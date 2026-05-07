@@ -15,7 +15,7 @@ export function KpiCard({
 }) {
   const toneCls =
     tone === "primary"
-      ? "text-primary"
+      ? "text-accent"
       : tone === "danger"
         ? "text-error"
         : tone === "success"

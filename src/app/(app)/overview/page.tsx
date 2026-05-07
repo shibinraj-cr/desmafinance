@@ -67,7 +67,7 @@ export default async function OverviewPage() {
             <Section
               title="Revenue by Service"
               action={
-                <Link className="text-primary text-label-sm hover:underline" href="/revenue">
+                <Link className="text-accent text-label-sm font-semibold hover:underline" href="/revenue">
                   View details
                 </Link>
               }
@@ -94,8 +94,8 @@ export default async function OverviewPage() {
           <MonthlyRevenueExpenseBars data={series} />
         </Section>
 
-        <section className="bg-primary text-on-primary p-lg rounded-xl flex items-center gap-lg shadow-sm border-l-4 border-primary-fixed-dim">
-          <div className="p-md bg-white/10 rounded-full flex items-center justify-center">
+        <section className="bg-brand text-on-brand p-lg rounded-xl flex items-center gap-lg shadow-sm border-l-4 border-primary">
+          <div className="p-md bg-primary text-on-primary rounded-full flex items-center justify-center">
             <span className="material-symbols-outlined" style={{ fontSize: 32 }}>psychology</span>
           </div>
           <div className="flex-1">
@@ -103,12 +103,12 @@ export default async function OverviewPage() {
               {totals.net >= 0
                 ? `Net cash position is ${inr(totals.net)} on ${inr(totals.revenue)} of revenue.`
                 : `Expenses are exceeding revenue by ${inr(-totals.net)}. Review marketing & salary spend.`}{" "}
-              <span className="opacity-80 font-normal">Open AI Insights for detailed analysis.</span>
+              <span className="text-on-brand-variant font-normal">Open AI Insights for detailed analysis.</span>
             </p>
           </div>
           <Link
             href="/ai-insights"
-            className="bg-white/20 hover:bg-white/30 px-md py-sm rounded-lg text-label-sm transition uppercase tracking-widest font-bold"
+            className="bg-primary text-on-primary hover:bg-primary-container px-md py-sm rounded-lg text-label-sm transition uppercase tracking-widest font-bold"
           >
             View
           </Link>

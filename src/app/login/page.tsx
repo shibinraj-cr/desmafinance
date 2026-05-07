@@ -1,5 +1,6 @@
 "use client";
 
+import Image from "next/image";
 import { signIn } from "next-auth/react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { Suspense, useState } from "react";
@@ -39,19 +40,19 @@ function LoginForm() {
   }
 
   return (
-    <main className="min-h-screen flex items-center justify-center bg-surface px-md">
-      <div className="w-full max-w-md bg-surface-container-lowest border border-outline-variant rounded-xl shadow-sm p-xl">
-        <div className="flex items-center gap-sm mb-lg">
-          <div className="w-10 h-10 bg-primary flex items-center justify-center rounded-lg">
-            <span className="material-symbols-outlined text-on-primary">account_balance</span>
+    <main className="min-h-screen flex items-center justify-center bg-brand px-md py-lg">
+      <div className="w-full max-w-md bg-surface-container-lowest border border-outline-variant rounded-xl shadow-lg p-xl">
+        <div className="flex flex-col items-center text-center mb-lg">
+          <div className="w-20 h-20 rounded-xl overflow-hidden bg-brand flex items-center justify-center shadow-sm">
+            <Image src="/desfin.png" alt="DESFIN" width={80} height={80} priority />
           </div>
-          <div>
-            <h1 className="text-h3 text-primary font-bold">Desma Finance</h1>
-            <p className="text-label-sm text-on-surface-variant">International Registry</p>
-          </div>
+          <h1 className="text-h2 font-bold text-on-surface mt-md">DESFIN</h1>
+          <p className="text-label-sm text-on-surface-variant uppercase tracking-widest">
+            Desma International
+          </p>
         </div>
-        <h2 className="text-h2 mb-base">Sign in</h2>
-        <p className="text-body-md text-on-surface-variant mb-lg">
+        <h2 className="text-h3 text-on-surface">Sign in</h2>
+        <p className="text-body-md text-on-surface-variant mt-xs mb-lg">
           Enter your credentials to access the dashboard.
         </p>
         <form onSubmit={onSubmit} className="space-y-md">

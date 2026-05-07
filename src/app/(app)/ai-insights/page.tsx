@@ -103,7 +103,7 @@ function buildInsights(opts: {
 }
 
 const TONE_CLS: Record<Insight["tone"], string> = {
-  info: "border-primary-fixed-dim bg-primary/5 text-primary",
+  info: "border-primary-fixed-dim bg-primary-fixed/40 text-accent",
   good: "border-green-200 bg-green-50 text-green-800",
   warn: "border-amber-300 bg-amber-50 text-amber-800",
   alert: "border-red-300 bg-red-50 text-red-800",
@@ -122,13 +122,13 @@ export default async function AiInsightsPage() {
     <>
       <TopBar title="AI Insights" subtitle="Auto-generated from your transaction history" />
       <div className="p-margin space-y-lg">
-        <section className="bg-primary text-on-primary p-lg rounded-xl shadow-sm flex items-center gap-lg border-l-4 border-primary-fixed-dim">
-          <div className="p-md bg-white/10 rounded-full">
+        <section className="bg-brand text-on-brand p-lg rounded-xl shadow-sm flex items-center gap-lg border-l-4 border-primary">
+          <div className="p-md bg-primary text-on-primary rounded-full">
             <span className="material-symbols-outlined" style={{ fontSize: 32 }}>psychology</span>
           </div>
           <div>
             <h3 className="text-h3 font-bold">Snapshot</h3>
-            <p className="text-body-md opacity-90">
+            <p className="text-body-md text-on-brand-variant">
               Revenue {inr(totals.revenue)} • Expenses {inr(totals.expense)} • Net {inr(totals.net)}
             </p>
           </div>

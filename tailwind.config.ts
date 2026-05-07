@@ -5,34 +5,46 @@ const config: Config = {
   theme: {
     extend: {
       colors: {
-        primary: "#004782",
-        "primary-container": "#185fa5",
-        "on-primary": "#ffffff",
-        "on-primary-container": "#c1d9ff",
-        "primary-fixed": "#d4e3ff",
-        "primary-fixed-dim": "#a4c9ff",
-        secondary: "#5c5f61",
-        "on-secondary": "#ffffff",
-        "secondary-container": "#e0e3e5",
-        "on-secondary-container": "#626567",
-        "secondary-fixed-dim": "#c4c7c9",
-        tertiary: "#6f3800",
-        surface: "#f8f9ff",
-        "surface-dim": "#d9dae0",
-        "surface-bright": "#f8f9ff",
-        "surface-container-lowest": "#ffffff",
-        "surface-container-low": "#f2f3fa",
-        "surface-container": "#ededf4",
-        "surface-container-high": "#e7e8ee",
-        "surface-container-highest": "#e1e2e9",
-        "surface-variant": "#e1e2e9",
-        "on-surface": "#191c20",
-        "on-surface-variant": "#424751",
-        outline: "#727782",
-        "outline-variant": "#c2c6d2",
-        error: "#ba1a1a",
-        "error-container": "#ffdad6",
-        "on-error-container": "#93000a",
+        // DESFIN brand palette: bright gold accent on charcoal, with light surfaces
+        // for legibility of dense financial data.
+        primary: "#F5C518", // gold/yellow — buttons, chart accents
+        "primary-container": "#C9A019", // darker gold (hover, accent stripes)
+        "on-primary": "#1A1A1A", // near-black text on yellow buttons
+        "on-primary-container": "#FFF8DC", // cream
+        "primary-fixed": "#FFE082", // light gold tint
+        "primary-fixed-dim": "#FFD54F", // mid gold
+        accent: "#7E6510", // dark gold — passes WCAG AA on white for inline text
+
+        // Sidebar / brand surfaces (dark charcoal — matches the logo background)
+        brand: "#1F1F1F",
+        "brand-elevated": "#2A2A2A",
+        "brand-line": "#3A3A3A",
+        "on-brand": "#F5F5F5",
+        "on-brand-variant": "#BDBDBD",
+
+        // Light surfaces (main canvas, cards)
+        secondary: "#5C5F61",
+        "on-secondary": "#FFFFFF",
+        "secondary-container": "#E0E3E5",
+        "on-secondary-container": "#3F3F3F",
+        "secondary-fixed-dim": "#9E9E9E",
+        tertiary: "#5D4037",
+        surface: "#FAFAFA",
+        "surface-dim": "#E5E5E5",
+        "surface-bright": "#FFFFFF",
+        "surface-container-lowest": "#FFFFFF",
+        "surface-container-low": "#F5F5F5",
+        "surface-container": "#EEEEEE",
+        "surface-container-high": "#E7E7E7",
+        "surface-container-highest": "#DDDDDD",
+        "surface-variant": "#E1E1E1",
+        "on-surface": "#1A1A1A",
+        "on-surface-variant": "#424242",
+        outline: "#9E9E9E",
+        "outline-variant": "#D5D5D5",
+        error: "#BA1A1A",
+        "error-container": "#FFDAD6",
+        "on-error-container": "#93000A",
       },
       fontFamily: {
         sans: ["var(--font-inter)", "Inter", "system-ui", "sans-serif"],

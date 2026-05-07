@@ -6,6 +6,9 @@ export default withAuth({
 
 export const config = {
   matcher: [
-    "/((?!login|api/auth|api/health|_next|favicon.ico|robots.txt).*)",
+    // Run on every path except: auth/health endpoints, the login page,
+    // Next.js internal asset routes, and any file with an extension
+    // (covers /desfin.png, /icon.png, /favicon.ico, fonts, etc.).
+    "/((?!login|api/auth|api/health|_next/static|_next/image|.*\\..*).*)",
   ],
 };

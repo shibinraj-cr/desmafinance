@@ -18,7 +18,18 @@ import {
   AreaChart,
 } from "recharts";
 
-const COLORS = ["#004782", "#185fa5", "#a4c9ff", "#5c5f61", "#c4c7c9", "#6f3800", "#924b00", "#ffb781"];
+// Brand-aligned palette: gold-led, with charcoal + warm browns for variety
+// while keeping enough hue separation for category charts.
+const COLORS = [
+  "#F5C518", // primary gold
+  "#1A1A1A", // charcoal
+  "#FFB400", // amber
+  "#5D4037", // espresso brown
+  "#9E9E9E", // neutral gray
+  "#FFE082", // pale gold
+  "#A1887F", // taupe
+  "#7E6510", // dark gold
+];
 
 export function MonthlyRevenueExpenseBars({
   data,
@@ -38,8 +49,8 @@ export function MonthlyRevenueExpenseBars({
         />
         <Tooltip formatter={(v: number) => `₹${(v / 1_00_000).toFixed(2)}L`} cursor={{ fill: "#f2f3fa" }} />
         <Legend wrapperStyle={{ fontSize: 12 }} />
-        <Bar dataKey="revenue" name="Revenue" fill="#004782" radius={[4, 4, 0, 0]} />
-        <Bar dataKey="expense" name="Expense" fill="#c2c6d2" radius={[4, 4, 0, 0]} />
+        <Bar dataKey="revenue" name="Revenue" fill="#F5C518" radius={[4, 4, 0, 0]} />
+        <Bar dataKey="expense" name="Expense" fill="#1A1A1A" radius={[4, 4, 0, 0]} />
       </BarChart>
     </ResponsiveContainer>
   );
@@ -51,8 +62,8 @@ export function NetCashFlowLine({ data }: { data: { month: string; net: number }
       <AreaChart data={data} margin={{ top: 10, right: 10, left: 0, bottom: 10 }}>
         <defs>
           <linearGradient id="netFill" x1="0" y1="0" x2="0" y2="1">
-            <stop offset="5%" stopColor="#004782" stopOpacity={0.35} />
-            <stop offset="95%" stopColor="#004782" stopOpacity={0} />
+            <stop offset="5%" stopColor="#F5C518" stopOpacity={0.45} />
+            <stop offset="95%" stopColor="#F5C518" stopOpacity={0} />
           </linearGradient>
         </defs>
         <CartesianGrid strokeDasharray="3 3" stroke="#e1e2e9" vertical={false} />
@@ -64,7 +75,7 @@ export function NetCashFlowLine({ data }: { data: { month: string; net: number }
           tickFormatter={(v) => `${(v / 1_00_000).toFixed(0)}L`}
         />
         <Tooltip formatter={(v: number) => `₹${(v / 1_00_000).toFixed(2)}L`} />
-        <Area type="monotone" dataKey="net" name="Net" stroke="#004782" strokeWidth={2} fill="url(#netFill)" />
+        <Area type="monotone" dataKey="net" name="Net" stroke="#C9A019" strokeWidth={2.5} fill="url(#netFill)" />
       </AreaChart>
     </ResponsiveContainer>
   );
@@ -143,8 +154,8 @@ export function CashflowDualLine({
         />
         <Tooltip formatter={(v: number) => `₹${(v / 1_00_000).toFixed(2)}L`} />
         <Legend wrapperStyle={{ fontSize: 12 }} />
-        <Line type="monotone" dataKey="revenue" name="Inflow" stroke="#004782" strokeWidth={2.5} dot={{ r: 3 }} />
-        <Line type="monotone" dataKey="expense" name="Outflow" stroke="#ba1a1a" strokeWidth={2.5} dot={{ r: 3 }} />
+        <Line type="monotone" dataKey="revenue" name="Inflow" stroke="#C9A019" strokeWidth={2.5} dot={{ r: 3 }} />
+        <Line type="monotone" dataKey="expense" name="Outflow" stroke="#BA1A1A" strokeWidth={2.5} dot={{ r: 3 }} />
       </LineChart>
     </ResponsiveContainer>
   );
