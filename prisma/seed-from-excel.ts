@@ -51,6 +51,14 @@ function excelDateToJS(v: unknown): Date | null {
 }
 
 async function main() {
+  if (process.env.NODE_ENV === "production" && process.env.ALLOW_DESTRUCTIVE_SEED !== "true") {
+    console.error(
+      "\n❌ Refusing to run destructive Excel import in production.\n" +
+        "   This script wipes all transactions before re-importing.\n" +
+        "   If you really mean to do this, set ALLOW_DESTRUCTIVE_SEED=true.\n",
+    );
+    process.exit(1);
+  }
   const candidates = [
     process.env.EXCEL_PATH,
     path.resolve(process.cwd(), "../DesmaInternational_Expense_Tracker 29042026 (2).xlsx"),

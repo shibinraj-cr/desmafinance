@@ -13,7 +13,7 @@ export default async function ExpensesPage() {
     expenseBreakdown(10),
     monthlySeries(),
     prisma.transaction.findMany({
-      where: { type: "Expense" },
+      where: { type: "Expense", deletedAt: null },
       orderBy: [{ date: "desc" }, { createdAt: "desc" }],
       take: 10,
     }),

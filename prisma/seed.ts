@@ -4,11 +4,23 @@ import bcrypt from "bcryptjs";
 const prisma = new PrismaClient();
 
 async function main() {
-  const username = (process.env.ADMIN_USERNAME ?? "admin").trim().toLowerCase();
-  const password = process.env.ADMIN_PASSWORD ?? "ChangeMe!2026";
-  const email = process.env.ADMIN_EMAIL ?? "admin@desma.local";
+  const username = (process.env.ADMIN_USERNAME ?? "").trim().toLowerCase();
+  const password = process.env.ADMIN_PASSWORD ?? "";
+  const email = process.env.ADMIN_EMAIL || null;
 
-  const passwordHash = await bcrypt.hash(password, 10);
+  if (!username || !password) {
+    console.error(
+      "\n❌ ADMIN_USERNAME and ADMIN_PASSWORD must both be set in the environment.\n" +
+        "   Edit your .env (or set Vercel env vars) and re-run.\n",
+    );
+    process.exit(1);
+  }
+  if (password.length < 8) {
+    console.error("\n❌ ADMIN_PASSWORD must be at least 8 characters.\n");
+    process.exit(1);
+  }
+
+  const passwordHash = await bcrypt.hash(password, 12);
   const user = await prisma.user.upsert({
     where: { username },
     update: { passwordHash, email, role: "admin" },

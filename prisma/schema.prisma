@@ -16,10 +16,11 @@ model User {
   createdAt    DateTime      @default(now())
   updatedAt    DateTime      @updatedAt
   transactions Transaction[]
+  auditLogs    AuditLog[]
 }
 
 model Transaction {
-  id          String   @id @default(cuid())
+  id          String    @id @default(cuid())
   date        DateTime
   month       String
   type        String
@@ -27,15 +28,35 @@ model Transaction {
   subItem     String
   description String?
   paymentMode String
-  amount      Decimal  @db.Decimal(14, 2)
+  amount      Decimal   @db.Decimal(14, 2)
   flow        String
   createdById String?
-  createdBy   User?    @relation(fields: [createdById], references: [id])
-  createdAt   DateTime @default(now())
-  updatedAt   DateTime @updatedAt
+  createdBy   User?     @relation(fields: [createdById], references: [id], onDelete: SetNull)
+  deletedAt   DateTime?
+  deletedById String?
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
 
   @@index([date])
   @@index([month])
   @@index([type])
   @@index([category])
+  @@index([deletedAt])
+  @@index([month, type])
+  @@index([paymentMode, type])
+}
+
+model AuditLog {
+  id         String   @id @default(cuid())
+  entityType String
+  entityId   String
+  action     String
+  userId     String?
+  user       User?    @relation(fields: [userId], references: [id], onDelete: SetNull)
+  changes    Json?
+  createdAt  DateTime @default(now())
+
+  @@index([entityType, entityId])
+  @@index([userId, createdAt])
+  @@index([createdAt])
 }

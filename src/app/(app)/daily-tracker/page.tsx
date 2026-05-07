@@ -12,6 +12,7 @@ export default async function DailyTrackerPage({
   searchParams: { month?: string; type?: string };
 }) {
   const where = {
+    deletedAt: null,
     ...(searchParams.month ? { month: searchParams.month } : {}),
     ...(searchParams.type ? { type: searchParams.type } : {}),
   };

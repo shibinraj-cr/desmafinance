@@ -17,6 +17,8 @@ const MONTH_ORDER = [
   "Mar-27",
 ];
 
+const ACTIVE = { deletedAt: null } as const;
+
 function num(d: { toString(): string } | number | null | undefined): number {
   if (d === null || d === undefined) return 0;
   return typeof d === "number" ? d : Number(d.toString());
@@ -25,6 +27,7 @@ function num(d: { toString(): string } | number | null | undefined): number {
 export async function totalsByType() {
   const rows = await prisma.transaction.groupBy({
     by: ["type"],
+    where: ACTIVE,
     _sum: { amount: true },
   });
   let revenue = 0;
@@ -40,6 +43,7 @@ export async function totalsByType() {
 export async function monthlySeries(): Promise<MonthBucket[]> {
   const rows = await prisma.transaction.groupBy({
     by: ["month", "type"],
+    where: ACTIVE,
     _sum: { amount: true },
   });
   const map = new Map<string, MonthBucket>();
@@ -57,7 +61,7 @@ export async function monthlySeries(): Promise<MonthBucket[]> {
 export async function topRevenueServices(limit = 6) {
   const rows = await prisma.transaction.groupBy({
     by: ["subItem"],
-    where: { type: "Revenue" },
+    where: { ...ACTIVE, type: "Revenue" },
     _sum: { amount: true },
   });
   return rows
@@ -69,7 +73,7 @@ export async function topRevenueServices(limit = 6) {
 export async function expenseBreakdown(limit = 8) {
   const rows = await prisma.transaction.groupBy({
     by: ["category"],
-    where: { type: "Expense" },
+    where: { ...ACTIVE, type: "Expense" },
     _sum: { amount: true },
   });
   return rows
@@ -81,7 +85,7 @@ export async function expenseBreakdown(limit = 8) {
 export async function revenueByCategory() {
   const rows = await prisma.transaction.groupBy({
     by: ["category"],
-    where: { type: "Revenue" },
+    where: { ...ACTIVE, type: "Revenue" },
     _sum: { amount: true },
   });
   return rows
@@ -92,6 +96,7 @@ export async function revenueByCategory() {
 export async function paymentModeMix() {
   const rows = await prisma.transaction.groupBy({
     by: ["paymentMode", "type"],
+    where: ACTIVE,
     _sum: { amount: true },
   });
   const map = new Map<string, { mode: string; inflow: number; outflow: number }>();
@@ -106,6 +111,7 @@ export async function paymentModeMix() {
 
 export async function recentTransactions(limit = 10) {
   return prisma.transaction.findMany({
+    where: ACTIVE,
     orderBy: [{ date: "desc" }, { createdAt: "desc" }],
     take: limit,
   });
