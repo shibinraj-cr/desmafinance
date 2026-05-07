@@ -1,11 +1,34 @@
 "use client";
 
 import Image from "next/image";
-import { signIn } from "next-auth/react";
 import { useEffect, useState } from "react";
 
 type StepStatus = "idle" | "running" | "ok" | "fail";
-type Steps = { click: StepStatus; auth: StepStatus; redirect: StepStatus };
+type Steps = {
+  click: StepStatus;
+  csrf: StepStatus;
+  post: StepStatus;
+  parse: StepStatus;
+  redirect: StepStatus;
+};
+
+const INITIAL_STEPS: Steps = {
+  click: "idle",
+  csrf: "idle",
+  post: "idle",
+  parse: "idle",
+  redirect: "idle",
+};
+
+async function fetchWithTimeout(url: string, opts: RequestInit, timeoutMs: number) {
+  const ctrl = new AbortController();
+  const t = setTimeout(() => ctrl.abort(), timeoutMs);
+  try {
+    return await fetch(url, { ...opts, signal: ctrl.signal });
+  } finally {
+    clearTimeout(t);
+  }
+}
 
 export default function LoginPage() {
   const [callbackUrl, setCallbackUrl] = useState("/overview");
@@ -13,7 +36,7 @@ export default function LoginPage() {
   const [password, setPassword] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
-  const [steps, setSteps] = useState<Steps>({ click: "idle", auth: "idle", redirect: "idle" });
+  const [steps, setSteps] = useState<Steps>(INITIAL_STEPS);
 
   useEffect(() => {
     if (typeof window === "undefined") return;
@@ -26,49 +49,116 @@ export default function LoginPage() {
     e.preventDefault();
     setError(null);
     setBusy(true);
-    setSteps({ click: "ok", auth: "running", redirect: "idle" });
+    setSteps({ ...INITIAL_STEPS, click: "ok", csrf: "running" });
 
-    let res;
+    // 1 — CSRF token
+    let csrfToken: string;
     try {
-      res = await signIn("credentials", {
-        username,
-        password,
-        redirect: false,
-        callbackUrl,
-      });
-    } catch (e) {
+      const r = await fetchWithTimeout(
+        "/api/auth/csrf",
+        { credentials: "include", cache: "no-store" },
+        15000,
+      );
+      if (!r.ok) {
+        setBusy(false);
+        setSteps((s) => ({ ...s, csrf: "fail" }));
+        setError(`CSRF endpoint returned ${r.status}.`);
+        return;
+      }
+      const j = await r.json();
+      csrfToken = j.csrfToken;
+      if (!csrfToken) {
+        setBusy(false);
+        setSteps((s) => ({ ...s, csrf: "fail" }));
+        setError("CSRF token missing from response.");
+        return;
+      }
+      setSteps((s) => ({ ...s, csrf: "ok", post: "running" }));
+    } catch (err) {
       setBusy(false);
-      setSteps((s) => ({ ...s, auth: "fail" }));
+      setSteps((s) => ({ ...s, csrf: "fail" }));
       setError(
-        "Connection problem (fetch threw). Disable any VPN or privacy extensions and retry. " +
-          (e instanceof Error ? `Detail: ${e.message}` : ""),
+        "Could not fetch CSRF token. " +
+          (err instanceof Error ? err.message : String(err)),
       );
       return;
     }
 
-    if (res?.error) {
+    // 2 — POST credentials
+    let postRes: Response;
+    try {
+      const body = new URLSearchParams();
+      body.set("csrfToken", csrfToken);
+      body.set("username", username);
+      body.set("password", password);
+      body.set("callbackUrl", callbackUrl);
+      body.set("json", "true");
+      postRes = await fetchWithTimeout(
+        "/api/auth/callback/credentials",
+        {
+          method: "POST",
+          headers: { "content-type": "application/x-www-form-urlencoded" },
+          body: body.toString(),
+          credentials: "include",
+          cache: "no-store",
+        },
+        20000,
+      );
+      setSteps((s) => ({ ...s, post: "ok", parse: "running" }));
+    } catch (err) {
       setBusy(false);
-      setSteps((s) => ({ ...s, auth: "fail" }));
+      setSteps((s) => ({ ...s, post: "fail" }));
+      setError(
+        "Login request failed before reaching the server. " +
+          (err instanceof Error ? err.message : String(err)),
+      );
+      return;
+    }
+
+    // 3 — Parse response
+    let resultUrl: string | null = null;
+    try {
+      const text = await postRes.text();
+      if (postRes.status === 401) {
+        setBusy(false);
+        setSteps((s) => ({ ...s, parse: "fail" }));
+        setError("Invalid username or password.");
+        return;
+      }
+      if (!postRes.ok) {
+        setBusy(false);
+        setSteps((s) => ({ ...s, parse: "fail" }));
+        setError(`Server returned HTTP ${postRes.status}.`);
+        return;
+      }
+      try {
+        const j = JSON.parse(text);
+        resultUrl = j.url ?? null;
+      } catch {
+        // Server may have returned a redirect-style response with no JSON.
+        resultUrl = null;
+      }
+      setSteps((s) => ({ ...s, parse: "ok", redirect: "running" }));
+    } catch (err) {
+      setBusy(false);
+      setSteps((s) => ({ ...s, parse: "fail" }));
+      setError(
+        "Could not read server response. " +
+          (err instanceof Error ? err.message : String(err)),
+      );
+      return;
+    }
+
+    if (resultUrl && resultUrl.includes("error=")) {
+      setBusy(false);
+      setSteps((s) => ({ ...s, redirect: "fail" }));
       setError("Invalid username or password.");
       return;
     }
 
-    if (!res?.ok) {
-      setBusy(false);
-      setSteps((s) => ({ ...s, auth: "fail" }));
-      setError(
-        "Sign-in service did not respond. Try a hard refresh (⌘⇧R), Incognito, or a different browser.",
-      );
-      return;
-    }
-
-    setSteps({ click: "ok", auth: "ok", redirect: "running" });
-    // Hard navigation is more reliable than the client-side router here —
-    // it forces the browser to re-fetch with the freshly-set session cookie
-    // and run the middleware against it from a clean state.
-    const target = res.url ?? callbackUrl;
+    // 4 — Redirect
     if (typeof window !== "undefined") {
-      window.location.href = target;
+      window.location.href = resultUrl ?? callbackUrl;
     }
   }
 
@@ -90,7 +180,10 @@ export default function LoginPage() {
         </p>
         <form onSubmit={onSubmit} className="space-y-md">
           <div>
-            <label htmlFor="login-username" className="text-label-sm text-on-surface-variant block mb-xs">
+            <label
+              htmlFor="login-username"
+              className="text-label-sm text-on-surface-variant block mb-xs"
+            >
               Username
             </label>
             <input
@@ -105,7 +198,10 @@ export default function LoginPage() {
             />
           </div>
           <div>
-            <label htmlFor="login-password" className="text-label-sm text-on-surface-variant block mb-xs">
+            <label
+              htmlFor="login-password"
+              className="text-label-sm text-on-surface-variant block mb-xs"
+            >
               Password
             </label>
             <input
@@ -125,9 +221,11 @@ export default function LoginPage() {
             </div>
           )}
           {(busy || steps.click !== "idle") && (
-            <div className="rounded-lg bg-surface-container-low border border-outline-variant px-md py-sm text-caption text-on-surface-variant">
+            <div className="rounded-lg bg-surface-container-low border border-outline-variant px-md py-sm text-caption">
               <Step label="Submit clicked" status={steps.click} />
-              <Step label="Authenticating" status={steps.auth} />
+              <Step label="Fetched CSRF token" status={steps.csrf} />
+              <Step label="POSTed credentials" status={steps.post} />
+              <Step label="Parsed response" status={steps.parse} />
               <Step label="Redirecting" status={steps.redirect} />
             </div>
           )}
@@ -167,7 +265,7 @@ function Step({ label, status }: { label: string; status: StepStatus }) {
   return (
     <div className="flex items-center gap-xs font-mono">
       <span className={cls + " w-4 inline-block"}>{icon}</span>
-      <span>{label}</span>
+      <span className="text-on-surface-variant">{label}</span>
     </div>
   );
 }
