@@ -28,15 +28,32 @@ function LoginForm() {
     e.preventDefault();
     setError(null);
     setBusy(true);
-    const res = await signIn("credentials", {
-      username,
-      password,
-      redirect: false,
-      callbackUrl,
-    });
+    let res;
+    try {
+      res = await signIn("credentials", {
+        username,
+        password,
+        redirect: false,
+        callbackUrl,
+      });
+    } catch {
+      setBusy(false);
+      setError(
+        "Connection problem. Check your internet, disable any VPN or privacy extensions, then try again.",
+      );
+      return;
+    }
     setBusy(false);
-    if (res?.error) setError("Invalid username or password.");
-    else if (res?.ok) router.replace(callbackUrl);
+    if (res?.error) {
+      setError("Invalid username or password.");
+    } else if (res?.ok) {
+      router.replace(callbackUrl);
+    } else {
+      // Fetch returned undefined — usually a network/CSP/extension issue.
+      setError(
+        "Could not reach the sign-in service. Try a hard refresh (⌘⇧R) or an Incognito window.",
+      );
+    }
   }
 
   return (
