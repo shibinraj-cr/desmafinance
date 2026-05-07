@@ -14,7 +14,9 @@ export default async function AppLayout({ children }: { children: React.ReactNod
     .catch(() => 0);
 
   return (
-    <div className="flex min-h-screen bg-surface">
+    // flex-col on mobile so the mobile top bar stacks above main; flex-row
+    // on md+ so the desktop sidebar sits to the left of main.
+    <div className="flex flex-col md:flex-row min-h-screen bg-surface">
       <SideNav
         user={{
           name: session.user.name,
