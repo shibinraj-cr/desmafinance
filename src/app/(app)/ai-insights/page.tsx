@@ -9,6 +9,7 @@ import {
 import { inr } from "@/lib/format";
 import { parsePeriod, periodLabel, rangeFor } from "@/lib/period";
 import { DateFilter } from "@/components/DateFilter";
+import { pace, deltaPct, type Pace } from "@/lib/pace";
 
 export const dynamic = "force-dynamic";
 
@@ -24,9 +25,36 @@ function buildInsights(opts: {
   series: { month: string; revenue: number; expense: number; net: number }[];
   topRev: { name: string; value: number }[];
   expBreak: { name: string; value: number }[];
+  pace: Pace;
 }): Insight[] {
-  const { totals, series, topRev, expBreak } = opts;
+  const { totals, series, topRev, expBreak, pace: p } = opts;
   const out: Insight[] = [];
+
+  // Pace cards lead the list when there is at least one prior month — they're
+  // the most actionable signal for the team this week.
+  if (p.revenue.priorMonthCount > 0 && !p.revenue.isFirstMonth) {
+    const r = p.revenue;
+    const dPrev = deltaPct(r.thisMtd, r.prevMtd);
+    if (dPrev !== null) {
+      const tone: Insight["tone"] = dPrev >= 5 ? "good" : dPrev <= -5 ? "warn" : "info";
+      out.push({
+        tone,
+        icon: dPrev >= 0 ? "trending_up" : "trending_down",
+        title: `Revenue pace: ${r.thisMonthLabel} 1–${r.asOfDay} vs ${r.prevMonthLabel} 1–${r.asOfDay}`,
+        body: `So far this month: ${inr(r.thisMtd)}. Same window in ${r.prevMonthLabel}: ${inr(r.prevMtd ?? 0)}. ${dPrev >= 0 ? "Up" : "Down"} ${Math.abs(dPrev).toFixed(1)}% on a calendar-fair basis.`,
+      });
+    }
+    const dAvg = deltaPct(r.thisMtd, r.trailingAvg);
+    if (dAvg !== null) {
+      const tone: Insight["tone"] = dAvg >= 5 ? "good" : dAvg <= -5 ? "warn" : "info";
+      out.push({
+        tone,
+        icon: "insights",
+        title: `Pace vs trailing ${r.priorMonthCount}-month average`,
+        body: `${r.thisMonthLabel} 1–${r.asOfDay}: ${inr(r.thisMtd)}. Trailing avg of the same window across ${r.priorMonthCount} prior month${r.priorMonthCount === 1 ? "" : "s"}: ${inr(r.trailingAvg ?? 0)}. ${dAvg >= 0 ? "Up" : "Down"} ${Math.abs(dAvg).toFixed(1)}%.`,
+      });
+    }
+  }
 
   const last = series[series.length - 1];
   const prev = series[series.length - 2];
@@ -118,13 +146,14 @@ export default async function AiInsightsPage({
 }) {
   const period = parsePeriod(searchParams);
   const range = rangeFor(period);
-  const [totals, series, topRev, expBreak] = await Promise.all([
+  const [totals, series, topRev, expBreak, paceData] = await Promise.all([
     totalsByType(range),
     monthlySeries(range),
     topRevenueServices(5, range),
     expenseBreakdown(8, range),
+    pace(),
   ]);
-  const insights = buildInsights({ totals, series, topRev, expBreak });
+  const insights = buildInsights({ totals, series, topRev, expBreak, pace: paceData });
 
   return (
     <>

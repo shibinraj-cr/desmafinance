@@ -15,6 +15,8 @@ import {
 import { inr } from "@/lib/format";
 import { parsePeriod, periodLabel, rangeFor } from "@/lib/period";
 import { DateFilter } from "@/components/DateFilter";
+import { pace } from "@/lib/pace";
+import { PaceTracker } from "@/components/PaceTracker";
 
 export const dynamic = "force-dynamic";
 
@@ -25,11 +27,12 @@ export default async function OverviewPage({
 }) {
   const period = parsePeriod(searchParams);
   const range = rangeFor(period);
-  const [totals, series, services, expBreak] = await Promise.all([
+  const [totals, series, services, expBreak, paceData] = await Promise.all([
     totalsByType(range),
     monthlySeries(range),
     topRevenueServicesSplit(6, range),
     expenseBreakdown(8, range),
+    pace(),
   ]);
 
   const margin = totals.revenue ? Math.round((totals.net / totals.revenue) * 100) : 0;
@@ -129,6 +132,9 @@ export default async function OverviewPage({
             hint="Net / Revenue"
           />
         </section>
+
+        {/* As-on-date pace tracker */}
+        <PaceTracker pace={paceData} />
 
         {/* Elevated AI Insights highlights */}
         <section className="bg-brand text-on-brand rounded-xl shadow-sm border-l-4 border-primary p-lg">
