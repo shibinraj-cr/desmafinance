@@ -1,0 +1,36 @@
+import { notFound } from "next/navigation";
+import { TopBar } from "@/components/TopBar";
+import { TransactionForm, type TransactionFormValues } from "@/components/TransactionForm";
+import { prisma } from "@/lib/prisma";
+import type { TxType } from "@/lib/catalog";
+
+export const dynamic = "force-dynamic";
+
+export default async function EditTransactionPage({
+  params,
+}: {
+  params: { id: string };
+}) {
+  const t = await prisma.transaction.findUnique({ where: { id: params.id } });
+  if (!t || t.deletedAt) notFound();
+
+  const initial: Partial<TransactionFormValues> = {
+    type: t.type as TxType,
+    date: t.date.toISOString().slice(0, 10),
+    month: t.month,
+    category: t.category,
+    subItem: t.subItem,
+    paymentMode: t.paymentMode,
+    amount: t.amount.toString(),
+    description: t.description ?? "",
+  };
+
+  return (
+    <>
+      <TopBar title="Edit Transaction" subtitle={t.description ?? t.subItem} />
+      <div className="p-margin max-w-3xl">
+        <TransactionForm mode="edit" initial={initial} transactionId={t.id} />
+      </div>
+    </>
+  );
+}

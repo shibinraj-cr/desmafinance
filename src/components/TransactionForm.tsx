@@ -11,6 +11,17 @@ import {
   type TxType,
 } from "@/lib/catalog";
 
+export type TransactionFormValues = {
+  type: TxType;
+  date: string; // yyyy-mm-dd
+  month: string;
+  category: string;
+  subItem: string;
+  paymentMode: string;
+  amount: string;
+  description: string;
+};
+
 function todayMonthCode(): string {
   const d = new Date();
   const months = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
@@ -21,19 +32,54 @@ function todayIso(): string {
   return new Date().toISOString().slice(0, 10);
 }
 
-export function TransactionForm() {
+function monthFromDate(iso: string): string {
+  const d = new Date(iso + "T00:00:00Z");
+  if (isNaN(+d)) return MONTHS[0];
+  const months = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+  const code = `${months[d.getUTCMonth()]}-${String(d.getUTCFullYear()).slice(-2)}`;
+  return (MONTHS as readonly string[]).includes(code) ? code : MONTHS[0];
+}
+
+const DEFAULT_VALUES: TransactionFormValues = {
+  type: "Revenue",
+  date: todayIso(),
+  month: (() => {
+    const c = todayMonthCode();
+    return (MONTHS as readonly string[]).includes(c) ? c : MONTHS[0];
+  })(),
+  category: categoriesFor("Revenue")[0],
+  subItem: subItemsFor("Revenue", categoriesFor("Revenue")[0])[0],
+  paymentMode: PAYMENT_MODES[0],
+  amount: "",
+  description: "",
+};
+
+export function TransactionForm({
+  mode = "create",
+  initial,
+  transactionId,
+}: {
+  mode?: "create" | "edit";
+  initial?: Partial<TransactionFormValues>;
+  transactionId?: string;
+}) {
   const router = useRouter();
-  const [type, setType] = useState<TxType>("Revenue");
+  const [type, setType] = useState<TxType>((initial?.type as TxType) ?? DEFAULT_VALUES.type);
   const cats = useMemo(() => categoriesFor(type), [type]);
-  const [category, setCategory] = useState<string>(cats[0]);
+  const [category, setCategory] = useState<string>(
+    initial?.category && cats.includes(initial.category as never)
+      ? initial.category
+      : cats[0],
+  );
   const subs = useMemo(() => subItemsFor(type, category), [type, category]);
-  const [subItem, setSubItem] = useState<string>(subs[0]);
-  const [date, setDate] = useState<string>(todayIso());
-  const initMonth = todayMonthCode();
-  const [month, setMonth] = useState<string>(MONTHS.includes(initMonth as (typeof MONTHS)[number]) ? initMonth : MONTHS[0]);
-  const [paymentMode, setPaymentMode] = useState<string>(PAYMENT_MODES[0]);
-  const [amount, setAmount] = useState<string>("");
-  const [description, setDescription] = useState<string>("");
+  const [subItem, setSubItem] = useState<string>(
+    initial?.subItem && subs.includes(initial.subItem) ? initial.subItem : subs[0],
+  );
+  const [date, setDate] = useState<string>(initial?.date ?? DEFAULT_VALUES.date);
+  const [month, setMonth] = useState<string>(initial?.month ?? DEFAULT_VALUES.month);
+  const [paymentMode, setPaymentMode] = useState<string>(initial?.paymentMode ?? DEFAULT_VALUES.paymentMode);
+  const [amount, setAmount] = useState<string>(initial?.amount ?? "");
+  const [description, setDescription] = useState<string>(initial?.description ?? "");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [ok, setOk] = useState(false);
@@ -48,14 +94,22 @@ export function TransactionForm() {
     setCategory(next);
     setSubItem(subItemsFor(type, next)[0]);
   }
+  function onDateChange(iso: string) {
+    setDate(iso);
+    // Auto-derive month from date so users don't have to keep them in sync.
+    const m = monthFromDate(iso);
+    setMonth(m);
+  }
 
   async function onSubmit(e: React.FormEvent) {
     e.preventDefault();
     setError(null);
     setOk(false);
     setBusy(true);
-    const res = await fetch("/api/transactions", {
-      method: "POST",
+    const url = mode === "edit" && transactionId ? `/api/transactions/${transactionId}` : "/api/transactions";
+    const method = mode === "edit" ? "PATCH" : "POST";
+    const res = await fetch(url, {
+      method,
       headers: { "content-type": "application/json" },
       body: JSON.stringify({
         date,
@@ -71,13 +125,25 @@ export function TransactionForm() {
     setBusy(false);
     if (!res.ok) {
       const data = await res.json().catch(() => ({}));
-      setError(data?.error === "validation_failed" ? "Please check the values entered." : "Failed to save.");
+      setError(
+        data?.error === "validation_failed"
+          ? "Please check the values entered."
+          : data?.error === "not_found"
+            ? "Transaction no longer exists."
+            : "Failed to save.",
+      );
       return;
     }
     setOk(true);
-    setAmount("");
-    setDescription("");
+    if (mode === "create") {
+      setAmount("");
+      setDescription("");
+    }
     router.refresh();
+    if (mode === "edit") {
+      // Send the user back to the table after a successful edit.
+      router.push("/daily-tracker");
+    }
   }
 
   const accent =
@@ -86,7 +152,10 @@ export function TransactionForm() {
       : "bg-red-50 text-red-700 border-red-200";
 
   return (
-    <form onSubmit={onSubmit} className="bg-surface-container-lowest border border-outline-variant rounded-xl shadow-sm p-lg space-y-md">
+    <form
+      onSubmit={onSubmit}
+      className="bg-surface-container-lowest border border-outline-variant rounded-xl shadow-sm p-lg space-y-md"
+    >
       <div className="flex items-center gap-base">
         <span className={`px-sm py-xs rounded-full border text-label-sm font-semibold ${accent}`}>
           {type === "Revenue" ? "Inflow" : "Outflow"}
@@ -99,7 +168,9 @@ export function TransactionForm() {
               onClick={() => onTypeChange(t)}
               className={
                 "px-md h-9 text-label-sm font-semibold transition " +
-                (type === t ? "bg-primary text-on-primary" : "bg-surface-container-lowest text-on-surface-variant hover:bg-surface-container-low")
+                (type === t
+                  ? "bg-primary text-on-primary"
+                  : "bg-surface-container-lowest text-on-surface-variant hover:bg-surface-container-low")
               }
             >
               {t}
@@ -110,33 +181,55 @@ export function TransactionForm() {
 
       <div className="grid grid-cols-1 md:grid-cols-2 gap-md">
         <Field label="Date">
-          <input type="date" value={date} onChange={(e) => setDate(e.target.value)} className={inputCls} required />
+          <input
+            type="date"
+            value={date}
+            onChange={(e) => onDateChange(e.target.value)}
+            className={inputCls}
+            required
+          />
         </Field>
         <Field label="Month">
           <select value={month} onChange={(e) => setMonth(e.target.value)} className={inputCls}>
             {MONTHS.map((m) => (
-              <option key={m} value={m}>{m}</option>
+              <option key={m} value={m}>
+                {m}
+              </option>
             ))}
           </select>
         </Field>
         <Field label="Category">
-          <select value={category} onChange={(e) => onCategoryChange(e.target.value)} className={inputCls}>
+          <select
+            value={category}
+            onChange={(e) => onCategoryChange(e.target.value)}
+            className={inputCls}
+          >
             {cats.map((c) => (
-              <option key={c} value={c}>{c}</option>
+              <option key={c} value={c}>
+                {c}
+              </option>
             ))}
           </select>
         </Field>
         <Field label="Sub-Item">
           <select value={subItem} onChange={(e) => setSubItem(e.target.value)} className={inputCls}>
             {subs.map((s) => (
-              <option key={s} value={s}>{s}</option>
+              <option key={s} value={s}>
+                {s}
+              </option>
             ))}
           </select>
         </Field>
         <Field label="Payment Mode">
-          <select value={paymentMode} onChange={(e) => setPaymentMode(e.target.value)} className={inputCls}>
+          <select
+            value={paymentMode}
+            onChange={(e) => setPaymentMode(e.target.value)}
+            className={inputCls}
+          >
             {PAYMENT_MODES.map((p) => (
-              <option key={p} value={p}>{p}</option>
+              <option key={p} value={p}>
+                {p}
+              </option>
             ))}
           </select>
         </Field>
@@ -159,14 +252,22 @@ export function TransactionForm() {
               value={description}
               onChange={(e) => setDescription(e.target.value)}
               className={inputCls}
-              placeholder={type === "Revenue" ? "Candidate name or reference" : "Vendor / payee details"}
+              placeholder={
+                type === "Revenue" ? "Candidate name or reference" : "Vendor / payee details"
+              }
             />
           </Field>
         </div>
       </div>
 
-      {error && <div className="rounded-lg bg-error-container text-on-error-container px-md py-sm">{error}</div>}
-      {ok && <div className="rounded-lg bg-green-50 text-green-700 px-md py-sm">Transaction saved.</div>}
+      {error && (
+        <div className="rounded-lg bg-error-container text-on-error-container px-md py-sm">{error}</div>
+      )}
+      {ok && (
+        <div className="rounded-lg bg-green-50 text-green-700 px-md py-sm">
+          {mode === "edit" ? "Transaction updated." : "Transaction saved."}
+        </div>
+      )}
 
       <div className="flex items-center gap-base pt-base">
         <button
@@ -174,7 +275,7 @@ export function TransactionForm() {
           disabled={busy}
           className="h-10 px-lg rounded-lg bg-primary text-on-primary font-semibold hover:bg-primary-container transition disabled:opacity-60"
         >
-          {busy ? "Saving…" : "Save transaction"}
+          {busy ? "Saving…" : mode === "edit" ? "Save changes" : "Save transaction"}
         </button>
         <button
           type="button"

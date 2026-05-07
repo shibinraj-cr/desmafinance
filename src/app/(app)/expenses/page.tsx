@@ -4,16 +4,36 @@ import { CategoryDonut, HorizontalBars, MonthlyRevenueExpenseBars } from "@/comp
 import { expenseBreakdown, monthlySeries, totalsByType } from "@/lib/aggregations";
 import { prisma } from "@/lib/prisma";
 import { inrFull } from "@/lib/format";
+import { parsePeriod, periodLabel, rangeFor } from "@/lib/period";
+import { DateFilter } from "@/components/DateFilter";
 
 export const dynamic = "force-dynamic";
 
-export default async function ExpensesPage() {
+export default async function ExpensesPage({
+  searchParams,
+}: {
+  searchParams: { period?: string; from?: string; to?: string };
+}) {
+  const period = parsePeriod(searchParams);
+  const range = rangeFor(period);
+  const recentWhere = {
+    type: "Expense",
+    deletedAt: null,
+    ...(range.from || range.to
+      ? {
+          date: {
+            ...(range.from ? { gte: range.from } : {}),
+            ...(range.to ? { lt: range.to } : {}),
+          },
+        }
+      : {}),
+  };
   const [totals, breakdown, series, recent] = await Promise.all([
-    totalsByType(),
-    expenseBreakdown(10),
-    monthlySeries(),
+    totalsByType(range),
+    expenseBreakdown(10, range),
+    monthlySeries(range),
     prisma.transaction.findMany({
-      where: { type: "Expense", deletedAt: null },
+      where: recentWhere,
       orderBy: [{ date: "desc" }, { createdAt: "desc" }],
       take: 10,
     }),
@@ -23,13 +43,17 @@ export default async function ExpensesPage() {
 
   return (
     <>
-      <TopBar title="Expense Tracker" />
+      <TopBar title="Expense Tracker" subtitle={periodLabel(period)} action={<DateFilter />} />
       <div className="p-margin space-y-lg">
         <section className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-gutter">
           <KpiCard label="Total Expenses" value={totals.expense} tone="danger" />
           <KpiCard label="Categories" value={breakdown.length} />
           <KpiCard label="Top 3 Share" value={`${top3Pct}%`} hint="Concentration of spend" />
-          <KpiCard label="Net After Expenses" value={totals.net} tone={totals.net >= 0 ? "success" : "danger"} />
+          <KpiCard
+            label="Net After Expenses"
+            value={totals.net}
+            tone={totals.net >= 0 ? "success" : "danger"}
+          />
         </section>
         <section className="grid grid-cols-1 lg:grid-cols-12 gap-gutter">
           <div className="lg:col-span-7">

@@ -3,21 +3,29 @@ import { KpiCard, Section } from "@/components/Cards";
 import { CashflowDualLine, NetCashFlowLine } from "@/components/Charts";
 import { monthlySeries, paymentModeMix, totalsByType } from "@/lib/aggregations";
 import { inrFull } from "@/lib/format";
+import { parsePeriod, periodLabel, rangeFor } from "@/lib/period";
+import { DateFilter } from "@/components/DateFilter";
 
 export const dynamic = "force-dynamic";
 
-export default async function CashFlowPage() {
+export default async function CashFlowPage({
+  searchParams,
+}: {
+  searchParams: { period?: string; from?: string; to?: string };
+}) {
+  const period = parsePeriod(searchParams);
+  const range = rangeFor(period);
   const [totals, series, modes] = await Promise.all([
-    totalsByType(),
-    monthlySeries(),
-    paymentModeMix(),
+    totalsByType(range),
+    monthlySeries(range),
+    paymentModeMix(range),
   ]);
   const positiveMonths = series.filter((s) => s.net > 0).length;
   const negativeMonths = series.filter((s) => s.net < 0).length;
 
   return (
     <>
-      <TopBar title="Cash Flow Statement" subtitle="FY 2026-27" />
+      <TopBar title="Cash Flow Statement" subtitle={periodLabel(period)} action={<DateFilter />} />
       <div className="p-margin space-y-lg">
         <section className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-gutter">
           <KpiCard label="Total Inflow" value={totals.revenue} tone="success" />

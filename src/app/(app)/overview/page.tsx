@@ -12,16 +12,24 @@ import {
   totalsByType,
 } from "@/lib/aggregations";
 import { inr, pct } from "@/lib/format";
+import { parsePeriod, periodLabel, rangeFor } from "@/lib/period";
+import { DateFilter } from "@/components/DateFilter";
 import Link from "next/link";
 
 export const dynamic = "force-dynamic";
 
-export default async function OverviewPage() {
+export default async function OverviewPage({
+  searchParams,
+}: {
+  searchParams: { period?: string; from?: string; to?: string };
+}) {
+  const period = parsePeriod(searchParams);
+  const range = rangeFor(period);
   const [totals, series, topRev, expBreak] = await Promise.all([
-    totalsByType(),
-    monthlySeries(),
-    topRevenueServices(5),
-    expenseBreakdown(8),
+    totalsByType(range),
+    monthlySeries(range),
+    topRevenueServices(5, range),
+    expenseBreakdown(8, range),
   ]);
 
   const margin = totals.revenue ? Math.round((totals.net / totals.revenue) * 100) : 0;
@@ -31,7 +39,11 @@ export default async function OverviewPage() {
 
   return (
     <>
-      <TopBar title="Financial Overview" subtitle="FY 2026-27" />
+      <TopBar
+        title="Financial Overview"
+        subtitle={periodLabel(period)}
+        action={<DateFilter />}
+      />
       <div className="p-margin space-y-lg">
         <section className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-gutter">
           <KpiCard
@@ -90,7 +102,7 @@ export default async function OverviewPage() {
           </div>
         </section>
 
-        <Section title="Revenue vs Expenses (FY 2026-27)">
+        <Section title="Revenue vs Expenses">
           <MonthlyRevenueExpenseBars data={series} />
         </Section>
 

@@ -1,4 +1,5 @@
 import { prisma } from "./prisma";
+import type { Range } from "./period";
 
 export type MonthBucket = { month: string; revenue: number; expense: number; net: number };
 
@@ -17,17 +18,29 @@ const MONTH_ORDER = [
   "Mar-27",
 ];
 
-const ACTIVE = { deletedAt: null } as const;
-
 function num(d: { toString(): string } | number | null | undefined): number {
   if (d === null || d === undefined) return 0;
   return typeof d === "number" ? d : Number(d.toString());
 }
 
-export async function totalsByType() {
+function activeWhere(range?: Range) {
+  return {
+    deletedAt: null,
+    ...(range?.from || range?.to
+      ? {
+          date: {
+            ...(range.from ? { gte: range.from } : {}),
+            ...(range.to ? { lt: range.to } : {}),
+          },
+        }
+      : {}),
+  };
+}
+
+export async function totalsByType(range?: Range) {
   const rows = await prisma.transaction.groupBy({
     by: ["type"],
-    where: ACTIVE,
+    where: activeWhere(range),
     _sum: { amount: true },
   });
   let revenue = 0;
@@ -40,10 +53,10 @@ export async function totalsByType() {
   return { revenue, expense, net: revenue - expense };
 }
 
-export async function monthlySeries(): Promise<MonthBucket[]> {
+export async function monthlySeries(range?: Range): Promise<MonthBucket[]> {
   const rows = await prisma.transaction.groupBy({
     by: ["month", "type"],
-    where: ACTIVE,
+    where: activeWhere(range),
     _sum: { amount: true },
   });
   const map = new Map<string, MonthBucket>();
@@ -58,10 +71,10 @@ export async function monthlySeries(): Promise<MonthBucket[]> {
   return Array.from(map.values());
 }
 
-export async function topRevenueServices(limit = 6) {
+export async function topRevenueServices(limit = 6, range?: Range) {
   const rows = await prisma.transaction.groupBy({
     by: ["subItem"],
-    where: { ...ACTIVE, type: "Revenue" },
+    where: { ...activeWhere(range), type: "Revenue" },
     _sum: { amount: true },
   });
   return rows
@@ -70,10 +83,10 @@ export async function topRevenueServices(limit = 6) {
     .slice(0, limit);
 }
 
-export async function expenseBreakdown(limit = 8) {
+export async function expenseBreakdown(limit = 8, range?: Range) {
   const rows = await prisma.transaction.groupBy({
     by: ["category"],
-    where: { ...ACTIVE, type: "Expense" },
+    where: { ...activeWhere(range), type: "Expense" },
     _sum: { amount: true },
   });
   return rows
@@ -82,10 +95,10 @@ export async function expenseBreakdown(limit = 8) {
     .slice(0, limit);
 }
 
-export async function revenueByCategory() {
+export async function revenueByCategory(range?: Range) {
   const rows = await prisma.transaction.groupBy({
     by: ["category"],
-    where: { ...ACTIVE, type: "Revenue" },
+    where: { ...activeWhere(range), type: "Revenue" },
     _sum: { amount: true },
   });
   return rows
@@ -93,10 +106,10 @@ export async function revenueByCategory() {
     .sort((a, b) => b.value - a.value);
 }
 
-export async function paymentModeMix() {
+export async function paymentModeMix(range?: Range) {
   const rows = await prisma.transaction.groupBy({
     by: ["paymentMode", "type"],
-    where: ACTIVE,
+    where: activeWhere(range),
     _sum: { amount: true },
   });
   const map = new Map<string, { mode: string; inflow: number; outflow: number }>();
@@ -109,15 +122,15 @@ export async function paymentModeMix() {
   return Array.from(map.values()).sort((a, b) => b.inflow + b.outflow - (a.inflow + a.outflow));
 }
 
-export async function recentTransactions(limit = 10) {
+export async function recentTransactions(limit = 10, range?: Range) {
   return prisma.transaction.findMany({
-    where: ACTIVE,
+    where: activeWhere(range),
     orderBy: [{ date: "desc" }, { createdAt: "desc" }],
     take: limit,
   });
 }
 
-export async function currentBalance(): Promise<number> {
-  const t = await totalsByType();
+export async function currentBalance(range?: Range): Promise<number> {
+  const t = await totalsByType(range);
   return t.net;
 }

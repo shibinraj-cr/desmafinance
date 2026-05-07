@@ -7,29 +7,41 @@ import {
   topRevenueServices,
   totalsByType,
 } from "@/lib/aggregations";
-import { inr } from "@/lib/format";
+import { parsePeriod, periodLabel, rangeFor } from "@/lib/period";
+import { DateFilter } from "@/components/DateFilter";
 
 export const dynamic = "force-dynamic";
 
-export default async function RevenuePage() {
+export default async function RevenuePage({
+  searchParams,
+}: {
+  searchParams: { period?: string; from?: string; to?: string };
+}) {
+  const period = parsePeriod(searchParams);
+  const range = rangeFor(period);
   const [totals, series, byCat, topRev] = await Promise.all([
-    totalsByType(),
-    monthlySeries(),
-    revenueByCategory(),
-    topRevenueServices(8),
+    totalsByType(range),
+    monthlySeries(range),
+    revenueByCategory(range),
+    topRevenueServices(8, range),
   ]);
   const last = series[series.length - 1];
   const prev = series[series.length - 2];
   const mom = prev?.revenue ? Math.round(((last.revenue - prev.revenue) / prev.revenue) * 100) : 0;
-  const ytdAvg = series.length ? totals.revenue / Math.max(1, series.filter((s) => s.revenue > 0).length) : 0;
+  const activeMonths = series.filter((s) => s.revenue > 0).length;
+  const ytdAvg = activeMonths ? totals.revenue / activeMonths : 0;
 
   return (
     <>
-      <TopBar title="Revenue Analysis" />
+      <TopBar title="Revenue Analysis" subtitle={periodLabel(period)} action={<DateFilter />} />
       <div className="p-margin space-y-lg">
         <section className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-gutter">
           <KpiCard label="Total Revenue" value={totals.revenue} tone="primary" />
-          <KpiCard label="MoM Growth" value={`${mom >= 0 ? "+" : ""}${mom}%`} tone={mom >= 0 ? "success" : "danger"} />
+          <KpiCard
+            label="MoM Growth"
+            value={`${mom >= 0 ? "+" : ""}${mom}%`}
+            tone={mom >= 0 ? "success" : "danger"}
+          />
           <KpiCard label="Avg / Active Month" value={ytdAvg} hint="Across months with revenue" />
           <KpiCard label="Categories" value={byCat.length} hint="Distinct revenue streams" />
         </section>

@@ -7,6 +7,8 @@ import {
   totalsByType,
 } from "@/lib/aggregations";
 import { inr } from "@/lib/format";
+import { parsePeriod, periodLabel, rangeFor } from "@/lib/period";
+import { DateFilter } from "@/components/DateFilter";
 
 export const dynamic = "force-dynamic";
 
@@ -109,18 +111,24 @@ const TONE_CLS: Record<Insight["tone"], string> = {
   alert: "border-red-300 bg-red-50 text-red-800",
 };
 
-export default async function AiInsightsPage() {
+export default async function AiInsightsPage({
+  searchParams,
+}: {
+  searchParams: { period?: string; from?: string; to?: string };
+}) {
+  const period = parsePeriod(searchParams);
+  const range = rangeFor(period);
   const [totals, series, topRev, expBreak] = await Promise.all([
-    totalsByType(),
-    monthlySeries(),
-    topRevenueServices(5),
-    expenseBreakdown(8),
+    totalsByType(range),
+    monthlySeries(range),
+    topRevenueServices(5, range),
+    expenseBreakdown(8, range),
   ]);
   const insights = buildInsights({ totals, series, topRev, expBreak });
 
   return (
     <>
-      <TopBar title="AI Insights" subtitle="Auto-generated from your transaction history" />
+      <TopBar title="AI Insights" subtitle={periodLabel(period)} action={<DateFilter />} />
       <div className="p-margin space-y-lg">
         <section className="bg-brand text-on-brand p-lg rounded-xl shadow-sm flex items-center gap-lg border-l-4 border-primary">
           <div className="p-md bg-primary text-on-primary rounded-full">
