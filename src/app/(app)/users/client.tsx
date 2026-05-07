@@ -63,15 +63,14 @@ export function NewUserButton() {
         <div
           role="dialog"
           aria-modal="true"
-          className="fixed inset-0 z-50 overflow-y-auto bg-black/50"
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-md"
           onClick={() => !busy && setOpen(false)}
         >
-          <div className="min-h-full flex items-start sm:items-center justify-center p-md">
-            <form
-              onSubmit={submit}
-              onClick={(e) => e.stopPropagation()}
-              className="w-full max-w-md bg-surface-container-lowest border border-outline-variant rounded-xl shadow-lg p-lg space-y-md my-lg"
-            >
+          <form
+            onSubmit={submit}
+            onClick={(e) => e.stopPropagation()}
+            className="w-full max-w-md max-h-[90vh] overflow-y-auto bg-surface-container-lowest border border-outline-variant rounded-xl shadow-lg p-lg space-y-md"
+          >
             <h3 className="text-h3 text-on-surface">New user</h3>
             <Field label="Username">
               <input
@@ -135,8 +134,7 @@ export function NewUserButton() {
                 Cancel
               </button>
             </div>
-            </form>
-          </div>
+          </form>
         </div>
       )}
     </>
