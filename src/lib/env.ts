@@ -15,10 +15,23 @@ const envSchema = z.object({
 
 export type Env = z.infer<typeof envSchema>;
 
+// Skip validation when Next.js is building (e.g. on Vercel before env vars
+// are populated for the build environment). At runtime, NEXT_PHASE is unset
+// and validation runs on the first env access.
+const isBuildPhase =
+  process.env.NEXT_PHASE === "phase-production-build" ||
+  process.env.SKIP_ENV_VALIDATION === "1";
+
 let cached: Env | null = null;
 
 function load(): Env {
   if (cached) return cached;
+
+  if (isBuildPhase) {
+    cached = process.env as unknown as Env;
+    return cached;
+  }
+
   const parsed = envSchema.safeParse(process.env);
   if (!parsed.success) {
     console.error("\n❌ Invalid environment variables:");
@@ -32,11 +45,8 @@ function load(): Env {
   return cached;
 }
 
-// Lazy proxy: validation runs the first time any field is read, not at import.
-// This keeps `next build` from needing real env vars on Vercel — they only
-// have to be set at runtime, when handlers actually run.
 export const env = new Proxy({} as Env, {
-  get(_target, key: string) {
+  get(_t, key: string) {
     return load()[key as keyof Env];
   },
 });
