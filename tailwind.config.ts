@@ -35,7 +35,7 @@ const config: Config = {
         "on-error-container": "#93000a",
       },
       fontFamily: {
-        sans: ["Inter", "system-ui", "sans-serif"],
+        sans: ["var(--font-inter)", "Inter", "system-ui", "sans-serif"],
       },
       borderRadius: {
         DEFAULT: "0.5rem",

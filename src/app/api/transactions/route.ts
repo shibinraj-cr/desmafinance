@@ -93,7 +93,7 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: "validation_failed" }, { status: 400 });
   }
   const data = parsed.data;
-  const userId = (session.user as { id?: string }).id ?? null;
+  const userId = session.user.id ?? null;
 
   const created = await prisma.transaction.create({
     data: {

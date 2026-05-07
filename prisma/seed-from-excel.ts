@@ -10,6 +10,7 @@ import { PrismaClient } from "@prisma/client";
 import * as XLSX from "xlsx";
 import path from "node:path";
 import fs from "node:fs";
+import { parseLooseDate } from "../src/lib/dates";
 
 const prisma = new PrismaClient();
 
@@ -28,27 +29,7 @@ type Row = {
   flow?: string;
 };
 
-function excelDateToJS(v: unknown): Date | null {
-  if (v instanceof Date) return v;
-  if (typeof v === "number") {
-    const epoch = new Date(Date.UTC(1899, 11, 30));
-    return new Date(epoch.getTime() + v * 86400000);
-  }
-  if (typeof v === "string" && v) {
-    const s = v.trim();
-    // Indian/UK formats typed by hand in Excel: dd-mm-yyyy or dd/mm/yyyy.
-    // JS Date parses these as MM/DD/YYYY → wrong. Match explicitly first.
-    const m = s.match(/^(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{4})$/);
-    if (m) {
-      const [, dd, mm, yyyy] = m;
-      const d = new Date(Date.UTC(Number(yyyy), Number(mm) - 1, Number(dd)));
-      return isNaN(+d) ? null : d;
-    }
-    const d = new Date(s);
-    return isNaN(+d) ? null : d;
-  }
-  return null;
-}
+const excelDateToJS = parseLooseDate;
 
 async function main() {
   if (process.env.NODE_ENV === "production" && process.env.ALLOW_DESTRUCTIVE_SEED !== "true") {
