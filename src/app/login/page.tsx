@@ -43,6 +43,11 @@ export default function LoginPage() {
     const params = new URLSearchParams(window.location.search);
     const cb = params.get("callbackUrl");
     if (cb && cb.startsWith("/")) setCallbackUrl(cb);
+    // Pre-warm the serverless function and database connection in the
+    // background so the user's first click doesn't pay the cold-start
+    // cost (7+ seconds on Vercel free tier with Neon).
+    fetch("/api/health", { cache: "no-store" }).catch(() => {});
+    fetch("/api/auth/csrf", { cache: "no-store", credentials: "include" }).catch(() => {});
   }, []);
 
   async function onSubmit(e: React.FormEvent) {
@@ -102,7 +107,7 @@ export default function LoginPage() {
           credentials: "include",
           cache: "no-store",
         },
-        20000,
+        60000, // 60s — Vercel cold start + Neon wake-up can hit ~10-15s
       );
       setSteps((s) => ({ ...s, post: "ok", parse: "running" }));
     } catch (err) {
