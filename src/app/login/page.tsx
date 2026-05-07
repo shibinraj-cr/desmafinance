@@ -2,19 +2,19 @@
 
 import Image from "next/image";
 import { signIn } from "next-auth/react";
-import { useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
 
+type StepStatus = "idle" | "running" | "ok" | "fail";
+type Steps = { click: StepStatus; auth: StepStatus; redirect: StepStatus };
+
 export default function LoginPage() {
-  const router = useRouter();
   const [callbackUrl, setCallbackUrl] = useState("/overview");
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const [steps, setSteps] = useState<Steps>({ click: "idle", auth: "idle", redirect: "idle" });
 
-  // Read callbackUrl from window.location to avoid useSearchParams' Suspense
-  // requirement, which broke SSR rendering of this page.
   useEffect(() => {
     if (typeof window === "undefined") return;
     const params = new URLSearchParams(window.location.search);
@@ -26,6 +26,8 @@ export default function LoginPage() {
     e.preventDefault();
     setError(null);
     setBusy(true);
+    setSteps({ click: "ok", auth: "running", redirect: "idle" });
+
     let res;
     try {
       res = await signIn("credentials", {
@@ -34,22 +36,39 @@ export default function LoginPage() {
         redirect: false,
         callbackUrl,
       });
-    } catch {
+    } catch (e) {
       setBusy(false);
+      setSteps((s) => ({ ...s, auth: "fail" }));
       setError(
-        "Connection problem. Check your internet, disable any VPN or privacy extensions, then try again.",
+        "Connection problem (fetch threw). Disable any VPN or privacy extensions and retry. " +
+          (e instanceof Error ? `Detail: ${e.message}` : ""),
       );
       return;
     }
-    setBusy(false);
+
     if (res?.error) {
+      setBusy(false);
+      setSteps((s) => ({ ...s, auth: "fail" }));
       setError("Invalid username or password.");
-    } else if (res?.ok) {
-      router.replace(callbackUrl);
-    } else {
+      return;
+    }
+
+    if (!res?.ok) {
+      setBusy(false);
+      setSteps((s) => ({ ...s, auth: "fail" }));
       setError(
-        "Could not reach the sign-in service. Try a hard refresh (⌘⇧R) or an Incognito window.",
+        "Sign-in service did not respond. Try a hard refresh (⌘⇧R), Incognito, or a different browser.",
       );
+      return;
+    }
+
+    setSteps({ click: "ok", auth: "ok", redirect: "running" });
+    // Hard navigation is more reliable than the client-side router here —
+    // it forces the browser to re-fetch with the freshly-set session cookie
+    // and run the middleware against it from a clean state.
+    const target = res.url ?? callbackUrl;
+    if (typeof window !== "undefined") {
+      window.location.href = target;
     }
   }
 
@@ -71,8 +90,12 @@ export default function LoginPage() {
         </p>
         <form onSubmit={onSubmit} className="space-y-md">
           <div>
-            <label className="text-label-sm text-on-surface-variant block mb-xs">Username</label>
+            <label htmlFor="login-username" className="text-label-sm text-on-surface-variant block mb-xs">
+              Username
+            </label>
             <input
+              id="login-username"
+              name="username"
               autoFocus
               autoComplete="username"
               value={username}
@@ -82,8 +105,12 @@ export default function LoginPage() {
             />
           </div>
           <div>
-            <label className="text-label-sm text-on-surface-variant block mb-xs">Password</label>
+            <label htmlFor="login-password" className="text-label-sm text-on-surface-variant block mb-xs">
+              Password
+            </label>
             <input
+              id="login-password"
+              name="password"
               type="password"
               autoComplete="current-password"
               value={password}
@@ -95,6 +122,13 @@ export default function LoginPage() {
           {error && (
             <div className="rounded-lg bg-error-container text-on-error-container px-md py-sm text-body-md">
               {error}
+            </div>
+          )}
+          {(busy || steps.click !== "idle") && (
+            <div className="rounded-lg bg-surface-container-low border border-outline-variant px-md py-sm text-caption text-on-surface-variant">
+              <Step label="Submit clicked" status={steps.click} />
+              <Step label="Authenticating" status={steps.auth} />
+              <Step label="Redirecting" status={steps.redirect} />
             </div>
           )}
           <button
@@ -110,5 +144,30 @@ export default function LoginPage() {
         </p>
       </div>
     </main>
+  );
+}
+
+function Step({ label, status }: { label: string; status: StepStatus }) {
+  const icon =
+    status === "ok"
+      ? "✓"
+      : status === "fail"
+        ? "✕"
+        : status === "running"
+          ? "…"
+          : "·";
+  const cls =
+    status === "ok"
+      ? "text-green-700"
+      : status === "fail"
+        ? "text-error"
+        : status === "running"
+          ? "text-accent"
+          : "text-on-surface-variant";
+  return (
+    <div className="flex items-center gap-xs font-mono">
+      <span className={cls + " w-4 inline-block"}>{icon}</span>
+      <span>{label}</span>
+    </div>
   );
 }
