@@ -2,27 +2,25 @@
 
 import Image from "next/image";
 import { signIn } from "next-auth/react";
-import { useRouter, useSearchParams } from "next/navigation";
-import { Suspense, useState } from "react";
-
-export const dynamic = "force-dynamic";
+import { useRouter } from "next/navigation";
+import { useEffect, useState } from "react";
 
 export default function LoginPage() {
-  return (
-    <Suspense fallback={null}>
-      <LoginForm />
-    </Suspense>
-  );
-}
-
-function LoginForm() {
   const router = useRouter();
-  const search = useSearchParams();
-  const callbackUrl = search.get("callbackUrl") || "/overview";
+  const [callbackUrl, setCallbackUrl] = useState("/overview");
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+
+  // Read callbackUrl from window.location to avoid useSearchParams' Suspense
+  // requirement, which broke SSR rendering of this page.
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const params = new URLSearchParams(window.location.search);
+    const cb = params.get("callbackUrl");
+    if (cb && cb.startsWith("/")) setCallbackUrl(cb);
+  }, []);
 
   async function onSubmit(e: React.FormEvent) {
     e.preventDefault();
@@ -49,7 +47,6 @@ function LoginForm() {
     } else if (res?.ok) {
       router.replace(callbackUrl);
     } else {
-      // Fetch returned undefined — usually a network/CSP/extension issue.
       setError(
         "Could not reach the sign-in service. Try a hard refresh (⌘⇧R) or an Incognito window.",
       );
