@@ -36,7 +36,7 @@ export default async function RevenuePage({
       <TopBar title="Revenue Analysis" subtitle={periodLabel(period)} action={<DateFilter />} />
       <div className="p-margin space-y-lg">
         <section className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-gutter">
-          <KpiCard label="Total Revenue" value={totals.revenue} tone="primary" />
+          <KpiCard label="Total Revenue" value={totals.revenue} tone="primary" hero />
           <KpiCard
             label="MoM Growth"
             value={`${mom >= 0 ? "+" : ""}${mom}%`}
@@ -53,7 +53,11 @@ export default async function RevenuePage({
           </div>
           <div className="lg:col-span-5">
             <Section title="Revenue Mix by Category">
-              {byCat.length ? <CategoryDonut data={byCat} /> : <Empty>No revenue yet.</Empty>}
+              {byCat.length ? (
+                <CategoryDonut data={byCat} centerTotal={totals.revenue} centerLabel="Total" />
+              ) : (
+                <Empty>No revenue yet.</Empty>
+              )}
             </Section>
           </div>
         </section>

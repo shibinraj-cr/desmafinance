@@ -129,8 +129,15 @@ export default async function DailyTrackerPage({
                 {items.map((t) => {
                   const v = Number(t.amount.toString());
                   const inflow = t.type === "Revenue";
+                  const rowTint = inflow ? "bg-green-50/30" : "bg-red-50/30";
                   return (
-                    <tr key={t.id} className="border-t border-outline-variant/60 hover:bg-surface-container-low">
+                    <tr
+                      key={t.id}
+                      className={
+                        "border-t border-outline-variant/60 hover:bg-surface-container-low " +
+                        rowTint
+                      }
+                    >
                       <Td>{t.date.toISOString().slice(0, 10)}</Td>
                       <Td>{t.month}</Td>
                       <Td>

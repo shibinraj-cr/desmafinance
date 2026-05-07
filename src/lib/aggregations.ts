@@ -83,6 +83,37 @@ export async function topRevenueServices(limit = 6, range?: Range) {
     .slice(0, limit);
 }
 
+/**
+ * Sales vs collections are tagged by "(Sales)" / "(Collection)" suffixes on
+ * the sub-item label in the catalog. Split them so management can read new
+ * pipeline distinctly from collection recovery.
+ */
+export async function topRevenueServicesSplit(limit = 6, range?: Range) {
+  const rows = await prisma.transaction.groupBy({
+    by: ["subItem", "category"],
+    where: { ...activeWhere(range), type: "Revenue" },
+    _sum: { amount: true },
+  });
+  const sales: { name: string; value: number }[] = [];
+  const collections: { name: string; value: number }[] = [];
+  for (const r of rows) {
+    const v = num(r._sum.amount);
+    const name = r.subItem;
+    const isCollection =
+      /\(Collection\)/i.test(name) || /Collection -/i.test(r.category ?? "");
+    if (isCollection) collections.push({ name, value: v });
+    else sales.push({ name, value: v });
+  }
+  sales.sort((a, b) => b.value - a.value);
+  collections.sort((a, b) => b.value - a.value);
+  return {
+    sales: sales.slice(0, limit),
+    collections: collections.slice(0, limit),
+    salesTotal: sales.reduce((s, x) => s + x.value, 0),
+    collectionsTotal: collections.reduce((s, x) => s + x.value, 0),
+  };
+}
+
 export async function expenseBreakdown(limit = 8, range?: Range) {
   const rows = await prisma.transaction.groupBy({
     by: ["category"],

@@ -46,7 +46,7 @@ export default async function ExpensesPage({
       <TopBar title="Expense Tracker" subtitle={periodLabel(period)} action={<DateFilter />} />
       <div className="p-margin space-y-lg">
         <section className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-gutter">
-          <KpiCard label="Total Expenses" value={totals.expense} tone="danger" />
+          <KpiCard label="Total Expenses" value={totals.expense} tone="danger" hero />
           <KpiCard label="Categories" value={breakdown.length} />
           <KpiCard label="Top 3 Share" value={`${top3Pct}%`} hint="Concentration of spend" />
           <KpiCard
@@ -63,7 +63,15 @@ export default async function ExpensesPage({
           </div>
           <div className="lg:col-span-5">
             <Section title="Distribution">
-              {breakdown.length ? <CategoryDonut data={breakdown.slice(0, 6)} /> : <Empty>No expenses yet.</Empty>}
+              {breakdown.length ? (
+                <CategoryDonut
+                  data={breakdown.slice(0, 6)}
+                  centerTotal={totals.expense}
+                  centerLabel="Total"
+                />
+              ) : (
+                <Empty>No expenses yet.</Empty>
+              )}
             </Section>
           </div>
         </section>

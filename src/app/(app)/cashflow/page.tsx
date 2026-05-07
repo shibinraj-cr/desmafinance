@@ -30,7 +30,12 @@ export default async function CashFlowPage({
         <section className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-gutter">
           <KpiCard label="Total Inflow" value={totals.revenue} tone="success" />
           <KpiCard label="Total Outflow" value={totals.expense} tone="danger" />
-          <KpiCard label="Net Cash" value={totals.net} tone={totals.net >= 0 ? "primary" : "danger"} />
+          <KpiCard
+            label="Net Cash"
+            value={totals.net}
+            tone={totals.net >= 0 ? "success" : "danger"}
+            hero
+          />
           <KpiCard
             label="Months Positive / Negative"
             value={`${positiveMonths} / ${negativeMonths}`}
