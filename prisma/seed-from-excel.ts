@@ -31,6 +31,19 @@ type Row = {
 
 const excelDateToJS = parseLooseDate;
 
+const MONTH_ABBR = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+
+/**
+ * Derive a "Mon-YY" label from the actual transaction date. We deliberately
+ * ignore the user-typed month column because hand-typed values like
+ * "26-04-2026" get auto-converted by Excel into Date objects and round-trip
+ * as garbage strings, dropping rows out of every month bucket. The date column
+ * is the source of truth.
+ */
+function monthLabelFromDate(d: Date): string {
+  return `${MONTH_ABBR[d.getUTCMonth()]}-${String(d.getUTCFullYear()).slice(-2)}`;
+}
+
 async function main() {
   if (process.env.NODE_ENV === "production" && process.env.ALLOW_DESTRUCTIVE_SEED !== "true") {
     console.error(
@@ -119,7 +132,7 @@ async function main() {
         if (!date) return null;
         return {
           date,
-          month: r.month ?? "",
+          month: monthLabelFromDate(date),
           type: r.type ?? "",
           category: r.category ?? "",
           subItem: r.subItem ?? "",
