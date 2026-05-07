@@ -4,18 +4,48 @@ import Image from "next/image";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { signOut } from "next-auth/react";
+import { canApprove, canManageUsers, roleLabel } from "@/lib/rbac";
 
-const NAV = [
-  { href: "/overview", label: "Overview", icon: "dashboard" },
-  { href: "/revenue", label: "Revenue", icon: "payments" },
-  { href: "/expenses", label: "Expenses", icon: "receipt_long" },
-  { href: "/cashflow", label: "Cash Flow", icon: "account_balance" },
-  { href: "/daily-tracker", label: "Daily Tracker", icon: "edit_calendar" },
-  { href: "/ai-insights", label: "AI Insights", icon: "psychology" },
-];
+type NavItem = {
+  href: string;
+  label: string;
+  icon: string;
+  badgeCount?: number | null;
+  show?: boolean;
+};
 
-export function SideNav({ user }: { user: { name?: string | null; email?: string | null } }) {
+export function SideNav({
+  user,
+  pendingCount,
+}: {
+  user: { name?: string | null; email?: string | null; role?: string | null };
+  pendingCount: number;
+}) {
   const pathname = usePathname();
+  const role = user.role ?? "executive";
+
+  const NAV: NavItem[] = [
+    { href: "/overview", label: "Overview", icon: "dashboard", show: true },
+    { href: "/revenue", label: "Revenue", icon: "payments", show: true },
+    { href: "/expenses", label: "Expenses", icon: "receipt_long", show: true },
+    { href: "/cashflow", label: "Cash Flow", icon: "account_balance", show: true },
+    { href: "/daily-tracker", label: "Daily Tracker", icon: "edit_calendar", show: true },
+    {
+      href: "/approvals",
+      label: "Approvals",
+      icon: "rule",
+      badgeCount: canApprove(role) ? pendingCount : null,
+      show: true,
+    },
+    { href: "/ai-insights", label: "AI Insights", icon: "psychology", show: true },
+    {
+      href: "/users",
+      label: "User Management",
+      icon: "manage_accounts",
+      show: canManageUsers(role),
+    },
+  ];
+
   return (
     <aside className="hidden md:flex flex-col w-[260px] h-screen sticky top-0 p-md gap-base bg-brand text-on-brand border-r border-brand-line">
       <div className="px-md pt-md pb-lg flex items-center gap-sm">
@@ -28,7 +58,7 @@ export function SideNav({ user }: { user: { name?: string | null; email?: string
         </div>
       </div>
       <nav className="flex-1 mt-base space-y-xs">
-        {NAV.map((n) => {
+        {NAV.filter((n) => n.show).map((n) => {
           const active = pathname === n.href || pathname.startsWith(n.href + "/");
           return (
             <Link
@@ -42,7 +72,12 @@ export function SideNav({ user }: { user: { name?: string | null; email?: string
               }
             >
               <span className="material-symbols-outlined">{n.icon}</span>
-              <span className="text-label-sm">{n.label}</span>
+              <span className="text-label-sm flex-1">{n.label}</span>
+              {n.badgeCount && n.badgeCount > 0 ? (
+                <span className="text-[10px] font-bold bg-primary text-on-primary px-xs py-[1px] rounded-full min-w-[18px] text-center">
+                  {n.badgeCount}
+                </span>
+              ) : null}
             </Link>
           );
         })}
@@ -50,7 +85,10 @@ export function SideNav({ user }: { user: { name?: string | null; email?: string
       <div className="mt-auto border-t border-brand-line pt-base space-y-xs">
         <div className="px-md py-sm">
           <p className="text-label-sm text-on-brand font-semibold truncate">{user.name ?? "User"}</p>
-          {user.email && <p className="text-caption text-on-brand-variant truncate">{user.email}</p>}
+          <p className="text-caption text-on-brand-variant truncate">
+            {roleLabel(role)}
+            {user.email ? ` · ${user.email}` : ""}
+          </p>
         </div>
         <button
           onClick={() => signOut({ callbackUrl: "/login" })}

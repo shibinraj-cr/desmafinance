@@ -1,6 +1,17 @@
 import { prisma } from "./prisma";
 
-type AuditAction = "CREATE" | "UPDATE" | "DELETE" | "RESTORE";
+type AuditAction =
+  | "CREATE"
+  | "UPDATE"
+  | "DELETE"
+  | "RESTORE"
+  | "SUBMIT_CREATE"
+  | "SUBMIT_UPDATE"
+  | "SUBMIT_DELETE"
+  | "APPROVE_CREATE"
+  | "APPROVE_UPDATE"
+  | "APPROVE_DELETE"
+  | "REJECT";
 
 export async function recordAudit(opts: {
   entityType: string;

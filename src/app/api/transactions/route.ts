@@ -3,7 +3,7 @@ import { z } from "zod";
 import { getServerSession } from "next-auth";
 import { authOptions } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
-import { recordAudit } from "@/lib/audit";
+import { submitCreate, type TxProposed } from "@/lib/approval";
 import {
   TYPES,
   FLOWS,
@@ -93,32 +93,30 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: "validation_failed" }, { status: 400 });
   }
   const data = parsed.data;
-  const userId = session.user.id ?? null;
+  const userId = session.user.id;
+  const role = session.user.role ?? "executive";
 
-  const created = await prisma.transaction.create({
-    data: {
-      date: new Date(data.date),
-      month: data.month,
-      type: data.type,
-      category: data.category,
-      subItem: data.subItem,
-      description: data.description ?? null,
-      paymentMode: data.paymentMode,
-      amount: data.amount,
-      flow: data.flow ?? flowFor(data.type),
-      createdById: userId,
-    },
-  });
+  const proposed: TxProposed = {
+    date: data.date,
+    month: data.month,
+    type: data.type,
+    category: data.category,
+    subItem: data.subItem,
+    description: data.description ?? null,
+    paymentMode: data.paymentMode,
+    amount: data.amount,
+    flow: data.flow ?? flowFor(data.type),
+  };
 
-  await recordAudit({
-    entityType: "Transaction",
-    entityId: created.id,
-    action: "CREATE",
-    userId,
-    changes: { ...data },
-  });
-
-  return NextResponse.json({
-    item: { ...created, amount: Number(created.amount.toString()) },
-  });
+  const result = await submitCreate({ data: proposed, userId, role });
+  if (result.applied) {
+    return NextResponse.json({
+      applied: true,
+      item: { ...result.transaction, amount: Number(result.transaction.amount.toString()) },
+    });
+  }
+  return NextResponse.json(
+    { applied: false, pendingId: result.pending.id },
+    { status: 202 },
+  );
 }

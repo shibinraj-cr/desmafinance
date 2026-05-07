@@ -83,6 +83,7 @@ export function TransactionForm({
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [ok, setOk] = useState(false);
+  const [okMessage, setOkMessage] = useState<string | null>(null);
 
   function onTypeChange(next: TxType) {
     setType(next);
@@ -105,8 +106,12 @@ export function TransactionForm({
     e.preventDefault();
     setError(null);
     setOk(false);
+    setOkMessage(null);
     setBusy(true);
-    const url = mode === "edit" && transactionId ? `/api/transactions/${transactionId}` : "/api/transactions";
+    const url =
+      mode === "edit" && transactionId
+        ? `/api/transactions/${transactionId}`
+        : "/api/transactions";
     const method = mode === "edit" ? "PATCH" : "POST";
     const res = await fetch(url, {
       method,
@@ -123,7 +128,7 @@ export function TransactionForm({
       }),
     });
     setBusy(false);
-    if (!res.ok) {
+    if (!res.ok && res.status !== 202) {
       const data = await res.json().catch(() => ({}));
       setError(
         data?.error === "validation_failed"
@@ -134,14 +139,23 @@ export function TransactionForm({
       );
       return;
     }
+    const data = await res.json().catch(() => ({}));
     setOk(true);
+    setOkMessage(
+      data?.applied === false
+        ? mode === "edit"
+          ? "Edit submitted for approval. It will appear on dashboards once a manager approves it."
+          : "Transaction submitted for approval. It will appear on dashboards once a manager approves it."
+        : mode === "edit"
+          ? "Transaction updated."
+          : "Transaction saved.",
+    );
     if (mode === "create") {
       setAmount("");
       setDescription("");
     }
     router.refresh();
     if (mode === "edit") {
-      // Send the user back to the table after a successful edit.
       router.push("/daily-tracker");
     }
   }
@@ -265,7 +279,7 @@ export function TransactionForm({
       )}
       {ok && (
         <div className="rounded-lg bg-green-50 text-green-700 px-md py-sm">
-          {mode === "edit" ? "Transaction updated." : "Transaction saved."}
+          {okMessage}
         </div>
       )}
 

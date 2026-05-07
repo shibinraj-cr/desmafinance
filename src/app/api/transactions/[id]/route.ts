@@ -2,8 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 import { getServerSession } from "next-auth";
 import { authOptions } from "@/lib/auth";
-import { prisma } from "@/lib/prisma";
-import { recordAudit } from "@/lib/audit";
+import { submitUpdate, submitDelete, type TxProposed } from "@/lib/approval";
 import {
   TYPES,
   FLOWS,
@@ -58,86 +57,50 @@ export async function PATCH(req: NextRequest, { params }: { params: { id: string
     return NextResponse.json({ error: "validation_failed" }, { status: 400 });
   }
   const data = parsed.data;
-  const userId = session.user.id ?? null;
+  const userId = session.user.id;
+  const role = session.user.role ?? "executive";
 
-  const existing = await prisma.transaction.findUnique({ where: { id: params.id } });
-  if (!existing || existing.deletedAt) {
-    return NextResponse.json({ error: "not_found" }, { status: 404 });
+  const proposed: TxProposed = {
+    date: data.date,
+    month: data.month,
+    type: data.type,
+    category: data.category,
+    subItem: data.subItem,
+    description: data.description ?? null,
+    paymentMode: data.paymentMode,
+    amount: data.amount,
+    flow: data.flow ?? flowFor(data.type),
+  };
+
+  const result = await submitUpdate({ txId: params.id, data: proposed, userId, role });
+  if ("error" in result) {
+    return NextResponse.json({ error: result.error }, { status: 404 });
   }
-
-  const updated = await prisma.transaction.update({
-    where: { id: params.id },
-    data: {
-      date: new Date(data.date),
-      month: data.month,
-      type: data.type,
-      category: data.category,
-      subItem: data.subItem,
-      description: data.description ?? null,
-      paymentMode: data.paymentMode,
-      amount: data.amount,
-      flow: data.flow ?? flowFor(data.type),
-    },
-  });
-
-  await recordAudit({
-    entityType: "Transaction",
-    entityId: updated.id,
-    action: "UPDATE",
-    userId,
-    changes: {
-      before: {
-        date: existing.date.toISOString(),
-        month: existing.month,
-        type: existing.type,
-        category: existing.category,
-        subItem: existing.subItem,
-        description: existing.description,
-        paymentMode: existing.paymentMode,
-        amount: Number(existing.amount.toString()),
-      },
-      after: {
-        ...data,
-        amount: data.amount,
-      },
-    },
-  });
-
-  return NextResponse.json({
-    item: { ...updated, amount: Number(updated.amount.toString()) },
-  });
+  if (result.applied) {
+    return NextResponse.json({
+      applied: true,
+      item: { ...result.transaction, amount: Number(result.transaction.amount.toString()) },
+    });
+  }
+  return NextResponse.json(
+    { applied: false, pendingId: result.pending.id },
+    { status: 202 },
+  );
 }
 
 export async function DELETE(_req: NextRequest, { params }: { params: { id: string } }) {
   const session = await getServerSession(authOptions);
   if (!session?.user) return NextResponse.json({ error: "unauthorized" }, { status: 401 });
 
-  const userId = session.user.id ?? null;
+  const userId = session.user.id;
+  const role = session.user.role ?? "executive";
 
-  const existing = await prisma.transaction.findUnique({ where: { id: params.id } });
-  if (!existing || existing.deletedAt) {
-    return NextResponse.json({ error: "not_found" }, { status: 404 });
+  const result = await submitDelete({ txId: params.id, userId, role });
+  if ("error" in result) {
+    return NextResponse.json({ error: result.error }, { status: 404 });
   }
-
-  await prisma.transaction.update({
-    where: { id: params.id },
-    data: { deletedAt: new Date(), deletedById: userId },
-  });
-
-  await recordAudit({
-    entityType: "Transaction",
-    entityId: params.id,
-    action: "DELETE",
-    userId,
-    changes: {
-      date: existing.date.toISOString(),
-      type: existing.type,
-      category: existing.category,
-      subItem: existing.subItem,
-      description: existing.description,
-      amount: Number(existing.amount.toString()),
-    },
-  });
-
-  return NextResponse.json({ ok: true });
+  if (result.applied) {
+    return NextResponse.json({ applied: true });
+  }
+  return NextResponse.json({ applied: false }, { status: 202 });
 }

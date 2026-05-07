@@ -9,15 +9,17 @@ datasource db {
 }
 
 model User {
-  id           String        @id @default(cuid())
-  username     String        @unique
-  email        String?       @unique
-  passwordHash String
-  role         String        @default("user")
-  createdAt    DateTime      @default(now())
-  updatedAt    DateTime      @updatedAt
-  transactions Transaction[]
-  auditLogs    AuditLog[]
+  id                  String            @id @default(cuid())
+  username            String            @unique
+  email               String?           @unique
+  passwordHash        String
+  role                String            @default("executive")
+  createdAt           DateTime          @default(now())
+  updatedAt           DateTime          @updatedAt
+  transactions        Transaction[]
+  auditLogs           AuditLog[]
+  submittedApprovals  PendingApproval[] @relation("submittedApprovals")
+  reviewedApprovals   PendingApproval[] @relation("reviewedApprovals")
 }
 
 model Transaction {
@@ -37,6 +39,8 @@ model Transaction {
   deletedById String?
   createdAt   DateTime  @default(now())
   updatedAt   DateTime  @updatedAt
+
+  pendingApprovals PendingApproval[] @relation("targetTransaction")
 
   @@index([date])
   @@index([month])
@@ -60,4 +64,25 @@ model AuditLog {
   @@index([entityType, entityId])
   @@index([userId, createdAt])
   @@index([createdAt])
+}
+
+model PendingApproval {
+  id            String       @id @default(cuid())
+  kind          String       // "create" | "update" | "delete"
+  status        String       @default("pending") // "pending" | "approved" | "rejected"
+  targetTxId    String?
+  targetTx      Transaction? @relation("targetTransaction", fields: [targetTxId], references: [id], onDelete: SetNull)
+  proposed      Json?        // proposed transaction values (null for delete)
+  submittedById String?
+  submittedBy   User?        @relation("submittedApprovals", fields: [submittedById], references: [id], onDelete: SetNull)
+  reviewedById  String?
+  reviewedBy    User?        @relation("reviewedApprovals", fields: [reviewedById], references: [id], onDelete: SetNull)
+  reviewNote    String?
+  reviewedAt    DateTime?
+  createdAt     DateTime     @default(now())
+  updatedAt     DateTime     @updatedAt
+
+  @@index([status, createdAt])
+  @@index([submittedById])
+  @@index([targetTxId])
 }
