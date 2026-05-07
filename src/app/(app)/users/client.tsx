@@ -1,7 +1,8 @@
 "use client";
 
 import { useRouter } from "next/navigation";
-import { useState } from "react";
+import { useEffect, useState } from "react";
+import { createPortal } from "react-dom";
 import { ROLES, type Role } from "@/lib/rbac";
 
 const errorLabels: Record<string, string> = {
@@ -18,6 +19,7 @@ const errorLabels: Record<string, string> = {
 export function NewUserButton() {
   const router = useRouter();
   const [open, setOpen] = useState(false);
+  const [mounted, setMounted] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [form, setForm] = useState({
@@ -26,6 +28,20 @@ export function NewUserButton() {
     password: "",
     role: "executive" as Role,
   });
+
+  useEffect(() => {
+    setMounted(true);
+  }, []);
+
+  // Lock body scroll while the modal is open so the page behind doesn't drift.
+  useEffect(() => {
+    if (!open) return;
+    const prev = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    return () => {
+      document.body.style.overflow = prev;
+    };
+  }, [open]);
 
   async function submit(e: React.FormEvent) {
     e.preventDefault();
@@ -59,11 +75,11 @@ export function NewUserButton() {
         </span>
         Add user
       </button>
-      {open && (
+      {open && mounted && createPortal(
         <div
           role="dialog"
           aria-modal="true"
-          className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-md"
+          className="fixed inset-0 z-[1000] grid place-items-center bg-black/50 p-md"
           onClick={() => !busy && setOpen(false)}
         >
           <form
@@ -135,7 +151,8 @@ export function NewUserButton() {
               </button>
             </div>
           </form>
-        </div>
+        </div>,
+        document.body,
       )}
     </>
   );
