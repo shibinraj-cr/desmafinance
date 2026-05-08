@@ -3,6 +3,7 @@ import { redirect } from "next/navigation";
 import { authOptions } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
 import { SideNav } from "@/components/SideNav";
+import { RouteProgress } from "@/components/RouteProgress";
 
 export default async function AppLayout({ children }: { children: React.ReactNode }) {
   const session = await getServerSession(authOptions);
@@ -17,6 +18,7 @@ export default async function AppLayout({ children }: { children: React.ReactNod
     // flex-col on mobile so the mobile top bar stacks above main; flex-row
     // on md+ so the desktop sidebar sits to the left of main.
     <div className="flex flex-col md:flex-row min-h-screen bg-surface">
+      <RouteProgress />
       <SideNav
         user={{
           name: session.user.name,
