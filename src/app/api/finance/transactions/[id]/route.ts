@@ -2,43 +2,29 @@ import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 import { getServerSession } from "next-auth";
 import { authOptions } from "@/lib/auth";
+import { prisma } from "@/lib/prisma";
 import { submitUpdate, submitDelete, type TxProposed } from "@/lib/approval";
 import { getCurrentUserAndPermissions } from "@/lib/permissions";
-import {
-  TYPES,
-  FLOWS,
-  MONTHS,
-  PAYMENT_MODES,
-  categoriesFor,
-  subItemsFor,
-  flowFor,
-} from "@/lib/catalog";
+import { TYPES, FLOWS, MONTHS, PAYMENT_MODES, flowFor } from "@/lib/catalog";
+import { verifyCategorySubItem } from "@/lib/master-data";
 
 const MAX_BODY_BYTES = 10_000;
 
-const TxPatchSchema = z
-  .object({
-    date: z
-      .string()
-      .min(1)
-      .refine((s) => !isNaN(Date.parse(s)), "Invalid date"),
-    month: z.enum(MONTHS),
-    type: z.enum(TYPES),
-    category: z.string().min(1).max(120),
-    subItem: z.string().min(1).max(160),
-    description: z.string().max(500).optional().nullable(),
-    paymentMode: z.enum(PAYMENT_MODES),
-    amount: z.coerce.number().positive().max(1_000_000_000),
-    flow: z.enum(FLOWS).optional(),
-  })
-  .refine(
-    (d) => (categoriesFor(d.type) as readonly string[]).includes(d.category),
-    { message: "Category not allowed for this type", path: ["category"] },
-  )
-  .refine(
-    (d) => subItemsFor(d.type, d.category).includes(d.subItem),
-    { message: "Sub-item not allowed for this category", path: ["subItem"] },
-  );
+const TxPatchSchema = z.object({
+  date: z
+    .string()
+    .min(1)
+    .refine((s) => !isNaN(Date.parse(s)), "Invalid date"),
+  month: z.enum(MONTHS),
+  type: z.enum(TYPES),
+  category: z.string().min(1).max(120),
+  subItem: z.string().min(1).max(160),
+  description: z.string().max(500).optional().nullable(),
+  paymentMode: z.enum(PAYMENT_MODES),
+  amount: z.coerce.number().positive().max(1_000_000_000),
+  flow: z.enum(FLOWS).optional(),
+  partyId: z.string().min(1).optional().nullable(),
+});
 
 export async function PATCH(req: NextRequest, { params }: { params: { id: string } }) {
   const session = await getServerSession(authOptions);
@@ -63,6 +49,19 @@ export async function PATCH(req: NextRequest, { params }: { params: { id: string
     return NextResponse.json({ error: "unauthorized" }, { status: 401 });
   }
 
+  const verr = await verifyCategorySubItem(data.category, data.subItem, data.type);
+  if (verr) return NextResponse.json({ error: verr }, { status: 400 });
+
+  if (data.partyId) {
+    const party = await prisma.party.findUnique({ where: { id: data.partyId } });
+    if (!party || !party.isActive) {
+      return NextResponse.json({ error: "party_not_found" }, { status: 400 });
+    }
+    if (party.txTypes !== "Both" && party.txTypes !== data.type) {
+      return NextResponse.json({ error: "party_tx_type_mismatch" }, { status: 400 });
+    }
+  }
+
   const proposed: TxProposed = {
     date: data.date,
     month: data.month,
@@ -73,6 +72,7 @@ export async function PATCH(req: NextRequest, { params }: { params: { id: string
     paymentMode: data.paymentMode,
     amount: data.amount,
     flow: data.flow ?? flowFor(data.type),
+    partyId: data.partyId ?? null,
   };
 
   const result = await submitUpdate({ txId: params.id, data: proposed, userId, perms });

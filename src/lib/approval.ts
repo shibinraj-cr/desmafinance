@@ -12,6 +12,7 @@ export type TxProposed = {
   paymentMode: string;
   amount: number;
   flow: string;
+  partyId?: string | null;
 };
 
 /**
@@ -39,6 +40,7 @@ export async function submitCreate(opts: {
         paymentMode: data.paymentMode,
         amount: data.amount,
         flow: data.flow,
+        partyId: data.partyId ?? null,
         createdById: userId,
       },
     });
@@ -96,6 +98,7 @@ export async function submitUpdate(opts: {
         paymentMode: data.paymentMode,
         amount: data.amount,
         flow: data.flow,
+        partyId: data.partyId ?? null,
       },
     });
     await recordAudit({
@@ -238,6 +241,7 @@ export async function approvePending(opts: {
         paymentMode: data.paymentMode,
         amount: data.amount,
         flow: data.flow,
+        partyId: data.partyId ?? null,
         createdById: p.submittedById,
       },
     });
@@ -277,6 +281,7 @@ export async function approvePending(opts: {
         paymentMode: data.paymentMode,
         amount: data.amount,
         flow: data.flow,
+        partyId: data.partyId ?? null,
       },
     });
     await prisma.pendingApproval.update({

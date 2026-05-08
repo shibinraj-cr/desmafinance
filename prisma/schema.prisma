@@ -56,6 +56,8 @@ model Transaction {
   paymentMode String
   amount      Decimal   @db.Decimal(14, 2)
   flow        String
+  partyId     String?
+  party       Party?    @relation(fields: [partyId], references: [id], onDelete: SetNull)
   createdById String?
   createdBy   User?     @relation(fields: [createdById], references: [id], onDelete: SetNull)
   deletedAt   DateTime?
@@ -72,6 +74,61 @@ model Transaction {
   @@index([deletedAt])
   @@index([month, type])
   @@index([paymentMode, type])
+  @@index([partyId])
+}
+
+// Master: transaction Categories. A category can be Revenue-only,
+// Expense-only, or available for Both.
+model Category {
+  id        String        @id @default(cuid())
+  name      String
+  // 'Revenue' | 'Expense' | 'Both'
+  type      String
+  isActive  Boolean       @default(true)
+  isSystem  Boolean       @default(false)
+  createdAt DateTime      @default(now())
+  updatedAt DateTime      @updatedAt
+  subItems  SubCategory[]
+
+  @@unique([name, type])
+  @@index([type])
+  @@index([isActive])
+}
+
+model SubCategory {
+  id         String   @id @default(cuid())
+  categoryId String
+  category   Category @relation(fields: [categoryId], references: [id], onDelete: Cascade)
+  name       String
+  isActive   Boolean  @default(true)
+  isSystem   Boolean  @default(false)
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  @@unique([categoryId, name])
+  @@index([categoryId])
+  @@index([isActive])
+}
+
+// Master: parties (candidates / vendors) referenced by transactions.
+model Party {
+  id        String   @id @default(cuid())
+  name      String   @unique
+  // 'Candidate' | 'Vendor'
+  group     String
+  // What transaction types this party may be linked to: 'Revenue' | 'Expense' | 'Both'
+  txTypes   String   @default("Both")
+  email     String?
+  phone     String?
+  notes     String?
+  isActive  Boolean  @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  transactions Transaction[]
+
+  @@index([group])
+  @@index([isActive])
 }
 
 model AuditLog {

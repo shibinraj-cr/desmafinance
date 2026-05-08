@@ -2,24 +2,35 @@
 
 import { useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
-import {
-  TYPES,
-  MONTHS,
-  PAYMENT_MODES,
-  categoriesFor,
-  subItemsFor,
-  type TxType,
-} from "@/lib/catalog";
+import { MONTHS, PAYMENT_MODES, TYPES, type TxType } from "@/lib/catalog";
+import { InlineNewParty } from "./InlineNewParty";
 
 export type TransactionFormValues = {
   type: TxType;
-  date: string; // yyyy-mm-dd
+  date: string;
   month: string;
   category: string;
   subItem: string;
   paymentMode: string;
   amount: string;
   description: string;
+  partyId: string | null;
+};
+
+export type MasterCategory = {
+  id: string;
+  name: string;
+  type: "Revenue" | "Expense" | "Both";
+  isActive: boolean;
+  subItems: { id: string; name: string; isActive: boolean }[];
+};
+
+export type MasterParty = {
+  id: string;
+  name: string;
+  group: "Candidate" | "Vendor";
+  txTypes: "Revenue" | "Expense" | "Both";
+  isActive: boolean;
 };
 
 function todayMonthCode(): string {
@@ -40,66 +51,103 @@ function monthFromDate(iso: string): string {
   return (MONTHS as readonly string[]).includes(code) ? code : MONTHS[0];
 }
 
-const DEFAULT_VALUES: TransactionFormValues = {
-  type: "Revenue",
-  date: todayIso(),
-  month: (() => {
-    const c = todayMonthCode();
-    return (MONTHS as readonly string[]).includes(c) ? c : MONTHS[0];
-  })(),
-  category: categoriesFor("Revenue")[0],
-  subItem: subItemsFor("Revenue", categoriesFor("Revenue")[0])[0],
-  paymentMode: PAYMENT_MODES[0],
-  amount: "",
-  description: "",
-};
-
 export function TransactionForm({
   mode = "create",
   initial,
   transactionId,
+  categories,
+  parties,
 }: {
   mode?: "create" | "edit";
   initial?: Partial<TransactionFormValues>;
   transactionId?: string;
+  /** All categories (active + inactive) keyed for the dropdown. */
+  categories: MasterCategory[];
+  /** All parties (active only) keyed for the dropdown. */
+  parties: MasterParty[];
 }) {
   const router = useRouter();
-  const [type, setType] = useState<TxType>((initial?.type as TxType) ?? DEFAULT_VALUES.type);
-  const cats = useMemo(() => categoriesFor(type), [type]);
-  const [category, setCategory] = useState<string>(
-    initial?.category && cats.includes(initial.category as never)
+  const [type, setType] = useState<TxType>((initial?.type as TxType) ?? "Revenue");
+
+  const visibleCategories = useMemo(() => {
+    return categories.filter(
+      (c) => c.isActive && (c.type === type || c.type === "Both"),
+    );
+  }, [categories, type]);
+
+  const [categoryName, setCategoryName] = useState<string>(
+    initial?.category && visibleCategories.some((c) => c.name === initial.category)
       ? initial.category
-      : cats[0],
+      : visibleCategories[0]?.name ?? "",
   );
-  const subs = useMemo(() => subItemsFor(type, category), [type, category]);
-  const [subItem, setSubItem] = useState<string>(
-    initial?.subItem && subs.includes(initial.subItem) ? initial.subItem : subs[0],
+
+  const currentCategory = useMemo(
+    () => visibleCategories.find((c) => c.name === categoryName) ?? null,
+    [visibleCategories, categoryName],
   );
-  const [date, setDate] = useState<string>(initial?.date ?? DEFAULT_VALUES.date);
-  const [month, setMonth] = useState<string>(initial?.month ?? DEFAULT_VALUES.month);
-  const [paymentMode, setPaymentMode] = useState<string>(initial?.paymentMode ?? DEFAULT_VALUES.paymentMode);
+
+  const subItems = useMemo(() => {
+    if (!currentCategory) return [];
+    return currentCategory.subItems.filter((s) => s.isActive);
+  }, [currentCategory]);
+
+  const [subItemName, setSubItemName] = useState<string>(
+    initial?.subItem && subItems.some((s) => s.name === initial.subItem)
+      ? initial.subItem
+      : subItems[0]?.name ?? "",
+  );
+
+  const [date, setDate] = useState<string>(initial?.date ?? todayIso());
+  const [month, setMonth] = useState<string>(() => {
+    if (initial?.month) return initial.month;
+    const c = todayMonthCode();
+    return (MONTHS as readonly string[]).includes(c) ? c : MONTHS[0];
+  });
+  const [paymentMode, setPaymentMode] = useState<string>(initial?.paymentMode ?? PAYMENT_MODES[0]);
   const [amount, setAmount] = useState<string>(initial?.amount ?? "");
   const [description, setDescription] = useState<string>(initial?.description ?? "");
+  const [partyId, setPartyId] = useState<string | null>(initial?.partyId ?? null);
+  const [partiesState, setPartiesState] = useState<MasterParty[]>(parties);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [ok, setOk] = useState(false);
   const [okMessage, setOkMessage] = useState<string | null>(null);
 
+  const visibleParties = useMemo(
+    () =>
+      partiesState.filter(
+        (p) => p.isActive && (p.txTypes === type || p.txTypes === "Both"),
+      ),
+    [partiesState, type],
+  );
+
   function onTypeChange(next: TxType) {
     setType(next);
-    const newCats = categoriesFor(next);
-    setCategory(newCats[0]);
-    setSubItem(subItemsFor(next, newCats[0])[0]);
+    const cats = categories.filter((c) => c.isActive && (c.type === next || c.type === "Both"));
+    const firstCat = cats[0];
+    if (firstCat) {
+      setCategoryName(firstCat.name);
+      setSubItemName(firstCat.subItems.find((s) => s.isActive)?.name ?? "");
+    } else {
+      setCategoryName("");
+      setSubItemName("");
+    }
+    // If the current party doesn't allow this tx type, clear it.
+    if (partyId) {
+      const cur = partiesState.find((p) => p.id === partyId);
+      if (cur && cur.txTypes !== next && cur.txTypes !== "Both") setPartyId(null);
+    }
   }
+
   function onCategoryChange(next: string) {
-    setCategory(next);
-    setSubItem(subItemsFor(type, next)[0]);
+    setCategoryName(next);
+    const cat = visibleCategories.find((c) => c.name === next);
+    setSubItemName(cat?.subItems.find((s) => s.isActive)?.name ?? "");
   }
+
   function onDateChange(iso: string) {
     setDate(iso);
-    // Auto-derive month from date so users don't have to keep them in sync.
-    const m = monthFromDate(iso);
-    setMonth(m);
+    setMonth(monthFromDate(iso));
   }
 
   async function onSubmit(e: React.FormEvent) {
@@ -107,6 +155,10 @@ export function TransactionForm({
     setError(null);
     setOk(false);
     setOkMessage(null);
+    if (!categoryName || !subItemName) {
+      setError("Pick a category and sub-category before saving.");
+      return;
+    }
     setBusy(true);
     const url =
       mode === "edit" && transactionId
@@ -120,11 +172,12 @@ export function TransactionForm({
         date,
         month,
         type,
-        category,
-        subItem,
+        category: categoryName,
+        subItem: subItemName,
         description: description || null,
         paymentMode,
         amount,
+        partyId: partyId || null,
       }),
     });
     setBusy(false);
@@ -153,11 +206,17 @@ export function TransactionForm({
     if (mode === "create") {
       setAmount("");
       setDescription("");
+      setPartyId(null);
     }
     router.refresh();
     if (mode === "edit") {
       router.push("/finance/daily-tracker");
     }
+  }
+
+  function handleNewParty(p: MasterParty) {
+    setPartiesState((prev) => [...prev, p]);
+    setPartyId(p.id);
   }
 
   const accent =
@@ -214,22 +273,30 @@ export function TransactionForm({
         </Field>
         <Field label="Category">
           <select
-            value={category}
+            value={categoryName}
             onChange={(e) => onCategoryChange(e.target.value)}
             className={inputCls}
+            required
           >
-            {cats.map((c) => (
-              <option key={c} value={c}>
-                {c}
+            {visibleCategories.length === 0 && <option value="">(no categories defined)</option>}
+            {visibleCategories.map((c) => (
+              <option key={c.id} value={c.name}>
+                {c.name}
               </option>
             ))}
           </select>
         </Field>
         <Field label="Sub-Item">
-          <select value={subItem} onChange={(e) => setSubItem(e.target.value)} className={inputCls}>
-            {subs.map((s) => (
-              <option key={s} value={s}>
-                {s}
+          <select
+            value={subItemName}
+            onChange={(e) => setSubItemName(e.target.value)}
+            className={inputCls}
+            required
+          >
+            {subItems.length === 0 && <option value="">(no sub-items)</option>}
+            {subItems.map((s) => (
+              <option key={s.id} value={s.name}>
+                {s.name}
               </option>
             ))}
           </select>
@@ -260,6 +327,25 @@ export function TransactionForm({
           />
         </Field>
         <div className="md:col-span-2">
+          <Field label="Party (optional)">
+            <div className="flex items-center gap-xs">
+              <select
+                value={partyId ?? ""}
+                onChange={(e) => setPartyId(e.target.value || null)}
+                className={inputCls + " flex-1"}
+              >
+                <option value="">— None —</option>
+                {visibleParties.map((p) => (
+                  <option key={p.id} value={p.id}>
+                    {p.name} · {p.group}
+                  </option>
+                ))}
+              </select>
+              <InlineNewParty txType={type} onCreated={handleNewParty} />
+            </div>
+          </Field>
+        </div>
+        <div className="md:col-span-2">
           <Field label="Description / Narration">
             <input
               type="text"
@@ -267,7 +353,7 @@ export function TransactionForm({
               onChange={(e) => setDescription(e.target.value)}
               className={inputCls}
               placeholder={
-                type === "Revenue" ? "Candidate name or reference" : "Vendor / payee details"
+                type === "Revenue" ? "Reference / context" : "Vendor / payee details"
               }
             />
           </Field>
@@ -278,9 +364,7 @@ export function TransactionForm({
         <div className="rounded-lg bg-error-container text-on-error-container px-md py-sm">{error}</div>
       )}
       {ok && (
-        <div className="rounded-lg bg-green-50 text-green-700 px-md py-sm">
-          {okMessage}
-        </div>
+        <div className="rounded-lg bg-green-50 text-green-700 px-md py-sm">{okMessage}</div>
       )}
 
       <div className="flex items-center gap-base pt-base">

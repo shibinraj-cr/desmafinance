@@ -58,6 +58,23 @@ export const MODULES: AppModule[] = [
     pages: [],
   },
   {
+    id: "master-data",
+    name: "Master Data",
+    icon: "category",
+    basePath: "/master-data",
+    status: "active",
+    adminOnly: true,
+    pages: [
+      {
+        href: "/master-data/categories",
+        label: "Categories",
+        icon: "account_tree",
+        adminOnly: true,
+      },
+      { href: "/master-data/parties", label: "Parties", icon: "groups", adminOnly: true },
+    ],
+  },
+  {
     id: "system",
     name: "System",
     icon: "settings",

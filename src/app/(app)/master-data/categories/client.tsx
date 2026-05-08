@@ -1,0 +1,503 @@
+"use client";
+
+import { useRouter } from "next/navigation";
+import { useEffect, useState } from "react";
+import { createPortal } from "react-dom";
+
+type CatType = "Revenue" | "Expense" | "Both";
+type SubItem = { id: string; name: string; isActive: boolean; isSystem: boolean };
+type Category = {
+  id: string;
+  name: string;
+  type: CatType;
+  isActive: boolean;
+  isSystem: boolean;
+  subItems: SubItem[];
+  txCount: number;
+};
+
+const errorLabels: Record<string, string> = {
+  name_taken: "A category with that name and type already exists.",
+  validation_failed: "Check the values entered.",
+  forbidden: "Only admins can do that.",
+  not_found: "Category no longer exists.",
+  in_use: "There are transactions using this — set inactive instead of deleting.",
+  category_not_found: "Parent category not found.",
+};
+
+const typeBadge = (t: CatType) => {
+  if (t === "Revenue") return "bg-green-50 text-green-700 border-green-200";
+  if (t === "Expense") return "bg-red-50 text-red-700 border-red-200";
+  return "bg-primary-fixed/40 text-accent border-primary-fixed-dim";
+};
+
+export function CategoriesEditor({ categories }: { categories: Category[] }) {
+  const groups = {
+    Revenue: categories.filter((c) => c.type === "Revenue"),
+    Both: categories.filter((c) => c.type === "Both"),
+    Expense: categories.filter((c) => c.type === "Expense"),
+  };
+
+  return (
+    <div className="space-y-lg">
+      {(["Revenue", "Both", "Expense"] as const).map((t) =>
+        groups[t].length === 0 ? null : (
+          <div key={t} className="space-y-base">
+            <h3 className="text-h3 text-on-surface flex items-center gap-base">
+              <span
+                className={`px-sm py-xs rounded-full border text-label-sm font-bold ${typeBadge(t)}`}
+              >
+                {t}
+              </span>
+              <span className="text-caption text-on-surface-variant">
+                {groups[t].length} categor{groups[t].length === 1 ? "y" : "ies"}
+              </span>
+            </h3>
+            <div className="space-y-base">
+              {groups[t].map((c) => (
+                <CategoryCard key={c.id} category={c} />
+              ))}
+            </div>
+          </div>
+        ),
+      )}
+    </div>
+  );
+}
+
+function CategoryCard({ category }: { category: Category }) {
+  const router = useRouter();
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState({
+    name: category.name,
+    type: category.type,
+    isActive: category.isActive,
+  });
+  const [newSubName, setNewSubName] = useState("");
+
+  async function save() {
+    setError(null);
+    setBusy(true);
+    const res = await fetch(`/api/master/categories/${category.id}`, {
+      method: "PATCH",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(draft),
+    });
+    setBusy(false);
+    if (!res.ok) {
+      const data = await res.json().catch(() => ({}));
+      setError(errorLabels[data?.error as string] ?? "Failed to save.");
+      return;
+    }
+    setEditing(false);
+    router.refresh();
+  }
+
+  async function remove() {
+    if (!confirm(`Delete category "${category.name}"? This cannot be undone.`)) return;
+    setBusy(true);
+    const res = await fetch(`/api/master/categories/${category.id}`, { method: "DELETE" });
+    setBusy(false);
+    if (!res.ok) {
+      const data = await res.json().catch(() => ({}));
+      alert(errorLabels[data?.error as string] ?? "Failed to delete.");
+      return;
+    }
+    router.refresh();
+  }
+
+  async function toggleActive() {
+    setBusy(true);
+    const res = await fetch(`/api/master/categories/${category.id}`, {
+      method: "PATCH",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ isActive: !category.isActive }),
+    });
+    setBusy(false);
+    if (res.ok) router.refresh();
+  }
+
+  async function addSubItem() {
+    const name = newSubName.trim();
+    if (!name) return;
+    setBusy(true);
+    const res = await fetch("/api/master/sub-categories", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ categoryId: category.id, name }),
+    });
+    setBusy(false);
+    if (!res.ok) {
+      const data = await res.json().catch(() => ({}));
+      alert(errorLabels[data?.error as string] ?? "Failed to add sub-category.");
+      return;
+    }
+    setNewSubName("");
+    router.refresh();
+  }
+
+  return (
+    <div
+      className={
+        "bg-surface-container-lowest border rounded-xl shadow-sm p-md " +
+        (category.isActive ? "border-outline-variant" : "border-outline-variant opacity-60")
+      }
+    >
+      <div className="flex flex-wrap items-center gap-base">
+        {editing ? (
+          <input
+            value={draft.name}
+            onChange={(e) => setDraft({ ...draft, name: e.target.value })}
+            className="text-h3 font-semibold bg-transparent border-b border-outline-variant focus:border-primary outline-none transition flex-1 min-w-0"
+            autoFocus
+          />
+        ) : (
+          <h4 className="text-h3 text-on-surface flex-1 min-w-0 truncate">{category.name}</h4>
+        )}
+        {editing ? (
+          <select
+            value={draft.type}
+            onChange={(e) => setDraft({ ...draft, type: e.target.value as CatType })}
+            className="h-8 px-sm rounded-lg border border-outline-variant bg-surface-container-lowest text-label-sm"
+          >
+            <option value="Revenue">Revenue</option>
+            <option value="Expense">Expense</option>
+            <option value="Both">Both</option>
+          </select>
+        ) : (
+          <span
+            className={`px-sm py-xs rounded-full border text-[11px] font-bold uppercase tracking-wider ${typeBadge(category.type)}`}
+          >
+            {category.type}
+          </span>
+        )}
+        <span className="text-caption text-on-surface-variant">
+          {category.subItems.length} sub-item{category.subItems.length === 1 ? "" : "s"}
+          {category.txCount > 0 ? ` · ${category.txCount} txn${category.txCount === 1 ? "" : "s"}` : ""}
+        </span>
+        <div className="flex items-center gap-xs ml-auto">
+          {editing ? (
+            <>
+              <button
+                onClick={save}
+                disabled={busy}
+                className="h-8 px-md rounded-lg bg-primary text-on-primary text-label-sm font-semibold hover:bg-primary-container transition disabled:opacity-60"
+              >
+                {busy ? "Saving…" : "Save"}
+              </button>
+              <button
+                onClick={() => {
+                  setEditing(false);
+                  setDraft({
+                    name: category.name,
+                    type: category.type,
+                    isActive: category.isActive,
+                  });
+                  setError(null);
+                }}
+                disabled={busy}
+                className="h-8 px-md rounded-lg border border-outline-variant text-on-surface-variant hover:bg-surface-container-low transition"
+              >
+                Cancel
+              </button>
+            </>
+          ) : (
+            <>
+              <button
+                onClick={toggleActive}
+                disabled={busy}
+                title={category.isActive ? "Retire this category" : "Reactivate"}
+                className="text-on-surface-variant hover:text-accent p-xs disabled:opacity-40"
+              >
+                <span className="material-symbols-outlined" style={{ fontSize: 18 }}>
+                  {category.isActive ? "toggle_on" : "toggle_off"}
+                </span>
+              </button>
+              <button
+                onClick={() => setEditing(true)}
+                className="text-on-surface-variant hover:text-accent p-xs"
+              >
+                <span className="material-symbols-outlined" style={{ fontSize: 18 }}>
+                  edit
+                </span>
+              </button>
+              <button
+                onClick={remove}
+                disabled={busy || category.txCount > 0}
+                title={
+                  category.txCount > 0
+                    ? "Has transactions — set inactive instead"
+                    : "Delete category"
+                }
+                className="text-on-surface-variant hover:text-error p-xs disabled:opacity-30"
+              >
+                <span className="material-symbols-outlined" style={{ fontSize: 18 }}>
+                  delete
+                </span>
+              </button>
+            </>
+          )}
+        </div>
+      </div>
+      {error && (
+        <div className="mt-base rounded-lg bg-error-container text-on-error-container px-md py-sm text-body-md">
+          {error}
+        </div>
+      )}
+
+      <div className="mt-md grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-base">
+        {category.subItems.map((s) => (
+          <SubItemRow key={s.id} sub={s} />
+        ))}
+      </div>
+
+      <div className="mt-md flex items-center gap-xs">
+        <input
+          value={newSubName}
+          onChange={(e) => setNewSubName(e.target.value)}
+          placeholder="New sub-category…"
+          onKeyDown={(e) => e.key === "Enter" && addSubItem()}
+          className="flex-1 h-9 px-md rounded-lg border border-outline-variant bg-surface-container-lowest text-body-md focus:border-primary focus:ring-2 focus:ring-primary/20 outline-none transition"
+        />
+        <button
+          onClick={addSubItem}
+          disabled={busy || !newSubName.trim()}
+          className="h-9 px-md rounded-lg bg-primary text-on-primary text-label-sm font-semibold hover:bg-primary-container transition disabled:opacity-50"
+        >
+          Add
+        </button>
+      </div>
+    </div>
+  );
+}
+
+function SubItemRow({ sub }: { sub: SubItem }) {
+  const router = useRouter();
+  const [busy, setBusy] = useState(false);
+  const [editing, setEditing] = useState(false);
+  const [name, setName] = useState(sub.name);
+
+  async function save() {
+    setBusy(true);
+    const res = await fetch(`/api/master/sub-categories/${sub.id}`, {
+      method: "PATCH",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ name }),
+    });
+    setBusy(false);
+    if (!res.ok) {
+      const data = await res.json().catch(() => ({}));
+      alert(errorLabels[data?.error as string] ?? "Failed.");
+      return;
+    }
+    setEditing(false);
+    router.refresh();
+  }
+
+  async function toggleActive() {
+    setBusy(true);
+    await fetch(`/api/master/sub-categories/${sub.id}`, {
+      method: "PATCH",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ isActive: !sub.isActive }),
+    });
+    setBusy(false);
+    router.refresh();
+  }
+
+  async function remove() {
+    if (!confirm(`Delete sub-category "${sub.name}"?`)) return;
+    setBusy(true);
+    const res = await fetch(`/api/master/sub-categories/${sub.id}`, { method: "DELETE" });
+    setBusy(false);
+    if (!res.ok) {
+      const data = await res.json().catch(() => ({}));
+      alert(errorLabels[data?.error as string] ?? "Failed.");
+      return;
+    }
+    router.refresh();
+  }
+
+  return (
+    <div
+      className={
+        "flex items-center gap-xs px-sm py-xs rounded-lg border " +
+        (sub.isActive
+          ? "bg-surface-container-low border-outline-variant"
+          : "bg-surface-container border-outline-variant opacity-50")
+      }
+    >
+      {editing ? (
+        <>
+          <input
+            value={name}
+            onChange={(e) => setName(e.target.value)}
+            className="flex-1 min-w-0 h-7 px-xs rounded border border-outline-variant bg-surface-container-lowest text-body-md outline-none focus:border-primary"
+            autoFocus
+          />
+          <button
+            onClick={save}
+            disabled={busy}
+            className="text-accent text-[11px] font-bold uppercase tracking-wider"
+          >
+            Save
+          </button>
+          <button
+            onClick={() => {
+              setEditing(false);
+              setName(sub.name);
+            }}
+            className="text-on-surface-variant text-[11px] uppercase tracking-wider"
+          >
+            Cancel
+          </button>
+        </>
+      ) : (
+        <>
+          <span className="flex-1 min-w-0 text-body-md text-on-surface truncate" title={sub.name}>
+            {sub.name}
+          </span>
+          <button
+            onClick={toggleActive}
+            disabled={busy}
+            className="text-on-surface-variant hover:text-accent disabled:opacity-40"
+          >
+            <span className="material-symbols-outlined" style={{ fontSize: 14 }}>
+              {sub.isActive ? "toggle_on" : "toggle_off"}
+            </span>
+          </button>
+          <button
+            onClick={() => setEditing(true)}
+            className="text-on-surface-variant hover:text-accent"
+          >
+            <span className="material-symbols-outlined" style={{ fontSize: 14 }}>
+              edit
+            </span>
+          </button>
+          <button onClick={remove} disabled={busy} className="text-on-surface-variant hover:text-error disabled:opacity-40">
+            <span className="material-symbols-outlined" style={{ fontSize: 14 }}>
+              delete
+            </span>
+          </button>
+        </>
+      )}
+    </div>
+  );
+}
+
+export function NewCategoryButton() {
+  const router = useRouter();
+  const [open, setOpen] = useState(false);
+  const [mounted, setMounted] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [form, setForm] = useState({ name: "", type: "Revenue" as CatType });
+
+  useEffect(() => setMounted(true), []);
+  useEffect(() => {
+    if (!open) return;
+    const prev = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    return () => {
+      document.body.style.overflow = prev;
+    };
+  }, [open]);
+
+  async function submit(e: React.FormEvent) {
+    e.preventDefault();
+    setError(null);
+    setBusy(true);
+    const res = await fetch("/api/master/categories", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(form),
+    });
+    setBusy(false);
+    if (!res.ok) {
+      const data = await res.json().catch(() => ({}));
+      setError(errorLabels[data?.error as string] ?? "Failed to create.");
+      return;
+    }
+    setOpen(false);
+    setForm({ name: "", type: "Revenue" });
+    router.refresh();
+  }
+
+  return (
+    <>
+      <button
+        type="button"
+        onClick={() => setOpen(true)}
+        className="inline-flex items-center gap-xs h-9 px-md rounded-lg bg-primary text-on-primary text-label-sm font-semibold hover:bg-primary-container transition"
+      >
+        <span className="material-symbols-outlined" style={{ fontSize: 18 }}>
+          add
+        </span>
+        Add category
+      </button>
+      {open &&
+        mounted &&
+        createPortal(
+          <div
+            className="fixed inset-0 z-[1000] grid place-items-center bg-black/50 p-md"
+            onClick={() => !busy && setOpen(false)}
+          >
+            <form
+              onSubmit={submit}
+              onClick={(e) => e.stopPropagation()}
+              className="w-full max-w-md max-h-[90vh] overflow-y-auto bg-surface-container-lowest border border-outline-variant rounded-xl shadow-lg p-lg space-y-md"
+            >
+              <h3 className="text-h3 text-on-surface">New category</h3>
+              <label className="block">
+                <span className="block text-label-sm text-on-surface-variant mb-xs">Name</span>
+                <input
+                  value={form.name}
+                  onChange={(e) => setForm({ ...form, name: e.target.value })}
+                  required
+                  autoFocus
+                  className="w-full h-10 px-md rounded-lg border border-outline-variant bg-surface-container-lowest focus:border-primary focus:ring-2 focus:ring-primary/20 outline-none transition text-body-md"
+                />
+              </label>
+              <label className="block">
+                <span className="block text-label-sm text-on-surface-variant mb-xs">Type</span>
+                <select
+                  value={form.type}
+                  onChange={(e) => setForm({ ...form, type: e.target.value as CatType })}
+                  className="w-full h-10 px-md rounded-lg border border-outline-variant bg-surface-container-lowest focus:border-primary focus:ring-2 focus:ring-primary/20 outline-none transition text-body-md"
+                >
+                  <option value="Revenue">Revenue</option>
+                  <option value="Expense">Expense</option>
+                  <option value="Both">Both (Revenue + Expense)</option>
+                </select>
+              </label>
+              {error && (
+                <div className="rounded-lg bg-error-container text-on-error-container px-md py-sm">
+                  {error}
+                </div>
+              )}
+              <div className="flex items-center gap-base pt-base">
+                <button
+                  type="submit"
+                  disabled={busy}
+                  className="h-10 px-lg rounded-lg bg-primary text-on-primary font-semibold hover:bg-primary-container transition disabled:opacity-60"
+                >
+                  {busy ? "Creating…" : "Create category"}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setOpen(false)}
+                  disabled={busy}
+                  className="h-10 px-lg rounded-lg border border-outline-variant text-on-surface-variant hover:bg-surface-container-low transition"
+                >
+                  Cancel
+                </button>
+              </div>
+            </form>
+          </div>,
+          document.body,
+        )}
+    </>
+  );
+}
