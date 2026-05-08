@@ -10,7 +10,7 @@ export default function NotFound() {
           The page you&apos;re looking for doesn&apos;t exist or has moved.
         </p>
         <Link
-          href="/overview"
+          href="/finance/overview"
           className="mt-lg inline-block h-10 px-lg leading-10 rounded-lg bg-primary text-on-primary font-semibold hover:bg-primary-container transition"
         >
           Back to dashboard

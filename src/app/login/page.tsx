@@ -31,7 +31,7 @@ async function fetchWithTimeout(url: string, opts: RequestInit, timeoutMs: numbe
 }
 
 export default function LoginPage() {
-  const [callbackUrl, setCallbackUrl] = useState("/overview");
+  const [callbackUrl, setCallbackUrl] = useState("/finance/overview");
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
   const [error, setError] = useState<string | null>(null);

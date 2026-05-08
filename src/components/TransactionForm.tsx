@@ -110,8 +110,8 @@ export function TransactionForm({
     setBusy(true);
     const url =
       mode === "edit" && transactionId
-        ? `/api/transactions/${transactionId}`
-        : "/api/transactions";
+        ? `/api/finance/transactions/${transactionId}`
+        : "/api/finance/transactions";
     const method = mode === "edit" ? "PATCH" : "POST";
     const res = await fetch(url, {
       method,
@@ -156,7 +156,7 @@ export function TransactionForm({
     }
     router.refresh();
     if (mode === "edit") {
-      router.push("/daily-tracker");
+      router.push("/finance/daily-tracker");
     }
   }
 
@@ -293,7 +293,7 @@ export function TransactionForm({
         </button>
         <button
           type="button"
-          onClick={() => router.push("/daily-tracker")}
+          onClick={() => router.push("/finance/daily-tracker")}
           className="h-10 px-lg rounded-lg border border-outline-variant text-on-surface-variant hover:bg-surface-container-low transition"
         >
           Cancel

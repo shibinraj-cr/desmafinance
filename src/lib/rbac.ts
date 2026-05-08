@@ -14,22 +14,21 @@ export type Permissions = {
 /** Legacy string-only check. Used as fallback when no Role record. */
 export function fromLegacyString(role?: string | null): Permissions {
   const r = role ?? "executive";
+  const FINANCE_PAGES = [
+    "/finance/overview",
+    "/finance/revenue",
+    "/finance/expenses",
+    "/finance/cashflow",
+    "/finance/daily-tracker",
+    "/finance/approvals",
+    "/finance/ai-insights",
+  ];
   if (r === "admin") {
     return {
       isAdmin: true,
       canApprove: true,
       needsApproval: false,
-      pages: [
-        "/overview",
-        "/revenue",
-        "/expenses",
-        "/cashflow",
-        "/daily-tracker",
-        "/approvals",
-        "/ai-insights",
-        "/users",
-        "/roles",
-      ],
+      pages: [...FINANCE_PAGES, "/users", "/roles"],
       roleName: "Admin",
     };
   }
@@ -38,15 +37,7 @@ export function fromLegacyString(role?: string | null): Permissions {
       isAdmin: false,
       canApprove: true,
       needsApproval: false,
-      pages: [
-        "/overview",
-        "/revenue",
-        "/expenses",
-        "/cashflow",
-        "/daily-tracker",
-        "/approvals",
-        "/ai-insights",
-      ],
+      pages: FINANCE_PAGES,
       roleName: "Manager",
     };
   }
@@ -54,15 +45,7 @@ export function fromLegacyString(role?: string | null): Permissions {
     isAdmin: false,
     canApprove: false,
     needsApproval: true,
-    pages: [
-      "/overview",
-      "/revenue",
-      "/expenses",
-      "/cashflow",
-      "/daily-tracker",
-      "/approvals",
-      "/ai-insights",
-    ],
+    pages: FINANCE_PAGES,
     roleName: r === "executive" ? "Executive" : "User",
   };
 }

@@ -6,7 +6,7 @@
  *   npm run db:seed-roles
  */
 import { PrismaClient } from "@prisma/client";
-import { ALL_PAGE_HREFS, DEFAULT_NON_ADMIN_PAGES } from "../src/lib/pages";
+import { ALL_PAGE_HREFS, DEFAULT_NON_ADMIN_PAGES } from "../src/lib/modules";
 
 const prisma = new PrismaClient();
 

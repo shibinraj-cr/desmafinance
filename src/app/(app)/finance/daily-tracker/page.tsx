@@ -68,7 +68,7 @@ export default async function DailyTrackerPage({
           <div className="flex items-center gap-base">
             <DateFilter />
             <Link
-              href="/daily-tracker/new"
+              href="/finance/daily-tracker/new"
               className="inline-flex items-center gap-xs h-9 px-md rounded-lg bg-primary text-on-primary text-label-sm font-semibold hover:bg-primary-container transition"
             >
               <span className="material-symbols-outlined" style={{ fontSize: 18 }}>
@@ -82,19 +82,19 @@ export default async function DailyTrackerPage({
       <div className="p-margin space-y-lg">
         <div className="flex flex-wrap gap-base items-center">
           <FilterChip
-            href={"/daily-tracker" + filterQs({ type: undefined })}
+            href={"/finance/daily-tracker" + filterQs({ type: undefined })}
             active={!searchParams.type}
           >
             All
           </FilterChip>
           <FilterChip
-            href={"/daily-tracker" + filterQs({ type: "Revenue" })}
+            href={"/finance/daily-tracker" + filterQs({ type: "Revenue" })}
             active={searchParams.type === "Revenue"}
           >
             Inflow
           </FilterChip>
           <FilterChip
-            href={"/daily-tracker" + filterQs({ type: "Expense" })}
+            href={"/finance/daily-tracker" + filterQs({ type: "Expense" })}
             active={searchParams.type === "Expense"}
           >
             Outflow
@@ -162,7 +162,7 @@ export default async function DailyTrackerPage({
                       </Td>
                       <Td className="text-right whitespace-nowrap">
                         <Link
-                          href={`/daily-tracker/${t.id}/edit`}
+                          href={`/finance/daily-tracker/${t.id}/edit`}
                           title="Edit"
                           className="inline-flex p-xs text-on-surface-variant hover:text-accent transition"
                         >

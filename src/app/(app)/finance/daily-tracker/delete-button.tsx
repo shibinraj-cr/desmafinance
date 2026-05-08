@@ -10,7 +10,7 @@ export function DeleteRowButton({ id }: { id: string }) {
   async function onClick() {
     if (!confirm("Delete this transaction? This cannot be undone.")) return;
     setBusy(true);
-    const res = await fetch(`/api/transactions/${id}`, { method: "DELETE" });
+    const res = await fetch(`/api/finance/transactions/${id}`, { method: "DELETE" });
     setBusy(false);
     if (res.ok) router.refresh();
   }

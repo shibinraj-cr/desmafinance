@@ -74,7 +74,7 @@ export default async function OverviewPage({
   if (searchParams.period) exportQs.set("period", searchParams.period);
   if (searchParams.from) exportQs.set("from", searchParams.from);
   if (searchParams.to) exportQs.set("to", searchParams.to);
-  const exportHref = `/api/export${exportQs.toString() ? "?" + exportQs.toString() : ""}`;
+  const exportHref = `/api/finance/export${exportQs.toString() ? "?" + exportQs.toString() : ""}`;
 
   return (
     <>
@@ -146,7 +146,7 @@ export default async function OverviewPage({
             </div>
             <h3 className="text-h3 font-bold">AI Highlights</h3>
             <Link
-              href="/ai-insights"
+              href="/finance/ai-insights"
               className="ml-auto bg-primary text-on-primary hover:bg-primary-container px-md py-xs rounded-lg text-label-sm transition uppercase tracking-widest font-bold"
             >
               View all
@@ -176,7 +176,7 @@ export default async function OverviewPage({
             <Section
               title="Revenue by Service"
               action={
-                <Link className="text-accent text-label-sm font-semibold hover:underline" href="/revenue">
+                <Link className="text-accent text-label-sm font-semibold hover:underline" href="/finance/revenue">
                   View details
                 </Link>
               }

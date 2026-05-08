@@ -16,7 +16,7 @@ export function ApprovalActions({ id }: { id: string }) {
       return;
     }
     setBusy(true);
-    const res = await fetch(`/api/approvals/${id}`, {
+    const res = await fetch(`/api/finance/approvals/${id}`, {
       method: "PATCH",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ action, note: note.trim() || undefined }),
