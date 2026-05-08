@@ -4,6 +4,7 @@ import { prisma } from "@/lib/prisma";
 import { inrFull } from "@/lib/format";
 import { parsePeriod, periodLabel, rangeFor } from "@/lib/period";
 import { DateFilter } from "@/components/DateFilter";
+import { FilterBand } from "@/components/FilterBand";
 import { DeleteRowButton } from "./delete-button";
 
 export const dynamic = "force-dynamic";
@@ -11,13 +12,28 @@ export const dynamic = "force-dynamic";
 export default async function DailyTrackerPage({
   searchParams,
 }: {
-  searchParams: { period?: string; from?: string; to?: string; type?: string };
+  searchParams: {
+    period?: string;
+    from?: string;
+    to?: string;
+    type?: string;
+    category?: string;
+    sub?: string;
+    party?: string;
+    mode?: string;
+    flow?: string;
+  };
 }) {
   const period = parsePeriod(searchParams);
   const range = rangeFor(period);
   const where = {
     deletedAt: null,
     ...(searchParams.type ? { type: searchParams.type } : {}),
+    ...(searchParams.category ? { category: searchParams.category } : {}),
+    ...(searchParams.sub ? { subItem: searchParams.sub } : {}),
+    ...(searchParams.party ? { partyId: searchParams.party } : {}),
+    ...(searchParams.mode ? { paymentMode: searchParams.mode } : {}),
+    ...(searchParams.flow ? { flow: searchParams.flow } : {}),
     ...(range.from || range.to
       ? {
           date: {
@@ -27,11 +43,27 @@ export default async function DailyTrackerPage({
         }
       : {}),
   };
-  const items = await prisma.transaction.findMany({
-    where,
-    orderBy: [{ date: "desc" }, { createdAt: "desc" }],
-    take: 500,
-  });
+  const [items, categories, parties] = await Promise.all([
+    prisma.transaction.findMany({
+      where,
+      orderBy: [{ date: "desc" }, { createdAt: "desc" }],
+      take: 500,
+    }),
+    prisma.category.findMany({
+      orderBy: [{ type: "asc" }, { name: "asc" }],
+      include: {
+        subItems: {
+          orderBy: [{ name: "asc" }],
+          select: { id: true, name: true, isActive: true },
+        },
+      },
+    }),
+    prisma.party.findMany({
+      where: { isActive: true },
+      orderBy: [{ group: "asc" }, { name: "asc" }],
+      select: { id: true, name: true, group: true, txTypes: true, isActive: true },
+    }),
+  ]);
 
   // Running balance is computed across the full timeline of (currently filtered) rows
   // in chronological order, then mapped back by id for newest-first display.
@@ -51,6 +83,12 @@ export default async function DailyTrackerPage({
     if (searchParams.period) qs.set("period", searchParams.period);
     if (searchParams.from) qs.set("from", searchParams.from);
     if (searchParams.to) qs.set("to", searchParams.to);
+    // Preserve party/mode/flow across type-chip clicks; drop
+    // category/sub since they're type-scoped and would silently filter
+    // to zero rows after a type swap.
+    if (searchParams.party) qs.set("party", searchParams.party);
+    if (searchParams.mode) qs.set("mode", searchParams.mode);
+    if (searchParams.flow) qs.set("flow", searchParams.flow);
     for (const [k, v] of Object.entries(extra)) {
       if (v) qs.set(k, v);
       else qs.delete(k);
@@ -100,6 +138,24 @@ export default async function DailyTrackerPage({
             Outflow
           </FilterChip>
         </div>
+
+        <FilterBand
+          categories={categories.map((c) => ({
+            id: c.id,
+            name: c.name,
+            type: c.type as "Revenue" | "Expense" | "Both",
+            isActive: c.isActive,
+            subItems: c.subItems,
+          }))}
+          parties={parties.map((p) => ({
+            id: p.id,
+            name: p.name,
+            group: p.group as "Candidate" | "Vendor",
+            txTypes: p.txTypes as "Revenue" | "Expense" | "Both",
+            isActive: p.isActive,
+          }))}
+          type={searchParams.type}
+        />
 
         <div className="bg-surface-container-lowest border border-outline-variant rounded-xl shadow-sm overflow-hidden">
           <div className="overflow-x-auto scrollbar-thin">
