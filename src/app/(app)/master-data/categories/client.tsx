@@ -5,7 +5,14 @@ import { useEffect, useState } from "react";
 import { createPortal } from "react-dom";
 
 type CatType = "Revenue" | "Expense" | "Both";
-type SubItem = { id: string; name: string; isActive: boolean; isSystem: boolean };
+type SubItem = {
+  id: string;
+  name: string;
+  isActive: boolean;
+  isSystem: boolean;
+  serviceId: string | null;
+  serviceName: string | null;
+};
 type Category = {
   id: string;
   name: string;
@@ -15,6 +22,14 @@ type Category = {
   subItems: SubItem[];
   txCount: number;
 };
+type ServiceOption = { id: string; name: string };
+
+const SERVICE_LINK_CATEGORIES = new Set([
+  "Sales - Nursing Registrations",
+  "Collection - Nursing Registrations",
+  "Sales - Study Abroad",
+  "Collection - Study Abroad",
+]);
 
 const errorLabels: Record<string, string> = {
   name_taken: "A category with that name and type already exists.",
@@ -31,7 +46,13 @@ const typeBadge = (t: CatType) => {
   return "bg-primary-fixed/40 text-accent border-primary-fixed-dim";
 };
 
-export function CategoriesEditor({ categories }: { categories: Category[] }) {
+export function CategoriesEditor({
+  categories,
+  services,
+}: {
+  categories: Category[];
+  services: ServiceOption[];
+}) {
   const [filter, setFilter] = useState<"Revenue" | "Expense">("Revenue");
 
   // 'Both' categories show under whichever side the user has toggled.
@@ -85,7 +106,7 @@ export function CategoriesEditor({ categories }: { categories: Category[] }) {
       ) : (
         <div className="space-y-base">
           {visible.map((c) => (
-            <CategoryCard key={c.id} category={c} />
+            <CategoryCard key={c.id} category={c} services={services} />
           ))}
         </div>
       )}
@@ -93,7 +114,14 @@ export function CategoriesEditor({ categories }: { categories: Category[] }) {
   );
 }
 
-function CategoryCard({ category }: { category: Category }) {
+function CategoryCard({
+  category,
+  services,
+}: {
+  category: Category;
+  services: ServiceOption[];
+}) {
+  const showServiceLink = SERVICE_LINK_CATEGORIES.has(category.name);
   const router = useRouter();
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -275,9 +303,13 @@ function CategoryCard({ category }: { category: Category }) {
         </div>
       )}
 
-      <div className="mt-md grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-base">
+      <div className={"mt-md grid grid-cols-1 gap-base " + (showServiceLink ? "" : "sm:grid-cols-2 lg:grid-cols-3")}>
         {category.subItems.map((s) => (
-          <SubItemRow key={s.id} sub={s} />
+          <SubItemRow
+            key={s.id}
+            sub={s}
+            services={showServiceLink ? services : null}
+          />
         ))}
       </div>
 
@@ -301,7 +333,13 @@ function CategoryCard({ category }: { category: Category }) {
   );
 }
 
-function SubItemRow({ sub }: { sub: SubItem }) {
+function SubItemRow({
+  sub,
+  services,
+}: {
+  sub: SubItem;
+  services: ServiceOption[] | null;
+}) {
   const router = useRouter();
   const [busy, setBusy] = useState(false);
   const [editing, setEditing] = useState(false);
@@ -348,10 +386,26 @@ function SubItemRow({ sub }: { sub: SubItem }) {
     router.refresh();
   }
 
+  async function linkService(serviceId: string | null) {
+    setBusy(true);
+    const res = await fetch(`/api/master/sub-categories/${sub.id}`, {
+      method: "PATCH",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ serviceId: serviceId ?? null }),
+    });
+    setBusy(false);
+    if (!res.ok) {
+      const data = await res.json().catch(() => ({}));
+      alert(errorLabels[data?.error as string] ?? "Failed.");
+      return;
+    }
+    router.refresh();
+  }
+
   return (
     <div
       className={
-        "flex items-center gap-xs px-sm py-xs rounded-lg border " +
+        "flex flex-wrap items-center gap-xs px-sm py-xs rounded-lg border " +
         (sub.isActive
           ? "bg-surface-container-low border-outline-variant"
           : "bg-surface-container border-outline-variant opacity-50")
@@ -387,6 +441,27 @@ function SubItemRow({ sub }: { sub: SubItem }) {
           <span className="flex-1 min-w-0 text-body-md text-on-surface truncate" title={sub.name}>
             {sub.name}
           </span>
+          {services !== null && (
+            <select
+              value={sub.serviceId ?? ""}
+              onChange={(e) => linkService(e.target.value || null)}
+              disabled={busy}
+              title={sub.serviceName ? `Linked to service: ${sub.serviceName}` : "No service linked"}
+              className={
+                "h-7 px-xs rounded border text-caption max-w-[180px] " +
+                (sub.serviceId
+                  ? "bg-primary-fixed/40 border-primary-fixed-dim text-accent font-semibold"
+                  : "bg-surface-container-lowest border-outline-variant text-on-surface-variant")
+              }
+            >
+              <option value="">— No service —</option>
+              {services.map((s) => (
+                <option key={s.id} value={s.id}>
+                  {s.name}
+                </option>
+              ))}
+            </select>
+          )}
           <button
             onClick={toggleActive}
             disabled={busy}

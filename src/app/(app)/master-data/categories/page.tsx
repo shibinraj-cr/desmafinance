@@ -26,13 +26,23 @@ export default async function CategoriesPage() {
     );
   }
 
-  const categories = await prisma.category.findMany({
-    orderBy: [{ type: "asc" }, { name: "asc" }],
-    include: {
-      subItems: { orderBy: { name: "asc" } },
-      _count: { select: { subItems: true } },
-    },
-  });
+  const [categories, services] = await Promise.all([
+    prisma.category.findMany({
+      orderBy: [{ type: "asc" }, { name: "asc" }],
+      include: {
+        subItems: {
+          orderBy: { name: "asc" },
+          include: { service: { select: { id: true, name: true } } },
+        },
+        _count: { select: { subItems: true } },
+      },
+    }),
+    prisma.service.findMany({
+      where: { isActive: true },
+      orderBy: { name: "asc" },
+      select: { id: true, name: true },
+    }),
+  ]);
 
   // For each category, compute how many transactions reference it (read-only, used to gate delete in UI).
   const txCounts = await prisma.transaction.groupBy({
@@ -63,9 +73,12 @@ export default async function CategoriesPage() {
               name: s.name,
               isActive: s.isActive,
               isSystem: s.isSystem,
+              serviceId: s.serviceId,
+              serviceName: s.service?.name ?? null,
             })),
             txCount: txByCategory.get(c.name) ?? 0,
           }))}
+          services={services}
         />
       </div>
     </>

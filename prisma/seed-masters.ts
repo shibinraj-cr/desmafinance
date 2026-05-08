@@ -72,7 +72,10 @@ async function main() {
       create: { name: p.name, type: p.type, isActive: true, isSystem: false },
     });
     let added = 0;
-    for (const sub of p.subItems) {
+    for (const subRaw of p.subItems) {
+      // Strip ` (Sales)` / ` (Collection)` suffix if present — the parent
+      // category already conveys side, so the suffix is redundant.
+      const sub = subRaw.replace(/\s*\((Sales|Collection)\)\s*$/, "").trim();
       const existing = await prisma.subCategory.findUnique({
         where: { categoryId_name: { categoryId: cat.id, name: sub } },
       });

@@ -6,11 +6,22 @@ import { canManageUsers } from "@/lib/rbac";
 import { getCurrentUserAndPermissions } from "@/lib/permissions";
 
 const CreateSchema = z.object({
-  categoryId: z.string().min(1),
-  name: z.string().min(1).max(160),
+  name: z.string().min(2).max(160),
+  description: z.string().max(500).optional().or(z.literal("")),
   isActive: z.boolean().default(true),
-  serviceId: z.string().min(1).optional().nullable(),
 });
+
+export const dynamic = "force-dynamic";
+
+export async function GET() {
+  const { perms } = await getCurrentUserAndPermissions();
+  if (!perms) return NextResponse.json({ error: "unauthorized" }, { status: 401 });
+  const services = await prisma.service.findMany({
+    orderBy: [{ name: "asc" }],
+    include: { _count: { select: { subItems: true } } },
+  });
+  return NextResponse.json({ services });
+}
 
 export async function POST(req: NextRequest) {
   const { perms, userId } = await getCurrentUserAndPermissions();
@@ -24,34 +35,23 @@ export async function POST(req: NextRequest) {
   const data = parsed.data;
   const name = data.name.trim();
 
-  const cat = await prisma.category.findUnique({ where: { id: data.categoryId } });
-  if (!cat) return NextResponse.json({ error: "category_not_found" }, { status: 400 });
-
-  const existing = await prisma.subCategory.findUnique({
-    where: { categoryId_name: { categoryId: cat.id, name } },
-  });
+  const existing = await prisma.service.findUnique({ where: { name } });
   if (existing) return NextResponse.json({ error: "name_taken" }, { status: 409 });
 
-  if (data.serviceId) {
-    const svc = await prisma.service.findUnique({ where: { id: data.serviceId } });
-    if (!svc) return NextResponse.json({ error: "service_not_found" }, { status: 400 });
-  }
-
-  const created = await prisma.subCategory.create({
+  const created = await prisma.service.create({
     data: {
-      categoryId: cat.id,
       name,
+      description: data.description && data.description.length > 0 ? data.description.trim() : null,
       isActive: data.isActive,
       isSystem: false,
-      serviceId: data.serviceId ?? null,
     },
   });
   await recordAudit({
-    entityType: "SubCategory",
+    entityType: "Service",
     entityId: created.id,
     action: "CREATE",
     userId,
-    changes: { categoryId: cat.id, categoryName: cat.name, name },
+    changes: { name, description: data.description ?? null },
   });
-  return NextResponse.json({ subCategory: created });
+  return NextResponse.json({ service: created });
 }

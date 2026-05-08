@@ -6,10 +6,9 @@ import { canManageUsers } from "@/lib/rbac";
 import { getCurrentUserAndPermissions } from "@/lib/permissions";
 
 const PatchSchema = z.object({
-  name: z.string().min(1).max(160).optional(),
+  name: z.string().min(2).max(160).optional(),
+  description: z.string().max(500).optional().or(z.literal("")),
   isActive: z.boolean().optional(),
-  // null clears the link, undefined leaves it untouched.
-  serviceId: z.string().min(1).nullable().optional(),
 });
 
 export async function PATCH(req: NextRequest, { params }: { params: { id: string } }) {
@@ -22,43 +21,42 @@ export async function PATCH(req: NextRequest, { params }: { params: { id: string
   const parsed = PatchSchema.safeParse(body);
   if (!parsed.success) return NextResponse.json({ error: "validation_failed" }, { status: 400 });
 
-  const sub = await prisma.subCategory.findUnique({ where: { id: params.id } });
-  if (!sub) return NextResponse.json({ error: "not_found" }, { status: 404 });
+  const service = await prisma.service.findUnique({ where: { id: params.id } });
+  if (!service) return NextResponse.json({ error: "not_found" }, { status: 404 });
 
   const data = parsed.data;
   const update: Record<string, unknown> = {};
   if (data.name !== undefined) {
     const newName = data.name.trim();
-    if (newName !== sub.name) {
-      const collision = await prisma.subCategory.findUnique({
-        where: { categoryId_name: { categoryId: sub.categoryId, name: newName } },
-      });
-      if (collision && collision.id !== sub.id) {
+    if (newName !== service.name) {
+      const collision = await prisma.service.findUnique({ where: { name: newName } });
+      if (collision && collision.id !== service.id) {
         return NextResponse.json({ error: "name_taken" }, { status: 409 });
       }
       update.name = newName;
     }
   }
+  if (data.description !== undefined)
+    update.description =
+      data.description && data.description.length > 0 ? data.description.trim() : null;
   if (data.isActive !== undefined) update.isActive = data.isActive;
-  if (data.serviceId !== undefined) {
-    if (data.serviceId === null) {
-      update.serviceId = null;
-    } else {
-      const svc = await prisma.service.findUnique({ where: { id: data.serviceId } });
-      if (!svc) return NextResponse.json({ error: "service_not_found" }, { status: 400 });
-      update.serviceId = data.serviceId;
-    }
-  }
 
-  const updated = await prisma.subCategory.update({ where: { id: params.id }, data: update });
+  const updated = await prisma.service.update({ where: { id: params.id }, data: update });
   await recordAudit({
-    entityType: "SubCategory",
+    entityType: "Service",
     entityId: updated.id,
     action: "UPDATE",
     userId,
-    changes: { before: { name: sub.name, isActive: sub.isActive }, after: data },
+    changes: {
+      before: {
+        name: service.name,
+        description: service.description,
+        isActive: service.isActive,
+      },
+      after: data,
+    },
   });
-  return NextResponse.json({ subCategory: updated });
+  return NextResponse.json({ service: updated });
 }
 
 export async function DELETE(_req: NextRequest, { params }: { params: { id: string } }) {
@@ -67,26 +65,26 @@ export async function DELETE(_req: NextRequest, { params }: { params: { id: stri
   if (!canManageUsers(perms))
     return NextResponse.json({ error: "forbidden" }, { status: 403 });
 
-  const sub = await prisma.subCategory.findUnique({ where: { id: params.id } });
-  if (!sub) return NextResponse.json({ error: "not_found" }, { status: 404 });
-
-  const txCount = await prisma.transaction.count({
-    where: { subItem: sub.name, deletedAt: null },
+  const service = await prisma.service.findUnique({
+    where: { id: params.id },
+    include: { _count: { select: { subItems: true } } },
   });
-  if (txCount > 0) {
+  if (!service) return NextResponse.json({ error: "not_found" }, { status: 404 });
+
+  if (service._count.subItems > 0) {
     return NextResponse.json(
-      { error: "in_use", txCount, message: "Set isActive=false to retire instead." },
+      { error: "in_use", message: "Unlink the sub-items first or set isActive=false." },
       { status: 409 },
     );
   }
 
-  await prisma.subCategory.delete({ where: { id: params.id } });
+  await prisma.service.delete({ where: { id: params.id } });
   await recordAudit({
-    entityType: "SubCategory",
+    entityType: "Service",
     entityId: params.id,
     action: "DELETE",
     userId,
-    changes: { categoryId: sub.categoryId, name: sub.name },
+    changes: { name: service.name },
   });
   return NextResponse.json({ ok: true });
 }

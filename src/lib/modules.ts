@@ -71,6 +71,12 @@ export const MODULES: AppModule[] = [
         icon: "account_tree",
         adminOnly: true,
       },
+      {
+        href: "/master-data/services",
+        label: "Services",
+        icon: "lan",
+        adminOnly: true,
+      },
       { href: "/master-data/parties", label: "Parties", icon: "groups", adminOnly: true },
     ],
   },
