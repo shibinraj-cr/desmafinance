@@ -143,14 +143,7 @@ export async function DELETE(_req: NextRequest, { params }: { params: { id: stri
 }
 
 function legacyForRole(roleName: string): string {
-  switch (roleName) {
-    case "Admin":
-      return "admin";
-    case "Manager":
-      return "manager";
-    case "Executive":
-      return "executive";
-    default:
-      return "executive";
-  }
+  if (roleName === "Admin") return "admin";
+  if (/manager/i.test(roleName)) return "manager";
+  return "executive";
 }

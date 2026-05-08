@@ -55,7 +55,17 @@ export async function PATCH(req: NextRequest, { params }: { params: { id: string
   if (data.canApprove !== undefined) update.canApprove = data.canApprove;
   if (data.needsApproval !== undefined) update.needsApproval = data.needsApproval;
   if (data.pages) update.pages = data.pages.filter((p) => allowed.has(p));
-  if (data.name && !role.isSystem) update.name = data.name.trim();
+  if (data.name) {
+    const newName = data.name.trim();
+    if (newName !== role.name) {
+      // Don't collide with another existing role's name.
+      const collision = await prisma.role.findUnique({ where: { name: newName } });
+      if (collision && collision.id !== role.id) {
+        return NextResponse.json({ error: "name_taken" }, { status: 409 });
+      }
+      update.name = newName;
+    }
+  }
 
   const updated = await prisma.role.update({ where: { id: params.id }, data: update });
   await recordAudit({

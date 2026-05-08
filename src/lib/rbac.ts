@@ -92,16 +92,13 @@ export function canSeePage(p: Permissions, href: string): boolean {
 
 /** Tone class for role pills shown in the user table. */
 export function roleBadgeClass(roleName?: string | null): string {
-  switch (roleName) {
-    case "Admin":
-      return "bg-primary text-on-primary";
-    case "Manager":
-      return "bg-accent text-on-primary";
-    case "Executive":
-      return "bg-surface-container-high text-on-surface";
-    default:
-      return "bg-surface-container text-on-surface-variant";
-  }
+  if (!roleName) return "bg-surface-container text-on-surface-variant";
+  if (roleName === "Admin") return "bg-primary text-on-primary";
+  // Manager-style roles (any role with "manager" in the name) get the accent tone.
+  if (/manager/i.test(roleName)) return "bg-accent text-on-primary";
+  // Executive/system role default
+  if (/executive/i.test(roleName)) return "bg-surface-container-high text-on-surface";
+  return "bg-surface-container text-on-surface-variant";
 }
 
 export function roleLabel(roleName?: string | null): string {

@@ -49,6 +49,7 @@ function RoleCard({ role, allPages }: { role: Role; allPages: AppPage[] }) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [draft, setDraft] = useState({
+    name: role.name,
     description: role.description ?? "",
     isAdmin: role.isAdmin,
     canApprove: role.canApprove,
@@ -57,6 +58,7 @@ function RoleCard({ role, allPages }: { role: Role; allPages: AppPage[] }) {
   });
 
   const dirty =
+    draft.name !== role.name ||
     draft.description !== (role.description ?? "") ||
     draft.isAdmin !== role.isAdmin ||
     draft.canApprove !== role.canApprove ||
@@ -79,6 +81,7 @@ function RoleCard({ role, allPages }: { role: Role; allPages: AppPage[] }) {
       method: "PATCH",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({
+        name: draft.name.trim(),
         description: draft.description,
         isAdmin: draft.isAdmin,
         canApprove: draft.canApprove,
@@ -111,9 +114,14 @@ function RoleCard({ role, allPages }: { role: Role; allPages: AppPage[] }) {
   return (
     <div className="bg-surface-container-lowest border border-outline-variant rounded-xl shadow-sm p-lg space-y-md">
       <div className="flex flex-wrap items-start gap-md">
-        <div className="min-w-0 flex-1">
-          <div className="flex items-center gap-base">
-            <h3 className="text-h3 text-on-surface">{role.name}</h3>
+        <div className="min-w-0 flex-1 space-y-xs">
+          <div className="flex items-center gap-base flex-wrap">
+            <input
+              value={draft.name}
+              onChange={(e) => setDraft({ ...draft, name: e.target.value })}
+              placeholder="Role name"
+              className="text-h3 text-on-surface font-semibold bg-transparent border-b border-transparent hover:border-outline-variant focus:border-primary focus:outline-none transition w-full max-w-md"
+            />
             {role.isSystem && (
               <span className="text-[10px] uppercase tracking-widest font-bold text-on-surface-variant border border-outline-variant rounded-full px-xs py-[1px]">
                 System
@@ -124,9 +132,9 @@ function RoleCard({ role, allPages }: { role: Role; allPages: AppPage[] }) {
             value={draft.description}
             onChange={(e) => setDraft({ ...draft, description: e.target.value })}
             placeholder="Description (optional)…"
-            className="mt-xs w-full max-w-lg h-9 px-md rounded-lg border border-outline-variant bg-surface-container-lowest text-body-md focus:border-primary focus:ring-2 focus:ring-primary/20 outline-none transition"
+            className="w-full max-w-lg h-9 px-md rounded-lg border border-outline-variant bg-surface-container-lowest text-body-md focus:border-primary focus:ring-2 focus:ring-primary/20 outline-none transition"
           />
-          <p className="text-caption text-on-surface-variant mt-xs">
+          <p className="text-caption text-on-surface-variant">
             {role.userCount} user{role.userCount === 1 ? "" : "s"} assigned
           </p>
         </div>
@@ -218,6 +226,7 @@ function RoleCard({ role, allPages }: { role: Role; allPages: AppPage[] }) {
             type="button"
             onClick={() =>
               setDraft({
+                name: role.name,
                 description: role.description ?? "",
                 isAdmin: role.isAdmin,
                 canApprove: role.canApprove,

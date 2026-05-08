@@ -126,15 +126,10 @@ export async function POST(req: NextRequest) {
 }
 
 function legacyForRole(roleName: string): string {
-  switch (roleName) {
-    case "Admin":
-      return "admin";
-    case "Manager":
-      return "manager";
-    case "Executive":
-      return "executive";
-    default:
-      // Custom roles map to "executive" for the legacy column (least-privileged).
-      return "executive";
-  }
+  if (roleName === "Admin") return "admin";
+  // Anything called "Manager" or "<X> Manager" maps to legacy "manager".
+  if (/manager/i.test(roleName)) return "manager";
+  // Default — including Executive variants and custom roles — uses the
+  // least-privileged legacy value.
+  return "executive";
 }
