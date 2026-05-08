@@ -15,6 +15,7 @@
     "db:seed-roles": "tsx prisma/seed-roles.ts",
     "db:seed-masters": "tsx prisma/seed-masters.ts",
     "db:migrate-services": "tsx prisma/migrate-services.ts",
+    "db:seed-lead-pulse": "tsx prisma/seed-lead-pulse.ts",
     "db:seed-from-excel": "tsx prisma/seed-from-excel.ts"
   },
   "dependencies": {

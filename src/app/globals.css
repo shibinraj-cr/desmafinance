@@ -36,3 +36,41 @@ body {
   background: #c2c6d2;
   border-radius: 9999px;
 }
+
+/* ────────────────────────────────────────────────────────
+   Lead Pulse — dark "Darkroom" theme scoped to .lp-scope.
+   Inherits CSS vars defined on the layout wrapper.
+   ──────────────────────────────────────────────────────── */
+.lp-scope input[type="text"],
+.lp-scope input[type="number"],
+.lp-scope input[type="email"],
+.lp-scope input[type="search"],
+.lp-scope input[type="date"],
+.lp-scope input:not([type]),
+.lp-scope select,
+.lp-scope textarea {
+  background-color: var(--lp-surface-container-low, #1f1b11);
+  border: 1px solid var(--lp-outline-variant, #4d4632);
+  color: var(--lp-on-surface, #ebe2d0);
+  font-family: inherit;
+}
+.lp-scope input:focus,
+.lp-scope select:focus,
+.lp-scope textarea:focus {
+  outline: none;
+  border-color: var(--lp-primary, #facc15);
+  box-shadow: 0 0 0 1px var(--lp-primary, #facc15);
+}
+.lp-scope input[type="number"] {
+  font-feature-settings: "tnum";
+  text-align: right;
+}
+.lp-scope ::placeholder {
+  color: var(--lp-outline, #9a9078);
+}
+/* Tabular numbers on data cells */
+.lp-scope .lp-tnum,
+.lp-scope td,
+.lp-scope th {
+  font-feature-settings: "tnum";
+}

@@ -1,0 +1,67 @@
+/**
+ * Seed Lead Pulse master data:
+ *  - 8 sources (per BUILD_SPEC §3.2)
+ *  - 4 regions (per BUILD_SPEC §3.3)
+ *
+ * Idempotent. Run via:  npm run db:seed-lead-pulse
+ */
+import { PrismaClient } from "@prisma/client";
+
+const prisma = new PrismaClient();
+
+const SOURCES = [
+  { code: "meta", label: "Meta", displayOrder: 1 },
+  { code: "wabis", label: "Wabis", displayOrder: 2 },
+  { code: "voxbay", label: "Voxbay", displayOrder: 3 },
+  { code: "youtube", label: "YouTube", displayOrder: 4 },
+  { code: "insta_fb", label: "Insta / FB", displayOrder: 5 },
+  { code: "website", label: "Website", displayOrder: 6 },
+  { code: "candidate_referral", label: "Candidate Referral", displayOrder: 7 },
+  { code: "agency_referral", label: "Agency Referral", displayOrder: 8 },
+];
+
+const REGIONS = [
+  { code: "gcc", label: "GCC" },
+  { code: "australia", label: "Australia" },
+  { code: "kerala", label: "Kerala" },
+  { code: "other_india", label: "Other India" },
+];
+
+async function main() {
+  console.log("Seeding Lead Pulse sources…");
+  for (const s of SOURCES) {
+    await prisma.leadPulseSource.upsert({
+      where: { code: s.code },
+      update: {
+        label: s.label,
+        displayOrder: s.displayOrder,
+      },
+      create: { ...s, active: true },
+    });
+    console.log(`  ✓ ${s.label}`);
+  }
+
+  console.log("\nSeeding Lead Pulse regions…");
+  for (const r of REGIONS) {
+    await prisma.leadPulseRegion.upsert({
+      where: { code: r.code },
+      update: { label: r.label },
+      create: { ...r, active: true },
+    });
+    console.log(`  ✓ ${r.label}`);
+  }
+
+  console.log("\nDone.");
+  console.log({
+    sources: await prisma.leadPulseSource.count(),
+    regions: await prisma.leadPulseRegion.count(),
+    leadPulseRoles: await prisma.leadPulseRole.count(),
+  });
+}
+
+main()
+  .catch((e) => {
+    console.error(e);
+    process.exit(1);
+  })
+  .finally(() => prisma.$disconnect());

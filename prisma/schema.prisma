@@ -24,6 +24,11 @@ model User {
   auditLogs           AuditLog[]
   submittedApprovals  PendingApproval[] @relation("submittedApprovals")
   reviewedApprovals   PendingApproval[] @relation("reviewedApprovals")
+  // Lead Pulse relations
+  leadPulseRole       LeadPulseRole?
+  leadPulseEntries    LeadPulseDailyEntry[] @relation("LeadPulseEntries")
+  leadPulseMeta       LeadPulseDailyMeta[]  @relation("LeadPulseMeta")
+  leadPulseAuditLogs  LeadPulseAuditLog[]   @relation("LeadPulseAudit")
 
   @@index([roleId])
 }
@@ -125,6 +130,154 @@ model Service {
 
   @@index([isActive])
 }
+
+// ──────────────────────────────────────────────────────────────────────
+// Lead Pulse — Marketing module sub-feature.
+//
+// Manual lead-tracking and funnel reporting tool layered on top of
+// existing DESFIN auth. Users get a Lead Pulse–specific role
+// (l1 / l2 / supervisor) via LeadPulseRole, distinct from DESFIN's
+// general Role record on User.
+// ──────────────────────────────────────────────────────────────────────
+
+model LeadPulseRole {
+  id           String   @id @default(cuid())
+  userId       String   @unique
+  user         User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  // 'l1' | 'l2' | 'supervisor'
+  role         String
+  // Region codes from LeadPulseRegion.code; empty array = all regions.
+  regionFocus  String[] @default([])
+  displayName  String
+  active       Boolean  @default(true)
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  @@index([role])
+  @@index([active])
+}
+
+model LeadPulseSource {
+  id           String                @id @default(cuid())
+  code         String                @unique
+  label        String
+  displayOrder Int                   @default(0)
+  active       Boolean               @default(true)
+  createdAt    DateTime              @default(now())
+  updatedAt    DateTime              @updatedAt
+  entries      LeadPulseDailyEntry[]
+  snapshots    LeadPulseMonthlySnapshot[]
+
+  @@index([active])
+  @@index([displayOrder])
+}
+
+model LeadPulseRegion {
+  id        String   @id @default(cuid())
+  code      String   @unique
+  label     String
+  active    Boolean  @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([active])
+}
+
+model LeadPulseDailyEntry {
+  id        String          @id @default(cuid())
+  userId    String
+  user      User            @relation(name: "LeadPulseEntries", fields: [userId], references: [id], onDelete: Cascade)
+  entryDate DateTime        @db.Date
+  sourceId  String
+  source    LeadPulseSource @relation(fields: [sourceId], references: [id], onDelete: Restrict)
+  // Snapshot of role at submission so historical reports stay accurate
+  // even if the user's role changes later.
+  roleAtEntry String
+
+  // L1 fields (nullable; only set when roleAtEntry = 'l1')
+  leadsReceived    Int?
+  connectedCalls   Int?
+  disqualified     Int?
+  transferredToL2  Int?
+
+  // L2 fields (nullable; only set when roleAtEntry = 'l2')
+  receivedFromL1 Int?
+  directLeads    Int?
+  connected      Int?
+  quoteSent      Int?
+  closedWon      Int?
+  closedLost     Int?
+
+  // Common
+  status      String   @default("draft") // 'draft' | 'submitted'
+  submittedAt DateTime?
+  locked      Boolean  @default(false)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@unique([userId, entryDate, sourceId])
+  @@index([entryDate])
+  @@index([userId, entryDate])
+  @@index([sourceId])
+  @@index([status])
+}
+
+model LeadPulseDailyMeta {
+  id               String    @id @default(cuid())
+  userId           String
+  user             User      @relation(name: "LeadPulseMeta", fields: [userId], references: [id], onDelete: Cascade)
+  entryDate        DateTime  @db.Date
+  totalFollowups   Int?      // L1 only
+  referredToDoc    Int?      // L2 only
+  referredToAbroad Int?      // L1 or L2
+  notes            String?
+  status           String    @default("draft")
+  submittedAt      DateTime?
+  locked           Boolean   @default(false)
+  createdAt        DateTime  @default(now())
+  updatedAt        DateTime  @updatedAt
+
+  @@unique([userId, entryDate])
+  @@index([entryDate])
+}
+
+model LeadPulseAuditLog {
+  id           String   @id @default(cuid())
+  actorUserId  String?
+  actor        User?    @relation(name: "LeadPulseAudit", fields: [actorUserId], references: [id], onDelete: SetNull)
+  // 'entry_submitted' | 'entry_edited' | 'entry_locked_override' |
+  // 'role_assigned' | 'role_changed' | 'source_added' | 'source_disabled' |
+  // 'region_added' | 'region_disabled'
+  eventType  String
+  targetId   String?
+  metadata   Json?
+  occurredAt DateTime @default(now())
+
+  @@index([eventType])
+  @@index([occurredAt])
+  @@index([actorUserId])
+}
+
+model LeadPulseMonthlySnapshot {
+  id            String   @id @default(cuid())
+  year          Int
+  month         Int
+  // null = team-level row
+  userId        String?
+  // 'l1' | 'l2'
+  role          String
+  // null = total-across-sources row
+  sourceId      String?
+  source        LeadPulseSource? @relation(fields: [sourceId], references: [id], onDelete: SetNull)
+  totalLeads    Int      @default(0)
+  totalWon      Int      @default(0)
+  conversionPct Decimal  @db.Decimal(5, 2) @default(0)
+  computedAt    DateTime @default(now())
+
+  @@unique([year, month, userId, role, sourceId])
+  @@index([year, month])
+}
+
 
 // Master: parties (candidates / vendors) referenced by transactions.
 model Party {

@@ -46,8 +46,39 @@ export const MODULES: AppModule[] = [
     name: "Marketing",
     icon: "campaign",
     basePath: "/marketing",
-    status: "coming_soon",
-    pages: [],
+    status: "active",
+    pages: [
+      {
+        href: "/marketing/lead-pulse",
+        label: "Lead Pulse",
+        icon: "trending_up",
+      },
+      {
+        href: "/marketing/lead-pulse/daily-entry",
+        label: "Daily Entry",
+        icon: "edit_note",
+      },
+      {
+        href: "/marketing/lead-pulse/monthly-report",
+        label: "Monthly Report",
+        icon: "table_chart",
+      },
+      {
+        href: "/marketing/lead-pulse/bde-performance",
+        label: "BDE Performance",
+        icon: "person_search",
+      },
+      {
+        href: "/marketing/lead-pulse/team-roster",
+        label: "Team Roster",
+        icon: "groups",
+      },
+      {
+        href: "/marketing/lead-pulse/settings",
+        label: "Settings",
+        icon: "tune",
+      },
+    ],
   },
   {
     id: "hr",
