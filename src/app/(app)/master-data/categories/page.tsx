@@ -4,7 +4,7 @@ import { canManageUsers } from "@/lib/rbac";
 import { getCurrentUserAndPermissions } from "@/lib/permissions";
 import { TopBar } from "@/components/TopBar";
 import { Section } from "@/components/Cards";
-import { CategoriesEditor, NewCategoryButton } from "./client";
+import { CategoriesEditor, NewCategoryButton, ExpenseMasterMigrationButton } from "./client";
 
 export const dynamic = "force-dynamic";
 
@@ -61,6 +61,7 @@ export default async function CategoriesPage() {
         action={<NewCategoryButton />}
       />
       <div className="p-margin space-y-lg">
+        <ExpenseMasterMigrationButton />
         <CategoriesEditor
           categories={categories.map((c) => ({
             id: c.id,

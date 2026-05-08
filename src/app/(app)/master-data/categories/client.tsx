@@ -604,3 +604,129 @@ export function NewCategoryButton() {
     </>
   );
 }
+
+/**
+ * Admin-only button that POSTs to /api/master/expense-master-migration.
+ * Reshapes the live Expense master to the new 15-category list (plus
+ * Commissions). Idempotent — re-clicks are safe and result in a no-op
+ * once the master is in the desired state.
+ */
+export function ExpenseMasterMigrationButton() {
+  const router = useRouter();
+  const [busy, setBusy] = useState(false);
+  const [confirming, setConfirming] = useState(false);
+  const [result, setResult] = useState<{
+    summary: Record<string, number>;
+    log: string[];
+  } | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  async function run() {
+    setBusy(true);
+    setError(null);
+    setResult(null);
+    const res = await fetch("/api/master/expense-master-migration", { method: "POST" });
+    setBusy(false);
+    setConfirming(false);
+    if (!res.ok) {
+      const data = await res.json().catch(() => ({}));
+      setError((data as { error?: string }).error ?? "migration_failed");
+      return;
+    }
+    const data = (await res.json()) as {
+      summary: Record<string, number>;
+      log: string[];
+    };
+    setResult(data);
+    router.refresh();
+  }
+
+  return (
+    <div className="rounded-lg border border-outline-variant bg-surface-container-lowest p-md space-y-sm">
+      <div className="flex items-start gap-md">
+        <div className="flex-1 min-w-0">
+          <h3 className="text-label-md font-semibold text-on-surface">
+            Expense master migration
+          </h3>
+          <p className="text-label-sm text-on-surface-variant mt-xs">
+            One-shot reshape of the Expense category list to the new 15-category
+            structure (Salary with team sub-items, Marketing with the Digital
+            Marketing Management Fee, Staff Welfare with EPFO/ESIC/Meals, etc).
+            Safe to re-run — deactivates rather than deletes, leaves Commissions
+            and existing Transaction rows untouched.
+          </p>
+        </div>
+        {!confirming ? (
+          <button
+            type="button"
+            onClick={() => setConfirming(true)}
+            disabled={busy}
+            className="shrink-0 h-9 px-md rounded-lg bg-primary text-on-primary text-label-sm font-semibold hover:bg-primary-container transition disabled:opacity-60"
+          >
+            Run migration
+          </button>
+        ) : (
+          <div className="shrink-0 flex items-center gap-xs">
+            <button
+              type="button"
+              onClick={run}
+              disabled={busy}
+              className="h-9 px-md rounded-lg bg-primary text-on-primary text-label-sm font-semibold hover:bg-primary-container transition disabled:opacity-60"
+            >
+              {busy ? "Running…" : "Confirm"}
+            </button>
+            <button
+              type="button"
+              onClick={() => setConfirming(false)}
+              disabled={busy}
+              className="h-9 px-md rounded-lg border border-outline-variant text-label-sm text-on-surface-variant hover:bg-surface-container-low transition"
+            >
+              Cancel
+            </button>
+          </div>
+        )}
+      </div>
+      {error && (
+        <div className="rounded-lg bg-error-container text-on-error-container px-md py-sm text-label-sm">
+          {errorLabels[error] ?? `Migration failed: ${error}`}
+        </div>
+      )}
+      {result && (
+        <div className="rounded-lg border border-outline-variant bg-surface-container-low px-md py-sm text-label-sm space-y-xs">
+          <p className="font-semibold text-on-surface">Migration complete:</p>
+          <ul className="text-on-surface-variant grid grid-cols-2 gap-x-md gap-y-[2px]">
+            {Object.entries(result.summary).map(([k, v]) => (
+              <li key={k}>
+                <span className="font-mono">{v}</span> {humanizeKey(k)}
+              </li>
+            ))}
+          </ul>
+          {result.log.length > 0 && (
+            <details className="mt-xs">
+              <summary className="cursor-pointer text-on-surface-variant">
+                Detail ({result.log.length} action{result.log.length === 1 ? "" : "s"})
+              </summary>
+              <ul className="mt-xs text-[12px] font-mono text-on-surface-variant space-y-[2px]">
+                {result.log.map((l, i) => (
+                  <li key={i}>· {l}</li>
+                ))}
+              </ul>
+            </details>
+          )}
+          {result.log.length === 0 && (
+            <p className="text-on-surface-variant">
+              No changes — master already in the desired state.
+            </p>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function humanizeKey(k: string): string {
+  return k
+    .replace(/([A-Z])/g, " $1")
+    .replace(/^./, (c) => c.toLowerCase())
+    .trim();
+}
