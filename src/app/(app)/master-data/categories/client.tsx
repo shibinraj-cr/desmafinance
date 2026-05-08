@@ -730,3 +730,119 @@ function humanizeKey(k: string): string {
     .replace(/^./, (c) => c.toLowerCase())
     .trim();
 }
+
+/**
+ * Admin-only button that POSTs to /api/master/parties-schema-sync.
+ * Runs the additive DDL needed for the Source/Service/Profile feature
+ * (Party.sourceId column + PartyService table) and copies any legacy
+ * Party↔Service M:M rows into PartyService.
+ *
+ * Idempotent — re-clicks are safe and report "already in place" for
+ * everything that's done.
+ */
+export function PartiesSchemaSyncButton() {
+  const router = useRouter();
+  const [busy, setBusy] = useState(false);
+  const [confirming, setConfirming] = useState(false);
+  const [result, setResult] = useState<{
+    log: string[];
+    legacyCopied: number;
+    legacySkipped: number;
+  } | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  async function run() {
+    setBusy(true);
+    setError(null);
+    setResult(null);
+    const res = await fetch("/api/master/parties-schema-sync", { method: "POST" });
+    setBusy(false);
+    setConfirming(false);
+    if (!res.ok) {
+      const data = await res.json().catch(() => ({}));
+      const msg = (data as { error?: string; message?: string }).message ?? (data as { error?: string }).error ?? "sync_failed";
+      setError(msg);
+      return;
+    }
+    const data = (await res.json()) as {
+      log: string[];
+      legacyCopied: number;
+      legacySkipped: number;
+    };
+    setResult(data);
+    router.refresh();
+  }
+
+  return (
+    <div className="rounded-lg border border-outline-variant bg-surface-container-lowest p-md space-y-sm">
+      <div className="flex items-start gap-md">
+        <div className="flex-1 min-w-0">
+          <h3 className="text-label-md font-semibold text-on-surface">
+            Sync Parties schema (Source + per-service amounts)
+          </h3>
+          <p className="text-label-sm text-on-surface-variant mt-xs">
+            One-shot DDL: adds <code>Party.sourceId</code> column and the new{" "}
+            <code>PartyService</code> table to the live DB, then copies any
+            legacy Party↔Service tags into the new table with{" "}
+            <code>totalAmount = 0</code>. Run this once after deploy — the
+            Candidates &amp; Vendors pages need it. Safe to re-run.
+          </p>
+        </div>
+        {!confirming ? (
+          <button
+            type="button"
+            onClick={() => setConfirming(true)}
+            disabled={busy}
+            className="shrink-0 h-9 px-md rounded-lg bg-primary text-on-primary text-label-sm font-semibold hover:bg-primary-container transition disabled:opacity-60"
+          >
+            Sync schema
+          </button>
+        ) : (
+          <div className="shrink-0 flex items-center gap-xs">
+            <button
+              type="button"
+              onClick={run}
+              disabled={busy}
+              className="h-9 px-md rounded-lg bg-primary text-on-primary text-label-sm font-semibold hover:bg-primary-container transition disabled:opacity-60"
+            >
+              {busy ? "Running…" : "Confirm"}
+            </button>
+            <button
+              type="button"
+              onClick={() => setConfirming(false)}
+              disabled={busy}
+              className="h-9 px-md rounded-lg border border-outline-variant text-label-sm text-on-surface-variant hover:bg-surface-container-low transition"
+            >
+              Cancel
+            </button>
+          </div>
+        )}
+      </div>
+      {error && (
+        <div className="rounded-lg bg-error-container text-on-error-container px-md py-sm text-label-sm">
+          {error}
+        </div>
+      )}
+      {result && (
+        <div className="rounded-lg border border-outline-variant bg-surface-container-low px-md py-sm text-label-sm space-y-xs">
+          <p className="font-semibold text-on-surface">Sync complete:</p>
+          <p className="text-on-surface-variant">
+            Legacy M:M copied: <span className="font-mono">{result.legacyCopied}</span>{" "}
+            · skipped (already present):{" "}
+            <span className="font-mono">{result.legacySkipped}</span>
+          </p>
+          <details className="mt-xs">
+            <summary className="cursor-pointer text-on-surface-variant">
+              DDL detail ({result.log.length} step{result.log.length === 1 ? "" : "s"})
+            </summary>
+            <ul className="mt-xs text-[12px] font-mono text-on-surface-variant space-y-[2px]">
+              {result.log.map((l, i) => (
+                <li key={i}>· {l}</li>
+              ))}
+            </ul>
+          </details>
+        </div>
+      )}
+    </div>
+  );
+}

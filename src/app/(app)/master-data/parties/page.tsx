@@ -1,7 +1,7 @@
 import { redirect } from "next/navigation";
-import { prisma } from "@/lib/prisma";
 import { canManageUsers } from "@/lib/rbac";
 import { getCurrentUserAndPermissions } from "@/lib/permissions";
+import { loadPartiesPayload } from "@/lib/party-data";
 import { TopBar } from "@/components/TopBar";
 import { Section } from "@/components/Cards";
 import { PartiesEditor, NewPartyButton } from "./client";
@@ -26,25 +26,7 @@ export default async function PartiesPage() {
     );
   }
 
-  const [parties, services, sources] = await Promise.all([
-    prisma.party.findMany({
-      orderBy: [{ group: "asc" }, { name: "asc" }],
-      include: {
-        _count: { select: { transactions: true } },
-        services: { select: { id: true, name: true }, orderBy: { name: "asc" } },
-        source: { select: { id: true, label: true } },
-      },
-    }),
-    prisma.service.findMany({
-      where: { isActive: true },
-      select: { id: true, name: true },
-      orderBy: { name: "asc" },
-    }),
-    prisma.leadPulseSource.findMany({
-      orderBy: [{ displayOrder: "asc" }, { label: "asc" }],
-      select: { id: true, code: true, label: true, active: true },
-    }),
-  ]);
+  const [parties, services, sources] = await loadPartiesPayload();
 
   return (
     <>
