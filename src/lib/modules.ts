@@ -37,6 +37,8 @@ export const MODULES: AppModule[] = [
       { href: "/finance/expenses", label: "Expenses", icon: "receipt_long" },
       { href: "/finance/cashflow", label: "Cash Flow", icon: "account_balance" },
       { href: "/finance/daily-tracker", label: "Daily Tracker", icon: "edit_calendar" },
+      { href: "/finance/parties", label: "Candidates & Vendors", icon: "groups" },
+      { href: "/finance/sources", label: "Sources", icon: "campaign" },
       { href: "/finance/approvals", label: "Approvals", icon: "rule" },
       { href: "/finance/ai-insights", label: "AI Insights", icon: "psychology" },
     ],
@@ -109,6 +111,7 @@ export const MODULES: AppModule[] = [
         adminOnly: true,
       },
       { href: "/master-data/parties", label: "Parties", icon: "groups", adminOnly: true },
+      { href: "/master-data/sources", label: "Sources", icon: "campaign" },
     ],
   },
   {

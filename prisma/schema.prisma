@@ -127,8 +127,31 @@ model Service {
   createdAt   DateTime      @default(now())
   updatedAt   DateTime      @updatedAt
   subItems    SubCategory[]
+  // Legacy M:M (read-only at this point) — new code uses partyServices.
+  parties     Party[]
+  partyServices PartyService[]
 
   @@index([isActive])
+}
+
+/// Explicit join between Party and Service that carries the candidate-
+/// specific quoted total for that service. Replaces the legacy Party↔Service
+/// M:M for any flow that needs an amount or per-service notes.
+model PartyService {
+  id          String   @id @default(cuid())
+  partyId     String
+  party       Party    @relation(fields: [partyId], references: [id], onDelete: Cascade)
+  serviceId   String
+  service     Service  @relation(fields: [serviceId], references: [id], onDelete: Restrict)
+  /// Quoted package amount (₹) the candidate owes for this service.
+  totalAmount Decimal  @db.Decimal(14, 2) @default(0)
+  notes       String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@unique([partyId, serviceId])
+  @@index([partyId])
+  @@index([serviceId])
 }
 
 // ──────────────────────────────────────────────────────────────────────
@@ -167,6 +190,7 @@ model LeadPulseSource {
   updatedAt    DateTime              @updatedAt
   entries      LeadPulseDailyEntry[]
   snapshots    LeadPulseMonthlySnapshot[]
+  parties      Party[]
 
   @@index([active])
   @@index([displayOrder])
@@ -291,13 +315,24 @@ model Party {
   phone     String?
   notes     String?
   isActive  Boolean  @default(true)
+  // Source (lead origin) — only meaningful for Candidates. Pulls from
+  // LeadPulseSource so the dropdown stays in sync with the marketing
+  // module's source list.
+  sourceId  String?
+  source    LeadPulseSource? @relation(fields: [sourceId], references: [id], onDelete: SetNull)
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  transactions Transaction[]
+  transactions  Transaction[]
+  // Legacy implicit M:M kept for backwards compatibility — new UI uses
+  // partyServices (with totalAmount). Will be removed once
+  // migrate-party-services has been run everywhere.
+  services      Service[]
+  partyServices PartyService[]
 
   @@index([group])
   @@index([isActive])
+  @@index([sourceId])
 }
 
 model AuditLog {
