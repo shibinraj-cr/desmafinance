@@ -1,11 +1,10 @@
 import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 import bcrypt from "bcryptjs";
-import { getServerSession } from "next-auth";
-import { authOptions } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
 import { recordAudit } from "@/lib/audit";
-import { canManageUsers, ROLES } from "@/lib/rbac";
+import { canManageUsers } from "@/lib/rbac";
+import { getCurrentUserAndPermissions } from "@/lib/permissions";
 
 const CreateSchema = z.object({
   username: z
@@ -15,13 +14,15 @@ const CreateSchema = z.object({
     .regex(/^[a-zA-Z0-9._@-]+$/, "Use letters, numbers, . _ @ -"),
   email: z.string().email().max(120).optional().or(z.literal("")),
   password: z.string().min(8).max(200),
-  role: z.enum(ROLES),
+  /** Role can be a built-in name or a custom role's id. Resolve server-side. */
+  roleId: z.string().min(1).optional(),
+  roleName: z.string().min(1).max(60).optional(),
 });
 
 export async function GET() {
-  const session = await getServerSession(authOptions);
-  if (!session?.user) return NextResponse.json({ error: "unauthorized" }, { status: 401 });
-  if (!canManageUsers(session.user.role))
+  const { perms } = await getCurrentUserAndPermissions();
+  if (!perms) return NextResponse.json({ error: "unauthorized" }, { status: 401 });
+  if (!canManageUsers(perms))
     return NextResponse.json({ error: "forbidden" }, { status: 403 });
 
   const users = await prisma.user.findMany({
@@ -31,6 +32,8 @@ export async function GET() {
       username: true,
       email: true,
       role: true,
+      roleId: true,
+      roleRef: { select: { id: true, name: true } },
       createdAt: true,
       updatedAt: true,
     },
@@ -39,9 +42,9 @@ export async function GET() {
 }
 
 export async function POST(req: NextRequest) {
-  const session = await getServerSession(authOptions);
-  if (!session?.user) return NextResponse.json({ error: "unauthorized" }, { status: 401 });
-  if (!canManageUsers(session.user.role))
+  const { perms, userId } = await getCurrentUserAndPermissions();
+  if (!perms || !userId) return NextResponse.json({ error: "unauthorized" }, { status: 401 });
+  if (!canManageUsers(perms))
     return NextResponse.json({ error: "forbidden" }, { status: 403 });
 
   if ((req.headers.get("content-type") ?? "").split(";")[0].trim() !== "application/json") {
@@ -56,6 +59,27 @@ export async function POST(req: NextRequest) {
   const username = data.username.trim().toLowerCase();
   const email = data.email && data.email.length > 0 ? data.email.trim().toLowerCase() : null;
 
+  // Resolve the chosen role.
+  let roleId: string | null = null;
+  let legacyRoleName = "executive";
+  if (data.roleId) {
+    const r = await prisma.role.findUnique({ where: { id: data.roleId } });
+    if (!r) return NextResponse.json({ error: "role_not_found" }, { status: 400 });
+    roleId = r.id;
+    legacyRoleName = legacyForRole(r.name);
+  } else if (data.roleName) {
+    const r = await prisma.role.findUnique({ where: { name: data.roleName } });
+    if (!r) return NextResponse.json({ error: "role_not_found" }, { status: 400 });
+    roleId = r.id;
+    legacyRoleName = legacyForRole(r.name);
+  } else {
+    // Default to Executive if nothing specified.
+    const r = await prisma.role.findUnique({ where: { name: "Executive" } });
+    if (r) {
+      roleId = r.id;
+    }
+  }
+
   const existing = await prisma.user.findUnique({ where: { username } });
   if (existing) {
     return NextResponse.json({ error: "username_taken" }, { status: 409 });
@@ -67,17 +91,50 @@ export async function POST(req: NextRequest) {
 
   const passwordHash = await bcrypt.hash(data.password, 12);
   const created = await prisma.user.create({
-    data: { username, email, passwordHash, role: data.role },
-    select: { id: true, username: true, email: true, role: true, createdAt: true },
+    data: {
+      username,
+      email,
+      passwordHash,
+      role: legacyRoleName,
+      roleId,
+    },
+    select: {
+      id: true,
+      username: true,
+      email: true,
+      role: true,
+      roleId: true,
+      roleRef: { select: { id: true, name: true } },
+      createdAt: true,
+    },
   });
 
   await recordAudit({
     entityType: "User",
     entityId: created.id,
     action: "CREATE",
-    userId: session.user.id,
-    changes: { username: created.username, email: created.email, role: created.role },
+    userId,
+    changes: {
+      username: created.username,
+      email: created.email,
+      role: created.role,
+      roleName: created.roleRef?.name ?? null,
+    },
   });
 
   return NextResponse.json({ user: created });
+}
+
+function legacyForRole(roleName: string): string {
+  switch (roleName) {
+    case "Admin":
+      return "admin";
+    case "Manager":
+      return "manager";
+    case "Executive":
+      return "executive";
+    default:
+      // Custom roles map to "executive" for the legacy column (least-privileged).
+      return "executive";
+  }
 }

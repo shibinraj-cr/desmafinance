@@ -13,13 +13,36 @@ model User {
   username            String            @unique
   email               String?           @unique
   passwordHash        String
+  // Legacy string role kept for backward compat — capability checks now
+  // prefer the `roleRef` relation when present and fall back to this.
   role                String            @default("executive")
+  roleId              String?
+  roleRef             Role?             @relation(fields: [roleId], references: [id], onDelete: SetNull)
   createdAt           DateTime          @default(now())
   updatedAt           DateTime          @updatedAt
   transactions        Transaction[]
   auditLogs           AuditLog[]
   submittedApprovals  PendingApproval[] @relation("submittedApprovals")
   reviewedApprovals   PendingApproval[] @relation("reviewedApprovals")
+
+  @@index([roleId])
+}
+
+model Role {
+  id            String   @id @default(cuid())
+  name          String   @unique
+  description   String?
+  // Capability flags
+  isAdmin       Boolean  @default(false) // Manage users + roles, see everything
+  canApprove    Boolean  @default(false) // Approve/reject pending changes
+  needsApproval Boolean  @default(true)  // Their tx mutations enter the queue
+  // List of page paths this role is allowed to view (e.g. ["/overview", "/revenue"])
+  pages         String[]
+  // Built-in roles (Admin/Manager/Executive) cannot be deleted
+  isSystem      Boolean  @default(false)
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+  users         User[]
 }
 
 model Transaction {

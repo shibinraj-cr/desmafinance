@@ -1,6 +1,6 @@
 import { prisma } from "./prisma";
 import { recordAudit } from "./audit";
-import { canApprove, needsApproval } from "./rbac";
+import { canApprove, needsApproval, type Permissions } from "./rbac";
 
 export type TxProposed = {
   date: string; // ISO date
@@ -24,10 +24,10 @@ export type TxProposed = {
 export async function submitCreate(opts: {
   data: TxProposed;
   userId: string;
-  role: string;
+  perms: Permissions;
 }) {
-  const { data, userId, role } = opts;
-  if (canApprove(role)) {
+  const { data, userId, perms } = opts;
+  if (canApprove(perms)) {
     const created = await prisma.transaction.create({
       data: {
         date: new Date(data.date),
@@ -52,7 +52,7 @@ export async function submitCreate(opts: {
     return { applied: true as const, transaction: created };
   }
 
-  if (!needsApproval(role)) throw new Error("unexpected role");
+  if (!needsApproval(perms)) throw new Error("unexpected role");
   const pending = await prisma.pendingApproval.create({
     data: {
       kind: "create",
@@ -75,15 +75,15 @@ export async function submitUpdate(opts: {
   txId: string;
   data: TxProposed;
   userId: string;
-  role: string;
+  perms: Permissions;
 }) {
-  const { txId, data, userId, role } = opts;
+  const { txId, data, userId, perms } = opts;
   const existing = await prisma.transaction.findUnique({ where: { id: txId } });
   if (!existing || existing.deletedAt) {
     return { error: "not_found" as const };
   }
 
-  if (canApprove(role)) {
+  if (canApprove(perms)) {
     const updated = await prisma.transaction.update({
       where: { id: txId },
       data: {
@@ -154,15 +154,15 @@ export async function submitUpdate(opts: {
 export async function submitDelete(opts: {
   txId: string;
   userId: string;
-  role: string;
+  perms: Permissions;
 }) {
-  const { txId, userId, role } = opts;
+  const { txId, userId, perms } = opts;
   const existing = await prisma.transaction.findUnique({ where: { id: txId } });
   if (!existing || existing.deletedAt) {
     return { error: "not_found" as const };
   }
 
-  if (canApprove(role)) {
+  if (canApprove(perms)) {
     await prisma.transaction.update({
       where: { id: txId },
       data: { deletedAt: new Date(), deletedById: userId },
@@ -215,11 +215,11 @@ export async function submitDelete(opts: {
 export async function approvePending(opts: {
   pendingId: string;
   reviewerId: string;
-  reviewerRole: string;
+  reviewerPerms: Permissions;
   note?: string;
 }) {
-  const { pendingId, reviewerId, reviewerRole, note } = opts;
-  if (!canApprove(reviewerRole)) return { error: "forbidden" as const };
+  const { pendingId, reviewerId, reviewerPerms, note } = opts;
+  if (!canApprove(reviewerPerms)) return { error: "forbidden" as const };
 
   const p = await prisma.pendingApproval.findUnique({ where: { id: pendingId } });
   if (!p) return { error: "not_found" as const };
@@ -335,11 +335,11 @@ export async function approvePending(opts: {
 export async function rejectPending(opts: {
   pendingId: string;
   reviewerId: string;
-  reviewerRole: string;
+  reviewerPerms: Permissions;
   note?: string;
 }) {
-  const { pendingId, reviewerId, reviewerRole, note } = opts;
-  if (!canApprove(reviewerRole)) return { error: "forbidden" as const };
+  const { pendingId, reviewerId, reviewerPerms, note } = opts;
+  if (!canApprove(reviewerPerms)) return { error: "forbidden" as const };
 
   const p = await prisma.pendingApproval.findUnique({ where: { id: pendingId } });
   if (!p) return { error: "not_found" as const };

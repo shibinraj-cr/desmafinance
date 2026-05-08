@@ -3,7 +3,8 @@
 import { useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
 import { createPortal } from "react-dom";
-import { ROLES, type Role } from "@/lib/rbac";
+
+type RoleOption = { id: string; name: string };
 
 const errorLabels: Record<string, string> = {
   username_taken: "That username is already in use.",
@@ -14,26 +15,28 @@ const errorLabels: Record<string, string> = {
   cannot_delete_last_admin: "Refusing to delete the only remaining admin.",
   cannot_demote_last_admin: "Refusing to demote the only remaining admin.",
   not_found: "User no longer exists.",
+  role_not_found: "That role no longer exists.",
 };
 
-export function NewUserButton() {
+export function NewUserButton({ roles }: { roles: RoleOption[] }) {
   const router = useRouter();
   const [open, setOpen] = useState(false);
   const [mounted, setMounted] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const defaultRoleId =
+    roles.find((r) => r.name === "Executive")?.id ?? roles[0]?.id ?? "";
   const [form, setForm] = useState({
     username: "",
     email: "",
     password: "",
-    role: "executive" as Role,
+    roleId: defaultRoleId,
   });
 
   useEffect(() => {
     setMounted(true);
   }, []);
 
-  // Lock body scroll while the modal is open so the page behind doesn't drift.
   useEffect(() => {
     if (!open) return;
     const prev = document.body.style.overflow;
@@ -59,7 +62,7 @@ export function NewUserButton() {
       return;
     }
     setOpen(false);
-    setForm({ username: "", email: "", password: "", role: "executive" });
+    setForm({ username: "", email: "", password: "", roleId: defaultRoleId });
     router.refresh();
   }
 
@@ -75,85 +78,88 @@ export function NewUserButton() {
         </span>
         Add user
       </button>
-      {open && mounted && createPortal(
-        <div
-          role="dialog"
-          aria-modal="true"
-          className="fixed inset-0 z-[1000] grid place-items-center bg-black/50 p-md"
-          onClick={() => !busy && setOpen(false)}
-        >
-          <form
-            onSubmit={submit}
-            onClick={(e) => e.stopPropagation()}
-            className="w-full max-w-md max-h-[90vh] overflow-y-auto bg-surface-container-lowest border border-outline-variant rounded-xl shadow-lg p-lg space-y-md"
+      {open &&
+        mounted &&
+        createPortal(
+          <div
+            role="dialog"
+            aria-modal="true"
+            className="fixed inset-0 z-[1000] grid place-items-center bg-black/50 p-md"
+            onClick={() => !busy && setOpen(false)}
           >
-            <h3 className="text-h3 text-on-surface">New user</h3>
-            <Field label="Username">
-              <input
-                value={form.username}
-                onChange={(e) => setForm({ ...form, username: e.target.value })}
-                className={inputCls}
-                required
-                autoFocus
-              />
-            </Field>
-            <Field label="Email (optional)">
-              <input
-                type="email"
-                value={form.email}
-                onChange={(e) => setForm({ ...form, email: e.target.value })}
-                className={inputCls}
-              />
-            </Field>
-            <Field label="Password (min 8 characters)">
-              <input
-                type="password"
-                value={form.password}
-                onChange={(e) => setForm({ ...form, password: e.target.value })}
-                className={inputCls}
-                required
-                minLength={8}
-              />
-            </Field>
-            <Field label="Role">
-              <select
-                value={form.role}
-                onChange={(e) => setForm({ ...form, role: e.target.value as Role })}
-                className={inputCls}
-              >
-                {ROLES.map((r) => (
-                  <option key={r} value={r}>
-                    {r[0].toUpperCase() + r.slice(1)}
-                  </option>
-                ))}
-              </select>
-            </Field>
-            {error && (
-              <div className="rounded-lg bg-error-container text-on-error-container px-md py-sm">
-                {error}
+            <form
+              onSubmit={submit}
+              onClick={(e) => e.stopPropagation()}
+              className="w-full max-w-md max-h-[90vh] overflow-y-auto bg-surface-container-lowest border border-outline-variant rounded-xl shadow-lg p-lg space-y-md"
+            >
+              <h3 className="text-h3 text-on-surface">New user</h3>
+              <Field label="Username">
+                <input
+                  value={form.username}
+                  onChange={(e) => setForm({ ...form, username: e.target.value })}
+                  className={inputCls}
+                  required
+                  autoFocus
+                />
+              </Field>
+              <Field label="Email (optional)">
+                <input
+                  type="email"
+                  value={form.email}
+                  onChange={(e) => setForm({ ...form, email: e.target.value })}
+                  className={inputCls}
+                />
+              </Field>
+              <Field label="Password (min 8 characters)">
+                <input
+                  type="password"
+                  value={form.password}
+                  onChange={(e) => setForm({ ...form, password: e.target.value })}
+                  className={inputCls}
+                  required
+                  minLength={8}
+                />
+              </Field>
+              <Field label="Role">
+                <select
+                  value={form.roleId}
+                  onChange={(e) => setForm({ ...form, roleId: e.target.value })}
+                  className={inputCls}
+                  required
+                >
+                  {roles.map((r) => (
+                    <option key={r.id} value={r.id}>
+                      {r.name}
+                    </option>
+                  ))}
+                </select>
+              </Field>
+              {error && (
+                <div className="rounded-lg bg-error-container text-on-error-container px-md py-sm">
+                  {error}
+                </div>
+              )}
+              <div className="flex items-center gap-base pt-base">
+                <button
+                  type="submit"
+                  disabled={busy}
+                  className="h-10 px-lg rounded-lg bg-primary text-on-primary font-semibold hover:bg-primary-container transition disabled:opacity-60"
+                >
+                  {busy ? "Creating…" : "Create user"}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setOpen(false)}
+                  disabled={busy}
+                  className="h-10 px-lg rounded-lg border border-outline-variant text-on-surface-variant hover:bg-surface-container-low transition"
+                >
+                  Cancel
+                </button>
               </div>
-            )}
-            <div className="flex items-center gap-base pt-base">
-              <button
-                type="submit"
-                disabled={busy}
-                className="h-10 px-lg rounded-lg bg-primary text-on-primary font-semibold hover:bg-primary-container transition disabled:opacity-60"
-              >
-                {busy ? "Creating…" : "Create user"}
-              </button>
-              <button
-                type="button"
-                onClick={() => setOpen(false)}
-                disabled={busy}
-                className="h-10 px-lg rounded-lg border border-outline-variant text-on-surface-variant hover:bg-surface-container-low transition"
-              >
-                Cancel
-              </button>
-            </div>
-          </form>
-        </div>,
-        document.body,
-      )}
+            </form>
+          </div>,
+          document.body,
+        )}
     </>
   );
 }
@@ -161,25 +167,28 @@ export function NewUserButton() {
 export function UserActions({
   userId,
   username,
-  role,
+  currentRoleId,
   isSelf,
+  roles,
 }: {
   userId: string;
   username: string;
-  role: string;
+  currentRoleId: string | null;
   isSelf: boolean;
+  roles: RoleOption[];
 }) {
   const router = useRouter();
   const [busy, setBusy] = useState(false);
 
-  async function changeRole(next: Role) {
-    if (next === role) return;
-    if (!confirm(`Change ${username}'s role from ${role} to ${next}?`)) return;
+  async function changeRole(roleId: string) {
+    if (roleId === currentRoleId) return;
+    const targetName = roles.find((r) => r.id === roleId)?.name ?? roleId;
+    if (!confirm(`Change ${username}'s role to ${targetName}?`)) return;
     setBusy(true);
     const res = await fetch(`/api/users/${userId}`, {
       method: "PATCH",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ role: next }),
+      body: JSON.stringify({ roleId }),
     });
     setBusy(false);
     if (!res.ok) {
@@ -228,15 +237,16 @@ export function UserActions({
   return (
     <div className="flex items-center gap-xs justify-end">
       <select
-        value={role}
-        onChange={(e) => changeRole(e.target.value as Role)}
+        value={currentRoleId ?? ""}
+        onChange={(e) => changeRole(e.target.value)}
         disabled={busy || isSelf}
         title={isSelf ? "Can't change your own role" : "Change role"}
         className="h-8 px-sm rounded-lg border border-outline-variant bg-surface-container-lowest text-label-sm focus:border-primary focus:ring-2 focus:ring-primary/20 outline-none transition disabled:opacity-50"
       >
-        {ROLES.map((r) => (
-          <option key={r} value={r}>
-            {r[0].toUpperCase() + r.slice(1)}
+        {!currentRoleId && <option value="">— No role —</option>}
+        {roles.map((r) => (
+          <option key={r.id} value={r.id}>
+            {r.name}
           </option>
         ))}
       </select>

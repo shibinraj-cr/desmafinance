@@ -12,6 +12,7 @@
     "postinstall": "prisma generate",
     "db:push": "prisma db push",
     "db:seed": "tsx prisma/seed.ts",
+    "db:seed-roles": "tsx prisma/seed-roles.ts",
     "db:seed-from-excel": "tsx prisma/seed-from-excel.ts"
   },
   "dependencies": {

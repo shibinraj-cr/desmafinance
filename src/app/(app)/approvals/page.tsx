@@ -3,8 +3,7 @@ import { Section } from "@/components/Cards";
 import { prisma } from "@/lib/prisma";
 import { inrFull } from "@/lib/format";
 import { canApprove } from "@/lib/rbac";
-import { getServerSession } from "next-auth";
-import { authOptions } from "@/lib/auth";
+import { getCurrentUserAndPermissions } from "@/lib/permissions";
 import { ApprovalActions } from "./actions";
 
 export const dynamic = "force-dynamic";
@@ -22,12 +21,12 @@ type ProposedTx = {
 };
 
 export default async function ApprovalsPage() {
-  const session = await getServerSession(authOptions);
-  const role = session?.user.role ?? "executive";
-  const userId = session?.user.id ?? "";
-  const reviewer = canApprove(role);
+  const { perms, userId } = await getCurrentUserAndPermissions();
+  const reviewer = canApprove(perms);
 
-  const where = reviewer ? { status: "pending" } : { submittedById: userId };
+  const where = reviewer
+    ? { status: "pending" }
+    : { submittedById: userId ?? "__none__" };
 
   const items = await prisma.pendingApproval.findMany({
     where,

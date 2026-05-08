@@ -4,6 +4,7 @@ import { getServerSession } from "next-auth";
 import { authOptions } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
 import { submitCreate, type TxProposed } from "@/lib/approval";
+import { getCurrentUserAndPermissions } from "@/lib/permissions";
 import {
   TYPES,
   FLOWS,
@@ -93,8 +94,10 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: "validation_failed" }, { status: 400 });
   }
   const data = parsed.data;
-  const userId = session.user.id;
-  const role = session.user.role ?? "executive";
+  const { perms, userId } = await getCurrentUserAndPermissions();
+  if (!perms || !userId) {
+    return NextResponse.json({ error: "unauthorized" }, { status: 401 });
+  }
 
   const proposed: TxProposed = {
     date: data.date,
@@ -108,7 +111,7 @@ export async function POST(req: NextRequest) {
     flow: data.flow ?? flowFor(data.type),
   };
 
-  const result = await submitCreate({ data: proposed, userId, role });
+  const result = await submitCreate({ data: proposed, userId, perms });
   if (result.applied) {
     return NextResponse.json({
       applied: true,

@@ -1,22 +1,18 @@
 import { NextResponse } from "next/server";
-import { getServerSession } from "next-auth";
-import { authOptions } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
 import { canApprove } from "@/lib/rbac";
+import { getCurrentUserAndPermissions } from "@/lib/permissions";
 
 export const dynamic = "force-dynamic";
 
 export async function GET() {
-  const session = await getServerSession(authOptions);
-  if (!session?.user) return NextResponse.json({ error: "unauthorized" }, { status: 401 });
-
-  const role = session.user.role ?? "executive";
-  const userId = session.user.id;
+  const { perms, userId } = await getCurrentUserAndPermissions();
+  if (!perms || !userId) {
+    return NextResponse.json({ error: "unauthorized" }, { status: 401 });
+  }
 
   // Manager/admin sees all pending. Executives see their own (any status).
-  const where = canApprove(role)
-    ? { status: "pending" }
-    : { submittedById: userId };
+  const where = canApprove(perms) ? { status: "pending" } : { submittedById: userId };
 
   const items = await prisma.pendingApproval.findMany({
     where,

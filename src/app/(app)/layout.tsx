@@ -1,15 +1,14 @@
-import { getServerSession } from "next-auth";
 import { redirect } from "next/navigation";
-import { authOptions } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
+import { getCurrentUserAndPermissions } from "@/lib/permissions";
 import { SideNav } from "@/components/SideNav";
 import { RouteProgress } from "@/components/RouteProgress";
 
 export default async function AppLayout({ children }: { children: React.ReactNode }) {
-  const session = await getServerSession(authOptions);
-  if (!session?.user) redirect("/login");
+  const { session, perms } = await getCurrentUserAndPermissions();
+  if (!session?.user || !perms) redirect("/login");
 
-  // Pending-approvals badge count for managers/admins. Other roles see 0.
+  // Pending-approvals badge count for managers/admins.
   const pendingCount = await prisma.pendingApproval
     .count({ where: { status: "pending" } })
     .catch(() => 0);
@@ -20,11 +19,8 @@ export default async function AppLayout({ children }: { children: React.ReactNod
     <div className="flex flex-col md:flex-row min-h-screen bg-surface">
       <RouteProgress />
       <SideNav
-        user={{
-          name: session.user.name,
-          email: session.user.email,
-          role: session.user.role,
-        }}
+        user={{ name: session.user.name, email: session.user.email }}
+        perms={perms}
         pendingCount={pendingCount}
       />
       <main className="flex-1 min-w-0 flex flex-col">{children}</main>

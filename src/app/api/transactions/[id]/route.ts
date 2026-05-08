@@ -3,6 +3,7 @@ import { z } from "zod";
 import { getServerSession } from "next-auth";
 import { authOptions } from "@/lib/auth";
 import { submitUpdate, submitDelete, type TxProposed } from "@/lib/approval";
+import { getCurrentUserAndPermissions } from "@/lib/permissions";
 import {
   TYPES,
   FLOWS,
@@ -57,8 +58,10 @@ export async function PATCH(req: NextRequest, { params }: { params: { id: string
     return NextResponse.json({ error: "validation_failed" }, { status: 400 });
   }
   const data = parsed.data;
-  const userId = session.user.id;
-  const role = session.user.role ?? "executive";
+  const { perms, userId } = await getCurrentUserAndPermissions();
+  if (!perms || !userId) {
+    return NextResponse.json({ error: "unauthorized" }, { status: 401 });
+  }
 
   const proposed: TxProposed = {
     date: data.date,
@@ -72,7 +75,7 @@ export async function PATCH(req: NextRequest, { params }: { params: { id: string
     flow: data.flow ?? flowFor(data.type),
   };
 
-  const result = await submitUpdate({ txId: params.id, data: proposed, userId, role });
+  const result = await submitUpdate({ txId: params.id, data: proposed, userId, perms });
   if ("error" in result) {
     return NextResponse.json({ error: result.error }, { status: 404 });
   }
@@ -92,10 +95,12 @@ export async function DELETE(_req: NextRequest, { params }: { params: { id: stri
   const session = await getServerSession(authOptions);
   if (!session?.user) return NextResponse.json({ error: "unauthorized" }, { status: 401 });
 
-  const userId = session.user.id;
-  const role = session.user.role ?? "executive";
+  const { perms, userId } = await getCurrentUserAndPermissions();
+  if (!perms || !userId) {
+    return NextResponse.json({ error: "unauthorized" }, { status: 401 });
+  }
 
-  const result = await submitDelete({ txId: params.id, userId, role });
+  const result = await submitDelete({ txId: params.id, userId, perms });
   if ("error" in result) {
     return NextResponse.json({ error: result.error }, { status: 404 });
   }

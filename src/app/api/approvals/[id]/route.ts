@@ -1,8 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
-import { getServerSession } from "next-auth";
-import { authOptions } from "@/lib/auth";
 import { approvePending, rejectPending } from "@/lib/approval";
+import { getCurrentUserAndPermissions } from "@/lib/permissions";
 
 const ActionSchema = z.object({
   action: z.enum(["approve", "reject"]),
@@ -10,8 +9,10 @@ const ActionSchema = z.object({
 });
 
 export async function PATCH(req: NextRequest, { params }: { params: { id: string } }) {
-  const session = await getServerSession(authOptions);
-  if (!session?.user) return NextResponse.json({ error: "unauthorized" }, { status: 401 });
+  const { perms, userId } = await getCurrentUserAndPermissions();
+  if (!perms || !userId) {
+    return NextResponse.json({ error: "unauthorized" }, { status: 401 });
+  }
 
   const body = await req.json().catch(() => null);
   const parsed = ActionSchema.safeParse(body);
@@ -19,13 +20,21 @@ export async function PATCH(req: NextRequest, { params }: { params: { id: string
     return NextResponse.json({ error: "validation_failed" }, { status: 400 });
   }
   const { action, note } = parsed.data;
-  const reviewerId = session.user.id;
-  const reviewerRole = session.user.role ?? "executive";
 
   const result =
     action === "approve"
-      ? await approvePending({ pendingId: params.id, reviewerId, reviewerRole, note })
-      : await rejectPending({ pendingId: params.id, reviewerId, reviewerRole, note });
+      ? await approvePending({
+          pendingId: params.id,
+          reviewerId: userId,
+          reviewerPerms: perms,
+          note,
+        })
+      : await rejectPending({
+          pendingId: params.id,
+          reviewerId: userId,
+          reviewerPerms: perms,
+          note,
+        });
 
   if ("error" in result) {
     const code =

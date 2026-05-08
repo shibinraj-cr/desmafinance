@@ -6,38 +6,23 @@ import { usePathname } from "next/navigation";
 import { signOut } from "next-auth/react";
 import { useEffect, useState } from "react";
 import { createPortal } from "react-dom";
-import { canApprove, canManageUsers, roleLabel } from "@/lib/rbac";
+import { canApprove, canSeePage, roleLabel, type Permissions } from "@/lib/rbac";
+import { APP_PAGES } from "@/lib/pages";
 
 type NavItem = {
   href: string;
   label: string;
   icon: string;
   badgeCount?: number | null;
-  show?: boolean;
 };
 
-function buildNav(role: string, pendingCount: number): NavItem[] {
-  return [
-    { href: "/overview", label: "Overview", icon: "dashboard", show: true },
-    { href: "/revenue", label: "Revenue", icon: "payments", show: true },
-    { href: "/expenses", label: "Expenses", icon: "receipt_long", show: true },
-    { href: "/cashflow", label: "Cash Flow", icon: "account_balance", show: true },
-    { href: "/daily-tracker", label: "Daily Tracker", icon: "edit_calendar", show: true },
-    {
-      href: "/approvals",
-      label: "Approvals",
-      icon: "rule",
-      badgeCount: canApprove(role) ? pendingCount : null,
-      show: true,
-    },
-    { href: "/ai-insights", label: "AI Insights", icon: "psychology", show: true },
-    {
-      href: "/users",
-      label: "User Management",
-      icon: "manage_accounts",
-      show: canManageUsers(role),
-    },
-  ];
+function buildNav(perms: Permissions, pendingCount: number): NavItem[] {
+  return APP_PAGES.filter((p) => canSeePage(perms, p.href)).map((p) => ({
+    href: p.href,
+    label: p.label,
+    icon: p.icon,
+    badgeCount: p.href === "/approvals" && canApprove(perms) ? pendingCount : null,
+  }));
 }
 
 function NavList({
@@ -51,32 +36,30 @@ function NavList({
 }) {
   return (
     <nav className="flex-1 mt-base space-y-xs">
-      {items
-        .filter((n) => n.show)
-        .map((n) => {
-          const active = pathname === n.href || pathname.startsWith(n.href + "/");
-          return (
-            <Link
-              key={n.href}
-              href={n.href}
-              onClick={onNavigate}
-              className={
-                "flex items-center gap-md px-md py-sm rounded-lg transition-all " +
-                (active
-                  ? "bg-primary text-on-primary font-bold"
-                  : "text-on-brand-variant hover:bg-brand-elevated hover:text-on-brand")
-              }
-            >
-              <span className="material-symbols-outlined">{n.icon}</span>
-              <span className="text-label-sm flex-1">{n.label}</span>
-              {n.badgeCount && n.badgeCount > 0 ? (
-                <span className="text-[10px] font-bold bg-primary text-on-primary px-xs py-[1px] rounded-full min-w-[18px] text-center">
-                  {n.badgeCount}
-                </span>
-              ) : null}
-            </Link>
-          );
-        })}
+      {items.map((n) => {
+        const active = pathname === n.href || pathname.startsWith(n.href + "/");
+        return (
+          <Link
+            key={n.href}
+            href={n.href}
+            onClick={onNavigate}
+            className={
+              "flex items-center gap-md px-md py-sm rounded-lg transition-all " +
+              (active
+                ? "bg-primary text-on-primary font-bold"
+                : "text-on-brand-variant hover:bg-brand-elevated hover:text-on-brand")
+            }
+          >
+            <span className="material-symbols-outlined">{n.icon}</span>
+            <span className="text-label-sm flex-1">{n.label}</span>
+            {n.badgeCount && n.badgeCount > 0 ? (
+              <span className="text-[10px] font-bold bg-primary text-on-primary px-xs py-[1px] rounded-full min-w-[18px] text-center">
+                {n.badgeCount}
+              </span>
+            ) : null}
+          </Link>
+        );
+      })}
     </nav>
   );
 }
@@ -97,11 +80,11 @@ function BrandHeader() {
 
 function UserFooter({
   user,
-  role,
+  perms,
   onNavigate,
 }: {
   user: { name?: string | null; email?: string | null };
-  role: string;
+  perms: Permissions;
   onNavigate?: () => void;
 }) {
   return (
@@ -109,7 +92,7 @@ function UserFooter({
       <div className="px-md py-sm">
         <p className="text-label-sm text-on-brand font-semibold truncate">{user.name ?? "User"}</p>
         <p className="text-caption text-on-brand-variant truncate">
-          {roleLabel(role)}
+          {roleLabel(perms.roleName)}
           {user.email ? ` · ${user.email}` : ""}
         </p>
       </div>
@@ -129,14 +112,15 @@ function UserFooter({
 
 export function SideNav({
   user,
+  perms,
   pendingCount,
 }: {
-  user: { name?: string | null; email?: string | null; role?: string | null };
+  user: { name?: string | null; email?: string | null };
+  perms: Permissions;
   pendingCount: number;
 }) {
   const pathname = usePathname();
-  const role = user.role ?? "executive";
-  const items = buildNav(role, pendingCount);
+  const items = buildNav(perms, pendingCount);
 
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [mounted, setMounted] = useState(false);
@@ -145,7 +129,6 @@ export function SideNav({
     setMounted(true);
   }, []);
 
-  // Lock body scroll when the mobile drawer is open.
   useEffect(() => {
     if (!drawerOpen) return;
     const prev = document.body.style.overflow;
@@ -155,21 +138,18 @@ export function SideNav({
     };
   }, [drawerOpen]);
 
-  // Close the drawer automatically whenever the route changes.
   useEffect(() => {
     setDrawerOpen(false);
   }, [pathname]);
 
   return (
     <>
-      {/* Desktop sidebar (md+) */}
       <aside className="hidden md:flex flex-col w-[260px] h-screen sticky top-0 p-md gap-base bg-brand text-on-brand border-r border-brand-line">
         <BrandHeader />
         <NavList items={items} pathname={pathname} />
-        <UserFooter user={user} role={role} />
+        <UserFooter user={user} perms={perms} />
       </aside>
 
-      {/* Mobile top bar (hidden on md+) — hamburger + brand */}
       <header className="md:hidden sticky top-0 z-40 flex items-center gap-sm h-14 px-md bg-brand text-on-brand border-b border-brand-line">
         <button
           type="button"
@@ -183,18 +163,19 @@ export function SideNav({
           <Image src="/desfin.png" alt="DESFIN" width={32} height={32} className="object-cover" />
         </div>
         <span className="text-h3 font-bold text-primary leading-none">DESFIN</span>
-        {canApprove(role) && pendingCount > 0 && (
+        {canApprove(perms) && pendingCount > 0 && (
           <Link
             href="/approvals"
             className="ml-auto inline-flex items-center gap-xs h-8 px-sm rounded-full bg-primary text-on-primary text-[11px] font-bold"
           >
-            <span className="material-symbols-outlined" style={{ fontSize: 14 }}>rule</span>
+            <span className="material-symbols-outlined" style={{ fontSize: 14 }}>
+              rule
+            </span>
             {pendingCount}
           </Link>
         )}
       </header>
 
-      {/* Mobile drawer (rendered via portal so it escapes any layout flex) */}
       {mounted &&
         drawerOpen &&
         createPortal(
@@ -224,7 +205,7 @@ export function SideNav({
                 pathname={pathname}
                 onNavigate={() => setDrawerOpen(false)}
               />
-              <UserFooter user={user} role={role} onNavigate={() => setDrawerOpen(false)} />
+              <UserFooter user={user} perms={perms} onNavigate={() => setDrawerOpen(false)} />
             </aside>
           </div>,
           document.body,

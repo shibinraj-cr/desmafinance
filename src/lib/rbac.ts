@@ -1,55 +1,109 @@
-// Role definitions and permission helpers. The `role` column on User is a
-// plain string in the schema for forward-compat; we narrow at the call site.
+// Role/permission helpers. We now prefer a Role record (with explicit
+// capability flags + page list) and fall back to the legacy string `role`
+// field on User when no relation is present.
 
-export const ROLES = ["admin", "manager", "executive"] as const;
-export type Role = (typeof ROLES)[number];
+export type Permissions = {
+  isAdmin: boolean;
+  canApprove: boolean;
+  needsApproval: boolean;
+  pages: string[];
+  /** The display name of the role (e.g. "Admin", "Manager", custom name). */
+  roleName: string;
+};
 
-export function isValidRole(r: string | null | undefined): r is Role {
-  return r === "admin" || r === "manager" || r === "executive";
-}
-
-export function isAdmin(role?: string | null): boolean {
-  return role === "admin";
-}
-
-export function canManageUsers(role?: string | null): boolean {
-  return role === "admin";
-}
-
-/** Manager + admin can approve/reject pending changes. */
-export function canApprove(role?: string | null): boolean {
-  return role === "admin" || role === "manager";
-}
-
-/** Whether a user's transaction mutations should be queued for approval. */
-export function needsApproval(role?: string | null): boolean {
-  // Anything that isn't admin or manager goes through the approval queue.
-  // The legacy "user" role default is treated like an executive.
-  return !canApprove(role);
-}
-
-export function roleLabel(role?: string | null): string {
-  switch (role) {
-    case "admin":
-      return "Admin";
-    case "manager":
-      return "Manager";
-    case "executive":
-      return "Executive";
-    default:
-      return "User";
+/** Legacy string-only check. Used as fallback when no Role record. */
+export function fromLegacyString(role?: string | null): Permissions {
+  const r = role ?? "executive";
+  if (r === "admin") {
+    return {
+      isAdmin: true,
+      canApprove: true,
+      needsApproval: false,
+      pages: [
+        "/overview",
+        "/revenue",
+        "/expenses",
+        "/cashflow",
+        "/daily-tracker",
+        "/approvals",
+        "/ai-insights",
+        "/users",
+        "/roles",
+      ],
+      roleName: "Admin",
+    };
   }
+  if (r === "manager") {
+    return {
+      isAdmin: false,
+      canApprove: true,
+      needsApproval: false,
+      pages: [
+        "/overview",
+        "/revenue",
+        "/expenses",
+        "/cashflow",
+        "/daily-tracker",
+        "/approvals",
+        "/ai-insights",
+      ],
+      roleName: "Manager",
+    };
+  }
+  return {
+    isAdmin: false,
+    canApprove: false,
+    needsApproval: true,
+    pages: [
+      "/overview",
+      "/revenue",
+      "/expenses",
+      "/cashflow",
+      "/daily-tracker",
+      "/approvals",
+      "/ai-insights",
+    ],
+    roleName: r === "executive" ? "Executive" : "User",
+  };
 }
 
-export function roleBadgeClass(role?: string | null): string {
-  switch (role) {
-    case "admin":
+export function isAdmin(p?: Permissions | null): boolean {
+  return !!p?.isAdmin;
+}
+
+export function canManageUsers(p?: Permissions | null): boolean {
+  return !!p?.isAdmin;
+}
+
+export function canApprove(p?: Permissions | null): boolean {
+  return !!p?.canApprove;
+}
+
+export function needsApproval(p?: Permissions | null): boolean {
+  return !!p?.needsApproval;
+}
+
+export function canSeePage(p: Permissions, href: string): boolean {
+  if (!href.startsWith("/")) return false;
+  // Exact match or prefix match (e.g. allowing /daily-tracker permits
+  // /daily-tracker/[id]/edit too).
+  return p.pages.some((pg) => href === pg || href.startsWith(pg + "/"));
+}
+
+/** Tone class for role pills shown in the user table. */
+export function roleBadgeClass(roleName?: string | null): string {
+  switch (roleName) {
+    case "Admin":
       return "bg-primary text-on-primary";
-    case "manager":
+    case "Manager":
       return "bg-accent text-on-primary";
-    case "executive":
+    case "Executive":
       return "bg-surface-container-high text-on-surface";
     default:
       return "bg-surface-container text-on-surface-variant";
   }
+}
+
+export function roleLabel(roleName?: string | null): string {
+  return roleName ?? "User";
 }
