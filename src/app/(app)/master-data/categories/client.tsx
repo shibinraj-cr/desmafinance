@@ -32,34 +32,62 @@ const typeBadge = (t: CatType) => {
 };
 
 export function CategoriesEditor({ categories }: { categories: Category[] }) {
-  const groups = {
-    Revenue: categories.filter((c) => c.type === "Revenue"),
-    Both: categories.filter((c) => c.type === "Both"),
-    Expense: categories.filter((c) => c.type === "Expense"),
+  const [filter, setFilter] = useState<"Revenue" | "Expense">("Revenue");
+
+  // 'Both' categories show under whichever side the user has toggled.
+  const visible = categories.filter(
+    (c) => c.type === filter || c.type === "Both",
+  );
+  const counts = {
+    Revenue: categories.filter((c) => c.type === "Revenue" || c.type === "Both").length,
+    Expense: categories.filter((c) => c.type === "Expense" || c.type === "Both").length,
   };
 
   return (
     <div className="space-y-lg">
-      {(["Revenue", "Both", "Expense"] as const).map((t) =>
-        groups[t].length === 0 ? null : (
-          <div key={t} className="space-y-base">
-            <h3 className="text-h3 text-on-surface flex items-center gap-base">
+      <div className="flex items-center gap-base">
+        <div className="inline-flex rounded-lg border border-outline-variant overflow-hidden">
+          {(["Revenue", "Expense"] as const).map((t) => (
+            <button
+              key={t}
+              type="button"
+              onClick={() => setFilter(t)}
+              className={
+                "px-md h-9 text-label-sm font-semibold transition flex items-center gap-xs " +
+                (filter === t
+                  ? "bg-primary text-on-primary"
+                  : "bg-surface-container-lowest text-on-surface-variant hover:bg-surface-container-low")
+              }
+            >
+              {t}
               <span
-                className={`px-sm py-xs rounded-full border text-label-sm font-bold ${typeBadge(t)}`}
+                className={
+                  "text-[10px] font-bold rounded-full px-xs py-[1px] " +
+                  (filter === t
+                    ? "bg-on-primary/20 text-on-primary"
+                    : "bg-surface-container text-on-surface-variant")
+                }
               >
-                {t}
+                {counts[t]}
               </span>
-              <span className="text-caption text-on-surface-variant">
-                {groups[t].length} categor{groups[t].length === 1 ? "y" : "ies"}
-              </span>
-            </h3>
-            <div className="space-y-base">
-              {groups[t].map((c) => (
-                <CategoryCard key={c.id} category={c} />
-              ))}
-            </div>
-          </div>
-        ),
+            </button>
+          ))}
+        </div>
+        <p className="text-caption text-on-surface-variant">
+          Showing {filter} categories. Categories tagged for both Revenue & Expense appear in either view.
+        </p>
+      </div>
+
+      {visible.length === 0 ? (
+        <div className="bg-surface-container-lowest border border-outline-variant rounded-xl shadow-sm p-lg text-center text-on-surface-variant">
+          No categories yet. Click <strong>+ Add category</strong> to create one.
+        </div>
+      ) : (
+        <div className="space-y-base">
+          {visible.map((c) => (
+            <CategoryCard key={c.id} category={c} />
+          ))}
+        </div>
       )}
     </div>
   );
