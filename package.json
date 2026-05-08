@@ -15,8 +15,11 @@
     "db:seed-roles": "tsx prisma/seed-roles.ts",
     "db:seed-masters": "tsx prisma/seed-masters.ts",
     "db:migrate-services": "tsx prisma/migrate-services.ts",
+    "db:migrate-expense-master": "tsx prisma/migrate-expense-master.ts",
     "db:seed-lead-pulse": "tsx prisma/seed-lead-pulse.ts",
-    "db:seed-from-excel": "tsx prisma/seed-from-excel.ts"
+    "db:seed-from-excel": "tsx prisma/seed-from-excel.ts",
+    "lp:import-historical": "tsx prisma/lead-pulse-import-historical.ts",
+    "lp:import-historical:dry": "tsx prisma/lead-pulse-import-historical.ts --dry-run"
   },
   "dependencies": {
     "@prisma/client": "^6.19.3",
