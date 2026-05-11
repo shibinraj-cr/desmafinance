@@ -47,25 +47,36 @@ export default async function LeadPulseHomePage() {
   const today = todayIst();
   const year = Number(today.slice(0, 4));
   const month = Number(today.slice(5, 7));
+  const dayOfMonth = Number(today.slice(8, 10));
   const { start: monthStart, end: monthEnd } = monthBounds(year, month);
-  // Previous month for trend deltas
+  // Previous month for trend deltas + the like-for-like pace window
+  // (1st of prev month through the same day-of-month as today, clamped
+  // to the previous month's last day for e.g. May 31 vs April 30).
   const prevMonth = month === 1 ? 12 : month - 1;
   const prevYear = month === 1 ? year - 1 : year;
   const prev = monthBounds(prevYear, prevMonth);
+  const prevMonthDays = new Date(year, month - 1, 0).getDate();
+  const paceEndDay = Math.min(dayOfMonth, prevMonthDays);
+  const paceLastMonthEnd = `${prevYear}-${String(prevMonth).padStart(2, "0")}-${String(paceEndDay).padStart(2, "0")}`;
+  const paceLabel = `${shortMonth(prevMonth)} 1–${paceEndDay}`;
 
-  const [thisMonth, lastMonth, daily, bySource, todays, alerts, activeRoles] = await Promise.all([
-    getFunnelTotals({ start: monthStart, end: monthEnd }),
-    getFunnelTotals({ start: prev.start, end: prev.end }),
-    getDailyLeadVolume(30),
-    getConversionBySource({ start: monthStart, end: monthEnd }),
-    getTodaysEntryStatus(),
-    getPriorityAlerts(),
-    prisma.leadPulseRole.count({ where: { active: true, role: { in: ["l1", "l2"] } } }),
-  ]);
+  const [thisMonth, lastMonth, paced, daily, bySource, todays, alerts, activeRoles] =
+    await Promise.all([
+      getFunnelTotals({ start: monthStart, end: monthEnd }),
+      getFunnelTotals({ start: prev.start, end: prev.end }),
+      getFunnelTotals({ start: prev.start, end: paceLastMonthEnd }),
+      getDailyLeadVolume(30),
+      getConversionBySource({ start: monthStart, end: monthEnd }),
+      getTodaysEntryStatus(),
+      getPriorityAlerts(),
+      prisma.leadPulseRole.count({ where: { active: true, role: { in: ["l1", "l2"] } } }),
+    ]);
 
   const totalLeadsThisMonth = thisMonth.l1Leads + thisMonth.l2Leads;
   const totalLeadsLastMonth = lastMonth.l1Leads + lastMonth.l2Leads;
+  const paceLeadsLastMonth = paced.l1Leads + paced.l2Leads;
   const leadsTrend = pctChange(totalLeadsThisMonth, totalLeadsLastMonth);
+  const paceTrend = pctChange(totalLeadsThisMonth, paceLeadsLastMonth);
   const wonTrend = pctChange(thisMonth.l2Won, lastMonth.l2Won);
   const submittedToday = todays.filter((t) => t.status === "submitted").length;
 
@@ -89,6 +100,9 @@ export default async function LeadPulseHomePage() {
           value={totalLeadsThisMonth.toString()}
           trend={leadsTrend}
           icon="trending_up"
+          paceLabel={paceLabel}
+          paceValue={paceLeadsLastMonth}
+          paceTrend={paceTrend}
         />
         <Kpi
           label="L1 → L2 %"
@@ -190,13 +204,29 @@ function pctChange(now: number, prev: number): number | null {
   return Math.round(((now - prev) / prev) * 1000) / 10;
 }
 
-function Kpi({ label, value, trend, icon }: { label: string; value: string; trend?: number | null; icon: string }) {
+function Kpi({
+  label,
+  value,
+  trend,
+  icon,
+  paceLabel,
+  paceValue,
+  paceTrend,
+}: {
+  label: string;
+  value: string;
+  trend?: number | null;
+  icon: string;
+  paceLabel?: string;
+  paceValue?: number;
+  paceTrend?: number | null;
+}) {
   return (
     <div
       className="rounded-[12px] p-[16px] border flex items-start justify-between"
       style={{ backgroundColor: "var(--lp-surface-container)", borderColor: "var(--lp-outline-variant)" }}
     >
-      <div>
+      <div className="min-w-0">
         <span
           className="inline-flex items-center justify-center w-[32px] h-[32px] rounded-[8px] mb-[8px]"
           style={{ backgroundColor: "var(--lp-surface-container-high)", color: "var(--lp-primary)" }}
@@ -209,10 +239,38 @@ function Kpi({ label, value, trend, icon }: { label: string; value: string; tren
         <p className="text-[26px] font-bold tabular-nums mt-[2px]" style={{ color: "var(--lp-primary)" }}>
           {value}
         </p>
+        {paceLabel && paceValue != null && (
+          <p
+            className="text-[11px] mt-[6px] flex items-center gap-[6px] flex-wrap"
+            style={{ color: "var(--lp-on-surface-variant)" }}
+          >
+            <span>
+              Pace: <span className="tabular-nums">{paceValue.toLocaleString("en-IN")}</span>{" "}
+              <span style={{ opacity: 0.8 }}>({paceLabel})</span>
+            </span>
+            {paceTrend != null ? (
+              <span
+                className="text-[10px] px-[6px] py-[1px] rounded-full"
+                style={{
+                  backgroundColor:
+                    paceTrend >= 0 ? "rgba(51, 228, 255, 0.18)" : "rgba(255, 180, 171, 0.18)",
+                  color: paceTrend >= 0 ? "var(--lp-cyan)" : "var(--lp-error)",
+                }}
+                title="Same-window pace vs last month"
+              >
+                {paceTrend >= 0 ? "▲" : "▼"} {Math.abs(paceTrend).toFixed(1)}%
+              </span>
+            ) : (
+              <span className="text-[10px]" style={{ opacity: 0.6 }} title="No data last month for this window">
+                —
+              </span>
+            )}
+          </p>
+        )}
       </div>
       {trend != null && (
         <span
-          className="text-[11px] px-[8px] py-[2px] rounded-full"
+          className="text-[11px] px-[8px] py-[2px] rounded-full whitespace-nowrap"
           style={{
             backgroundColor: trend >= 0 ? "rgba(51, 228, 255, 0.18)" : "rgba(255, 180, 171, 0.18)",
             color: trend >= 0 ? "var(--lp-cyan)" : "var(--lp-error)",
@@ -223,6 +281,12 @@ function Kpi({ label, value, trend, icon }: { label: string; value: string; tren
       )}
     </div>
   );
+}
+
+function shortMonth(month: number): string {
+  return ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"][
+    month - 1
+  ]!;
 }
 
 function Card({ title, children, wide }: { title: string; children: React.ReactNode; wide?: boolean }) {

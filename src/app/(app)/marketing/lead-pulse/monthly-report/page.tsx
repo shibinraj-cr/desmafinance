@@ -44,9 +44,15 @@ export default async function MonthlyReportPage({
 
   const today = todayIst();
   const months = await getMonthsWithData();
-  const defaultYM = months[0] ?? { year: Number(today.slice(0, 4)), month: Number(today.slice(5, 7)) };
-  const year = searchParams.year ? Number(searchParams.year) : defaultYM.year;
-  const month = searchParams.month ? Number(searchParams.month) : defaultYM.month;
+  // Default to the current calendar month so the report always opens
+  // on "now". Earlier (and any stray-future) months are still pickable
+  // from the dropdown — but we don't auto-jump to them.
+  const year = searchParams.year
+    ? Number(searchParams.year)
+    : Number(today.slice(0, 4));
+  const month = searchParams.month
+    ? Number(searchParams.month)
+    : Number(today.slice(5, 7));
   const sourceCode = searchParams.source || null;
   const region = searchParams.region || null;
 
