@@ -7,6 +7,27 @@ import type { AppPage } from "@/lib/pages";
 import { MODULES, moduleForPath, type AppModule } from "@/lib/modules";
 
 /**
+ * Per-module tag style for the small badge that sits next to each page
+ * label. Subtle tints — Finance gold, Marketing cyan, Master Data
+ * amber, HR slate, System neutral.
+ */
+function moduleTagClass(moduleId: string): string {
+  switch (moduleId) {
+    case "finance":
+      return "bg-amber-50 text-amber-800 border-amber-200";
+    case "marketing":
+      return "bg-cyan-50 text-cyan-800 border-cyan-200";
+    case "master-data":
+      return "bg-purple-50 text-purple-800 border-purple-200";
+    case "hr":
+      return "bg-slate-50 text-slate-700 border-slate-200";
+    case "system":
+    default:
+      return "bg-surface-container-high text-on-surface-variant border-outline-variant";
+  }
+}
+
+/**
  * Group all pages by their owning module so the role-access UI is
  * scannable. Pages whose href doesn't resolve to any module (rare)
  * land under the System module.
@@ -121,6 +142,14 @@ function ModuleGroupedPageAccess({
                     {p.icon}
                   </span>
                   <span className="text-body-md text-on-surface flex-1">{p.label}</span>
+                  <span
+                    className={
+                      "text-[10px] uppercase tracking-wider font-semibold px-xs py-[1px] rounded border " +
+                      moduleTagClass(m.id)
+                    }
+                  >
+                    {m.name}
+                  </span>
                   {p.adminOnly && (
                     <span className="text-[10px] uppercase tracking-widest text-accent font-bold">
                       Admin
