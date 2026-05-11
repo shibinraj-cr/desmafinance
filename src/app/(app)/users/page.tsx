@@ -4,7 +4,7 @@ import { canManageUsers, roleBadgeClass, roleLabel } from "@/lib/rbac";
 import { getCurrentUserAndPermissions } from "@/lib/permissions";
 import { TopBar } from "@/components/TopBar";
 import { Section } from "@/components/Cards";
-import { UserActions, NewUserButton } from "./client";
+import { UserActions, NewUserButton, ResetPlaceholderPasswordsButton } from "./client";
 
 export const dynamic = "force-dynamic";
 
@@ -53,6 +53,7 @@ export default async function UsersPage() {
         action={<NewUserButton roles={roles} />}
       />
       <div className="p-margin space-y-lg">
+        <ResetPlaceholderPasswordsButton />
         <div className="bg-surface-container-lowest border border-outline-variant rounded-xl shadow-sm overflow-hidden">
           <div className="overflow-x-auto scrollbar-thin">
             <table className="w-full text-body-md">

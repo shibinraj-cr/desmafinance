@@ -287,3 +287,162 @@ function Field({ label, children }: { label: string; children: React.ReactNode }
     </label>
   );
 }
+
+/**
+ * Admin-only one-shot reset for users created with `@desfin.local`
+ * placeholder emails (i.e. those auto-spawned by the Lead Pulse
+ * historical importer). Sets all to a known temp password and lists
+ * them so the admin can hand out credentials.
+ */
+export function ResetPlaceholderPasswordsButton() {
+  const router = useRouter();
+  const [busy, setBusy] = useState(false);
+  const [confirming, setConfirming] = useState(false);
+  const [result, setResult] = useState<{
+    tempPassword: string;
+    users: { username: string; email: string }[];
+    note?: string;
+  } | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  async function run() {
+    setBusy(true);
+    setError(null);
+    setResult(null);
+    const res = await fetch("/api/admin/reset-placeholder-passwords", {
+      method: "POST",
+    });
+    setBusy(false);
+    setConfirming(false);
+    if (!res.ok) {
+      const data = await res.json().catch(() => ({}));
+      setError((data as { error?: string }).error ?? "reset_failed");
+      return;
+    }
+    const data = (await res.json()) as {
+      tempPassword: string;
+      users: { username: string; email: string }[];
+      note?: string;
+    };
+    setResult(data);
+    router.refresh();
+  }
+
+  async function copyAll() {
+    if (!result || result.users.length === 0) return;
+    const text = result.users
+      .map((u) => `${u.username}\t${result.tempPassword}\t${u.email}`)
+      .join("\n");
+    try {
+      await navigator.clipboard.writeText(text);
+    } catch {
+      // navigator.clipboard requires HTTPS in some browsers; fail quietly.
+    }
+  }
+
+  return (
+    <div className="rounded-lg border border-outline-variant bg-surface-container-lowest p-md space-y-sm">
+      <div className="flex items-start gap-md">
+        <div className="flex-1 min-w-0">
+          <h3 className="text-label-md font-semibold text-on-surface">
+            Reset placeholder-user passwords
+          </h3>
+          <p className="text-label-sm text-on-surface-variant mt-xs">
+            Finds users with <code>@desfin.local</code> emails (the
+            placeholders the Lead Pulse historical importer auto-created
+            for each BDE) and sets them all to a known temporary
+            password. The list of usernames + the temp password is shown
+            below so you can distribute credentials. Safe to re-run.
+          </p>
+        </div>
+        {!confirming ? (
+          <button
+            type="button"
+            onClick={() => setConfirming(true)}
+            disabled={busy}
+            className="shrink-0 h-9 px-md rounded-lg bg-primary text-on-primary text-label-sm font-semibold disabled:opacity-60"
+          >
+            Reset passwords
+          </button>
+        ) : (
+          <div className="shrink-0 flex items-center gap-xs">
+            <button
+              type="button"
+              onClick={run}
+              disabled={busy}
+              className="h-9 px-md rounded-lg bg-primary text-on-primary text-label-sm font-semibold disabled:opacity-60"
+            >
+              {busy ? "Resetting…" : "Confirm"}
+            </button>
+            <button
+              type="button"
+              onClick={() => setConfirming(false)}
+              disabled={busy}
+              className="h-9 px-md rounded-lg border border-outline-variant text-label-sm text-on-surface-variant"
+            >
+              Cancel
+            </button>
+          </div>
+        )}
+      </div>
+      {error && (
+        <div className="rounded-lg bg-error-container text-on-error-container px-md py-sm text-label-sm">
+          {error === "forbidden_admin_only" ? "Admin-only action." : `Failed: ${error}`}
+        </div>
+      )}
+      {result && (
+        <div className="rounded-lg border border-outline-variant bg-surface-container-low px-md py-sm text-label-sm space-y-xs">
+          {result.note && (
+            <p className="text-on-surface-variant">{result.note}</p>
+          )}
+          {result.users.length > 0 && (
+            <>
+              <p className="font-semibold text-on-surface">
+                Reset complete — {result.users.length} user
+                {result.users.length === 1 ? "" : "s"}.
+              </p>
+              <p className="text-on-surface-variant">
+                Temporary password:{" "}
+                <code className="px-xs py-[1px] rounded bg-surface-container-high text-on-surface font-mono">
+                  {result.tempPassword}
+                </code>
+                {" "}
+                — share this with each BDE.
+              </p>
+              <div className="flex items-center justify-end">
+                <button
+                  type="button"
+                  onClick={copyAll}
+                  className="h-7 px-sm rounded text-[11px] font-semibold border border-outline-variant text-on-surface-variant hover:text-on-surface"
+                >
+                  Copy as TSV
+                </button>
+              </div>
+              <details>
+                <summary className="cursor-pointer text-on-surface-variant">
+                  Users ({result.users.length})
+                </summary>
+                <table className="w-full mt-xs text-[11px] font-mono">
+                  <thead>
+                    <tr className="text-on-surface-variant">
+                      <th className="text-left px-xs">Username</th>
+                      <th className="text-left px-xs">Email</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {result.users.map((u) => (
+                      <tr key={u.username}>
+                        <td className="px-xs">{u.username}</td>
+                        <td className="px-xs text-on-surface-variant">{u.email}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </details>
+            </>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}

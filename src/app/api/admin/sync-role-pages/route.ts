@@ -31,6 +31,13 @@ const SHARED_NON_ADMIN_PAGES = [
   "/finance/parties",
   "/marketing/parties",
   "/master-data/sources",
+  // BDE-facing Lead Pulse pages so L1/L2 BDEs see them in the sidebar.
+  // The pages themselves still gate by LeadPulseRole, so granting them
+  // here is harmless for non-BDE non-admin roles (they'd hit the 403
+  // page but it's unlikely they navigate there).
+  "/marketing/lead-pulse",
+  "/marketing/lead-pulse/daily-entry",
+  "/marketing/lead-pulse/bde-performance",
 ];
 
 export async function POST() {
