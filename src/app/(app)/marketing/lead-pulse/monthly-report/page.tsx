@@ -257,14 +257,52 @@ function PerformanceMatrix({ matrix }: { matrix: Matrix }) {
           </thead>
           <tbody>
             <SectionHeader colSpan={1 + subColCount} label="L1 Team" />
-            {matrix.l1Rows.map((r) => (
-              <BdeRow key={r.userId} row={r} sources={sources} />
-            ))}
+            {(() => {
+              const visible = matrix.l1Rows.filter(
+                (r) => r.total.leads > 0 || r.total.won > 0,
+              );
+              const hidden = matrix.l1Rows.length - visible.length;
+              return (
+                <>
+                  {visible.map((r) => (
+                    <BdeRow key={r.userId} row={r} sources={sources} />
+                  ))}
+                  {hidden > 0 && (
+                    <HiddenRowsNote
+                      colSpan={1 + subColCount}
+                      hidden={hidden}
+                      names={matrix.l1Rows
+                        .filter((r) => r.total.leads === 0 && r.total.won === 0)
+                        .map((r) => r.displayName)}
+                    />
+                  )}
+                </>
+              );
+            })()}
             <SubtotalRow label="Subtotal L1" subtotal={matrix.l1Subtotal} sources={sources} />
             <SectionHeader colSpan={1 + subColCount} label="L2 Team" />
-            {matrix.l2Rows.map((r) => (
-              <BdeRow key={r.userId} row={r} sources={sources} />
-            ))}
+            {(() => {
+              const visible = matrix.l2Rows.filter(
+                (r) => r.total.leads > 0 || r.total.won > 0,
+              );
+              const hidden = matrix.l2Rows.length - visible.length;
+              return (
+                <>
+                  {visible.map((r) => (
+                    <BdeRow key={r.userId} row={r} sources={sources} />
+                  ))}
+                  {hidden > 0 && (
+                    <HiddenRowsNote
+                      colSpan={1 + subColCount}
+                      hidden={hidden}
+                      names={matrix.l2Rows
+                        .filter((r) => r.total.leads === 0 && r.total.won === 0)
+                        .map((r) => r.displayName)}
+                    />
+                  )}
+                </>
+              );
+            })()}
             <SubtotalRow label="Subtotal L2" subtotal={matrix.l2Subtotal} sources={sources} />
             <GlobalRow total={matrix.globalTotal} sources={sources} />
           </tbody>
@@ -308,6 +346,34 @@ function SectionHeader({ colSpan, label }: { colSpan: number; label: string }) {
         style={{ color: "var(--lp-primary)" }}
       >
         {label}
+      </td>
+    </tr>
+  );
+}
+
+/**
+ * Tiny "+N hidden — no activity" row that sits just before the
+ * sub-total row when one or more BDEs had zero leads + zero won for
+ * the current filter. The names show on hover via title attr.
+ */
+function HiddenRowsNote({
+  colSpan,
+  hidden,
+  names,
+}: {
+  colSpan: number;
+  hidden: number;
+  names: string[];
+}) {
+  return (
+    <tr style={{ backgroundColor: "var(--lp-surface-container)" }}>
+      <td
+        colSpan={colSpan}
+        className="px-[12px] py-[4px] text-[11px] italic"
+        style={{ color: "var(--lp-on-surface-variant)" }}
+        title={names.join(", ")}
+      >
+        + {hidden} BDE{hidden === 1 ? "" : "s"} hidden — no activity in this filter
       </td>
     </tr>
   );
