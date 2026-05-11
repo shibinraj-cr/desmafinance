@@ -836,6 +836,149 @@ function ErrorMsg({ children }: { children: React.ReactNode }) {
 }
 
 /**
+ * One-shot fix for the year-typo on Anila's January 2027 entries.
+ * Shifts any LeadPulseDailyEntry / Meta with year=2027 back to 2026
+ * (same month + day). Idempotent.
+ */
+export function Fix2027TypoButton() {
+  const router = useRouter();
+  const [busy, setBusy] = useState(false);
+  const [confirming, setConfirming] = useState(false);
+  const [result, setResult] = useState<{
+    summary: Record<string, number>;
+    log: string[];
+  } | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  async function run() {
+    setBusy(true);
+    setError(null);
+    setResult(null);
+    const res = await fetch("/api/marketing/lead-pulse/fix-2027-typo", {
+      method: "POST",
+    });
+    setBusy(false);
+    setConfirming(false);
+    if (!res.ok) {
+      const data = await res.json().catch(() => ({}));
+      setError((data as { error?: string }).error ?? "fix_failed");
+      return;
+    }
+    setResult(await res.json());
+    router.refresh();
+  }
+
+  return (
+    <div
+      className="rounded-[12px] p-[20px] border"
+      style={{
+        backgroundColor: "var(--lp-surface-container)",
+        borderColor: "var(--lp-outline-variant)",
+      }}
+    >
+      <div className="flex items-start gap-[16px]">
+        <div className="flex-1 min-w-0">
+          <h3 className="text-[14px] font-semibold" style={{ color: "var(--lp-on-surface)" }}>
+            Fix 2027 year-typo (Anila&apos;s January)
+          </h3>
+          <p className="text-[12px] mt-[4px]" style={{ color: "var(--lp-on-surface-variant)" }}>
+            Rows 6-10 of the <code>Anila(L2)</code> sheet were typed
+            with year 2027 instead of 2026 — only one cell carries a
+            non-zero value (Wabis = 12 on 2027-01-03) but it shows up
+            on the dashboard as a stray future month. This shifts every
+            year=2027 entry back to 2026 with the same month-day.
+            Idempotent.
+          </p>
+        </div>
+        {!confirming ? (
+          <button
+            type="button"
+            onClick={() => setConfirming(true)}
+            disabled={busy}
+            className="shrink-0 h-[36px] px-[14px] rounded-[8px] text-[13px] font-semibold disabled:opacity-60"
+            style={{ backgroundColor: "var(--lp-primary)", color: "var(--lp-on-primary)" }}
+          >
+            Fix
+          </button>
+        ) : (
+          <div className="shrink-0 flex items-center gap-[8px]">
+            <button
+              type="button"
+              onClick={run}
+              disabled={busy}
+              className="h-[36px] px-[14px] rounded-[8px] text-[13px] font-semibold disabled:opacity-60"
+              style={{ backgroundColor: "var(--lp-primary)", color: "var(--lp-on-primary)" }}
+            >
+              {busy ? "Running…" : "Confirm"}
+            </button>
+            <button
+              type="button"
+              onClick={() => setConfirming(false)}
+              disabled={busy}
+              className="h-[36px] px-[14px] rounded-[8px] text-[13px] border"
+              style={{
+                borderColor: "var(--lp-outline-variant)",
+                color: "var(--lp-on-surface-variant)",
+              }}
+            >
+              Cancel
+            </button>
+          </div>
+        )}
+      </div>
+      {error && (
+        <div
+          className="mt-[12px] rounded-[8px] px-[12px] py-[8px] text-[12px]"
+          style={{ backgroundColor: "rgba(255,180,171,0.15)", color: "var(--lp-error)" }}
+        >
+          {error}
+        </div>
+      )}
+      {result && (
+        <div
+          className="mt-[12px] rounded-[8px] px-[12px] py-[10px] text-[12px] space-y-[6px]"
+          style={{
+            backgroundColor: "var(--lp-surface-container-low)",
+            color: "var(--lp-on-surface)",
+          }}
+        >
+          <p className="font-semibold">Fix complete:</p>
+          <ul
+            className="grid grid-cols-2 gap-x-[16px] gap-y-[2px]"
+            style={{ color: "var(--lp-on-surface-variant)" }}
+          >
+            {Object.entries(result.summary).map(([k, v]) => (
+              <li key={k}>
+                <span className="font-mono">{v}</span>{" "}
+                {k.replace(/([A-Z])/g, " $1").toLowerCase()}
+              </li>
+            ))}
+          </ul>
+          {result.log.length > 0 && (
+            <details>
+              <summary
+                className="cursor-pointer"
+                style={{ color: "var(--lp-on-surface-variant)" }}
+              >
+                Per-row detail ({result.log.length})
+              </summary>
+              <ul
+                className="mt-[4px] text-[11px] font-mono"
+                style={{ color: "var(--lp-on-surface-variant)" }}
+              >
+                {result.log.map((l, i) => (
+                  <li key={i}>· {l}</li>
+                ))}
+              </ul>
+            </details>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+/**
  * Read-only spot-check that re-parses the bundled Excel and compares
  * each (BDE, date, source) cell against the DB. Optional BDE name
  * filter narrows the check. Shows mismatches inline.

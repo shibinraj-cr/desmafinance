@@ -6,6 +6,7 @@ import {
   SettingsTabs,
   HistoricalImportButton,
   ReconcileHistoricalButton,
+  Fix2027TypoButton,
 } from "./client";
 
 export const dynamic = "force-dynamic";
@@ -79,6 +80,8 @@ export default async function SettingsPage({
       <HistoricalImportButton />
 
       <ReconcileHistoricalButton />
+
+      <Fix2027TypoButton />
 
       <SettingsTabs
         initialTab={initialTab}
