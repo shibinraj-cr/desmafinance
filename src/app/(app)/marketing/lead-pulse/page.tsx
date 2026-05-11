@@ -5,7 +5,7 @@ import { getLeadPulseAccess, leadPulseRoleLabel } from "@/lib/lead-pulse-rbac";
 import { prisma } from "@/lib/prisma";
 import {
   getFunnelTotals,
-  getDailyLeadVolume,
+  getDailyLeadVolumeWithPrior,
   getConversionBySource,
   getTodaysEntryStatus,
   getPriorityAlerts,
@@ -65,7 +65,7 @@ export default async function LeadPulseHomePage() {
       getFunnelTotals({ start: monthStart, end: monthEnd }),
       getFunnelTotals({ start: prev.start, end: prev.end }),
       getFunnelTotals({ start: prev.start, end: paceLastMonthEnd }),
-      getDailyLeadVolume(30),
+      getDailyLeadVolumeWithPrior(30),
       getConversionBySource({ start: monthStart, end: monthEnd }),
       getTodaysEntryStatus(),
       getPriorityAlerts(),
@@ -124,8 +124,39 @@ export default async function LeadPulseHomePage() {
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-[16px]">
-        <Card title="Lead Volume (last 30 days)" wide>
+        <Card title="Lead Volume — last 30 days vs prior 30 days" wide>
           <LeadVolumeChart data={daily} />
+          <div
+            className="flex items-center gap-[16px] mt-[6px] text-[11px]"
+            style={{ color: "var(--lp-on-surface-variant)" }}
+          >
+            <span className="inline-flex items-center gap-[4px]">
+              <span
+                style={{
+                  width: 10,
+                  height: 10,
+                  background: "var(--lp-primary)",
+                  borderRadius: 2,
+                  display: "inline-block",
+                }}
+              />
+              This 30d
+            </span>
+            <span className="inline-flex items-center gap-[4px]">
+              <span
+                style={{
+                  width: 10,
+                  height: 2,
+                  background: "var(--lp-cyan)",
+                  display: "inline-block",
+                }}
+              />
+              Prior 30d (offset-aligned by day position)
+            </span>
+            <span style={{ opacity: 0.7 }}>
+              · X-axis = this-window date; hover for the matching prior-window date.
+            </span>
+          </div>
         </Card>
         <Card title="Conversion by Source (this month)">
           <ConversionBySourceChart data={bySource} />

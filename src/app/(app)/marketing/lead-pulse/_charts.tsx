@@ -21,15 +21,37 @@ const ORANGE = "#ffb693";
 const TEXT = "#d1c6ab";
 const GRID = "#4d4632";
 
-export function LeadVolumeChart({ data }: { data: { date: string; leads: number }[] }) {
+export function LeadVolumeChart({
+  data,
+}: {
+  /**
+   * Each row: current-window date + leads, plus the matching prior-
+   * window date + leads (offset by the window length). When
+   * `priorLeads` is present the chart overlays both series; otherwise
+   * it falls back to the single-series layout for backwards-compat.
+   */
+  data: {
+    date: string;
+    leads: number;
+    priorDate?: string;
+    priorLeads?: number;
+  }[];
+}) {
+  const hasPrior = data.some((d) => typeof d.priorLeads === "number");
   return (
-    <ResponsiveContainer width="100%" height={220}>
+    <ResponsiveContainer width="100%" height={240}>
       <AreaChart data={data} margin={{ top: 10, right: 10, left: 0, bottom: 0 }}>
         <defs>
           <linearGradient id="lpGold" x1="0" y1="0" x2="0" y2="1">
             <stop offset="0%" stopColor={GOLD} stopOpacity={0.4} />
             <stop offset="100%" stopColor={GOLD} stopOpacity={0.05} />
           </linearGradient>
+          {hasPrior && (
+            <linearGradient id="lpPrior" x1="0" y1="0" x2="0" y2="1">
+              <stop offset="0%" stopColor={CYAN} stopOpacity={0.15} />
+              <stop offset="100%" stopColor={CYAN} stopOpacity={0.02} />
+            </linearGradient>
+          )}
         </defs>
         <CartesianGrid stroke={GRID} strokeDasharray="3 3" vertical={false} />
         <XAxis
@@ -49,13 +71,35 @@ export function LeadVolumeChart({ data }: { data: { date: string; leads: number 
         <Tooltip
           contentStyle={{ backgroundColor: "#231f14", border: `1px solid ${GRID}`, color: "#ebe2d0" }}
           labelStyle={{ color: TEXT }}
+          formatter={(value: number, name: string, ctx: { payload?: { priorDate?: string } }) => {
+            if (name === "Prior 30d") {
+              return [value, `Prior 30d (${ctx.payload?.priorDate ?? ""})`];
+            }
+            return [value, name];
+          }}
         />
+        {hasPrior && (
+          <Area
+            type="monotone"
+            dataKey="priorLeads"
+            name="Prior 30d"
+            stroke={CYAN}
+            strokeWidth={1.5}
+            strokeDasharray="4 3"
+            fill="url(#lpPrior)"
+            dot={false}
+            isAnimationActive={false}
+          />
+        )}
         <Area
           type="monotone"
           dataKey="leads"
+          name="This 30d"
           stroke={GOLD}
           strokeWidth={2}
           fill="url(#lpGold)"
+          dot={false}
+          isAnimationActive={false}
         />
       </AreaChart>
     </ResponsiveContainer>

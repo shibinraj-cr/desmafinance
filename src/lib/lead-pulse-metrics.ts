@@ -128,6 +128,80 @@ export async function getDailyLeadVolume(days: number): Promise<Array<{ date: st
     .map(([date, leads]) => ({ date, leads }));
 }
 
+/**
+ * Dual-window daily lead volume — returns the current N-day window
+ * (today − N + 1 … today) overlaid with the matching prior N-day
+ * window (today − 2N + 1 … today − N), aligned by offset so the two
+ * series can be drawn on the same chart for direct comparison.
+ *
+ * Each output row has:
+ *   - `date`        — calendar date in the *current* window
+ *   - `leads`       — current-window leads on that date
+ *   - `priorDate`   — calendar date one window-length earlier
+ *   - `priorLeads`  — leads on that prior date (the comparison value)
+ */
+export async function getDailyLeadVolumeWithPrior(
+  days: number,
+): Promise<
+  Array<{ date: string; leads: number; priorDate: string; priorLeads: number }>
+> {
+  const today = todayIst();
+  const start = addDays(today, -(days - 1));
+  const priorStart = addDays(start, -days);
+  const priorEnd = addDays(start, -1);
+
+  // Single query covering both windows — saves a round-trip and keeps
+  // the data-volume tax low (~12k rows max for a 60-day span).
+  const entries = await prisma.leadPulseDailyEntry.findMany({
+    where: {
+      entryDate: { gte: toPrismaDate(priorStart), lte: toPrismaDate(today) },
+      status: "submitted",
+    },
+    select: {
+      entryDate: true,
+      roleAtEntry: true,
+      leadsReceived: true,
+      receivedFromL1: true,
+      directLeads: true,
+    },
+  });
+  const buckets = new Map<string, number>();
+  // Pre-seed every day in the combined range so empty days show zero.
+  for (let i = 0; i < days * 2; i++) {
+    buckets.set(addDays(priorStart, i), 0);
+  }
+  for (const e of entries) {
+    const dayStr = e.entryDate.toISOString().slice(0, 10);
+    const bump =
+      e.roleAtEntry === "l1"
+        ? (e.leadsReceived ?? 0)
+        : (e.receivedFromL1 ?? 0) + (e.directLeads ?? 0);
+    buckets.set(dayStr, (buckets.get(dayStr) ?? 0) + bump);
+  }
+  // Build the aligned series: index 0 = start-of-current-window vs
+  // start-of-prior-window, …, index N-1 = today vs today − N.
+  const out: Array<{
+    date: string;
+    leads: number;
+    priorDate: string;
+    priorLeads: number;
+  }> = [];
+  for (let i = 0; i < days; i++) {
+    const date = addDays(start, i);
+    const priorDate = addDays(priorStart, i);
+    out.push({
+      date,
+      leads: buckets.get(date) ?? 0,
+      priorDate,
+      priorLeads: buckets.get(priorDate) ?? 0,
+    });
+  }
+  // Used in case the caller wants the raw priorEnd; not returned but
+  // referenced via the priorDate of the last row for clarity.
+  void priorEnd;
+  return out;
+}
+
 /** Per-BDE roster snapshot for "today's entries" panel. */
 export async function getTodaysEntryStatus(): Promise<
   Array<{
