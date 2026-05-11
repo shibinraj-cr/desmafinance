@@ -1,13 +1,149 @@
-import { PhasePlaceholder } from "../_phase-placeholder";
+import { redirect } from "next/navigation";
+import { getCurrentUserAndPermissions } from "@/lib/permissions";
+import { getLeadPulseAccess } from "@/lib/lead-pulse-rbac";
+import { prisma } from "@/lib/prisma";
+import { todayIst, fromPrismaDate, toPrismaDate } from "@/lib/lead-pulse-dates";
+import { DailyEntryForm } from "./client";
 
 export const dynamic = "force-dynamic";
 
-export default function DailyEntryPlaceholder() {
+export default async function DailyEntryPage({
+  searchParams,
+}: {
+  searchParams: { date?: string };
+}) {
+  const { userId, perms } = await getCurrentUserAndPermissions();
+  if (!userId || !perms) redirect("/login");
+  const access = await getLeadPulseAccess(userId, perms);
+
+  // Only L1 / L2 BDEs submit daily entries. Supervisors viewing the
+  // daily-entry tab from the nav land on a friendly hint, not a 403,
+  // since they may have arrived via a stale tab.
+  if (access.role !== "l1" && access.role !== "l2") {
+    return (
+      <div className="px-[24px] py-[40px] max-w-2xl mx-auto">
+        <div
+          className="rounded-[12px] p-[24px] border"
+          style={{
+            backgroundColor: "var(--lp-surface-container)",
+            borderColor: "var(--lp-outline-variant)",
+          }}
+        >
+          <h1 className="text-[20px] font-semibold mb-[8px]">Daily Entry is for BDEs</h1>
+          <p style={{ color: "var(--lp-on-surface-variant)" }}>
+            Only L1 and L2 BDEs log daily lead activity here. Supervisors should head to the
+            dashboard or monthly report.
+          </p>
+        </div>
+      </div>
+    );
+  }
+  if (!access.canSubmitEntries) {
+    return (
+      <div className="px-[24px] py-[40px] max-w-2xl mx-auto">
+        <div
+          className="rounded-[12px] p-[24px] border"
+          style={{
+            backgroundColor: "var(--lp-surface-container)",
+            borderColor: "var(--lp-outline-variant)",
+          }}
+        >
+          <h1 className="text-[20px] font-semibold mb-[8px]">Your roster row is inactive</h1>
+          <p style={{ color: "var(--lp-on-surface-variant)" }}>
+            Contact your supervisor to re-activate your Lead Pulse access before submitting
+            entries.
+          </p>
+        </div>
+      </div>
+    );
+  }
+
+  const today = todayIst();
+  // The 3-day backdate cap on editing is enforced by the `locked` flag on
+  // historical entries (set by the importer + the nightly cron). The date
+  // picker itself goes much further back so BDEs can browse their historical
+  // entries in read-only mode.
+  const historyEarliest = "2025-01-01";
+  const requestedDate =
+    searchParams.date && /^\d{4}-\d{2}-\d{2}$/.test(searchParams.date)
+      ? searchParams.date
+      : today;
+  const date =
+    requestedDate > today
+      ? today
+      : requestedDate < historyEarliest
+        ? historyEarliest
+        : requestedDate;
+
+  // Server-render the initial payload so the form has correct values
+  // before hydration. The client will refetch on date change.
+  const [sources, entries, meta] = await Promise.all([
+    prisma.leadPulseSource.findMany({
+      where: { active: true },
+      orderBy: [{ displayOrder: "asc" }, { label: "asc" }],
+    }),
+    prisma.leadPulseDailyEntry.findMany({
+      where: { userId, entryDate: toPrismaDate(date) },
+    }),
+    prisma.leadPulseDailyMeta.findUnique({
+      where: { userId_entryDate: { userId, entryDate: toPrismaDate(date) } },
+    }),
+  ]);
+
+  const editable = !entries.some((e) => e.locked) && !meta?.locked;
+
   return (
-    <PhasePlaceholder
-      title="Daily Entry"
-      phase="Phase B"
-      description="L1 and L2 BDEs will log their daily lead activity by source on this page. The table will validate row totals server-side, auto-save drafts, and lock entries older than 3 days."
+    <DailyEntryForm
+      role={access.role}
+      displayName={access.displayName ?? ""}
+      date={date}
+      today={today}
+      earliest={historyEarliest}
+      editable={editable}
+      sources={sources.map((s) => ({
+        id: s.id,
+        code: s.code,
+        label: s.label,
+        displayOrder: s.displayOrder,
+      }))}
+      initialEntries={entries.map((e) => ({
+        sourceId: e.sourceId,
+        leadsReceived: e.leadsReceived ?? 0,
+        connectedCalls: e.connectedCalls ?? 0,
+        disqualified: e.disqualified ?? 0,
+        transferredToL2: e.transferredToL2 ?? 0,
+        receivedFromL1: e.receivedFromL1 ?? 0,
+        directLeads: e.directLeads ?? 0,
+        connected: e.connected ?? 0,
+        quoteSent: e.quoteSent ?? 0,
+        closedWon: e.closedWon ?? 0,
+        closedLost: e.closedLost ?? 0,
+        status: e.status,
+        locked: e.locked,
+        submittedAt: e.submittedAt?.toISOString() ?? null,
+        entryDate: fromPrismaDate(e.entryDate),
+      }))}
+      initialMeta={
+        meta
+          ? {
+              totalFollowups: meta.totalFollowups ?? 0,
+              referredToDoc: meta.referredToDoc ?? 0,
+              referredToAbroad: meta.referredToAbroad ?? 0,
+              notes: meta.notes ?? "",
+              status: meta.status,
+              locked: meta.locked,
+              submittedAt: meta.submittedAt?.toISOString() ?? null,
+            }
+          : {
+              totalFollowups: 0,
+              referredToDoc: 0,
+              referredToAbroad: 0,
+              notes: "",
+              status: "draft",
+              locked: false,
+              submittedAt: null,
+            }
+      }
     />
   );
 }

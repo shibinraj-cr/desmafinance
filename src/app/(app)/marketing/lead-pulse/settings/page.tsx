@@ -2,7 +2,11 @@ import { redirect } from "next/navigation";
 import { prisma } from "@/lib/prisma";
 import { getCurrentUserAndPermissions } from "@/lib/permissions";
 import { getLeadPulseAccess } from "@/lib/lead-pulse-rbac";
-import { SettingsTabs, HistoricalImportButton } from "./client";
+import {
+  SettingsTabs,
+  HistoricalImportButton,
+  ReconcileHistoricalButton,
+} from "./client";
 
 export const dynamic = "force-dynamic";
 
@@ -73,6 +77,8 @@ export default async function SettingsPage({
       </header>
 
       <HistoricalImportButton />
+
+      <ReconcileHistoricalButton />
 
       <SettingsTabs
         initialTab={initialTab}

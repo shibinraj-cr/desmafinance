@@ -836,6 +836,219 @@ function ErrorMsg({ children }: { children: React.ReactNode }) {
 }
 
 /**
+ * Read-only spot-check that re-parses the bundled Excel and compares
+ * each (BDE, date, source) cell against the DB. Optional BDE name
+ * filter narrows the check. Shows mismatches inline.
+ */
+export function ReconcileHistoricalButton() {
+  const [busy, setBusy] = useState(false);
+  const [bdeFilter, setBdeFilter] = useState("");
+  const [result, setResult] = useState<{
+    totals: { bdes: number; cellsChecked: number; cellsMatching: number; cellsMismatching: number };
+    perBde: Array<{
+      bde: string;
+      role: "l1" | "l2";
+      excelDays: number;
+      dbDays: number;
+      cellsChecked: number;
+      cellsMatching: number;
+      cellsMismatching: number;
+      missingFromDb: number;
+      extraInDb: number;
+      sampleMismatches: Array<{
+        bde: string;
+        date: string;
+        source: string;
+        excelLeads: number;
+        dbLeads: number;
+        excelConversion: number;
+        dbConversion: number;
+      }>;
+    }>;
+  } | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  async function run() {
+    setBusy(true);
+    setError(null);
+    setResult(null);
+    const qs = bdeFilter.trim() ? `?bde=${encodeURIComponent(bdeFilter.trim())}` : "";
+    const res = await fetch(`/api/marketing/lead-pulse/reconcile-historical${qs}`);
+    setBusy(false);
+    if (!res.ok) {
+      const data = await res.json().catch(() => ({}));
+      setError(
+        (data as { message?: string }).message ??
+          (data as { error?: string }).error ??
+          "Reconcile failed.",
+      );
+      return;
+    }
+    setResult(await res.json());
+  }
+
+  return (
+    <div
+      className="rounded-[12px] p-[20px] border"
+      style={{
+        backgroundColor: "var(--lp-surface-container)",
+        borderColor: "var(--lp-outline-variant)",
+      }}
+    >
+      <div className="flex items-start gap-[16px]">
+        <div className="flex-1 min-w-0">
+          <h3 className="text-[14px] font-semibold" style={{ color: "var(--lp-on-surface)" }}>
+            Reconcile DB against historical Excel
+          </h3>
+          <p
+            className="text-[12px] mt-[4px]"
+            style={{ color: "var(--lp-on-surface-variant)" }}
+          >
+            Read-only spot-check. Re-parses the bundled Excel and compares each
+            (BDE, date, source) cell to the live DB. Reports cells that match,
+            mismatches with deltas, and any keys present on one side but not
+            the other. Optional filter narrows to a single BDE by name.
+          </p>
+        </div>
+      </div>
+      <div className="mt-[12px] flex items-center gap-[8px]">
+        <input
+          type="text"
+          value={bdeFilter}
+          onChange={(e) => setBdeFilter(e.target.value)}
+          placeholder="BDE name filter (e.g. Sreeshma) — empty = all"
+          className="flex-1 h-[36px] px-[12px] rounded-[8px] text-[13px]"
+          style={{
+            backgroundColor: "var(--lp-surface-container-low)",
+            border: "1px solid var(--lp-outline-variant)",
+            color: "var(--lp-on-surface)",
+          }}
+        />
+        <button
+          type="button"
+          onClick={run}
+          disabled={busy}
+          className="shrink-0 h-[36px] px-[14px] rounded-[8px] text-[13px] font-semibold disabled:opacity-60"
+          style={{ backgroundColor: "var(--lp-primary)", color: "var(--lp-on-primary)" }}
+        >
+          {busy ? "Reconciling…" : "Run reconcile"}
+        </button>
+      </div>
+      {error && (
+        <div
+          className="mt-[12px] rounded-[8px] px-[12px] py-[8px] text-[12px]"
+          style={{
+            backgroundColor: "rgba(255,180,171,0.15)",
+            color: "var(--lp-error)",
+          }}
+        >
+          {error}
+        </div>
+      )}
+      {result && (
+        <div
+          className="mt-[12px] rounded-[8px] px-[12px] py-[10px] text-[12px] space-y-[8px]"
+          style={{
+            backgroundColor: "var(--lp-surface-container-low)",
+            color: "var(--lp-on-surface)",
+          }}
+        >
+          <div className="font-semibold">
+            {result.totals.bdes} BDE{result.totals.bdes === 1 ? "" : "s"} ·{" "}
+            <span className="font-mono">{result.totals.cellsChecked}</span> cells checked ·{" "}
+            <span
+              className="font-mono"
+              style={{
+                color:
+                  result.totals.cellsMismatching === 0
+                    ? "var(--lp-cyan)"
+                    : "var(--lp-error)",
+              }}
+            >
+              {result.totals.cellsMismatching} mismatches
+            </span>
+            {result.totals.cellsMismatching === 0 ? " ✓" : ""}
+          </div>
+          <details>
+            <summary
+              className="cursor-pointer"
+              style={{ color: "var(--lp-on-surface-variant)" }}
+            >
+              Per-BDE breakdown ({result.perBde.length})
+            </summary>
+            <table className="w-full mt-[6px] text-[11px] tabular-nums">
+              <thead>
+                <tr style={{ color: "var(--lp-on-surface-variant)" }}>
+                  <th className="text-left px-[4px]">BDE</th>
+                  <th className="text-right px-[4px]">Role</th>
+                  <th className="text-right px-[4px]">Cells</th>
+                  <th className="text-right px-[4px]">Match</th>
+                  <th className="text-right px-[4px]">Mismatch</th>
+                  <th className="text-right px-[4px]">Missing</th>
+                  <th className="text-right px-[4px]">Extra</th>
+                </tr>
+              </thead>
+              <tbody>
+                {result.perBde.map((b) => (
+                  <tr
+                    key={b.bde}
+                    style={{
+                      color:
+                        b.cellsMismatching || b.missingFromDb || b.extraInDb
+                          ? "var(--lp-on-surface)"
+                          : "var(--lp-on-surface-variant)",
+                    }}
+                  >
+                    <td className="px-[4px]">{b.bde}</td>
+                    <td className="text-right px-[4px] uppercase">{b.role}</td>
+                    <td className="text-right px-[4px]">{b.cellsChecked}</td>
+                    <td className="text-right px-[4px]">{b.cellsMatching}</td>
+                    <td
+                      className="text-right px-[4px] font-semibold"
+                      style={{
+                        color: b.cellsMismatching ? "var(--lp-error)" : undefined,
+                      }}
+                    >
+                      {b.cellsMismatching}
+                    </td>
+                    <td className="text-right px-[4px]">{b.missingFromDb}</td>
+                    <td className="text-right px-[4px]">{b.extraInDb}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </details>
+          {result.perBde.some((b) => b.sampleMismatches.length > 0) && (
+            <details>
+              <summary
+                className="cursor-pointer"
+                style={{ color: "var(--lp-on-surface-variant)" }}
+              >
+                Sample mismatches (first 30 per BDE)
+              </summary>
+              <ul
+                className="mt-[6px] text-[11px] font-mono space-y-[2px]"
+                style={{ color: "var(--lp-on-surface-variant)" }}
+              >
+                {result.perBde.flatMap((b) =>
+                  b.sampleMismatches.map((m, i) => (
+                    <li key={`${b.bde}-${i}`}>
+                      · <span style={{ color: "var(--lp-on-surface)" }}>{m.bde}</span>{" "}
+                      {m.date} {m.source}: leads {m.excelLeads}→{m.dbLeads}, conv{" "}
+                      {m.excelConversion}→{m.dbConversion}
+                    </li>
+                  )),
+                )}
+              </ul>
+            </details>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+/**
  * Supervisor-only one-shot import that POSTs to
  * /api/marketing/lead-pulse/import-historical and ingests the bundled
  * `public/data/lead-pulse-historical.xlsx` into LeadPulseDailyEntry,
