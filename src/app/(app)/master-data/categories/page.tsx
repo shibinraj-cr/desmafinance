@@ -9,6 +9,7 @@ import {
   NewCategoryButton,
   ExpenseMasterMigrationButton,
   PartiesSchemaSyncButton,
+  SyncRolePagesButton,
 } from "./client";
 
 export const dynamic = "force-dynamic";
@@ -66,6 +67,7 @@ export default async function CategoriesPage() {
         action={<NewCategoryButton />}
       />
       <div className="p-margin space-y-lg">
+        <SyncRolePagesButton />
         <PartiesSchemaSyncButton />
         <ExpenseMasterMigrationButton />
         <CategoriesEditor

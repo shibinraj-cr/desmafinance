@@ -732,6 +732,125 @@ function humanizeKey(k: string): string {
 }
 
 /**
+ * Admin-only button that POSTs to /api/admin/sync-role-pages.
+ * Re-fills every Role's `pages` array with the current module
+ * registry — fixes the case where new pages added in modules.ts
+ * silently don't show in the sidebar for existing role records.
+ */
+export function SyncRolePagesButton() {
+  const router = useRouter();
+  const [busy, setBusy] = useState(false);
+  const [confirming, setConfirming] = useState(false);
+  const [result, setResult] = useState<{
+    summary: Record<string, number>;
+    log: string[];
+  } | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  async function run() {
+    setBusy(true);
+    setError(null);
+    setResult(null);
+    const res = await fetch("/api/admin/sync-role-pages", { method: "POST" });
+    setBusy(false);
+    setConfirming(false);
+    if (!res.ok) {
+      const data = await res.json().catch(() => ({}));
+      setError((data as { error?: string }).error ?? "sync_failed");
+      return;
+    }
+    const data = (await res.json()) as {
+      summary: Record<string, number>;
+      log: string[];
+    };
+    setResult(data);
+    router.refresh();
+  }
+
+  return (
+    <div className="rounded-lg border border-outline-variant bg-surface-container-lowest p-md space-y-sm">
+      <div className="flex items-start gap-md">
+        <div className="flex-1 min-w-0">
+          <h3 className="text-label-md font-semibold text-on-surface">
+            Sync role pages (sidebar nav)
+          </h3>
+          <p className="text-label-sm text-on-surface-variant mt-xs">
+            Refreshes every Role.pages array against the current module
+            registry. Admin roles get every page; non-admins additionally
+            get /finance/parties, /finance/sources, /marketing/parties,
+            and /master-data/sources. Run this whenever the sidebar
+            doesn&apos;t show a freshly-added page. Idempotent.
+          </p>
+        </div>
+        {!confirming ? (
+          <button
+            type="button"
+            onClick={() => setConfirming(true)}
+            disabled={busy}
+            className="shrink-0 h-9 px-md rounded-lg bg-primary text-on-primary text-label-sm font-semibold disabled:opacity-60"
+          >
+            Sync pages
+          </button>
+        ) : (
+          <div className="shrink-0 flex items-center gap-xs">
+            <button
+              type="button"
+              onClick={run}
+              disabled={busy}
+              className="h-9 px-md rounded-lg bg-primary text-on-primary text-label-sm font-semibold disabled:opacity-60"
+            >
+              {busy ? "Running…" : "Confirm"}
+            </button>
+            <button
+              type="button"
+              onClick={() => setConfirming(false)}
+              disabled={busy}
+              className="h-9 px-md rounded-lg border border-outline-variant text-label-sm text-on-surface-variant"
+            >
+              Cancel
+            </button>
+          </div>
+        )}
+      </div>
+      {error && (
+        <div className="rounded-lg bg-error-container text-on-error-container px-md py-sm text-label-sm">
+          {error === "forbidden_admin_only" ? "Admin-only action." : `Failed: ${error}`}
+        </div>
+      )}
+      {result && (
+        <div className="rounded-lg border border-outline-variant bg-surface-container-low px-md py-sm text-label-sm space-y-xs">
+          <p className="font-semibold text-on-surface">Sync complete:</p>
+          <ul className="text-on-surface-variant grid grid-cols-2 gap-x-md gap-y-[2px]">
+            {Object.entries(result.summary).map(([k, v]) => (
+              <li key={k}>
+                <span className="font-mono">{v}</span>{" "}
+                {k.replace(/([A-Z])/g, " $1").toLowerCase()}
+              </li>
+            ))}
+          </ul>
+          <details className="mt-xs">
+            <summary className="cursor-pointer text-on-surface-variant">
+              Per-role detail ({result.log.length} role
+              {result.log.length === 1 ? "" : "s"})
+            </summary>
+            <ul className="mt-xs text-[12px] font-mono text-on-surface-variant space-y-[2px]">
+              {result.log.map((l, i) => (
+                <li key={i}>· {l}</li>
+              ))}
+            </ul>
+          </details>
+          <p className="text-caption text-on-surface-variant pt-xs">
+            Note: you&apos;ll need to sign out and back in for the new nav
+            entries to appear in your own sidebar (the session caches the
+            permissions list).
+          </p>
+        </div>
+      )}
+    </div>
+  );
+}
+
+/**
  * Admin-only button that POSTs to /api/master/parties-schema-sync.
  * Runs the additive DDL needed for the Source/Service/Profile feature
  * (Party.sourceId column + PartyService table) and copies any legacy
