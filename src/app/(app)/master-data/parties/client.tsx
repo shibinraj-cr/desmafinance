@@ -763,3 +763,124 @@ function Field({ label, children }: { label: string; children: React.ReactNode }
     </label>
   );
 }
+
+/**
+ * Admin-only button that POSTs to /api/master/import-candidates and
+ * pushes the bundled Candidate list.xlsx into the live DB. Re-runs
+ * are safe — uses upsert + overwrite semantics on PartyService.
+ */
+export function CandidateImportButton() {
+  const router = useRouter();
+  const [busy, setBusy] = useState(false);
+  const [confirming, setConfirming] = useState(false);
+  const [result, setResult] = useState<{
+    summary: Record<string, number>;
+    log: string[];
+  } | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  async function run() {
+    setBusy(true);
+    setError(null);
+    setResult(null);
+    const res = await fetch("/api/master/import-candidates", { method: "POST" });
+    setBusy(false);
+    setConfirming(false);
+    if (!res.ok) {
+      const data = await res.json().catch(() => ({}));
+      const msg =
+        (data as { message?: string }).message ??
+        (data as { error?: string }).error ??
+        "import_failed";
+      setError(msg);
+      return;
+    }
+    const data = (await res.json()) as {
+      summary: Record<string, number>;
+      log: string[];
+    };
+    setResult(data);
+    router.refresh();
+  }
+
+  return (
+    <div className="rounded-lg border border-outline-variant bg-surface-container-lowest p-md space-y-sm">
+      <div className="flex items-start gap-md">
+        <div className="flex-1 min-w-0">
+          <h3 className="text-label-md font-semibold text-on-surface">
+            Import candidates from Candidate list.xlsx
+          </h3>
+          <p className="text-label-sm text-on-surface-variant mt-xs">
+            Loads the bundled 126-row candidate sheet into Party + PartyService.
+            Existing candidates (matched by name) keep their source / email /
+            phone but have their service list overwritten by the Excel.
+            Service-master entries are created on the fly for any name that
+            doesn&apos;t exist yet. Safe to re-run.
+          </p>
+        </div>
+        {!confirming ? (
+          <button
+            type="button"
+            onClick={() => setConfirming(true)}
+            disabled={busy}
+            className="shrink-0 h-9 px-md rounded-lg bg-primary text-on-primary text-label-sm font-semibold disabled:opacity-60"
+          >
+            Run import
+          </button>
+        ) : (
+          <div className="shrink-0 flex items-center gap-xs">
+            <button
+              type="button"
+              onClick={run}
+              disabled={busy}
+              className="h-9 px-md rounded-lg bg-primary text-on-primary text-label-sm font-semibold disabled:opacity-60"
+            >
+              {busy ? "Running…" : "Confirm"}
+            </button>
+            <button
+              type="button"
+              onClick={() => setConfirming(false)}
+              disabled={busy}
+              className="h-9 px-md rounded-lg border border-outline-variant text-label-sm text-on-surface-variant"
+            >
+              Cancel
+            </button>
+          </div>
+        )}
+      </div>
+      {error && (
+        <div className="rounded-lg bg-error-container text-on-error-container px-md py-sm text-label-sm">
+          {error === "forbidden_admin_only"
+            ? "Admin-only action."
+            : `Import failed: ${error}`}
+        </div>
+      )}
+      {result && (
+        <div className="rounded-lg border border-outline-variant bg-surface-container-low px-md py-sm text-label-sm space-y-xs">
+          <p className="font-semibold text-on-surface">Import complete:</p>
+          <ul className="text-on-surface-variant grid grid-cols-2 gap-x-md gap-y-[2px]">
+            {Object.entries(result.summary).map(([k, v]) => (
+              <li key={k}>
+                <span className="font-mono">{v}</span>{" "}
+                {k.replace(/([A-Z])/g, " $1").toLowerCase()}
+              </li>
+            ))}
+          </ul>
+          {result.log.length > 0 && (
+            <details className="mt-xs">
+              <summary className="cursor-pointer text-on-surface-variant">
+                Detail ({result.log.length} entr
+                {result.log.length === 1 ? "y" : "ies"})
+              </summary>
+              <ul className="mt-xs text-[12px] font-mono text-on-surface-variant space-y-[2px] max-h-64 overflow-y-auto">
+                {result.log.map((l, i) => (
+                  <li key={i}>· {l}</li>
+                ))}
+              </ul>
+            </details>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}

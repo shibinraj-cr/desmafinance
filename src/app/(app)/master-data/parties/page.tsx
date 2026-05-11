@@ -4,7 +4,7 @@ import { getCurrentUserAndPermissions } from "@/lib/permissions";
 import { loadPartiesPayload } from "@/lib/party-data";
 import { TopBar } from "@/components/TopBar";
 import { Section } from "@/components/Cards";
-import { PartiesEditor, NewPartyButton } from "./client";
+import { PartiesEditor, NewPartyButton, CandidateImportButton } from "./client";
 
 export const dynamic = "force-dynamic";
 
@@ -36,6 +36,7 @@ export default async function PartiesPage() {
         action={<NewPartyButton services={services} sources={sources} />}
       />
       <div className="p-margin space-y-lg">
+        <CandidateImportButton />
         <PartiesEditor
           services={services}
           sources={sources}
