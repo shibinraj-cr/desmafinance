@@ -1,6 +1,7 @@
 import { notFound, redirect } from "next/navigation";
 import { prisma } from "@/lib/prisma";
 import { getCurrentUserAndPermissions } from "@/lib/permissions";
+import { loadPartyDetail } from "@/lib/party-data";
 import { TopBar } from "@/components/TopBar";
 import { PartyProfile } from "./client";
 
@@ -19,10 +20,6 @@ export default async function PartyDetailPage({
   const { userId, perms } = await getCurrentUserAndPermissions();
   if (!userId || !perms) redirect("/login");
 
-  // Schema-resilient load: if Party.sourceId / PartyService aren't yet
-  // pushed to the live DB, fall back to a narrower query so the page
-  // still renders. The Sync-schema button on /master-data/categories
-  // will close the gap.
   const services = await prisma.service.findMany({
     where: { isActive: true },
     select: { id: true, name: true },
@@ -32,52 +29,7 @@ export default async function PartyDetailPage({
     orderBy: [{ displayOrder: "asc" }, { label: "asc" }],
     select: { id: true, code: true, label: true, active: true },
   });
-  type PartyDetail = {
-    id: string;
-    name: string;
-    group: string;
-    txTypes: string;
-    email: string | null;
-    phone: string | null;
-    notes: string | null;
-    isActive: boolean;
-    sourceId: string | null;
-    source: { id: string; label: string } | null;
-    partyServices: Array<{
-      id: string;
-      serviceId: string;
-      totalAmount: { toString: () => string };
-      notes: string | null;
-      service: { id: string; name: string; isActive: boolean };
-    }>;
-  };
-  let party: PartyDetail | null;
-  try {
-    party = (await prisma.party.findUnique({
-      where: { id: params.id },
-      include: {
-        source: { select: { id: true, label: true } },
-        partyServices: {
-          orderBy: { createdAt: "asc" },
-          include: { service: { select: { id: true, name: true, isActive: true } } },
-        },
-      },
-    })) as PartyDetail | null;
-  } catch {
-    const fallback = await prisma.party.findUnique({
-      where: { id: params.id },
-    });
-    if (!fallback) {
-      party = null;
-    } else {
-      party = {
-        ...fallback,
-        sourceId: null,
-        source: null,
-        partyServices: [],
-      };
-    }
-  }
+  const party = await loadPartyDetail(params.id);
   if (!party) notFound();
 
   // Transactions linked to this party (newest first). Used for the
