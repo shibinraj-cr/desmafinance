@@ -80,6 +80,11 @@ export const MODULES: AppModule[] = [
         label: "Settings",
         icon: "tune",
       },
+      {
+        href: "/marketing/parties",
+        label: "Candidates & Vendors",
+        icon: "groups",
+      },
     ],
   },
   {
