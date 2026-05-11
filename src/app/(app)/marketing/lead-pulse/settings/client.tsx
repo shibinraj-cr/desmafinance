@@ -8,6 +8,7 @@ type Source = { id: string; code: string; label: string; displayOrder: number; a
 type Region = { id: string; code: string; label: string; active: boolean };
 type LockedEntry = {
   id: string;
+  userId: string;
   username: string;
   sourceLabel: string;
   entryDate: string;
@@ -15,25 +16,42 @@ type LockedEntry = {
   roleAtEntry: string;
 };
 
-type TabKey = "sources" | "regions" | "lock-override";
+type AuditEvent = {
+  id: string;
+  eventType: string;
+  occurredAt: string;
+  actorUsername: string | null;
+  metadata: Record<string, unknown> | null;
+};
+
+type TabKey = "sources" | "regions" | "lock-override" | "audit";
 
 export function SettingsTabs({
   initialTab,
   sources,
   regions,
   lockedEntries,
+  auditEvents,
 }: {
   initialTab: TabKey;
   sources: Source[];
   regions: Region[];
   lockedEntries: LockedEntry[];
+  auditEvents: AuditEvent[];
 }) {
   const [tab, setTab] = useState<TabKey>(initialTab);
+
+  const tabs: [TabKey, string][] = [
+    ["sources", "Lead Sources"],
+    ["regions", "Regions"],
+    ["lock-override", "Lock Override"],
+    ["audit", "Audit Log"],
+  ];
 
   return (
     <div className="space-y-[16px]">
       <div className="flex items-center gap-[4px] border-b" style={{ borderColor: "var(--lp-outline-variant)" }}>
-        {(["sources", "regions", "lock-override"] as const).map((t) => (
+        {tabs.map(([t, label]) => (
           <button
             key={t}
             type="button"
@@ -44,7 +62,7 @@ export function SettingsTabs({
               borderColor: tab === t ? "var(--lp-primary)" : "transparent",
             }}
           >
-            {t === "sources" ? "Lead Sources" : t === "regions" ? "Regions" : "Lock Override"}
+            {label}
           </button>
         ))}
       </div>
@@ -52,8 +70,63 @@ export function SettingsTabs({
       {tab === "sources" && <SourcesTab sources={sources} />}
       {tab === "regions" && <RegionsTab regions={regions} />}
       {tab === "lock-override" && <LockOverrideTab entries={lockedEntries} />}
+      {tab === "audit" && <AuditTab events={auditEvents} />}
     </div>
   );
+}
+
+function AuditTab({ events }: { events: AuditEvent[] }) {
+  return (
+    <div className="space-y-[12px]">
+      <div
+        className="rounded-[12px] border overflow-hidden"
+        style={{ backgroundColor: "var(--lp-surface-container)", borderColor: "var(--lp-outline-variant)" }}
+      >
+        <table className="w-full text-[13px]">
+          <thead>
+            <tr style={{ backgroundColor: "var(--lp-surface-container-low)" }}>
+              <Th>When</Th>
+              <Th>Actor</Th>
+              <Th>Event</Th>
+              <Th>Detail</Th>
+            </tr>
+          </thead>
+          <tbody>
+            {events.map((e) => (
+              <tr key={e.id} className="border-t" style={{ borderColor: "var(--lp-outline-variant)" }}>
+                <td className="px-[16px] py-[8px] tabular-nums" style={{ color: "var(--lp-on-surface-variant)" }}>
+                  {new Date(e.occurredAt).toLocaleString()}
+                </td>
+                <td className="px-[16px] py-[8px]">{e.actorUsername ?? "—"}</td>
+                <td className="px-[16px] py-[8px]">
+                  <span
+                    className="text-[11px] px-[8px] py-[2px] rounded-full font-semibold uppercase"
+                    style={{ backgroundColor: "var(--lp-surface-container-high)", color: "var(--lp-primary)" }}
+                  >
+                    {e.eventType}
+                  </span>
+                </td>
+                <td className="px-[16px] py-[8px] text-[12px] font-mono" style={{ color: "var(--lp-on-surface-variant)" }}>
+                  {e.metadata ? truncate(JSON.stringify(e.metadata), 90) : ""}
+                </td>
+              </tr>
+            ))}
+            {events.length === 0 && (
+              <tr>
+                <td colSpan={4} className="px-[16px] py-[16px] text-center" style={{ color: "var(--lp-on-surface-variant)" }}>
+                  No audit events yet.
+                </td>
+              </tr>
+            )}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+}
+
+function truncate(s: string, n: number): string {
+  return s.length > n ? s.slice(0, n - 1) + "…" : s;
 }
 
 function SourcesTab({ sources }: { sources: Source[] }) {
@@ -371,9 +444,20 @@ function LockOverrideTab({ entries }: { entries: LockedEntry[] }) {
 }
 
 function LockedEntryRow({ entry }: { entry: LockedEntry }) {
-  // Phase A only lists entries — actually unlocking arrives with Phase B
-  // when daily-entry routes exist. Show a disabled "Unlock" button so the
-  // affordance is visible.
+  const router = useRouter();
+  const [busy, setBusy] = useState(false);
+
+  async function unlock() {
+    setBusy(true);
+    const res = await fetch("/api/marketing/lead-pulse/lock-override", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ userId: entry.userId, date: entry.entryDate }),
+    });
+    setBusy(false);
+    if (res.ok) router.refresh();
+  }
+
   return (
     <tr className="border-t" style={{ borderColor: "var(--lp-outline-variant)" }}>
       <td className="px-[16px] py-[10px] font-semibold">{entry.username}</td>
@@ -387,12 +471,12 @@ function LockedEntryRow({ entry }: { entry: LockedEntry }) {
       <td className="px-[16px] py-[10px] text-right">
         <button
           type="button"
-          disabled
-          title="Unlock arrives with Phase B (Daily Entry)"
-          className="h-[28px] px-[12px] rounded text-[12px] font-semibold opacity-50 cursor-not-allowed"
+          onClick={unlock}
+          disabled={busy}
+          className="h-[28px] px-[12px] rounded text-[12px] font-semibold disabled:opacity-50"
           style={{ backgroundColor: "var(--lp-primary)", color: "var(--lp-on-primary)" }}
         >
-          Unlock
+          {busy ? "…" : "Unlock"}
         </button>
       </td>
     </tr>
@@ -747,6 +831,178 @@ function ErrorMsg({ children }: { children: React.ReactNode }) {
       style={{ backgroundColor: "rgba(255,180,171,0.15)", color: "var(--lp-error)" }}
     >
       {children}
+    </div>
+  );
+}
+
+/**
+ * Supervisor-only one-shot import that POSTs to
+ * /api/marketing/lead-pulse/import-historical and ingests the bundled
+ * `public/data/lead-pulse-historical.xlsx` into LeadPulseDailyEntry,
+ * LeadPulseDailyMeta, and LeadPulseRole. Idempotent — re-runs upsert.
+ */
+export function HistoricalImportButton() {
+  const router = useRouter();
+  const [busy, setBusy] = useState(false);
+  const [confirming, setConfirming] = useState(false);
+  const [result, setResult] = useState<{
+    summary: Record<string, number>;
+    bdes: string[];
+    errors: string[];
+  } | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  async function run() {
+    setBusy(true);
+    setError(null);
+    setResult(null);
+    const res = await fetch("/api/marketing/lead-pulse/import-historical", {
+      method: "POST",
+    });
+    setBusy(false);
+    setConfirming(false);
+    if (!res.ok) {
+      const data = await res.json().catch(() => ({}));
+      setError(
+        (data as { message?: string }).message ??
+          (data as { error?: string }).error ??
+          "Import failed.",
+      );
+      return;
+    }
+    const data = (await res.json()) as {
+      summary: Record<string, number>;
+      bdes: string[];
+      errors: string[];
+    };
+    setResult(data);
+    router.refresh();
+  }
+
+  return (
+    <div
+      className="rounded-[12px] p-[20px] border"
+      style={{
+        backgroundColor: "var(--lp-surface-container)",
+        borderColor: "var(--lp-outline-variant)",
+      }}
+    >
+      <div className="flex items-start gap-[16px]">
+        <div className="flex-1 min-w-0">
+          <h3 className="text-[14px] font-semibold" style={{ color: "var(--lp-on-surface)" }}>
+            Import historical Lead Pulse data
+          </h3>
+          <p
+            className="text-[12px] mt-[4px]"
+            style={{ color: "var(--lp-on-surface-variant)" }}
+          >
+            Loads the bundled <code>New_SALES_REPORT_FIXED.xlsx</code> (19 BDE
+            sheets, ~6 months of daily history) into the live DB. Creates
+            LeadPulseRole rows for any BDE not yet on the roster, auto-creates
+            placeholder DESFIN users if needed, then upserts daily entries
+            (locked + submitted). Safe to re-run; second click is a clean
+            update of any rows that have already landed.
+          </p>
+        </div>
+        {!confirming ? (
+          <button
+            type="button"
+            onClick={() => setConfirming(true)}
+            disabled={busy}
+            className="shrink-0 h-[36px] px-[14px] rounded-[8px] text-[13px] font-semibold disabled:opacity-60"
+            style={{ backgroundColor: "var(--lp-primary)", color: "var(--lp-on-primary)" }}
+          >
+            Run import
+          </button>
+        ) : (
+          <div className="shrink-0 flex items-center gap-[8px]">
+            <button
+              type="button"
+              onClick={run}
+              disabled={busy}
+              className="h-[36px] px-[14px] rounded-[8px] text-[13px] font-semibold disabled:opacity-60"
+              style={{ backgroundColor: "var(--lp-primary)", color: "var(--lp-on-primary)" }}
+            >
+              {busy ? "Importing… (60-180s)" : "Confirm"}
+            </button>
+            <button
+              type="button"
+              onClick={() => setConfirming(false)}
+              disabled={busy}
+              className="h-[36px] px-[14px] rounded-[8px] text-[13px] border"
+              style={{
+                borderColor: "var(--lp-outline-variant)",
+                color: "var(--lp-on-surface-variant)",
+              }}
+            >
+              Cancel
+            </button>
+          </div>
+        )}
+      </div>
+      {error && (
+        <div
+          className="mt-[12px] rounded-[8px] px-[12px] py-[8px] text-[12px]"
+          style={{
+            backgroundColor: "rgba(255,180,171,0.15)",
+            color: "var(--lp-error)",
+          }}
+        >
+          {error}
+        </div>
+      )}
+      {result && (
+        <div
+          className="mt-[12px] rounded-[8px] px-[12px] py-[10px] text-[12px] space-y-[6px]"
+          style={{
+            backgroundColor: "var(--lp-surface-container-low)",
+            color: "var(--lp-on-surface)",
+          }}
+        >
+          <p className="font-semibold">Import complete:</p>
+          <ul
+            className="grid grid-cols-2 gap-x-[16px] gap-y-[2px]"
+            style={{ color: "var(--lp-on-surface-variant)" }}
+          >
+            {Object.entries(result.summary).map(([k, v]) => (
+              <li key={k}>
+                <span className="font-mono">{v}</span>{" "}
+                {k.replace(/([A-Z])/g, " $1").toLowerCase()}
+              </li>
+            ))}
+          </ul>
+          {result.bdes.length > 0 && (
+            <details className="mt-[6px]">
+              <summary
+                className="cursor-pointer"
+                style={{ color: "var(--lp-on-surface-variant)" }}
+              >
+                BDEs imported ({result.bdes.length})
+              </summary>
+              <ul
+                className="mt-[4px] text-[11px] font-mono"
+                style={{ color: "var(--lp-on-surface-variant)" }}
+              >
+                {result.bdes.map((b, i) => (
+                  <li key={i}>· {b}</li>
+                ))}
+              </ul>
+            </details>
+          )}
+          {result.errors.length > 0 && (
+            <details className="mt-[6px]">
+              <summary className="cursor-pointer" style={{ color: "var(--lp-error)" }}>
+                Errors ({result.errors.length})
+              </summary>
+              <ul className="mt-[4px] text-[11px] font-mono" style={{ color: "var(--lp-error)" }}>
+                {result.errors.map((e, i) => (
+                  <li key={i}>· {e}</li>
+                ))}
+              </ul>
+            </details>
+          )}
+        </div>
+      )}
     </div>
   );
 }

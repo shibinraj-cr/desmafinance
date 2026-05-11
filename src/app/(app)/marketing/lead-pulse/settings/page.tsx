@@ -2,7 +2,7 @@ import { redirect } from "next/navigation";
 import { prisma } from "@/lib/prisma";
 import { getCurrentUserAndPermissions } from "@/lib/permissions";
 import { getLeadPulseAccess } from "@/lib/lead-pulse-rbac";
-import { SettingsTabs } from "./client";
+import { SettingsTabs, HistoricalImportButton } from "./client";
 
 export const dynamic = "force-dynamic";
 
@@ -32,7 +32,7 @@ export default async function SettingsPage({
     );
   }
 
-  const [sources, regions, lockedEntries] = await Promise.all([
+  const [sources, regions, lockedEntries, auditEvents] = await Promise.all([
     prisma.leadPulseSource.findMany({
       orderBy: [{ displayOrder: "asc" }, { label: "asc" }],
     }),
@@ -46,10 +46,17 @@ export default async function SettingsPage({
         source: { select: { id: true, label: true } },
       },
     }),
+    prisma.leadPulseAuditLog.findMany({
+      orderBy: [{ occurredAt: "desc" }],
+      take: 100,
+      include: { actor: { select: { username: true } } },
+    }),
   ]);
 
   const initialTab =
-    searchParams.tab === "regions" || searchParams.tab === "lock-override"
+    searchParams.tab === "regions" ||
+    searchParams.tab === "lock-override" ||
+    searchParams.tab === "audit"
       ? searchParams.tab
       : "sources";
 
@@ -64,6 +71,8 @@ export default async function SettingsPage({
           Manage Lead Pulse sources, regions, and lock overrides.
         </p>
       </header>
+
+      <HistoricalImportButton />
 
       <SettingsTabs
         initialTab={initialTab}
@@ -82,11 +91,19 @@ export default async function SettingsPage({
         }))}
         lockedEntries={lockedEntries.map((e) => ({
           id: e.id,
+          userId: e.user.id,
           username: e.user.username,
           sourceLabel: e.source.label,
           entryDate: e.entryDate.toISOString().slice(0, 10),
           submittedAt: e.submittedAt?.toISOString() ?? null,
           roleAtEntry: e.roleAtEntry,
+        }))}
+        auditEvents={auditEvents.map((a) => ({
+          id: a.id,
+          eventType: a.eventType,
+          occurredAt: a.occurredAt.toISOString(),
+          actorUsername: a.actor?.username ?? null,
+          metadata: (a.metadata as Record<string, unknown> | null) ?? null,
         }))}
       />
     </div>
