@@ -777,8 +777,8 @@ export function SyncRolePagesButton() {
           <p className="text-label-sm text-on-surface-variant mt-xs">
             Refreshes every Role.pages array against the current module
             registry. Admin roles get every page; non-admins additionally
-            get /finance/parties, /finance/sources, /marketing/parties,
-            and /master-data/sources. Run this whenever the sidebar
+            get /finance/parties, /marketing/parties, and
+            /master-data/sources. Run this whenever the sidebar
             doesn&apos;t show a freshly-added page. Idempotent.
           </p>
         </div>

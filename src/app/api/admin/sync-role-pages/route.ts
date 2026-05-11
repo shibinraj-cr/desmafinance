@@ -29,7 +29,6 @@ export const dynamic = "force-dynamic";
  */
 const SHARED_NON_ADMIN_PAGES = [
   "/finance/parties",
-  "/finance/sources",
   "/marketing/parties",
   "/master-data/sources",
 ];
