@@ -1,9 +1,140 @@
 "use client";
 
 import { useRouter } from "next/navigation";
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { createPortal } from "react-dom";
 import type { AppPage } from "@/lib/pages";
+import { MODULES, moduleForPath, type AppModule } from "@/lib/modules";
+
+/**
+ * Group all pages by their owning module so the role-access UI is
+ * scannable. Pages whose href doesn't resolve to any module (rare)
+ * land under the System module.
+ */
+function groupPagesByModule(
+  pages: AppPage[],
+): Array<{ module: AppModule; pages: AppPage[] }> {
+  const buckets = new Map<string, { module: AppModule; pages: AppPage[] }>();
+  // Preserve MODULES order
+  for (const m of MODULES) buckets.set(m.id, { module: m, pages: [] });
+  const systemMod =
+    MODULES.find((m) => m.id === "system") ??
+    MODULES[MODULES.length - 1]!;
+  for (const p of pages) {
+    const m = moduleForPath(p.href) ?? systemMod;
+    const bucket = buckets.get(m.id);
+    if (bucket) bucket.pages.push(p);
+    else
+      buckets.set(m.id, {
+        module: m,
+        pages: [p],
+      });
+  }
+  return Array.from(buckets.values()).filter((g) => g.pages.length > 0);
+}
+
+/**
+ * Per-module collapsible page-access section with quick-actions for
+ * selecting / clearing an entire module's pages. Shared between the
+ * existing-role edit panel and the new-role modal.
+ */
+function ModuleGroupedPageAccess({
+  allPages,
+  selected,
+  onToggle,
+  onSetMany,
+  size = "md",
+}: {
+  allPages: AppPage[];
+  selected: Set<string>;
+  onToggle: (href: string) => void;
+  onSetMany: (hrefs: string[], on: boolean) => void;
+  size?: "sm" | "md";
+}) {
+  const groups = useMemo(() => groupPagesByModule(allPages), [allPages]);
+  const gridCols =
+    size === "sm"
+      ? "grid-cols-1 sm:grid-cols-2"
+      : "grid-cols-1 sm:grid-cols-2 lg:grid-cols-3";
+  return (
+    <div className="space-y-md">
+      {groups.map(({ module: m, pages }) => {
+        const moduleHrefs = pages.map((p) => p.href);
+        const selectedInModule = moduleHrefs.filter((h) => selected.has(h)).length;
+        const allChecked = selectedInModule === moduleHrefs.length;
+        const noneChecked = selectedInModule === 0;
+        return (
+          <div
+            key={m.id}
+            className="rounded-lg border border-outline-variant bg-surface-container-low"
+          >
+            <div className="flex items-center gap-sm px-md py-sm border-b border-outline-variant/70">
+              <span className="material-symbols-outlined text-on-surface-variant" style={{ fontSize: 18 }}>
+                {m.icon}
+              </span>
+              <span className="text-label-sm font-bold uppercase tracking-wider text-on-surface">
+                {m.name}
+              </span>
+              <span className="text-caption text-on-surface-variant ml-xs">
+                {selectedInModule}/{moduleHrefs.length}
+              </span>
+              <div className="ml-auto inline-flex items-center gap-xs">
+                <button
+                  type="button"
+                  onClick={() => onSetMany(moduleHrefs, true)}
+                  disabled={allChecked}
+                  className="h-7 px-sm rounded text-[11px] font-semibold border border-outline-variant text-on-surface-variant hover:text-on-surface hover:bg-surface-container disabled:opacity-40"
+                >
+                  All
+                </button>
+                <button
+                  type="button"
+                  onClick={() => onSetMany(moduleHrefs, false)}
+                  disabled={noneChecked}
+                  className="h-7 px-sm rounded text-[11px] font-semibold border border-outline-variant text-on-surface-variant hover:text-on-surface hover:bg-surface-container disabled:opacity-40"
+                >
+                  Clear
+                </button>
+              </div>
+            </div>
+            <div className={`grid ${gridCols} gap-base p-md`}>
+              {pages.map((p) => (
+                <label
+                  key={p.href}
+                  className={
+                    "flex items-center gap-sm px-md py-sm rounded-lg border cursor-pointer transition " +
+                    (selected.has(p.href)
+                      ? "bg-primary-fixed/40 border-primary-fixed-dim"
+                      : "bg-surface-container-lowest border-outline-variant hover:bg-surface-container")
+                  }
+                >
+                  <input
+                    type="checkbox"
+                    checked={selected.has(p.href)}
+                    onChange={() => onToggle(p.href)}
+                    className="w-4 h-4 accent-primary"
+                  />
+                  <span
+                    className="material-symbols-outlined text-on-surface-variant"
+                    style={{ fontSize: 18 }}
+                  >
+                    {p.icon}
+                  </span>
+                  <span className="text-body-md text-on-surface flex-1">{p.label}</span>
+                  {p.adminOnly && (
+                    <span className="text-[10px] uppercase tracking-widest text-accent font-bold">
+                      Admin
+                    </span>
+                  )}
+                </label>
+              ))}
+            </div>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
 
 type Role = {
   id: string;
@@ -175,35 +306,21 @@ function RoleCard({ role, allPages }: { role: Role; allPages: AppPage[] }) {
         <p className="text-label-sm font-bold uppercase tracking-wider text-on-surface-variant mb-sm">
           Page access
         </p>
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-base">
-          {allPages.map((p) => (
-            <label
-              key={p.href}
-              className={
-                "flex items-center gap-sm px-md py-sm rounded-lg border cursor-pointer transition " +
-                (draft.pages.has(p.href)
-                  ? "bg-primary-fixed/40 border-primary-fixed-dim"
-                  : "bg-surface-container-low border-outline-variant hover:bg-surface-container")
+        <ModuleGroupedPageAccess
+          allPages={allPages}
+          selected={draft.pages}
+          onToggle={toggle}
+          onSetMany={(hrefs, on) => {
+            setDraft((d) => {
+              const next = new Set(d.pages);
+              for (const h of hrefs) {
+                if (on) next.add(h);
+                else next.delete(h);
               }
-            >
-              <input
-                type="checkbox"
-                checked={draft.pages.has(p.href)}
-                onChange={() => toggle(p.href)}
-                className="w-4 h-4 accent-primary"
-              />
-              <span className="material-symbols-outlined text-on-surface-variant" style={{ fontSize: 18 }}>
-                {p.icon}
-              </span>
-              <span className="text-body-md text-on-surface flex-1">{p.label}</span>
-              {p.adminOnly && (
-                <span className="text-[10px] uppercase tracking-widest text-accent font-bold">
-                  Admin
-                </span>
-              )}
-            </label>
-          ))}
-        </div>
+              return { ...d, pages: next };
+            });
+          }}
+        />
       </div>
 
       {error && (
@@ -414,32 +531,22 @@ export function NewRoleButton({
                 <p className="text-label-sm font-bold uppercase tracking-wider text-on-surface-variant mb-sm">
                   Page access
                 </p>
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-base">
-                  {allPages.map((p) => (
-                    <label
-                      key={p.href}
-                      className={
-                        "flex items-center gap-sm px-md py-sm rounded-lg border cursor-pointer transition " +
-                        (form.pages.has(p.href)
-                          ? "bg-primary-fixed/40 border-primary-fixed-dim"
-                          : "bg-surface-container-low border-outline-variant hover:bg-surface-container")
+                <ModuleGroupedPageAccess
+                  allPages={allPages}
+                  selected={form.pages}
+                  onToggle={toggle}
+                  onSetMany={(hrefs, on) => {
+                    setForm((f) => {
+                      const next = new Set(f.pages);
+                      for (const h of hrefs) {
+                        if (on) next.add(h);
+                        else next.delete(h);
                       }
-                    >
-                      <input
-                        type="checkbox"
-                        checked={form.pages.has(p.href)}
-                        onChange={() => toggle(p.href)}
-                        className="w-4 h-4 accent-primary"
-                      />
-                      <span className="text-body-md flex-1">{p.label}</span>
-                      {p.adminOnly && (
-                        <span className="text-[10px] uppercase tracking-widest text-accent font-bold">
-                          Admin
-                        </span>
-                      )}
-                    </label>
-                  ))}
-                </div>
+                      return { ...f, pages: next };
+                    });
+                  }}
+                  size="sm"
+                />
               </div>
               {error && (
                 <div className="rounded-lg bg-error-container text-on-error-container px-md py-sm">
