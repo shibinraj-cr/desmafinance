@@ -1,3 +1,4 @@
+import Link from "next/link";
 import { TopBar } from "@/components/TopBar";
 import { Section } from "@/components/Cards";
 import { prisma } from "@/lib/prisma";
@@ -5,6 +6,7 @@ import { inrFull } from "@/lib/format";
 import { canApprove } from "@/lib/rbac";
 import { getCurrentUserAndPermissions } from "@/lib/permissions";
 import { ApprovalActions } from "./actions";
+import { ResubmitEditor } from "./resubmit-editor";
 
 export const dynamic = "force-dynamic";
 
@@ -18,42 +20,109 @@ type ProposedTx = {
   paymentMode: string;
   amount: number;
   flow: string;
+  partyId?: string | null;
 };
 
-export default async function ApprovalsPage() {
+type TabKey = "pending" | "approved" | "rejected";
+
+export default async function ApprovalsPage({
+  searchParams,
+}: {
+  searchParams: { tab?: string };
+}) {
   const { perms, userId } = await getCurrentUserAndPermissions();
   const reviewer = canApprove(perms);
+  const tab: TabKey =
+    searchParams.tab === "approved" || searchParams.tab === "rejected"
+      ? searchParams.tab
+      : "pending";
 
-  const where = reviewer
-    ? { status: "pending" }
-    : { submittedById: userId ?? "__none__" };
+  // Visibility: reviewers (manager/admin) see everyone's items, executives
+  // see only their own submissions. The status filter narrows to the tab.
+  const ownershipWhere = reviewer ? {} : { submittedById: userId ?? "__none__" };
 
-  const items = await prisma.pendingApproval.findMany({
-    where,
-    include: {
-      submittedBy: { select: { id: true, username: true, role: true } },
-      reviewedBy: { select: { id: true, username: true } },
-      targetTx: true,
-    },
-    orderBy: [{ status: "asc" }, { createdAt: "desc" }],
-    take: 200,
-  });
+  const [items, counts, masters] = await Promise.all([
+    prisma.pendingApproval.findMany({
+      where: { ...ownershipWhere, status: tab },
+      include: {
+        submittedBy: { select: { id: true, username: true, role: true } },
+        reviewedBy: { select: { id: true, username: true } },
+        targetTx: true,
+      },
+      orderBy: [{ createdAt: "desc" }],
+      take: 200,
+    }),
+    Promise.all([
+      prisma.pendingApproval.count({ where: { ...ownershipWhere, status: "pending" } }),
+      prisma.pendingApproval.count({ where: { ...ownershipWhere, status: "approved" } }),
+      prisma.pendingApproval.count({ where: { ...ownershipWhere, status: "rejected" } }),
+    ]),
+    // Master data needed by ResubmitEditor (categories + parties).
+    // Skipped for reviewers since they don't resubmit.
+    tab === "rejected"
+      ? Promise.all([
+          prisma.category.findMany({
+            orderBy: [{ type: "asc" }, { name: "asc" }],
+            include: {
+              subItems: {
+                orderBy: { name: "asc" },
+                select: { id: true, name: true, isActive: true },
+              },
+            },
+          }),
+          prisma.party.findMany({
+            where: { isActive: true },
+            orderBy: [{ group: "asc" }, { name: "asc" }],
+            select: { id: true, name: true, group: true, txTypes: true, isActive: true },
+          }),
+        ])
+      : Promise.resolve([[], []] as [
+          {
+            id: string;
+            name: string;
+            type: string;
+            isActive: boolean;
+            subItems: { id: string; name: string; isActive: boolean }[];
+          }[],
+          { id: string; name: string; group: string; txTypes: string; isActive: boolean }[],
+        ]),
+  ]);
+
+  const [pendingCount, approvedCount, rejectedCount] = counts;
+  const [categories, parties] = masters;
+  const tabSubtitle =
+    tab === "pending"
+      ? `${items.length} pending`
+      : tab === "approved"
+        ? `${items.length} approved`
+        : `${items.length} rejected · resubmit or dismiss to clear from queue`;
 
   return (
     <>
       <TopBar
         title="Approvals"
-        subtitle={
-          reviewer
-            ? `${items.length} pending change${items.length === 1 ? "" : "s"}`
-            : "Your submissions"
-        }
+        subtitle={reviewer ? tabSubtitle : `Your submissions · ${tabSubtitle}`}
       />
       <div className="p-margin space-y-lg">
+        <Tabs
+          active={tab}
+          counts={{ pending: pendingCount, approved: approvedCount, rejected: rejectedCount }}
+        />
+
         {items.length === 0 ? (
           <Section title="">
             <div className="py-lg text-center text-on-surface-variant">
-              {reviewer ? "No pending approvals." : "You haven't submitted any changes yet."}
+              {tab === "pending"
+                ? reviewer
+                  ? "No pending approvals."
+                  : "You haven't submitted any pending changes."
+                : tab === "approved"
+                  ? reviewer
+                    ? "Nothing approved in the recent window."
+                    : "None of your changes have been approved yet."
+                  : reviewer
+                    ? "Nothing rejected yet."
+                    : "None of your changes have been rejected."}
             </div>
           </Section>
         ) : (
@@ -70,6 +139,7 @@ export default async function ApprovalsPage() {
                   paymentMode: p.targetTx.paymentMode,
                   amount: Number(p.targetTx.amount.toString()),
                   flow: p.targetTx.flow,
+                  partyId: p.targetTx.partyId,
                 }
               : null;
 
@@ -86,6 +156,9 @@ export default async function ApprovalsPage() {
                 : p.status === "rejected"
                   ? "bg-red-50 text-red-700 border-red-200"
                   : "bg-amber-50 text-amber-800 border-amber-200";
+
+            const isOwner = p.submittedById === userId;
+            const canResubmit = p.status === "rejected" && isOwner;
 
             return (
               <div
@@ -128,12 +201,89 @@ export default async function ApprovalsPage() {
                 )}
 
                 {reviewer && p.status === "pending" && <ApprovalActions id={p.id} />}
+
+                {canResubmit && (
+                  <ResubmitEditor
+                    pendingId={p.id}
+                    kind={p.kind as "create" | "update" | "delete"}
+                    initialProposed={proposed ?? before}
+                    categories={categories.map((c) => ({
+                      id: c.id,
+                      name: c.name,
+                      type: c.type as "Revenue" | "Expense" | "Both",
+                      isActive: c.isActive,
+                      subItems: c.subItems,
+                    }))}
+                    parties={parties.map((pt) => ({
+                      id: pt.id,
+                      name: pt.name,
+                      group: pt.group as "Candidate" | "Vendor",
+                      txTypes: pt.txTypes as "Revenue" | "Expense" | "Both",
+                      isActive: pt.isActive,
+                    }))}
+                  />
+                )}
               </div>
             );
           })
         )}
       </div>
     </>
+  );
+}
+
+function Tabs({
+  active,
+  counts,
+}: {
+  active: TabKey;
+  counts: { pending: number; approved: number; rejected: number };
+}) {
+  const tabs: Array<{
+    key: TabKey;
+    label: string;
+    count: number;
+    countTone: "amber" | "green" | "red";
+  }> = [
+    { key: "pending", label: "Pending", count: counts.pending, countTone: "amber" },
+    { key: "approved", label: "Approved", count: counts.approved, countTone: "green" },
+    { key: "rejected", label: "Rejected", count: counts.rejected, countTone: "red" },
+  ];
+  return (
+    <div className="flex flex-wrap items-center gap-xs border-b border-outline-variant">
+      {tabs.map((t) => {
+        const activeStyles =
+          active === t.key
+            ? "text-on-surface font-semibold border-primary"
+            : "text-on-surface-variant border-transparent hover:text-on-surface";
+        const countStyles =
+          t.countTone === "amber"
+            ? "bg-amber-50 text-amber-800"
+            : t.countTone === "green"
+              ? "bg-green-50 text-green-700"
+              : "bg-red-50 text-red-700";
+        return (
+          <Link
+            key={t.key}
+            href={t.key === "pending" ? "/finance/approvals" : `/finance/approvals?tab=${t.key}`}
+            scroll={false}
+            className={
+              "inline-flex items-center gap-xs h-10 px-md border-b-2 transition " + activeStyles
+            }
+          >
+            <span>{t.label}</span>
+            <span
+              className={
+                "text-[11px] font-bold px-xs py-[1px] rounded-full min-w-[20px] text-center " +
+                countStyles
+              }
+            >
+              {t.count}
+            </span>
+          </Link>
+        );
+      })}
+    </div>
   );
 }
 

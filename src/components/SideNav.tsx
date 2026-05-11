@@ -14,12 +14,16 @@ type NavItem = {
   label: string;
   icon: string;
   badgeCount?: number | null;
+  /** Red-toned secondary badge — used for the signed-in user's
+   *  unresolved-rejected approvals queue. */
+  warningCount?: number | null;
 };
 
 function navForModule(
   mod: AppModule,
   perms: Permissions,
   pendingCount: number,
+  rejectedCount: number,
 ): NavItem[] {
   return mod.pages
     .filter((p) => canSeePage(perms, p.href))
@@ -29,6 +33,8 @@ function navForModule(
       icon: p.icon,
       badgeCount:
         p.href === "/finance/approvals" && canApprove(perms) ? pendingCount : null,
+      warningCount:
+        p.href === "/finance/approvals" && rejectedCount > 0 ? rejectedCount : null,
     }));
 }
 
@@ -70,6 +76,14 @@ function NavList({
           >
             <span className="material-symbols-outlined">{n.icon}</span>
             <span className="text-label-sm flex-1">{n.label}</span>
+            {n.warningCount && n.warningCount > 0 ? (
+              <span
+                title={`${n.warningCount} rejected, awaiting your action`}
+                className="text-[10px] font-bold bg-red-500 text-white px-xs py-[1px] rounded-full min-w-[18px] text-center"
+              >
+                {n.warningCount}
+              </span>
+            ) : null}
             {n.badgeCount && n.badgeCount > 0 ? (
               <span className="text-[10px] font-bold bg-primary text-on-primary px-xs py-[1px] rounded-full min-w-[18px] text-center">
                 {n.badgeCount}
@@ -200,10 +214,12 @@ export function SideNav({
   user,
   perms,
   pendingCount,
+  rejectedCount,
 }: {
   user: { name?: string | null; email?: string | null };
   perms: Permissions;
   pendingCount: number;
+  rejectedCount: number;
 }) {
   const pathname = usePathname();
 
@@ -224,7 +240,7 @@ export function SideNav({
 
   const activeModule =
     modules.find((m) => m.id === activeModuleId) ?? initialModule;
-  const items = navForModule(activeModule, perms, pendingCount);
+  const items = navForModule(activeModule, perms, pendingCount, rejectedCount);
 
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [mounted, setMounted] = useState(false);

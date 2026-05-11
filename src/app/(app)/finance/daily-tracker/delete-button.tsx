@@ -8,11 +8,23 @@ export function DeleteRowButton({ id }: { id: string }) {
   const [busy, setBusy] = useState(false);
 
   async function onClick() {
-    if (!confirm("Delete this transaction? This cannot be undone.")) return;
+    if (!confirm("Delete this transaction?")) return;
     setBusy(true);
     const res = await fetch(`/api/finance/transactions/${id}`, { method: "DELETE" });
     setBusy(false);
-    if (res.ok) router.refresh();
+    if (!res.ok) {
+      alert("Could not delete. Please try again.");
+      return;
+    }
+    // 202 means an executive's delete went into the approval queue
+    // rather than removing the row directly. Surface that explicitly so
+    // the user knows the row will only disappear once a manager approves.
+    if (res.status === 202) {
+      alert(
+        "Delete submitted for approval. The transaction stays visible until a manager approves the deletion. You'll see it under Approvals → Pending.",
+      );
+    }
+    router.refresh();
   }
 
   return (
