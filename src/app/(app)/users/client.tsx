@@ -446,3 +446,129 @@ export function ResetPlaceholderPasswordsButton() {
     </div>
   );
 }
+
+/**
+ * Admin-only one-shot link of placeholder users (the historical-
+ * import accounts with `@desfin.local` emails and no roleId) to the
+ * Finance Executive Role record. Required after running the
+ * Sync-role-pages button — otherwise the new Lead Pulse nav entries
+ * never reach those users (their perms fall through to the
+ * hardcoded fromLegacyString fallback).
+ */
+export function LinkPlaceholderRolesButton() {
+  const router = useRouter();
+  const [busy, setBusy] = useState(false);
+  const [confirming, setConfirming] = useState(false);
+  const [result, setResult] = useState<{
+    summary: { linked: number; role: string };
+    log: string[];
+    note?: string;
+  } | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  async function run() {
+    setBusy(true);
+    setError(null);
+    setResult(null);
+    const res = await fetch("/api/admin/link-placeholder-roles", { method: "POST" });
+    setBusy(false);
+    setConfirming(false);
+    if (!res.ok) {
+      const data = await res.json().catch(() => ({}));
+      setError(
+        (data as { message?: string }).message ??
+          (data as { error?: string }).error ??
+          "link_failed",
+      );
+      return;
+    }
+    const data = (await res.json()) as {
+      summary: { linked: number; role: string };
+      log: string[];
+      note?: string;
+    };
+    setResult(data);
+    router.refresh();
+  }
+
+  return (
+    <div className="rounded-lg border border-outline-variant bg-surface-container-lowest p-md space-y-sm">
+      <div className="flex items-start gap-md">
+        <div className="flex-1 min-w-0">
+          <h3 className="text-label-md font-semibold text-on-surface">
+            Link placeholder users to the Executive role
+          </h3>
+          <p className="text-label-sm text-on-surface-variant mt-xs">
+            Finds users with <code>@desfin.local</code> emails and no
+            <code>roleId</code> (the historical-import placeholders) and
+            assigns them the <strong>Finance Executive</strong> role so
+            they pick up the role&apos;s page list (Finance + Lead Pulse
+            after the Sync-role-pages button has been run). Each user
+            must sign out and back in for their session to refresh.
+            Safe to re-run.
+          </p>
+        </div>
+        {!confirming ? (
+          <button
+            type="button"
+            onClick={() => setConfirming(true)}
+            disabled={busy}
+            className="shrink-0 h-9 px-md rounded-lg bg-primary text-on-primary text-label-sm font-semibold disabled:opacity-60"
+          >
+            Link role
+          </button>
+        ) : (
+          <div className="shrink-0 flex items-center gap-xs">
+            <button
+              type="button"
+              onClick={run}
+              disabled={busy}
+              className="h-9 px-md rounded-lg bg-primary text-on-primary text-label-sm font-semibold disabled:opacity-60"
+            >
+              {busy ? "Linking…" : "Confirm"}
+            </button>
+            <button
+              type="button"
+              onClick={() => setConfirming(false)}
+              disabled={busy}
+              className="h-9 px-md rounded-lg border border-outline-variant text-label-sm text-on-surface-variant"
+            >
+              Cancel
+            </button>
+          </div>
+        )}
+      </div>
+      {error && (
+        <div className="rounded-lg bg-error-container text-on-error-container px-md py-sm text-label-sm">
+          {error === "forbidden_admin_only" ? "Admin-only action." : `Failed: ${error}`}
+        </div>
+      )}
+      {result && (
+        <div className="rounded-lg border border-outline-variant bg-surface-container-low px-md py-sm text-label-sm space-y-xs">
+          <p className="font-semibold text-on-surface">
+            Linked {result.summary.linked} user
+            {result.summary.linked === 1 ? "" : "s"} to{" "}
+            <span className="font-mono">{result.summary.role}</span>.
+          </p>
+          {result.note && (
+            <p className="text-on-surface-variant">{result.note}</p>
+          )}
+          {result.log.length > 0 && (
+            <details>
+              <summary className="cursor-pointer text-on-surface-variant">
+                Detail ({result.log.length})
+              </summary>
+              <ul
+                className="mt-xs text-[11px] font-mono text-on-surface-variant max-h-64 overflow-y-auto"
+              >
+                {result.log.map((l, i) => (
+                  <li key={i}>· {l}</li>
+                ))}
+              </ul>
+            </details>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
