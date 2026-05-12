@@ -11,7 +11,7 @@ const inter = Inter({
 });
 
 export const metadata: Metadata = {
-  title: "DESFIN — Desma International",
+  title: "DESGRO — Desma International",
   description: "Desma International — Financial Insights Dashboard",
   icons: {
     icon: [

@@ -172,9 +172,9 @@ export default function LoginPage() {
       <div className="w-full max-w-md bg-surface-container-lowest border border-outline-variant rounded-xl shadow-lg p-xl">
         <div className="flex flex-col items-center text-center mb-lg">
           <div className="w-20 h-20 rounded-xl overflow-hidden bg-brand flex items-center justify-center shadow-sm">
-            <Image src="/desfin.png" alt="DESFIN" width={80} height={80} priority />
+            <Image src="/desgro.png" alt="Desgro" width={80} height={80} priority />
           </div>
-          <h1 className="text-h2 font-bold text-on-surface mt-md">DESFIN</h1>
+          <h1 className="text-h2 font-bold text-on-surface mt-md">DESGRO</h1>
           <p className="text-label-sm text-on-surface-variant uppercase tracking-widest">
             Desma International
           </p>

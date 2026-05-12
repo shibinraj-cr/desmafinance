@@ -168,10 +168,10 @@ function BrandHeader() {
   return (
     <div className="px-md pt-md pb-sm flex items-center gap-sm">
       <div className="w-10 h-10 rounded-lg overflow-hidden bg-brand-elevated flex items-center justify-center">
-        <Image src="/desfin.png" alt="DESFIN" width={40} height={40} className="object-cover" />
+        <Image src="/desgro.png" alt="Desgro" width={40} height={40} className="object-cover" />
       </div>
       <div>
-        <h1 className="text-h3 font-bold text-primary leading-tight">DESFIN</h1>
+        <h1 className="text-h3 font-bold text-primary leading-tight">DESGRO</h1>
         <p className="text-caption text-on-brand-variant">Desma International</p>
       </div>
     </div>
@@ -290,9 +290,9 @@ export function SideNav({
           <span className="material-symbols-outlined">menu</span>
         </button>
         <div className="w-8 h-8 rounded overflow-hidden bg-brand-elevated flex items-center justify-center">
-          <Image src="/desfin.png" alt="DESFIN" width={32} height={32} className="object-cover" />
+          <Image src="/desgro.png" alt="Desgro" width={32} height={32} className="object-cover" />
         </div>
-        <span className="text-h3 font-bold text-primary leading-none">DESFIN</span>
+        <span className="text-h3 font-bold text-primary leading-none">DESGRO</span>
         <span className="text-caption text-on-brand-variant ml-xs">· {activeModule.name}</span>
         {canApprove(perms) && pendingCount > 0 && (
           <Link
