@@ -6,13 +6,17 @@ import { prisma } from "@/lib/prisma";
 import {
   getFunnelTotals,
   getDailyLeadVolumeWithPrior,
-  getConversionBySource,
   getTodaysEntryStatus,
   getPriorityAlerts,
+  getAvgMonthlyTotals,
+  getSourceLeadCount,
+  getMonthlyConversionBySource,
+  getL2WeeklyYouTubeConversion,
+  getL2SourceLabels,
   monthBounds,
 } from "@/lib/lead-pulse-metrics";
 import { todayIst } from "@/lib/lead-pulse-dates";
-import { LeadVolumeChart, ConversionBySourceChart } from "./_charts";
+import { LeadVolumeChart, GroupedConversionBySourceChart } from "./_charts";
 
 export const dynamic = "force-dynamic";
 
@@ -60,17 +64,37 @@ export default async function LeadPulseHomePage() {
   const paceLastMonthEnd = `${prevYear}-${String(prevMonth).padStart(2, "0")}-${String(paceEndDay).padStart(2, "0")}`;
   const paceLabel = `${shortMonth(prevMonth)} 1–${paceEndDay}`;
 
-  const [thisMonth, lastMonth, paced, daily, bySource, todays, alerts, activeRoles] =
-    await Promise.all([
-      getFunnelTotals({ start: monthStart, end: monthEnd }),
-      getFunnelTotals({ start: prev.start, end: prev.end }),
-      getFunnelTotals({ start: prev.start, end: paceLastMonthEnd }),
-      getDailyLeadVolumeWithPrior(30),
-      getConversionBySource({ start: monthStart, end: monthEnd }),
-      getTodaysEntryStatus(),
-      getPriorityAlerts(),
-      prisma.leadPulseRole.count({ where: { active: true, role: { in: ["l1", "l2"] } } }),
-    ]);
+  const [
+    thisMonth,
+    lastMonth,
+    paced,
+    avg3,
+    daily,
+    bySource,
+    sourceLeadCount,
+    convCompare,
+    youtubeWeekly,
+    sourceLabels,
+    todays,
+    alerts,
+    activeRoles,
+  ] = await Promise.all([
+    getFunnelTotals({ start: monthStart, end: monthEnd }),
+    getFunnelTotals({ start: prev.start, end: prev.end }),
+    getFunnelTotals({ start: prev.start, end: paceLastMonthEnd }),
+    getAvgMonthlyTotals(year, month, 3),
+    getDailyLeadVolumeWithPrior(30),
+    getSourceLeadCount({ start: monthStart, end: monthEnd }),
+    getSourceLeadCount({ start: monthStart, end: monthEnd }), // alias kept for shape
+    getMonthlyConversionBySource(year, month),
+    getL2WeeklyYouTubeConversion(),
+    getL2SourceLabels(year, month),
+    getTodaysEntryStatus(),
+    getPriorityAlerts(),
+    prisma.leadPulseRole.count({ where: { active: true, role: { in: ["l1", "l2"] } } }),
+  ]);
+  void bySource;
+  void convCompare;
 
   const totalLeadsThisMonth = thisMonth.l1Leads + thisMonth.l2Leads;
   const totalLeadsLastMonth = lastMonth.l1Leads + lastMonth.l2Leads;
@@ -94,21 +118,28 @@ export default async function LeadPulseHomePage() {
         <QuickActions />
       </header>
 
-      <div className="grid grid-cols-2 lg:grid-cols-4 gap-[16px]">
-        <Kpi
-          label="Total Leads (this month)"
-          value={totalLeadsThisMonth.toString()}
-          trend={leadsTrend}
-          icon="trending_up"
-          paceLabel={paceLabel}
-          paceValue={paceLeadsLastMonth}
-          paceTrend={paceTrend}
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-[16px]">
+        <TripletKpi
+          label="L1 Total Leads"
+          icon="alt_route"
+          thisMonth={thisMonth.l1Leads}
+          lastMonth={lastMonth.l1Leads}
+          avg={avg3.avgL1Leads}
+          avgLabel={`Avg ${avg3.months}-mo`}
+        />
+        <TripletKpi
+          label="L2 Total Leads"
+          icon="handshake"
+          thisMonth={thisMonth.l2Leads}
+          lastMonth={lastMonth.l2Leads}
+          avg={avg3.avgL2Leads}
+          avgLabel={`Avg ${avg3.months}-mo`}
         />
         <Kpi
           label="L1 → L2 %"
           value={thisMonth.l1ConversionPct == null ? "—" : `${thisMonth.l1ConversionPct.toFixed(1)}%`}
           trend={pctChange(thisMonth.l1ConversionPct ?? 0, lastMonth.l1ConversionPct ?? 0)}
-          icon="alt_route"
+          icon="trending_up"
         />
         <Kpi
           label="Closed-Won"
@@ -122,6 +153,18 @@ export default async function LeadPulseHomePage() {
           icon="groups"
         />
       </div>
+      {/* keep the pace numbers reachable for future tiles */}
+      <p className="text-[11px]" style={{ color: "var(--lp-on-surface-variant)" }}>
+        Same-window pace: {paceLabel} · {paceLeadsLastMonth.toLocaleString("en-IN")}
+        {" leads vs "}
+        {totalLeadsThisMonth.toLocaleString("en-IN")} this period
+        {paceTrend != null
+          ? ` (${paceTrend >= 0 ? "▲" : "▼"} ${Math.abs(paceTrend).toFixed(1)}%)`
+          : ""}
+        {leadsTrend != null
+          ? ` · MoM ${leadsTrend >= 0 ? "▲" : "▼"} ${Math.abs(leadsTrend).toFixed(1)}%`
+          : ""}
+      </p>
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-[16px]">
         <Card title="Lead Volume — last 30 days vs prior 30 days" wide>
@@ -158,8 +201,143 @@ export default async function LeadPulseHomePage() {
             </span>
           </div>
         </Card>
-        <Card title="Conversion by Source (this month)">
-          <ConversionBySourceChart data={bySource} />
+        <Card title="Conversion by Source — this vs last vs 3-mo avg">
+          <GroupedConversionBySourceChart data={convCompare} />
+          <div
+            className="flex items-center gap-[16px] mt-[6px] text-[11px]"
+            style={{ color: "var(--lp-on-surface-variant)" }}
+          >
+            <Legend color="var(--lp-primary)" label="This month" />
+            <Legend color="var(--lp-cyan)" label="Last month" />
+            <Legend color="var(--lp-orange)" label="3-mo avg" />
+          </div>
+        </Card>
+      </div>
+
+      <div className="grid grid-cols-1 lg:grid-cols-3 gap-[16px]">
+        <Card title="Source-wise Lead Count (this month)">
+          <p className="text-[11px] mb-[8px]" style={{ color: "var(--lp-on-surface-variant)" }}>
+            Formula: L1 leads received + L2 direct leads (excludes L2 receivedFromL1
+            to avoid double-counting).
+          </p>
+          <table className="w-full text-[13px] tabular-nums">
+            <thead>
+              <tr style={{ backgroundColor: "var(--lp-surface-container-low)" }}>
+                <Th>Source</Th>
+                <Th align="right">Leads</Th>
+              </tr>
+            </thead>
+            <tbody>
+              {sourceLeadCount.map((s) => (
+                <tr key={s.sourceCode} className="border-t" style={{ borderColor: "var(--lp-outline-variant)" }}>
+                  <td className="px-[16px] py-[6px]">{s.sourceLabel}</td>
+                  <td className="px-[16px] py-[6px] text-right">{s.leads}</td>
+                </tr>
+              ))}
+              <tr className="border-t" style={{ borderColor: "var(--lp-outline-variant)", backgroundColor: "var(--lp-surface-container-low)" }}>
+                <td className="px-[16px] py-[6px] font-semibold uppercase text-[11px]" style={{ color: "var(--lp-on-surface-variant)" }}>
+                  Total
+                </td>
+                <td className="px-[16px] py-[6px] text-right font-semibold" style={{ color: "var(--lp-primary)" }}>
+                  {sourceLeadCount.reduce((a, b) => a + b.leads, 0)}
+                </td>
+              </tr>
+            </tbody>
+          </table>
+        </Card>
+
+        <Card title="L2 YouTube — last 2 weeks">
+          {youtubeWeekly.length === 0 ? (
+            <p className="text-[12px]" style={{ color: "var(--lp-on-surface-variant)" }}>
+              No active L2 BDEs.
+            </p>
+          ) : (
+            <table className="w-full text-[13px] tabular-nums">
+              <thead>
+                <tr style={{ backgroundColor: "var(--lp-surface-container-low)" }}>
+                  <Th>BDE</Th>
+                  <Th align="right">Last wk</Th>
+                  <Th align="right">This wk</Th>
+                  <Th align="right">Δ</Th>
+                </tr>
+              </thead>
+              <tbody>
+                {youtubeWeekly
+                  .filter((b) => b.thisWeek > 0 || b.lastWeek > 0)
+                  .map((b) => {
+                    const delta = b.thisWeek - b.lastWeek;
+                    return (
+                      <tr key={b.userId} className="border-t" style={{ borderColor: "var(--lp-outline-variant)" }}>
+                        <td className="px-[16px] py-[6px] font-semibold">{b.displayName}</td>
+                        <td className="px-[16px] py-[6px] text-right">{b.lastWeek}</td>
+                        <td className="px-[16px] py-[6px] text-right">{b.thisWeek}</td>
+                        <td
+                          className="px-[16px] py-[6px] text-right font-semibold"
+                          style={{ color: delta >= 0 ? "var(--lp-cyan)" : "var(--lp-error)" }}
+                        >
+                          {delta >= 0 ? "+" : ""}
+                          {delta}
+                        </td>
+                      </tr>
+                    );
+                  })}
+                {youtubeWeekly.every((b) => b.thisWeek === 0 && b.lastWeek === 0) && (
+                  <tr>
+                    <td colSpan={4} className="px-[16px] py-[16px] text-center" style={{ color: "var(--lp-on-surface-variant)" }}>
+                      No YouTube closes either week.
+                    </td>
+                  </tr>
+                )}
+              </tbody>
+            </table>
+          )}
+        </Card>
+
+        <Card title="L2 Source Champions (this month)">
+          {sourceLabels.length === 0 ? (
+            <p className="text-[12px]" style={{ color: "var(--lp-on-surface-variant)" }}>
+              No active L2 BDEs.
+            </p>
+          ) : (
+            <table className="w-full text-[13px] tabular-nums">
+              <thead>
+                <tr style={{ backgroundColor: "var(--lp-surface-container-low)" }}>
+                  <Th>BDE</Th>
+                  <Th>Crown</Th>
+                  <Th align="right">Top</Th>
+                  <Th align="right">Total</Th>
+                </tr>
+              </thead>
+              <tbody>
+                {[...sourceLabels]
+                  .sort((a, b) => b.totalClosedWon - a.totalClosedWon)
+                  .map((b) => (
+                    <tr key={b.userId} className="border-t" style={{ borderColor: "var(--lp-outline-variant)" }}>
+                      <td className="px-[16px] py-[6px] font-semibold">{b.displayName}</td>
+                      <td className="px-[16px] py-[6px]">
+                        {b.topSourceLabel ? (
+                          <span
+                            className="px-[8px] py-[2px] rounded-full text-[11px] font-semibold"
+                            style={{
+                              backgroundColor: "rgba(250,204,21,0.18)",
+                              color: "var(--lp-primary)",
+                            }}
+                          >
+                            {b.topSourceLabel} Queen
+                          </span>
+                        ) : (
+                          <span style={{ color: "var(--lp-on-surface-variant)" }}>—</span>
+                        )}
+                      </td>
+                      <td className="px-[16px] py-[6px] text-right">{b.topSourceCount}</td>
+                      <td className="px-[16px] py-[6px] text-right font-semibold" style={{ color: "var(--lp-primary)" }}>
+                        {b.totalClosedWon}
+                      </td>
+                    </tr>
+                  ))}
+              </tbody>
+            </table>
+          )}
         </Card>
       </div>
 
@@ -314,6 +492,101 @@ function Kpi({
   );
 }
 
+/**
+ * KPI tile that stacks three numbers: this month, last month, and an
+ * average. Used for the L1 / L2 Total Leads tiles on the dashboard.
+ */
+function TripletKpi({
+  label,
+  icon,
+  thisMonth,
+  lastMonth,
+  avg,
+  avgLabel,
+}: {
+  label: string;
+  icon: string;
+  thisMonth: number;
+  lastMonth: number;
+  avg: number;
+  avgLabel: string;
+}) {
+  const monthTrend = lastMonth === 0 ? null : ((thisMonth - lastMonth) / lastMonth) * 100;
+  const avgTrend = avg === 0 ? null : ((thisMonth - avg) / avg) * 100;
+  return (
+    <div
+      className="rounded-[12px] p-[16px] border"
+      style={{
+        backgroundColor: "var(--lp-surface-container)",
+        borderColor: "var(--lp-outline-variant)",
+      }}
+    >
+      <div className="flex items-center gap-[8px] mb-[8px]">
+        <span
+          className="inline-flex items-center justify-center w-[28px] h-[28px] rounded-[6px]"
+          style={{
+            backgroundColor: "var(--lp-surface-container-high)",
+            color: "var(--lp-primary)",
+          }}
+        >
+          <span className="material-symbols-outlined" style={{ fontSize: 16 }}>
+            {icon}
+          </span>
+        </span>
+        <p className="text-[10px] uppercase tracking-widest" style={{ color: "var(--lp-on-surface-variant)" }}>
+          {label}
+        </p>
+      </div>
+      <p className="text-[26px] font-bold tabular-nums" style={{ color: "var(--lp-primary)" }}>
+        {thisMonth.toLocaleString("en-IN")}
+      </p>
+      <div className="grid grid-cols-2 gap-[6px] mt-[8px] text-[11px]">
+        <div>
+          <p style={{ color: "var(--lp-on-surface-variant)" }}>Last month</p>
+          <p className="font-mono">{lastMonth.toLocaleString("en-IN")}</p>
+          {monthTrend != null && (
+            <span
+              className="text-[10px]"
+              style={{ color: monthTrend >= 0 ? "var(--lp-cyan)" : "var(--lp-error)" }}
+            >
+              {monthTrend >= 0 ? "▲" : "▼"} {Math.abs(monthTrend).toFixed(1)}%
+            </span>
+          )}
+        </div>
+        <div>
+          <p style={{ color: "var(--lp-on-surface-variant)" }}>{avgLabel}</p>
+          <p className="font-mono">{avg.toLocaleString("en-IN")}</p>
+          {avgTrend != null && (
+            <span
+              className="text-[10px]"
+              style={{ color: avgTrend >= 0 ? "var(--lp-cyan)" : "var(--lp-error)" }}
+            >
+              {avgTrend >= 0 ? "▲" : "▼"} {Math.abs(avgTrend).toFixed(1)}%
+            </span>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function Legend({ color, label }: { color: string; label: string }) {
+  return (
+    <span className="inline-flex items-center gap-[4px]">
+      <span
+        style={{
+          width: 10,
+          height: 10,
+          backgroundColor: color,
+          borderRadius: 2,
+          display: "inline-block",
+        }}
+      />
+      {label}
+    </span>
+  );
+}
+
 function shortMonth(month: number): string {
   return ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"][
     month - 1
@@ -390,6 +663,13 @@ function QuickActions() {
         style={{ backgroundColor: "var(--lp-primary)", color: "var(--lp-on-primary)" }}
       >
         Run monthly report
+      </Link>
+      <Link
+        href="/marketing/lead-pulse/targets"
+        className="h-[40px] px-[16px] rounded-[8px] text-[13px] font-semibold inline-flex items-center border"
+        style={{ borderColor: "var(--lp-outline-variant)", color: "var(--lp-on-surface)" }}
+      >
+        L2 targets
       </Link>
       <Link
         href="/marketing/lead-pulse/team-roster"

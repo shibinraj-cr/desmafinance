@@ -19,6 +19,7 @@ const PatchSchema = z.object({
   notes: z.string().max(500).optional().or(z.literal("")),
   isActive: z.boolean().optional(),
   sourceId: z.string().optional().or(z.literal("")),
+  assignedL2BdeId: z.string().nullable().optional().or(z.literal("")),
   partyServices: z.array(PartyServiceInput).optional(),
   serviceIds: z.array(z.string().min(1)).optional(),
 });
@@ -90,6 +91,32 @@ export async function PATCH(req: NextRequest, { params }: { params: { id: string
     }
   } else if (effectiveGroup === "Vendor") {
     update.sourceId = null;
+  }
+
+  // assignedL2BdeId — applies only to Candidates. Vendors clear the
+  // field on save.
+  if (effectiveGroup === "Candidate") {
+    if (d.assignedL2BdeId !== undefined) {
+      if (!d.assignedL2BdeId) {
+        update.assignedL2BdeId = null;
+      } else {
+        // Soft-validate that the assigned user exists and is an active
+        // L2. Don't hard-fail if not (e.g. role flipped after assignment)
+        // — the matrix view will surface it.
+        const targetRole = await prisma.leadPulseRole.findUnique({
+          where: { userId: d.assignedL2BdeId },
+        });
+        if (!targetRole) {
+          return NextResponse.json(
+            { error: "assigned_l2_not_found" },
+            { status: 400 },
+          );
+        }
+        update.assignedL2BdeId = d.assignedL2BdeId;
+      }
+    }
+  } else if (effectiveGroup === "Vendor") {
+    update.assignedL2BdeId = null;
   }
 
   // Resolve services: prefer the new partyServices payload; fall back

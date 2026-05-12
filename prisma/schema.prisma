@@ -29,6 +29,11 @@ model User {
   leadPulseEntries    LeadPulseDailyEntry[] @relation("LeadPulseEntries")
   leadPulseMeta       LeadPulseDailyMeta[]  @relation("LeadPulseMeta")
   leadPulseAuditLogs  LeadPulseAuditLog[]   @relation("LeadPulseAudit")
+  leadPulseTargets        LeadPulseTarget[]   @relation("LeadPulseTargets")
+  leadPulseTargetsEdited  LeadPulseTarget[]   @relation("LeadPulseTargetEditors")
+  // Candidates assigned to this user as their L2 BDE (the BDE who
+  // closed the deal). Drives the service-conversion matrix.
+  assignedCandidates  Party[]               @relation("PartyAssignedL2Bde")
 
   @@index([roleId])
 }
@@ -130,6 +135,7 @@ model Service {
   // Legacy M:M (read-only at this point) — new code uses partyServices.
   parties     Party[]
   partyServices PartyService[]
+  leadPulseTargets LeadPulseTarget[]
 
   @@index([isActive])
 }
@@ -302,6 +308,28 @@ model LeadPulseMonthlySnapshot {
   @@index([year, month])
 }
 
+/// Per-month per-L2-BDE per-Service target. Suhaina (or any supervisor)
+/// edits these via /marketing/lead-pulse/targets; actuals are derived
+/// from Party.assignedL2BdeId × PartyService × Revenue Transaction.
+model LeadPulseTarget {
+  id          String   @id @default(cuid())
+  year        Int
+  month       Int
+  userId      String
+  user        User     @relation(name: "LeadPulseTargets", fields: [userId], references: [id], onDelete: Cascade)
+  serviceId   String
+  service     Service  @relation(fields: [serviceId], references: [id], onDelete: Restrict)
+  target      Int      @default(0)
+  updatedById String?
+  updatedBy   User?    @relation(name: "LeadPulseTargetEditors", fields: [updatedById], references: [id], onDelete: SetNull)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@unique([year, month, userId, serviceId])
+  @@index([year, month])
+  @@index([userId])
+}
+
 
 // Master: parties (candidates / vendors) referenced by transactions.
 model Party {
@@ -320,6 +348,11 @@ model Party {
   // module's source list.
   sourceId  String?
   source    LeadPulseSource? @relation(fields: [sourceId], references: [id], onDelete: SetNull)
+  // L2 BDE who closed this candidate. Populated by Suhaina (or any
+  // supervisor) on the candidate detail page; drives the service-
+  // conversion matrix on /marketing/lead-pulse/targets.
+  assignedL2BdeId String?
+  assignedL2Bde   User?   @relation(name: "PartyAssignedL2Bde", fields: [assignedL2BdeId], references: [id], onDelete: SetNull)
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
@@ -333,6 +366,7 @@ model Party {
   @@index([group])
   @@index([isActive])
   @@index([sourceId])
+  @@index([assignedL2BdeId])
 }
 
 model AuditLog {

@@ -119,6 +119,85 @@ export async function POST() {
          END IF;
        END $$`,
     );
+
+    // 3. Party.assignedL2BdeId — used by the L2 service targets matrix
+    await step(
+      "Party.assignedL2BdeId column",
+      `ALTER TABLE "Party" ADD COLUMN IF NOT EXISTS "assignedL2BdeId" TEXT`,
+    );
+    await step(
+      "Party.assignedL2BdeId index",
+      `CREATE INDEX IF NOT EXISTS "Party_assignedL2BdeId_idx" ON "Party"("assignedL2BdeId")`,
+    );
+    await step(
+      "Party.assignedL2BdeId foreign key",
+      `DO $$ BEGIN
+         IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'Party_assignedL2BdeId_fkey') THEN
+           ALTER TABLE "Party"
+             ADD CONSTRAINT "Party_assignedL2BdeId_fkey"
+             FOREIGN KEY ("assignedL2BdeId") REFERENCES "User"("id") ON DELETE SET NULL;
+         END IF;
+       END $$`,
+    );
+
+    // 4. LeadPulseTarget table for Suhaina's monthly target entry
+    await step(
+      "LeadPulseTarget table",
+      `CREATE TABLE IF NOT EXISTS "LeadPulseTarget" (
+         "id" TEXT NOT NULL,
+         "year" INTEGER NOT NULL,
+         "month" INTEGER NOT NULL,
+         "userId" TEXT NOT NULL,
+         "serviceId" TEXT NOT NULL,
+         "target" INTEGER NOT NULL DEFAULT 0,
+         "updatedById" TEXT,
+         "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+         "updatedAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+         CONSTRAINT "LeadPulseTarget_pkey" PRIMARY KEY ("id")
+       )`,
+    );
+    await step(
+      "LeadPulseTarget unique (year, month, userId, serviceId)",
+      `CREATE UNIQUE INDEX IF NOT EXISTS "LeadPulseTarget_year_month_userId_serviceId_key" ON "LeadPulseTarget"("year", "month", "userId", "serviceId")`,
+    );
+    await step(
+      "LeadPulseTarget year/month index",
+      `CREATE INDEX IF NOT EXISTS "LeadPulseTarget_year_month_idx" ON "LeadPulseTarget"("year", "month")`,
+    );
+    await step(
+      "LeadPulseTarget userId index",
+      `CREATE INDEX IF NOT EXISTS "LeadPulseTarget_userId_idx" ON "LeadPulseTarget"("userId")`,
+    );
+    await step(
+      "LeadPulseTarget.userId foreign key",
+      `DO $$ BEGIN
+         IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'LeadPulseTarget_userId_fkey') THEN
+           ALTER TABLE "LeadPulseTarget"
+             ADD CONSTRAINT "LeadPulseTarget_userId_fkey"
+             FOREIGN KEY ("userId") REFERENCES "User"("id") ON DELETE CASCADE;
+         END IF;
+       END $$`,
+    );
+    await step(
+      "LeadPulseTarget.serviceId foreign key",
+      `DO $$ BEGIN
+         IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'LeadPulseTarget_serviceId_fkey') THEN
+           ALTER TABLE "LeadPulseTarget"
+             ADD CONSTRAINT "LeadPulseTarget_serviceId_fkey"
+             FOREIGN KEY ("serviceId") REFERENCES "Service"("id") ON DELETE RESTRICT;
+         END IF;
+       END $$`,
+    );
+    await step(
+      "LeadPulseTarget.updatedById foreign key",
+      `DO $$ BEGIN
+         IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'LeadPulseTarget_updatedById_fkey') THEN
+           ALTER TABLE "LeadPulseTarget"
+             ADD CONSTRAINT "LeadPulseTarget_updatedById_fkey"
+             FOREIGN KEY ("updatedById") REFERENCES "User"("id") ON DELETE SET NULL;
+         END IF;
+       END $$`,
+    );
   } catch (e) {
     return NextResponse.json(
       { error: "ddl_failed", log, message: e instanceof Error ? e.message : String(e) },

@@ -75,6 +75,11 @@ export const MODULES: AppModule[] = [
         icon: "groups",
       },
       {
+        href: "/marketing/lead-pulse/targets",
+        label: "L2 Targets",
+        icon: "flag",
+      },
+      {
         href: "/marketing/lead-pulse/settings",
         label: "Settings",
         icon: "tune",

@@ -99,6 +99,8 @@ export type PartyDetailLoaded = {
   isActive: boolean;
   sourceId: string | null;
   source: { id: string; label: string } | null;
+  assignedL2BdeId: string | null;
+  assignedL2Bde: { id: string; username: string } | null;
   partyServices: Array<{
     id: string;
     serviceId: string;
@@ -114,6 +116,7 @@ export async function loadPartyDetail(id: string): Promise<PartyDetailLoaded | n
       where: { id },
       include: {
         source: { select: { id: true, label: true } },
+        assignedL2Bde: { select: { id: true, username: true } },
         partyServices: {
           orderBy: { createdAt: "asc" },
           include: { service: { select: { id: true, name: true, isActive: true } } },
@@ -141,6 +144,8 @@ export async function loadPartyDetail(id: string): Promise<PartyDetailLoaded | n
       ...fallback,
       sourceId: null,
       source: null,
+      assignedL2BdeId: null,
+      assignedL2Bde: null,
       partyServices: [],
     };
   }

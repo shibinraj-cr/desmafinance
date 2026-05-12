@@ -564,3 +564,397 @@ export function generateInsightNarrative(matrix: Matrix): string {
   if (totalLeads === 0) return "No submitted entries yet for this month.";
   return sentences.join(" ");
 }
+
+// ──────────────────────────────────────────────────────────────────────
+// Dashboard v2 helpers — multi-window comparisons, source labels, and
+// the service-conversion matrix that powers /marketing/lead-pulse/targets.
+// ──────────────────────────────────────────────────────────────────────
+
+/** First/last YYYY-MM-DD of (year, month - 1), wrapping years. */
+function prevMonth(year: number, month: number): { year: number; month: number } {
+  if (month === 1) return { year: year - 1, month: 12 };
+  return { year, month: month - 1 };
+}
+
+/** The previous N complete months (excludes the current). */
+function lastNCompleteMonths(
+  year: number,
+  month: number,
+  n: number,
+): Array<{ year: number; month: number }> {
+  const out: Array<{ year: number; month: number }> = [];
+  let y = year;
+  let m = month;
+  for (let i = 0; i < n; i++) {
+    ({ year: y, month: m } = prevMonth(y, m));
+    out.push({ year: y, month: m });
+  }
+  return out;
+}
+
+/** Average L1 + L2 monthly leads across the previous N complete months. */
+export async function getAvgMonthlyTotals(
+  year: number,
+  month: number,
+  n = 3,
+): Promise<{ avgL1Leads: number; avgL2Leads: number; months: number }> {
+  const months = lastNCompleteMonths(year, month, n);
+  let l1 = 0;
+  let l2 = 0;
+  let counted = 0;
+  for (const ym of months) {
+    const { start, end } = monthBounds(ym.year, ym.month);
+    const t = await getFunnelTotals({ start, end });
+    l1 += t.l1Leads;
+    l2 += t.l2Leads;
+    counted++;
+  }
+  return {
+    avgL1Leads: counted ? Math.round(l1 / counted) : 0,
+    avgL2Leads: counted ? Math.round(l2 / counted) : 0,
+    months: counted,
+  };
+}
+
+/**
+ * Per-source lead count using the user-defined formula:
+ *   leads(source) = L1.leadsReceived(source) + L2.directLeads(source)
+ *
+ * Drops L2's receivedFromL1 so the leads that come via the L1→L2
+ * hand-off aren't double-counted with the upstream L1 row.
+ */
+export async function getSourceLeadCount(opts: {
+  start: string;
+  end: string;
+}): Promise<Array<{ sourceId: string; sourceCode: string; sourceLabel: string; leads: number }>> {
+  const sources = await prisma.leadPulseSource.findMany({
+    orderBy: [{ displayOrder: "asc" }, { label: "asc" }],
+  });
+  const out: Array<{ sourceId: string; sourceCode: string; sourceLabel: string; leads: number }> = [];
+  for (const s of sources) {
+    const l1 = await prisma.leadPulseDailyEntry.aggregate({
+      where: {
+        sourceId: s.id,
+        roleAtEntry: "l1",
+        status: "submitted",
+        entryDate: { gte: toPrismaDate(opts.start), lte: toPrismaDate(opts.end) },
+      },
+      _sum: { leadsReceived: true },
+    });
+    const l2 = await prisma.leadPulseDailyEntry.aggregate({
+      where: {
+        sourceId: s.id,
+        roleAtEntry: "l2",
+        status: "submitted",
+        entryDate: { gte: toPrismaDate(opts.start), lte: toPrismaDate(opts.end) },
+      },
+      _sum: { directLeads: true },
+    });
+    out.push({
+      sourceId: s.id,
+      sourceCode: s.code,
+      sourceLabel: s.label,
+      leads: (l1._sum.leadsReceived ?? 0) + (l2._sum.directLeads ?? 0),
+    });
+  }
+  return out;
+}
+
+/**
+ * Conversion% per source for three windows (this month / last month /
+ * mean of the previous 3 complete months). Conversion = won / leads
+ * where leads = `getSourceLeadCount` formula and won = L1 transferred-
+ * to-L2 + L2 closed-won.
+ */
+export async function getMonthlyConversionBySource(
+  year: number,
+  month: number,
+): Promise<
+  Array<{
+    sourceLabel: string;
+    sourceCode: string;
+    thisMonthPct: number | null;
+    lastMonthPct: number | null;
+    avgPct: number | null;
+  }>
+> {
+  async function windowPctMap(yy: number, mm: number) {
+    const { start, end } = monthBounds(yy, mm);
+    const leads = await getSourceLeadCount({ start, end });
+    const rows = await getFunnelBySource({ start, end });
+    const wonByCode = new Map(rows.map((r) => [r.sourceCode, r.l1Won + r.l2Won]));
+    const map = new Map<string, number | null>();
+    for (const s of leads) {
+      const won = wonByCode.get(s.sourceCode) ?? 0;
+      map.set(s.sourceCode, pct(won, s.leads));
+    }
+    return map;
+  }
+  const sources = await prisma.leadPulseSource.findMany({
+    orderBy: [{ displayOrder: "asc" }, { label: "asc" }],
+  });
+  const thisMonth = await windowPctMap(year, month);
+  const last = prevMonth(year, month);
+  const lastMonth = await windowPctMap(last.year, last.month);
+  // 3-month average — collect each month's pct, then average the
+  // non-null ones per source.
+  const lastThree = lastNCompleteMonths(year, month, 3);
+  const perSource: Map<string, number[]> = new Map();
+  for (const ym of lastThree) {
+    const map = await windowPctMap(ym.year, ym.month);
+    for (const [code, v] of map) {
+      if (v == null) continue;
+      const arr = perSource.get(code) ?? [];
+      arr.push(v);
+      perSource.set(code, arr);
+    }
+  }
+  return sources.map((s) => {
+    const arr = perSource.get(s.code) ?? [];
+    const avgPct = arr.length ? Math.round((arr.reduce((a, b) => a + b, 0) / arr.length) * 10) / 10 : null;
+    return {
+      sourceLabel: s.label,
+      sourceCode: s.code,
+      thisMonthPct: thisMonth.get(s.code) ?? null,
+      lastMonthPct: lastMonth.get(s.code) ?? null,
+      avgPct,
+    };
+  });
+}
+
+/**
+ * Per-L2-BDE weekly closed-won counts of YouTube leads — current
+ * week + the prior week. Week buckets are Mon–Sun in IST.
+ */
+export async function getL2WeeklyYouTubeConversion(): Promise<
+  Array<{ userId: string; displayName: string; thisWeek: number; lastWeek: number }>
+> {
+  const today = todayIst();
+  // Find Monday of the current ISO-ish week.
+  const [yy, mm, dd] = today.split("-").map(Number);
+  const dt = new Date(Date.UTC(yy, mm - 1, dd));
+  const dow = dt.getUTCDay() || 7; // Sunday → 7
+  const thisMon = addDays(today, -(dow - 1));
+  const lastMon = addDays(thisMon, -7);
+  const lastSun = addDays(thisMon, -1);
+  const thisSun = addDays(thisMon, 6);
+
+  const ytSource = await prisma.leadPulseSource.findUnique({ where: { code: "youtube" } });
+  if (!ytSource) return [];
+  const roles = await prisma.leadPulseRole.findMany({
+    where: { active: true, role: "l2" },
+    orderBy: [{ displayName: "asc" }],
+  });
+  const out: Array<{ userId: string; displayName: string; thisWeek: number; lastWeek: number }> = [];
+  for (const r of roles) {
+    const [thisAgg, lastAgg] = await Promise.all([
+      prisma.leadPulseDailyEntry.aggregate({
+        where: {
+          userId: r.userId,
+          sourceId: ytSource.id,
+          roleAtEntry: "l2",
+          status: "submitted",
+          entryDate: { gte: toPrismaDate(thisMon), lte: toPrismaDate(thisSun) },
+        },
+        _sum: { closedWon: true },
+      }),
+      prisma.leadPulseDailyEntry.aggregate({
+        where: {
+          userId: r.userId,
+          sourceId: ytSource.id,
+          roleAtEntry: "l2",
+          status: "submitted",
+          entryDate: { gte: toPrismaDate(lastMon), lte: toPrismaDate(lastSun) },
+        },
+        _sum: { closedWon: true },
+      }),
+    ]);
+    out.push({
+      userId: r.userId,
+      displayName: r.displayName,
+      thisWeek: thisAgg._sum.closedWon ?? 0,
+      lastWeek: lastAgg._sum.closedWon ?? 0,
+    });
+  }
+  return out;
+}
+
+/**
+ * "Source Champion" label per active L2 BDE — the source with the
+ * highest closed-won count this month. BDEs with zero closed-won are
+ * still listed (no badge).
+ */
+export async function getL2SourceLabels(
+  year: number,
+  month: number,
+): Promise<
+  Array<{
+    userId: string;
+    displayName: string;
+    topSourceLabel: string | null;
+    topSourceCount: number;
+    totalClosedWon: number;
+  }>
+> {
+  const { start, end } = monthBounds(year, month);
+  const roles = await prisma.leadPulseRole.findMany({
+    where: { active: true, role: "l2" },
+    orderBy: [{ displayName: "asc" }],
+  });
+  const sources = await prisma.leadPulseSource.findMany();
+  const sourceById = new Map(sources.map((s) => [s.id, s]));
+  const out: Array<{
+    userId: string;
+    displayName: string;
+    topSourceLabel: string | null;
+    topSourceCount: number;
+    totalClosedWon: number;
+  }> = [];
+  for (const r of roles) {
+    const grouped = await prisma.leadPulseDailyEntry.groupBy({
+      by: ["sourceId"],
+      where: {
+        userId: r.userId,
+        roleAtEntry: "l2",
+        status: "submitted",
+        entryDate: { gte: toPrismaDate(start), lte: toPrismaDate(end) },
+      },
+      _sum: { closedWon: true },
+    });
+    let topLabel: string | null = null;
+    let topCount = 0;
+    let total = 0;
+    for (const g of grouped) {
+      const wonCount = g._sum.closedWon ?? 0;
+      total += wonCount;
+      if (wonCount > topCount) {
+        topCount = wonCount;
+        topLabel = sourceById.get(g.sourceId)?.label ?? null;
+      }
+    }
+    out.push({
+      userId: r.userId,
+      displayName: r.displayName,
+      topSourceLabel: topCount > 0 ? topLabel : null,
+      topSourceCount: topCount,
+      totalClosedWon: total,
+    });
+  }
+  return out;
+}
+
+/**
+ * L2 BDE × Service matrix for the given month. Target read from the
+ * LeadPulseTarget table; Actual = count of parties where
+ * assignedL2BdeId = BDE AND linked to that service via PartyService
+ * AND have at least one non-deleted Revenue Transaction in the month.
+ */
+export type ServiceMatrixCell = {
+  target: number;
+  actual: number;
+  partyNames: string[]; // surfaced via hover on the targets page
+};
+
+export type ServiceMatrix = {
+  bdes: Array<{ userId: string; displayName: string }>;
+  services: Array<{ id: string; name: string }>;
+  cells: Map<string, ServiceMatrixCell>; // key = `${userId}|${serviceId}`
+};
+
+export async function getServiceConversionMatrix(
+  year: number,
+  month: number,
+): Promise<ServiceMatrix> {
+  const { start, end } = monthBounds(year, month);
+  // Active L2 BDEs (matched by display name + active flag).
+  const roles = await prisma.leadPulseRole.findMany({
+    where: { active: true, role: "l2" },
+    include: { user: { select: { id: true, username: true } } },
+    orderBy: [{ displayName: "asc" }],
+  });
+
+  // Active services that any L2 BDE has at least one party linked to,
+  // OR services that already have a target row for the month. Keeps
+  // the matrix focused on relevant columns.
+  const partyServices = await prisma.partyService.findMany({
+    where: {
+      party: {
+        assignedL2BdeId: { in: roles.map((r) => r.userId) },
+      },
+    },
+    include: {
+      party: { select: { id: true, name: true, assignedL2BdeId: true } },
+      service: { select: { id: true, name: true, isActive: true } },
+    },
+  });
+  const targets = await prisma.leadPulseTarget.findMany({
+    where: { year, month },
+  });
+
+  const serviceMap = new Map<string, { id: string; name: string }>();
+  for (const ps of partyServices) {
+    if (ps.service.isActive) {
+      serviceMap.set(ps.service.id, { id: ps.service.id, name: ps.service.name });
+    }
+  }
+  for (const t of targets) {
+    if (!serviceMap.has(t.serviceId)) {
+      const svc = await prisma.service.findUnique({
+        where: { id: t.serviceId },
+        select: { id: true, name: true },
+      });
+      if (svc) serviceMap.set(svc.id, svc);
+    }
+  }
+  const services = Array.from(serviceMap.values()).sort((a, b) =>
+    a.name.localeCompare(b.name),
+  );
+
+  // Build the (BDE × Service) cells, computing actuals via revenue
+  // transactions in the window.
+  const partyIdsToWatch = new Set(partyServices.map((ps) => ps.party.id));
+  const revTxs =
+    partyIdsToWatch.size === 0
+      ? []
+      : await prisma.transaction.findMany({
+          where: {
+            partyId: { in: Array.from(partyIdsToWatch) },
+            deletedAt: null,
+            type: "Revenue",
+            date: { gte: toPrismaDate(start), lte: toPrismaDate(end) },
+          },
+          select: { partyId: true },
+        });
+  const partiesWithRev = new Set<string>();
+  for (const t of revTxs) {
+    if (t.partyId) partiesWithRev.add(t.partyId);
+  }
+
+  const cells = new Map<string, ServiceMatrixCell>();
+  for (const r of roles) {
+    for (const s of services) {
+      const key = `${r.userId}|${s.id}`;
+      cells.set(key, { target: 0, actual: 0, partyNames: [] });
+    }
+  }
+  for (const t of targets) {
+    const key = `${t.userId}|${t.serviceId}`;
+    const c = cells.get(key);
+    if (c) c.target = t.target;
+    else cells.set(key, { target: t.target, actual: 0, partyNames: [] });
+  }
+  for (const ps of partyServices) {
+    if (!ps.party.assignedL2BdeId) continue;
+    if (!partiesWithRev.has(ps.party.id)) continue;
+    const key = `${ps.party.assignedL2BdeId}|${ps.service.id}`;
+    const c = cells.get(key);
+    if (!c) continue;
+    c.actual++;
+    c.partyNames.push(ps.party.name);
+  }
+  return {
+    bdes: roles.map((r) => ({ userId: r.userId, displayName: r.displayName })),
+    services,
+    cells,
+  };
+}

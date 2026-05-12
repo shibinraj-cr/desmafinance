@@ -29,6 +29,14 @@ export default async function PartyDetailPage({
     orderBy: [{ displayOrder: "asc" }, { label: "asc" }],
     select: { id: true, code: true, label: true, active: true },
   });
+  // Active L2 BDEs — populate the "Closed by" dropdown on Candidates
+  // so the service-conversion matrix can attribute each closed deal
+  // to the right BDE.
+  const l2Bdes = await prisma.leadPulseRole.findMany({
+    where: { active: true, role: "l2" },
+    orderBy: [{ displayName: "asc" }],
+    include: { user: { select: { id: true, username: true } } },
+  });
   const party = await loadPartyDetail(params.id);
   if (!party) notFound();
 
@@ -91,6 +99,8 @@ export default async function PartyDetailPage({
             isActive: party.isActive,
             sourceId: party.sourceId,
             sourceLabel: party.source?.label ?? null,
+            assignedL2BdeId: party.assignedL2BdeId ?? null,
+            assignedL2BdeUsername: party.assignedL2Bde?.username ?? null,
             partyServices: party.partyServices.map((ps) => ({
               id: ps.id,
               serviceId: ps.serviceId,
@@ -104,6 +114,11 @@ export default async function PartyDetailPage({
           totals={{ totalQuoted, totalPaid, totalRefunded, balanceRemaining: totalQuoted - totalPaid }}
           services={services}
           sources={sources}
+          l2Bdes={l2Bdes.map((r) => ({
+            id: r.user.id,
+            username: r.user.username,
+            displayName: r.displayName,
+          }))}
           transactions={transactions.map((t) => ({
             id: t.id,
             date: t.date.toISOString().slice(0, 10),

@@ -155,6 +155,53 @@ export function ConversionBySourceChart({
   );
 }
 
+export function GroupedConversionBySourceChart({
+  data,
+}: {
+  data: {
+    sourceLabel: string;
+    thisMonthPct: number | null;
+    lastMonthPct: number | null;
+    avgPct: number | null;
+  }[];
+}) {
+  const rows = data.map((d) => ({
+    sourceLabel: d.sourceLabel,
+    thisMonth: d.thisMonthPct ?? 0,
+    lastMonth: d.lastMonthPct ?? 0,
+    avg3Mo: d.avgPct ?? 0,
+  }));
+  return (
+    <ResponsiveContainer width="100%" height={Math.max(260, 48 * rows.length)}>
+      <BarChart data={rows} layout="vertical" margin={{ top: 4, right: 30, left: 4, bottom: 4 }}>
+        <CartesianGrid stroke={GRID} horizontal={false} strokeDasharray="3 3" />
+        <XAxis
+          type="number"
+          tick={{ fontSize: 11, fill: TEXT }}
+          axisLine={{ stroke: GRID }}
+          tickLine={false}
+          tickFormatter={(v: number) => `${v}%`}
+        />
+        <YAxis
+          type="category"
+          dataKey="sourceLabel"
+          width={120}
+          tick={{ fontSize: 11, fill: TEXT }}
+          axisLine={{ stroke: GRID }}
+          tickLine={false}
+        />
+        <Tooltip
+          contentStyle={{ backgroundColor: "#231f14", border: `1px solid ${GRID}`, color: "#ebe2d0" }}
+          formatter={(v: number) => `${v.toFixed(1)}%`}
+        />
+        <Bar dataKey="thisMonth" fill={GOLD} radius={[0, 3, 3, 0]} name="This month" />
+        <Bar dataKey="lastMonth" fill={CYAN} radius={[0, 3, 3, 0]} name="Last month" />
+        <Bar dataKey="avg3Mo" fill={ORANGE} radius={[0, 3, 3, 0]} name="3-mo avg" />
+      </BarChart>
+    </ResponsiveContainer>
+  );
+}
+
 export function HistoricalFunnelChart({
   data,
 }: {

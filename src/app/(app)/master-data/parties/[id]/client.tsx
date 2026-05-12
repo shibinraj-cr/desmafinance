@@ -29,8 +29,12 @@ type Party = {
   isActive: boolean;
   sourceId: string | null;
   sourceLabel: string | null;
+  assignedL2BdeId: string | null;
+  assignedL2BdeUsername: string | null;
   partyServices: PartyServiceRow[];
 };
+
+type L2Bde = { id: string; username: string; displayName: string };
 
 type TransactionRow = {
   id: string;
@@ -64,12 +68,14 @@ export function PartyProfile({
   totals,
   services,
   sources,
+  l2Bdes,
   transactions,
 }: {
   party: Party;
   totals: Totals;
   services: ServiceOption[];
   sources: SourceOption[];
+  l2Bdes: L2Bde[];
   transactions: TransactionRow[];
 }) {
   return (
@@ -77,7 +83,7 @@ export function PartyProfile({
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-md">
         <div className="lg:col-span-2 bg-surface-container-lowest border border-outline-variant rounded-xl p-lg space-y-md">
           <h2 className="text-h3">Profile</h2>
-          <ContactPanel party={party} sources={sources} />
+          <ContactPanel party={party} sources={sources} l2Bdes={l2Bdes} />
         </div>
         <div className="bg-surface-container-lowest border border-outline-variant rounded-xl p-lg space-y-md">
           <h2 className="text-h3">Totals</h2>
@@ -136,9 +142,11 @@ function Stat({
 function ContactPanel({
   party,
   sources,
+  l2Bdes,
 }: {
   party: Party;
   sources: SourceOption[];
+  l2Bdes: L2Bde[];
 }) {
   const router = useRouter();
   const [editing, setEditing] = useState(false);
@@ -150,6 +158,7 @@ function ContactPanel({
     phone: party.phone ?? "",
     notes: party.notes ?? "",
     sourceId: party.sourceId ?? "",
+    assignedL2BdeId: party.assignedL2BdeId ?? "",
     isActive: party.isActive,
   });
 
@@ -169,7 +178,12 @@ function ContactPanel({
         phone: draft.phone,
         notes: draft.notes,
         isActive: draft.isActive,
-        ...(party.group === "Candidate" ? { sourceId: draft.sourceId } : {}),
+        ...(party.group === "Candidate"
+          ? {
+              sourceId: draft.sourceId,
+              assignedL2BdeId: draft.assignedL2BdeId || null,
+            }
+          : {}),
       }),
     });
     setBusy(false);
@@ -189,6 +203,13 @@ function ContactPanel({
         <Field readOnly label="Group" value={party.group} />
         {party.group === "Candidate" && (
           <Field readOnly label="Source" value={party.sourceLabel ?? "—"} />
+        )}
+        {party.group === "Candidate" && (
+          <Field
+            readOnly
+            label="Closed by (L2 BDE)"
+            value={party.assignedL2BdeUsername ?? "—"}
+          />
         )}
         <Field readOnly label="Tx types" value={party.txTypes} />
         <Field readOnly label="Email" value={party.email ?? "—"} />
@@ -240,6 +261,27 @@ function ContactPanel({
                     {s.label}
                   </option>
                 ))}
+            </select>
+          </label>
+        )}
+        {party.group === "Candidate" && (
+          <label className="block">
+            <span className="block text-label-sm text-on-surface-variant mb-xs">
+              Closed by (L2 BDE)
+            </span>
+            <select
+              value={draft.assignedL2BdeId}
+              onChange={(e) =>
+                setDraft({ ...draft, assignedL2BdeId: e.target.value })
+              }
+              className={inputCls}
+            >
+              <option value="">— unassigned —</option>
+              {l2Bdes.map((b) => (
+                <option key={b.id} value={b.id}>
+                  {b.displayName} ({b.username})
+                </option>
+              ))}
             </select>
           </label>
         )}
@@ -303,6 +345,7 @@ function ContactPanel({
               phone: party.phone ?? "",
               notes: party.notes ?? "",
               sourceId: party.sourceId ?? "",
+              assignedL2BdeId: party.assignedL2BdeId ?? "",
               isActive: party.isActive,
             });
             setError(null);
