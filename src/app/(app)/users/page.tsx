@@ -9,6 +9,7 @@ import {
   NewUserButton,
   ResetPlaceholderPasswordsButton,
   LinkPlaceholderRolesButton,
+  SetupMarketingAdminButton,
 } from "./client";
 
 export const dynamic = "force-dynamic";
@@ -58,6 +59,7 @@ export default async function UsersPage() {
         action={<NewUserButton roles={roles} />}
       />
       <div className="p-margin space-y-lg">
+        <SetupMarketingAdminButton />
         <LinkPlaceholderRolesButton />
         <ResetPlaceholderPasswordsButton />
         <div className="bg-surface-container-lowest border border-outline-variant rounded-xl shadow-sm overflow-hidden">

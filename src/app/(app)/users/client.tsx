@@ -572,3 +572,119 @@ export function LinkPlaceholderRolesButton() {
     </div>
   );
 }
+
+/**
+ * Admin-only one-shot that creates/updates the "Marketing Admin"
+ * role and links Suhaina to it (+ bumps her LeadPulseRole to
+ * supervisor). Once shipped, the role appears in /roles for further
+ * editing and can be assigned to other users via the normal /users
+ * edit flow.
+ */
+export function SetupMarketingAdminButton() {
+  const router = useRouter();
+  const [busy, setBusy] = useState(false);
+  const [confirming, setConfirming] = useState(false);
+  const [result, setResult] = useState<{
+    summary: Record<string, unknown>;
+    log: string[];
+    note?: string;
+  } | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  async function run() {
+    setBusy(true);
+    setError(null);
+    setResult(null);
+    const res = await fetch("/api/admin/setup-marketing-admin", { method: "POST" });
+    setBusy(false);
+    setConfirming(false);
+    if (!res.ok) {
+      const data = await res.json().catch(() => ({}));
+      setError(
+        (data as { message?: string }).message ??
+          (data as { error?: string }).error ??
+          "setup_failed",
+      );
+      return;
+    }
+    const data = (await res.json()) as {
+      summary: Record<string, unknown>;
+      log: string[];
+      note?: string;
+    };
+    setResult(data);
+    router.refresh();
+  }
+
+  return (
+    <div className="rounded-lg border border-outline-variant bg-surface-container-lowest p-md space-y-sm">
+      <div className="flex items-start gap-md">
+        <div className="flex-1 min-w-0">
+          <h3 className="text-label-md font-semibold text-on-surface">
+            Set up Marketing Admin role (and link Suhaina)
+          </h3>
+          <p className="text-label-sm text-on-surface-variant mt-xs">
+            Creates a <strong>Marketing Admin</strong> role with access
+            to the entire Marketing module + the Sources and Parties
+            masters. Assigns Suhaina to it and promotes her Lead Pulse
+            role to <strong>supervisor</strong> so she lands on the
+            supervisor dashboard. Other users can be added to the role
+            later via the normal /users edit flow. Idempotent.
+          </p>
+        </div>
+        {!confirming ? (
+          <button
+            type="button"
+            onClick={() => setConfirming(true)}
+            disabled={busy}
+            className="shrink-0 h-9 px-md rounded-lg bg-primary text-on-primary text-label-sm font-semibold disabled:opacity-60"
+          >
+            Set up
+          </button>
+        ) : (
+          <div className="shrink-0 flex items-center gap-xs">
+            <button
+              type="button"
+              onClick={run}
+              disabled={busy}
+              className="h-9 px-md rounded-lg bg-primary text-on-primary text-label-sm font-semibold disabled:opacity-60"
+            >
+              {busy ? "Setting up…" : "Confirm"}
+            </button>
+            <button
+              type="button"
+              onClick={() => setConfirming(false)}
+              disabled={busy}
+              className="h-9 px-md rounded-lg border border-outline-variant text-label-sm text-on-surface-variant"
+            >
+              Cancel
+            </button>
+          </div>
+        )}
+      </div>
+      {error && (
+        <div className="rounded-lg bg-error-container text-on-error-container px-md py-sm text-label-sm">
+          {error === "forbidden_admin_only" ? "Admin-only action." : `Failed: ${error}`}
+        </div>
+      )}
+      {result && (
+        <div className="rounded-lg border border-outline-variant bg-surface-container-low px-md py-sm text-label-sm space-y-xs">
+          <p className="font-semibold text-on-surface">Setup complete</p>
+          {result.note && <p className="text-on-surface-variant">{result.note}</p>}
+          <details>
+            <summary className="cursor-pointer text-on-surface-variant">
+              Detail ({result.log.length} step{result.log.length === 1 ? "" : "s"})
+            </summary>
+            <ul
+              className="mt-xs text-[11px] font-mono text-on-surface-variant"
+            >
+              {result.log.map((l, i) => (
+                <li key={i}>· {l}</li>
+              ))}
+            </ul>
+          </details>
+        </div>
+      )}
+    </div>
+  );
+}
