@@ -44,6 +44,10 @@ type Props = {
   sources: Source[];
   initialEntries: Row[];
   initialMeta: Meta;
+  /** Read-only preview for admins / supervisors viewing the form
+   *  shape. No date picker, no save / submit buttons, no auto-save
+   *  fetch, no remote refetch on date change. */
+  preview?: boolean;
 };
 
 const TIPS = [
@@ -70,8 +74,11 @@ export function DailyEntryForm(props: Props) {
   const [serverError, setServerError] = useState<string | null>(null);
 
   // Refresh on date change. We re-fetch the day's data via the JSON API
-  // so the URL reflects the chosen date and bookmarking works.
+  // so the URL reflects the chosen date and bookmarking works. Skipped in
+  // preview mode — the form never refetches, and the date never changes
+  // because the date picker is hidden.
   useEffect(() => {
+    if (props.preview) return;
     if (date === props.date) return;
     let cancelled = false;
     (async () => {
@@ -182,6 +189,7 @@ export function DailyEntryForm(props: Props) {
   // least one value typed.
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   useEffect(() => {
+    if (props.preview) return;
     if (!editable || firstError || !hasAnyValue) return;
     if (debounceRef.current) clearTimeout(debounceRef.current);
     debounceRef.current = setTimeout(async () => {
@@ -223,12 +231,26 @@ export function DailyEntryForm(props: Props) {
             <span style={{ color: roleColor(role), fontWeight: 600 }}>
               {role === "l1" ? "L1 BDE" : "L2 BDE"}
             </span>
+            {props.preview && (
+              <span
+                className="ml-[8px] text-[10px] px-[8px] py-[2px] rounded-full font-bold uppercase tracking-widest"
+                style={{
+                  backgroundColor: "rgba(250,204,21,0.15)",
+                  color: "var(--lp-primary)",
+                  border: "1px solid rgba(250,204,21,0.35)",
+                }}
+              >
+                Preview · admin view
+              </span>
+            )}
           </p>
         </div>
-        <DatePicker date={date} earliest={props.earliest} today={props.today} onChange={setDate} />
+        {!props.preview && (
+          <DatePicker date={date} earliest={props.earliest} today={props.today} onChange={setDate} />
+        )}
       </header>
 
-      <NoticeStrip />
+      {!props.preview && <NoticeStrip />}
 
       <div
         className="rounded-[12px] border"
@@ -306,6 +328,7 @@ export function DailyEntryForm(props: Props) {
         </Card>
       </div>
 
+      {!props.preview && (
       <div
         className="rounded-[12px] border flex flex-wrap items-center gap-[12px] px-[20px] py-[14px]"
         style={{
@@ -366,7 +389,9 @@ export function DailyEntryForm(props: Props) {
           {submitting ? "Submitting..." : meta.status === "submitted" ? "Re-submit entry" : "Submit entry"}
         </button>
       </div>
+      )}
 
+      {!props.preview && (
       <div
         className="rounded-[12px] px-[20px] py-[14px] text-[13px]"
         style={{
@@ -378,6 +403,7 @@ export function DailyEntryForm(props: Props) {
         <span style={{ color: "var(--lp-primary)", fontWeight: 600 }}>Performance Tip — </span>
         {tip}
       </div>
+      )}
     </div>
   );
 }
@@ -737,4 +763,86 @@ function relativeTime(ts: number): string {
 
 function roleColor(role: "l1" | "l2") {
   return role === "l1" ? "var(--lp-primary)" : "var(--lp-cyan)";
+}
+
+/**
+ * Admin / supervisor preview of the Daily Entry form. Renders both the
+ * L1 and L2 variants in tabbed view so admins can see exactly what each
+ * BDE role gets when they sign in. Read-only — no save/submit, no
+ * auto-save, no remote refetch; just the shape and labels.
+ */
+export function AdminDailyEntryPreview({
+  sources,
+  today,
+}: {
+  sources: Source[];
+  today: string;
+}) {
+  const [role, setRoleState] = useState<"l1" | "l2">("l1");
+  const blankEntries: Row[] = [];
+  const blankMeta: Meta = {
+    totalFollowups: 0,
+    referredToDoc: 0,
+    referredToAbroad: 0,
+    notes: "",
+    status: "draft",
+    locked: false,
+    submittedAt: null,
+  };
+  return (
+    <div className="px-[24px] pt-[24px] pb-0">
+      <div
+        className="rounded-[12px] p-[16px] border mb-[16px]"
+        style={{
+          backgroundColor: "var(--lp-surface-container)",
+          borderColor: "var(--lp-outline-variant)",
+        }}
+      >
+        <div className="flex flex-wrap items-center gap-[12px]">
+          <p
+            className="text-[13px] flex-1"
+            style={{ color: "var(--lp-on-surface-variant)" }}
+          >
+            <span className="material-symbols-outlined align-middle" style={{ fontSize: 16, color: "var(--lp-primary)" }}>
+              visibility
+            </span>{" "}
+            Admin preview of the BDE Daily Entry form. Toggle between L1 and
+            L2 to see each variant. No fields are editable in this view.
+          </p>
+          <div className="inline-flex items-center gap-[4px] rounded-[8px] p-[4px]" style={{ backgroundColor: "var(--lp-surface-container-low)" }}>
+            {(["l1", "l2"] as const).map((r) => (
+              <button
+                key={r}
+                type="button"
+                onClick={() => setRoleState(r)}
+                className="h-[28px] px-[14px] rounded-[6px] text-[12px] font-semibold transition"
+                style={{
+                  backgroundColor:
+                    role === r ? "var(--lp-primary)" : "transparent",
+                  color:
+                    role === r
+                      ? "var(--lp-on-primary)"
+                      : "var(--lp-on-surface-variant)",
+                }}
+              >
+                {r === "l1" ? "L1 BDE" : "L2 BDE"}
+              </button>
+            ))}
+          </div>
+        </div>
+      </div>
+      <DailyEntryForm
+        role={role}
+        displayName="Sample BDE"
+        date={today}
+        today={today}
+        earliest={today}
+        editable={false}
+        sources={sources}
+        initialEntries={blankEntries}
+        initialMeta={blankMeta}
+        preview
+      />
+    </div>
+  );
 }

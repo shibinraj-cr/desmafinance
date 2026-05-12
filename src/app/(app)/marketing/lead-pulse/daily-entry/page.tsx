@@ -3,7 +3,7 @@ import { getCurrentUserAndPermissions } from "@/lib/permissions";
 import { getLeadPulseAccess } from "@/lib/lead-pulse-rbac";
 import { prisma } from "@/lib/prisma";
 import { todayIst, fromPrismaDate, toPrismaDate } from "@/lib/lead-pulse-dates";
-import { DailyEntryForm } from "./client";
+import { DailyEntryForm, AdminDailyEntryPreview } from "./client";
 
 export const dynamic = "force-dynamic";
 
@@ -16,26 +16,43 @@ export default async function DailyEntryPage({
   if (!userId || !perms) redirect("/login");
   const access = await getLeadPulseAccess(userId, perms);
 
-  // Only L1 / L2 BDEs submit daily entries. Supervisors viewing the
-  // daily-entry tab from the nav land on a friendly hint, not a 403,
-  // since they may have arrived via a stale tab.
+  // Only L1 / L2 BDEs submit daily entries. Admins / supervisors who
+  // land here get a read-only preview of the L1 and L2 form variants
+  // (tab-switchable) so they can see what each BDE role experiences
+  // without needing to log in as one.
   if (access.role !== "l1" && access.role !== "l2") {
-    return (
-      <div className="px-[24px] py-[40px] max-w-2xl mx-auto">
-        <div
-          className="rounded-[12px] p-[24px] border"
-          style={{
-            backgroundColor: "var(--lp-surface-container)",
-            borderColor: "var(--lp-outline-variant)",
-          }}
-        >
-          <h1 className="text-[20px] font-semibold mb-[8px]">Daily Entry is for BDEs</h1>
-          <p style={{ color: "var(--lp-on-surface-variant)" }}>
-            Only L1 and L2 BDEs log daily lead activity here. Supervisors should head to the
-            dashboard or monthly report.
-          </p>
+    if (!access.canSupervise) {
+      return (
+        <div className="px-[24px] py-[40px] max-w-2xl mx-auto">
+          <div
+            className="rounded-[12px] p-[24px] border"
+            style={{
+              backgroundColor: "var(--lp-surface-container)",
+              borderColor: "var(--lp-outline-variant)",
+            }}
+          >
+            <h1 className="text-[20px] font-semibold mb-[8px]">Daily Entry is for BDEs</h1>
+            <p style={{ color: "var(--lp-on-surface-variant)" }}>
+              You don&apos;t have a Lead Pulse role assigned. Contact your supervisor.
+            </p>
+          </div>
         </div>
-      </div>
+      );
+    }
+    const previewSources = await prisma.leadPulseSource.findMany({
+      where: { active: true },
+      orderBy: [{ displayOrder: "asc" }, { label: "asc" }],
+    });
+    return (
+      <AdminDailyEntryPreview
+        sources={previewSources.map((s) => ({
+          id: s.id,
+          code: s.code,
+          label: s.label,
+          displayOrder: s.displayOrder,
+        }))}
+        today={todayIst()}
+      />
     );
   }
   if (!access.canSubmitEntries) {
