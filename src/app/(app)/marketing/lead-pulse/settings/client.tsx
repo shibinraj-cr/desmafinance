@@ -1255,7 +1255,7 @@ export function HistoricalImportButton() {
             Loads the bundled <code>New_SALES_REPORT_FIXED.xlsx</code> (19 BDE
             sheets, ~6 months of daily history) into the live DB. Creates
             LeadPulseRole rows for any BDE not yet on the roster, auto-creates
-            placeholder DESFIN users if needed, then upserts daily entries
+            placeholder DESGRO users if needed, then upserts daily entries
             (locked + submitted). Safe to re-run; second click is a clean
             update of any rows that have already landed.
           </p>

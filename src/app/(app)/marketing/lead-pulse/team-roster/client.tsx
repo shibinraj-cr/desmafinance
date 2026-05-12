@@ -27,7 +27,7 @@ const errorLabels: Record<string, string> = {
   user_not_found: "That user no longer exists.",
   invalid_region_code: "Invalid region code.",
   validation_failed: "Check the values entered.",
-  forbidden: "Only supervisors and DESFIN admins can do that.",
+  forbidden: "Only supervisors and DESGRO admins can do that.",
   not_found: "Roster entry no longer exists.",
 };
 
@@ -506,7 +506,7 @@ export function AddBdeButton({
         type="button"
         onClick={() => setOpen(true)}
         disabled={noUsers}
-        title={noUsers ? "Every DESFIN user is already rostered" : "Add a BDE"}
+        title={noUsers ? "Every DESGRO user is already rostered" : "Add a BDE"}
         className="inline-flex items-center gap-[6px] h-[36px] px-[16px] rounded-[8px] text-[13px] font-semibold transition disabled:opacity-50"
         style={{
           backgroundColor: "var(--lp-primary)",
@@ -537,7 +537,7 @@ export function AddBdeButton({
               }}
             >
               <h3 className="text-[18px] font-semibold">Add BDE</h3>
-              <Field label="DESFIN user">
+              <Field label="DESGRO user">
                 <select
                   value={form.userId}
                   onChange={(e) => setForm({ ...form, userId: e.target.value, displayName: "" })}

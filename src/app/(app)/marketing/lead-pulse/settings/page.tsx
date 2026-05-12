@@ -30,7 +30,7 @@ export default async function SettingsPage({
           }}
         >
           <p style={{ color: "var(--lp-on-surface-variant)" }}>
-            Only Lead Pulse Supervisors and DESFIN Admins can access settings.
+            Only Lead Pulse Supervisors and DESGRO Admins can access settings.
           </p>
         </div>
       </div>

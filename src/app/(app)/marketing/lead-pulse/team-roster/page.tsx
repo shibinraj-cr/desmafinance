@@ -21,7 +21,7 @@ export default async function TeamRosterPage() {
           }}
         >
           <p style={{ color: "var(--lp-on-surface-variant)" }}>
-            Only Lead Pulse Supervisors and DESFIN Admins can manage the team roster.
+            Only Lead Pulse Supervisors and DESGRO Admins can manage the team roster.
           </p>
         </div>
       </div>
@@ -59,7 +59,7 @@ export default async function TeamRosterPage() {
             style={{ color: "var(--lp-on-surface-variant)" }}
           >
             {roles.length} BDE{roles.length === 1 ? "" : "s"} rostered ·{" "}
-            {assignable.length} unassigned DESFIN user{assignable.length === 1 ? "" : "s"}
+            {assignable.length} unassigned DESGRO user{assignable.length === 1 ? "" : "s"}
           </p>
         </div>
         <AddBdeButton assignableUsers={assignable} regions={regions} />

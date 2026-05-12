@@ -15,9 +15,9 @@ export const metadata: Metadata = {
   description: "Desma International — Financial Insights Dashboard",
   icons: {
     icon: [
-      { url: "/icon.png", type: "image/png" },
+      { url: "/desgro-icon.png", type: "image/png" },
     ],
-    apple: "/icon.png",
+    apple: "/desgro-icon.png",
   },
 };
 

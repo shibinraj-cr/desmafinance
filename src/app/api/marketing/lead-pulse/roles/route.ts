@@ -42,7 +42,7 @@ export async function POST(req: NextRequest) {
   if (!parsed.success) return NextResponse.json({ error: "validation_failed" }, { status: 400 });
   const data = parsed.data;
 
-  // Target user must exist in DESFIN.
+  // Target user must exist in DESGRO.
   const target = await prisma.user.findUnique({ where: { id: data.userId } });
   if (!target) return NextResponse.json({ error: "user_not_found" }, { status: 400 });
 

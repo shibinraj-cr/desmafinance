@@ -15,12 +15,12 @@ export type LeadPulseAccess = {
   canSupervise: boolean;
   /** Whether the user can submit daily entries. */
   canSubmitEntries: boolean;
-  /** Effective for this user — DESFIN admins have implicit supervise rights. */
+  /** Effective for this user — DESGRO admins have implicit supervise rights. */
   desfinAdmin: boolean;
 };
 
 /**
- * Resolve a user's Lead Pulse capabilities. DESFIN admins implicitly have
+ * Resolve a user's Lead Pulse capabilities. DESGRO admins implicitly have
  * supervisor-level access in Lead Pulse without needing an explicit
  * LeadPulseRole row, so they can bootstrap the team roster.
  */

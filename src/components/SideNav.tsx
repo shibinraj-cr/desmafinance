@@ -168,11 +168,25 @@ function BrandHeader() {
   return (
     <div className="px-md pt-md pb-sm flex items-center gap-sm">
       <div className="w-10 h-10 rounded-lg overflow-hidden bg-brand-elevated flex items-center justify-center">
-        <Image src="/desgro.png" alt="Desgro" width={40} height={40} className="object-cover" />
+        <Image
+          src="/desgro-icon.png"
+          alt="Desgro"
+          width={40}
+          height={40}
+          className="object-contain"
+        />
       </div>
-      <div>
-        <h1 className="text-h3 font-bold text-primary leading-tight">DESGRO</h1>
-        <p className="text-caption text-on-brand-variant">Desma International</p>
+      <div className="flex flex-col">
+        <Image
+          src="/desgro-letters.png"
+          alt="DESGRO"
+          width={140}
+          height={24}
+          className="object-contain"
+          style={{ width: "auto", height: "24px" }}
+          priority
+        />
+        <p className="text-caption text-on-brand-variant mt-[2px]">Desma International</p>
       </div>
     </div>
   );
@@ -290,9 +304,22 @@ export function SideNav({
           <span className="material-symbols-outlined">menu</span>
         </button>
         <div className="w-8 h-8 rounded overflow-hidden bg-brand-elevated flex items-center justify-center">
-          <Image src="/desgro.png" alt="Desgro" width={32} height={32} className="object-cover" />
+          <Image
+            src="/desgro-icon.png"
+            alt="Desgro"
+            width={32}
+            height={32}
+            className="object-contain"
+          />
         </div>
-        <span className="text-h3 font-bold text-primary leading-none">DESGRO</span>
+        <Image
+          src="/desgro-letters.png"
+          alt="DESGRO"
+          width={117}
+          height={20}
+          className="object-contain"
+          style={{ width: "auto", height: "20px" }}
+        />
         <span className="text-caption text-on-brand-variant ml-xs">· {activeModule.name}</span>
         {canApprove(perms) && pendingCount > 0 && (
           <Link
