@@ -31,7 +31,10 @@ async function fetchWithTimeout(url: string, opts: RequestInit, timeoutMs: numbe
 }
 
 export default function LoginPage() {
-  const [callbackUrl, setCallbackUrl] = useState("/finance/overview");
+  // Default to "/" so the root page can route every user to their
+  // first allowed page (perms.pages[0]) — e.g. Finance Overview for
+  // Finance roles, Lead Pulse for a Marketing Admin like Suhaina.
+  const [callbackUrl, setCallbackUrl] = useState("/");
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
   const [error, setError] = useState<string | null>(null);
