@@ -1,6 +1,20 @@
 import { prisma } from "./prisma";
 import type { MasterCategory, MasterParty } from "@/components/TransactionForm";
 
+// Categories whose sub-items can be linked to a Service. Service-aware
+// reporting joins on these sub-items, so widening the set requires updating
+// the relevant aggregations as well.
+export const SERVICE_LINK_CATEGORIES = [
+  "Sales - Nursing Registrations",
+  "Collection - Nursing Registrations",
+  "Sales - Study Abroad",
+  "Collection - Study Abroad",
+] as const;
+
+export const SERVICE_LINK_CATEGORY_SET: ReadonlySet<string> = new Set(
+  SERVICE_LINK_CATEGORIES,
+);
+
 /**
  * Validate that the (category, sub-item, type) triple exists in the master.
  * Returns null on success, or an error string suitable for an API response.
@@ -27,6 +41,12 @@ export async function verifyCategorySubItem(
 /**
  * Server-side fetcher for the master data the transaction form needs.
  * Returns categories with sub-items and active parties.
+ *
+ * The Party query uses an explicit `select` instead of `findMany()`'s
+ * default-all so it survives the brief window when newly-added Party
+ * columns (e.g. `sourceId`, `assignedL2BdeId`) haven't been pushed to
+ * the live DB yet. The transaction form only needs id/name/group/
+ * txTypes/isActive anyway.
  */
 export async function getTransactionFormMasters(): Promise<{
   categories: MasterCategory[];
@@ -40,6 +60,13 @@ export async function getTransactionFormMasters(): Promise<{
     prisma.party.findMany({
       where: { isActive: true },
       orderBy: [{ group: "asc" }, { name: "asc" }],
+      select: {
+        id: true,
+        name: true,
+        group: true,
+        txTypes: true,
+        isActive: true,
+      },
     }),
   ]);
   return {

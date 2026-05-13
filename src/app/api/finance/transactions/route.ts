@@ -90,7 +90,10 @@ export async function POST(req: NextRequest) {
   if (verr) return NextResponse.json({ error: verr }, { status: 400 });
 
   if (data.partyId) {
-    const party = await prisma.party.findUnique({ where: { id: data.partyId } });
+    const party = await prisma.party.findUnique({
+      where: { id: data.partyId },
+      select: { id: true, isActive: true, txTypes: true },
+    });
     if (!party || !party.isActive) {
       return NextResponse.json({ error: "party_not_found" }, { status: 400 });
     }
