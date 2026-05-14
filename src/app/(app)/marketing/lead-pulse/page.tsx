@@ -64,6 +64,28 @@ export default async function LeadPulseHomePage() {
   const paceLastMonthEnd = `${prevYear}-${String(prevMonth).padStart(2, "0")}-${String(paceEndDay).padStart(2, "0")}`;
   const paceLabel = `${shortMonth(prevMonth)} 1–${paceEndDay}`;
 
+  // Find the "last working day" — the most recent calendar day before
+  // today that is neither a Sunday nor a stored Holiday. We pull the
+  // last 30 days of Holiday rows once so the walk-back is in-memory.
+  const lookbackStart = new Date(`${today}T00:00:00.000Z`);
+  lookbackStart.setUTCDate(lookbackStart.getUTCDate() - 30);
+  const recentHolidays = await prisma.holiday.findMany({
+    where: { date: { gte: lookbackStart } },
+    select: { date: true },
+  });
+  const holidaySet = new Set(recentHolidays.map((h) => h.date.toISOString().slice(0, 10)));
+  function findLastWorkingDay(fromStr: string): string {
+    const d = new Date(`${fromStr}T00:00:00.000Z`);
+    d.setUTCDate(d.getUTCDate() - 1);
+    for (let i = 0; i < 31; i++) {
+      const ds = d.toISOString().slice(0, 10);
+      if (d.getUTCDay() !== 0 && !holidaySet.has(ds)) return ds;
+      d.setUTCDate(d.getUTCDate() - 1);
+    }
+    return fromStr; // fallback — shouldn't happen
+  }
+  const lastWorkingDay = findLastWorkingDay(today);
+
   const [
     thisMonth,
     lastMonth,
@@ -91,7 +113,7 @@ export default async function LeadPulseHomePage() {
     getMonthlyConversionBySource(year, month),
     getL2WeeklyYouTubeConversion(),
     getL2SourceLabels(year, month),
-    getTodaysEntryStatus(),
+    getTodaysEntryStatus({ date: lastWorkingDay, activeOnly: true }),
     getPriorityAlerts(),
     prisma.leadPulseRole.count({ where: { active: true, role: { in: ["l1", "l2"] } } }),
     prisma.leadPulseRole.count({ where: { active: true, role: "l1" } }),
@@ -356,7 +378,7 @@ export default async function LeadPulseHomePage() {
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-[16px]">
         <div className="lg:col-span-2">
-          <Card title={`Today's Entries (${today})`}>
+          <Card title={`Last Working Day's Entries (${lastWorkingDay})`}>
             <table className="w-full text-[13px]">
               <thead>
                 <tr style={{ backgroundColor: "var(--lp-surface-container-low)" }}>

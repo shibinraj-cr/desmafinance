@@ -202,8 +202,15 @@ export async function getDailyLeadVolumeWithPrior(
   return out;
 }
 
-/** Per-BDE roster snapshot for "today's entries" panel. */
-export async function getTodaysEntryStatus(): Promise<
+/**
+ * Per-BDE roster snapshot. Default subject = today, default filter = all
+ * rostered L1/L2 BDEs. Pass `date` to look at a different working day
+ * (e.g. last working day) and `activeOnly` to scope to active BDEs only.
+ */
+export async function getTodaysEntryStatus(opts?: {
+  date?: string;
+  activeOnly?: boolean;
+}): Promise<
   Array<{
     userId: string;
     displayName: string;
@@ -212,10 +219,13 @@ export async function getTodaysEntryStatus(): Promise<
     status: "submitted" | "draft" | "missing";
   }>
 > {
-  const today = todayIst();
-  const dateValue = toPrismaDate(today);
+  const targetDate = opts?.date ?? todayIst();
+  const dateValue = toPrismaDate(targetDate);
   const roles = await prisma.leadPulseRole.findMany({
-    where: { role: { in: ["l1", "l2"] } },
+    where: {
+      role: { in: ["l1", "l2"] },
+      ...(opts?.activeOnly ? { active: true } : {}),
+    },
     orderBy: [{ role: "asc" }, { displayName: "asc" }],
   });
   const todays = await prisma.leadPulseDailyEntry.findMany({

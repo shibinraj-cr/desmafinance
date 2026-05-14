@@ -547,10 +547,7 @@ function L2Table({
           <Th>Source</Th>
           <Th align="right">From L1</Th>
           <Th align="right">Direct</Th>
-          <Th align="right">Connected</Th>
-          <Th align="right">Quote Sent</Th>
           <Th align="right" goldText>Closed-Won</Th>
-          <Th align="right">Closed-Lost</Th>
         </tr>
       </thead>
       <tbody>
@@ -571,19 +568,11 @@ function L2Table({
               </Td>
               <NumCell value={r.receivedFromL1} onChange={(v) => updateRow(setRows, s.id, "receivedFromL1", v)} disabled={!editable} />
               <NumCell value={r.directLeads} onChange={(v) => updateRow(setRows, s.id, "directLeads", v)} disabled={!editable} />
-              <NumCell value={r.connected} onChange={(v) => updateRow(setRows, s.id, "connected", v)} disabled={!editable} />
-              <NumCell value={r.quoteSent} onChange={(v) => updateRow(setRows, s.id, "quoteSent", v)} disabled={!editable} />
               <NumCell
                 value={r.closedWon}
                 onChange={(v) => updateRow(setRows, s.id, "closedWon", v)}
                 disabled={!editable}
                 goldText
-              />
-              <NumCell
-                value={r.closedLost}
-                onChange={(v) => updateRow(setRows, s.id, "closedLost", v)}
-                disabled={!editable}
-                muted
               />
             </Tr>
           );

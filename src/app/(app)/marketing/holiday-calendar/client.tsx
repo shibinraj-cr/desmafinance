@@ -23,6 +23,13 @@ function fmtDate(d: Date): string {
   return `${y}-${m}-${dd}`;
 }
 
+function formatLongDate(ds: string): string {
+  const [y, m, d] = ds.split("-").map(Number);
+  const dt = new Date(Date.UTC(y, m - 1, d));
+  const weekday = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"][dt.getUTCDay()];
+  return `${weekday}, ${d} ${MONTH_LABELS[m - 1]} ${y}`;
+}
+
 function daysInMonth(year: number, month: number): number {
   return new Date(Date.UTC(year, month, 0)).getUTCDate();
 }
@@ -357,7 +364,7 @@ export function HolidayCalendarClient({
         </aside>
       </div>
 
-      {/* Edit modal */}
+      {/* Edit modal — yellow theme with the selected date prominently shown */}
       {editing && (
         <div
           className="fixed inset-0 flex items-center justify-center px-[16px]"
@@ -366,21 +373,42 @@ export function HolidayCalendarClient({
         >
           <div
             onClick={(e) => e.stopPropagation()}
-            className="w-full max-w-md rounded-[12px] p-[20px] border"
+            className="w-full max-w-md rounded-[12px] p-[20px] border-2 shadow-2xl"
             style={{
-              backgroundColor: "var(--lp-surface-container)",
-              borderColor: "var(--lp-outline-variant)",
+              backgroundColor: "#facc15",
+              borderColor: "#ca9d00",
+              color: "#3c2f00",
             }}
           >
-            <div className="flex items-center justify-between mb-[10px]">
-              <h3 className="text-[15px] font-semibold" style={{ color: "var(--lp-on-surface)" }}>
+            <div className="flex items-center justify-between mb-[12px]">
+              <h3 className="text-[16px] font-bold" style={{ color: "#3c2f00" }}>
                 {holidayByDate.get(editing.date) ? "Edit holiday" : "Mark as holiday"}
               </h3>
-              <span className="text-[12px]" style={{ color: "var(--lp-on-surface-variant)" }}>
+              <span
+                className="material-symbols-outlined"
+                style={{ fontSize: 22, color: "#3c2f00" }}
+                aria-hidden
+              >
+                event
+              </span>
+            </div>
+            <div
+              className="rounded-[10px] px-[14px] py-[10px] mb-[14px] flex items-center justify-between border"
+              style={{ backgroundColor: "rgba(60, 47, 0, 0.10)", borderColor: "rgba(60, 47, 0, 0.30)" }}
+            >
+              <div>
+                <p className="text-[10px] uppercase tracking-widest" style={{ color: "rgba(60, 47, 0, 0.7)" }}>
+                  Selected date
+                </p>
+                <p className="text-[18px] font-bold tabular-nums" style={{ color: "#3c2f00" }}>
+                  {formatLongDate(editing.date)}
+                </p>
+              </div>
+              <span className="text-[12px] font-mono" style={{ color: "rgba(60, 47, 0, 0.65)" }}>
                 {editing.date}
               </span>
             </div>
-            <label className="block text-[11px] uppercase tracking-widest mb-[4px]" style={{ color: "var(--lp-on-surface-variant)" }}>
+            <label className="block text-[11px] uppercase tracking-widest mb-[4px] font-semibold" style={{ color: "rgba(60, 47, 0, 0.75)" }}>
               Label
             </label>
             <input
@@ -390,12 +418,12 @@ export function HolidayCalendarClient({
               placeholder="e.g. Diwali"
               className="w-full rounded-[8px] px-[10px] py-[8px] text-[14px] border outline-none"
               style={{
-                backgroundColor: "var(--lp-surface-container-high)",
-                borderColor: "var(--lp-outline-variant)",
-                color: "var(--lp-on-surface)",
+                backgroundColor: "#fff8d6",
+                borderColor: "rgba(60, 47, 0, 0.35)",
+                color: "#3c2f00",
               }}
             />
-            <label className="block text-[11px] uppercase tracking-widest mt-[10px] mb-[4px]" style={{ color: "var(--lp-on-surface-variant)" }}>
+            <label className="block text-[11px] uppercase tracking-widest mt-[10px] mb-[4px] font-semibold" style={{ color: "rgba(60, 47, 0, 0.75)" }}>
               Notes (optional)
             </label>
             <textarea
@@ -404,18 +432,18 @@ export function HolidayCalendarClient({
               rows={2}
               className="w-full rounded-[8px] px-[10px] py-[8px] text-[13px] border outline-none resize-none"
               style={{
-                backgroundColor: "var(--lp-surface-container-high)",
-                borderColor: "var(--lp-outline-variant)",
-                color: "var(--lp-on-surface)",
+                backgroundColor: "#fff8d6",
+                borderColor: "rgba(60, 47, 0, 0.35)",
+                color: "#3c2f00",
               }}
             />
-            <div className="mt-[14px] flex items-center justify-between gap-[8px]">
+            <div className="mt-[16px] flex items-center justify-between gap-[8px]">
               {holidayByDate.get(editing.date) ? (
                 <button
                   onClick={() => deleteHoliday(editing.date)}
                   disabled={busy}
-                  className="text-[12px] underline"
-                  style={{ color: "var(--lp-error)" }}
+                  className="text-[12px] underline font-semibold"
+                  style={{ color: "#992b1a" }}
                 >
                   Remove
                 </button>
@@ -426,16 +454,16 @@ export function HolidayCalendarClient({
                 <button
                   onClick={() => setEditing(null)}
                   disabled={busy}
-                  className="rounded-[8px] px-[12px] py-[6px] text-[13px] border"
-                  style={{ borderColor: "var(--lp-outline-variant)", color: "var(--lp-on-surface)" }}
+                  className="rounded-[8px] px-[12px] py-[6px] text-[13px] border font-semibold"
+                  style={{ borderColor: "rgba(60, 47, 0, 0.45)", color: "#3c2f00", backgroundColor: "transparent" }}
                 >
                   Cancel
                 </button>
                 <button
                   onClick={saveHoliday}
                   disabled={busy || !editing.label.trim()}
-                  className="rounded-[8px] px-[14px] py-[6px] text-[13px] font-semibold"
-                  style={{ backgroundColor: "var(--lp-primary)", color: "#1a1500" }}
+                  className="rounded-[8px] px-[14px] py-[6px] text-[13px] font-bold"
+                  style={{ backgroundColor: "#3c2f00", color: "#facc15" }}
                 >
                   {busy ? "Saving…" : "Save"}
                 </button>
