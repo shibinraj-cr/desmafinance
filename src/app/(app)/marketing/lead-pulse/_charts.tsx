@@ -165,15 +165,24 @@ export function GroupedConversionBySourceChart({
     avgPct: number | null;
   }[];
 }) {
-  const rows = data.map((d) => ({
-    sourceLabel: d.sourceLabel,
-    thisMonth: d.thisMonthPct ?? 0,
-    lastMonth: d.lastMonthPct ?? 0,
-    avg3Mo: d.avgPct ?? 0,
-  }));
+  const rows = data
+    .map((d) => ({
+      sourceLabel: d.sourceLabel,
+      thisMonth: d.thisMonthPct ?? 0,
+      lastMonth: d.lastMonthPct ?? 0,
+      avg3Mo: d.avgPct ?? 0,
+    }))
+    .sort(
+      (a, b) =>
+        b.thisMonth - a.thisMonth ||
+        b.lastMonth - a.lastMonth ||
+        b.avg3Mo - a.avg3Mo ||
+        a.sourceLabel.localeCompare(b.sourceLabel),
+    );
+  const labelFmt = (v: number) => (v > 0 ? `${v.toFixed(1)}%` : "");
   return (
     <ResponsiveContainer width="100%" height={Math.max(260, 48 * rows.length)}>
-      <BarChart data={rows} layout="vertical" margin={{ top: 4, right: 30, left: 4, bottom: 4 }}>
+      <BarChart data={rows} layout="vertical" margin={{ top: 4, right: 48, left: 4, bottom: 4 }}>
         <CartesianGrid stroke={GRID} horizontal={false} strokeDasharray="3 3" />
         <XAxis
           type="number"
@@ -194,9 +203,15 @@ export function GroupedConversionBySourceChart({
           contentStyle={{ backgroundColor: "#231f14", border: `1px solid ${GRID}`, color: "#ebe2d0" }}
           formatter={(v: number) => `${v.toFixed(1)}%`}
         />
-        <Bar dataKey="thisMonth" fill={GOLD} radius={[0, 3, 3, 0]} name="This month" />
-        <Bar dataKey="lastMonth" fill={CYAN} radius={[0, 3, 3, 0]} name="Last month" />
-        <Bar dataKey="avg3Mo" fill={ORANGE} radius={[0, 3, 3, 0]} name="3-mo avg" />
+        <Bar dataKey="thisMonth" fill={GOLD} radius={[0, 3, 3, 0]} name="This month">
+          <LabelList dataKey="thisMonth" position="right" formatter={labelFmt} style={{ fill: GOLD, fontSize: 10 }} />
+        </Bar>
+        <Bar dataKey="lastMonth" fill={CYAN} radius={[0, 3, 3, 0]} name="Last month">
+          <LabelList dataKey="lastMonth" position="right" formatter={labelFmt} style={{ fill: CYAN, fontSize: 10 }} />
+        </Bar>
+        <Bar dataKey="avg3Mo" fill={ORANGE} radius={[0, 3, 3, 0]} name="3-mo avg">
+          <LabelList dataKey="avg3Mo" position="right" formatter={labelFmt} style={{ fill: ORANGE, fontSize: 10 }} />
+        </Bar>
       </BarChart>
     </ResponsiveContainer>
   );
