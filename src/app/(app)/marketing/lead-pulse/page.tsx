@@ -112,7 +112,9 @@ export default async function LeadPulseHomePage() {
     getDailyLeadVolumeWithPrior(30),
     getSourceLeadCount({ start: prev.start, end: paceLastMonthEnd }),
     getSourceLeadCount({ start: monthStart, end: monthEnd }),
-    getSourceLeadCountAvgMonthly(year, month, 3, ["2026-03-27"]),
+    // Historical importer lumped each month's totals into a single day.
+    // Drop those days from rolling-average sums so the 3-mo line is meaningful.
+    getSourceLeadCountAvgMonthly(year, month, 3, ["2026-02-28", "2026-03-27"]),
     getMonthlyConversionBySource(year, month),
     getL2WeeklyYouTubeConversion(),
     getL2SourceLabels(year, month),
@@ -256,7 +258,7 @@ export default async function LeadPulseHomePage() {
           <p className="text-[11px] mb-[8px]" style={{ color: "var(--lp-on-surface-variant)" }}>
             Formula: L1 leads received + L2 direct leads (excludes L2 receivedFromL1
             to avoid double-counting). Last MTD = last month, 1st to {paceLabel}.
-            3-mo avg excludes the 27 Mar 2026 lump-import outlier.
+            3-mo avg excludes the 28 Feb &amp; 27 Mar 2026 lump-import days.
           </p>
           <table className="w-full text-[13px] tabular-nums">
             <thead>
