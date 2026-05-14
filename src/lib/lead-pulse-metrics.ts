@@ -635,10 +635,22 @@ export async function getAvgMonthlyTotals(
 export async function getSourceLeadCount(opts: {
   start: string;
   end: string;
+  /**
+   * Calendar days (YYYY-MM-DD) whose lead numbers should be left out
+   * of the totals. Used to drop the 2026-03-27 lump-import outlier
+   * from rolling averages.
+   */
+  excludeDates?: string[];
 }): Promise<Array<{ sourceId: string; sourceCode: string; sourceLabel: string; leads: number }>> {
   const sources = await prisma.leadPulseSource.findMany({
     orderBy: [{ displayOrder: "asc" }, { label: "asc" }],
   });
+  const excluded = (opts.excludeDates ?? []).map(toPrismaDate);
+  const dateFilter: { gte: Date; lte: Date; notIn?: Date[] } = {
+    gte: toPrismaDate(opts.start),
+    lte: toPrismaDate(opts.end),
+  };
+  if (excluded.length > 0) dateFilter.notIn = excluded;
   const out: Array<{ sourceId: string; sourceCode: string; sourceLabel: string; leads: number }> = [];
   for (const s of sources) {
     const l1 = await prisma.leadPulseDailyEntry.aggregate({
@@ -646,7 +658,7 @@ export async function getSourceLeadCount(opts: {
         sourceId: s.id,
         roleAtEntry: "l1",
         status: "submitted",
-        entryDate: { gte: toPrismaDate(opts.start), lte: toPrismaDate(opts.end) },
+        entryDate: dateFilter,
       },
       _sum: { leadsReceived: true },
     });
@@ -655,7 +667,7 @@ export async function getSourceLeadCount(opts: {
         sourceId: s.id,
         roleAtEntry: "l2",
         status: "submitted",
-        entryDate: { gte: toPrismaDate(opts.start), lte: toPrismaDate(opts.end) },
+        entryDate: dateFilter,
       },
       _sum: { directLeads: true },
     });
@@ -667,6 +679,42 @@ export async function getSourceLeadCount(opts: {
     });
   }
   return out;
+}
+
+/**
+ * Per-source mean monthly lead count averaged over the previous N
+ * complete months (default 3). `excludeDates` lets callers drop
+ * specific calendar days from the underlying sums (e.g. the
+ * 2026-03-27 historical-import lump that distorts averages).
+ */
+export async function getSourceLeadCountAvgMonthly(
+  year: number,
+  month: number,
+  n = 3,
+  excludeDates: string[] = [],
+): Promise<Array<{ sourceId: string; sourceCode: string; sourceLabel: string; avg: number }>> {
+  const months = lastNCompleteMonths(year, month, n);
+  const perSourceSums = new Map<string, { sourceCode: string; sourceLabel: string; total: number }>();
+  for (const ym of months) {
+    const { start, end } = monthBounds(ym.year, ym.month);
+    const rows = await getSourceLeadCount({ start, end, excludeDates });
+    for (const r of rows) {
+      const cur = perSourceSums.get(r.sourceId) ?? {
+        sourceCode: r.sourceCode,
+        sourceLabel: r.sourceLabel,
+        total: 0,
+      };
+      cur.total += r.leads;
+      perSourceSums.set(r.sourceId, cur);
+    }
+  }
+  const denom = Math.max(1, months.length);
+  return Array.from(perSourceSums.entries()).map(([sourceId, v]) => ({
+    sourceId,
+    sourceCode: v.sourceCode,
+    sourceLabel: v.sourceLabel,
+    avg: Math.round((v.total / denom) * 10) / 10,
+  }));
 }
 
 /**

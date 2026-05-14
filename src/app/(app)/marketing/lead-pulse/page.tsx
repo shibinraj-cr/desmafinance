@@ -10,6 +10,7 @@ import {
   getPriorityAlerts,
   getAvgMonthlyTotals,
   getSourceLeadCount,
+  getSourceLeadCountAvgMonthly,
   getMonthlyConversionBySource,
   getL2WeeklyYouTubeConversion,
   getL2SourceLabels,
@@ -94,6 +95,7 @@ export default async function LeadPulseHomePage() {
     daily,
     sourceLeadCountLastMtd,
     sourceLeadCount,
+    sourceLeadCountAvg3Mo,
     convCompare,
     youtubeWeekly,
     sourceLabels,
@@ -110,6 +112,7 @@ export default async function LeadPulseHomePage() {
     getDailyLeadVolumeWithPrior(30),
     getSourceLeadCount({ start: prev.start, end: paceLastMonthEnd }),
     getSourceLeadCount({ start: monthStart, end: monthEnd }),
+    getSourceLeadCountAvgMonthly(year, month, 3, ["2026-03-27"]),
     getMonthlyConversionBySource(year, month),
     getL2WeeklyYouTubeConversion(),
     getL2SourceLabels(year, month),
@@ -253,6 +256,7 @@ export default async function LeadPulseHomePage() {
           <p className="text-[11px] mb-[8px]" style={{ color: "var(--lp-on-surface-variant)" }}>
             Formula: L1 leads received + L2 direct leads (excludes L2 receivedFromL1
             to avoid double-counting). Last MTD = last month, 1st to {paceLabel}.
+            3-mo avg excludes the 27 Mar 2026 lump-import outlier.
           </p>
           <table className="w-full text-[13px] tabular-nums">
             <thead>
@@ -260,6 +264,7 @@ export default async function LeadPulseHomePage() {
                 <Th>Source</Th>
                 <Th align="right">This month</Th>
                 <Th align="right">Last MTD</Th>
+                <Th align="right">Avg 3-mo</Th>
               </tr>
             </thead>
             <tbody>
@@ -267,8 +272,12 @@ export default async function LeadPulseHomePage() {
                 const lastByCode = new Map(
                   sourceLeadCountLastMtd.map((s) => [s.sourceCode, s.leads]),
                 );
+                const avgByCode = new Map(
+                  sourceLeadCountAvg3Mo.map((s) => [s.sourceCode, s.avg]),
+                );
                 return sourceLeadCount.map((s) => {
                   const last = lastByCode.get(s.sourceCode) ?? 0;
+                  const avg = avgByCode.get(s.sourceCode) ?? 0;
                   return (
                     <tr
                       key={s.sourceCode}
@@ -288,6 +297,12 @@ export default async function LeadPulseHomePage() {
                       >
                         {last}
                       </td>
+                      <td
+                        className="px-[16px] py-[6px] text-right"
+                        style={{ color: "var(--lp-on-surface-variant)" }}
+                      >
+                        {avg}
+                      </td>
                     </tr>
                   );
                 });
@@ -295,6 +310,7 @@ export default async function LeadPulseHomePage() {
               {(() => {
                 const thisTotal = sourceLeadCount.reduce((a, b) => a + b.leads, 0);
                 const lastTotal = sourceLeadCountLastMtd.reduce((a, b) => a + b.leads, 0);
+                const avgTotal = Math.round(sourceLeadCountAvg3Mo.reduce((a, b) => a + b.avg, 0) * 10) / 10;
                 return (
                   <tr
                     className="border-t"
@@ -323,6 +339,12 @@ export default async function LeadPulseHomePage() {
                       style={{ color: "var(--lp-on-surface-variant)" }}
                     >
                       {lastTotal}
+                    </td>
+                    <td
+                      className="px-[16px] py-[6px] text-right font-semibold"
+                      style={{ color: "var(--lp-on-surface-variant)" }}
+                    >
+                      {avgTotal}
                     </td>
                   </tr>
                 );
