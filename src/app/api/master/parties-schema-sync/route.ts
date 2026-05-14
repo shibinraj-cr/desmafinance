@@ -198,6 +198,50 @@ export async function POST() {
          END IF;
        END $$`,
     );
+
+    // 5. Holiday table for the marketing module's holiday calendar.
+    await step(
+      "Holiday table",
+      `CREATE TABLE IF NOT EXISTS "Holiday" (
+         "id" TEXT NOT NULL,
+         "date" DATE NOT NULL,
+         "label" TEXT NOT NULL,
+         "notes" TEXT,
+         "createdById" TEXT,
+         "updatedById" TEXT,
+         "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+         "updatedAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+         CONSTRAINT "Holiday_pkey" PRIMARY KEY ("id")
+       )`,
+    );
+    await step(
+      "Holiday unique (date)",
+      `CREATE UNIQUE INDEX IF NOT EXISTS "Holiday_date_key" ON "Holiday"("date")`,
+    );
+    await step(
+      "Holiday date index",
+      `CREATE INDEX IF NOT EXISTS "Holiday_date_idx" ON "Holiday"("date")`,
+    );
+    await step(
+      "Holiday.createdById foreign key",
+      `DO $$ BEGIN
+         IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'Holiday_createdById_fkey') THEN
+           ALTER TABLE "Holiday"
+             ADD CONSTRAINT "Holiday_createdById_fkey"
+             FOREIGN KEY ("createdById") REFERENCES "User"("id") ON DELETE SET NULL;
+         END IF;
+       END $$`,
+    );
+    await step(
+      "Holiday.updatedById foreign key",
+      `DO $$ BEGIN
+         IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'Holiday_updatedById_fkey') THEN
+           ALTER TABLE "Holiday"
+             ADD CONSTRAINT "Holiday_updatedById_fkey"
+             FOREIGN KEY ("updatedById") REFERENCES "User"("id") ON DELETE SET NULL;
+         END IF;
+       END $$`,
+    );
   } catch (e) {
     return NextResponse.json(
       { error: "ddl_failed", log, message: e instanceof Error ? e.message : String(e) },

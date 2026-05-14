@@ -89,6 +89,11 @@ export const MODULES: AppModule[] = [
         label: "Candidates & Vendors",
         icon: "groups",
       },
+      {
+        href: "/marketing/holiday-calendar",
+        label: "Holiday Calendar",
+        icon: "event",
+      },
     ],
   },
   {
