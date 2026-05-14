@@ -661,10 +661,16 @@ export async function getSourceLeadCount(opts: {
 }
 
 /**
- * Conversion% per source for three windows (this month / last month /
- * mean of the previous 3 complete months). Conversion = won / leads
- * where leads = `getSourceLeadCount` formula and won = L1 transferred-
- * to-L2 + L2 closed-won.
+ * L2 conversion% per source for three windows (this month / last
+ * month / mean of the previous 3 complete months).
+ *
+ * Scope is intentionally L2-only — both numerator and denominator
+ * come from L2 daily entries:
+ *   - leads = L2.receivedFromL1 + L2.directLeads (i.e. every lead
+ *             L2 actually worked on, regardless of origin)
+ *   - won   = L2.closedWon
+ * L1's transferred-to-L2 hand-off is *not* counted as a win here —
+ * that lives in the L1→L2 % KPI instead.
  */
 export async function getMonthlyConversionBySource(
   year: number,
@@ -683,15 +689,12 @@ export async function getMonthlyConversionBySource(
 > {
   async function windowMaps(yy: number, mm: number) {
     const { start, end } = monthBounds(yy, mm);
-    const leads = await getSourceLeadCount({ start, end });
     const rows = await getFunnelBySource({ start, end });
-    const wonByCode = new Map(rows.map((r) => [r.sourceCode, r.l1Won + r.l2Won]));
     const pctMap = new Map<string, number | null>();
     const wonMap = new Map<string, number>();
-    for (const s of leads) {
-      const won = wonByCode.get(s.sourceCode) ?? 0;
-      pctMap.set(s.sourceCode, pct(won, s.leads));
-      wonMap.set(s.sourceCode, won);
+    for (const r of rows) {
+      pctMap.set(r.sourceCode, pct(r.l2Won, r.l2Leads));
+      wonMap.set(r.sourceCode, r.l2Won);
     }
     return { pctMap, wonMap };
   }

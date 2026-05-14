@@ -201,7 +201,7 @@ export default async function LeadPulseHomePage() {
             </span>
           </div>
         </Card>
-        <Card title="Conversion by Source — this vs last vs 3-mo avg">
+        <Card title="Conversion by Source — Current Month vs Last Month vs Last 3-months avg">
           <GroupedConversionBySourceChart data={convCompare} />
           <div
             className="flex items-center gap-[16px] mt-[6px] text-[11px]"
