@@ -276,7 +276,12 @@ export default async function LeadPulseHomePage() {
                       style={{ borderColor: "var(--lp-outline-variant)" }}
                     >
                       <td className="px-[16px] py-[6px]">{s.sourceLabel}</td>
-                      <td className="px-[16px] py-[6px] text-right">{s.leads}</td>
+                      <td className="px-[16px] py-[6px] text-right">
+                        <span className="inline-flex items-center justify-end gap-[6px]">
+                          <span>{s.leads}</span>
+                          <TrendPill now={s.leads} prev={last} />
+                        </span>
+                      </td>
                       <td
                         className="px-[16px] py-[6px] text-right"
                         style={{ color: "var(--lp-on-surface-variant)" }}
@@ -287,32 +292,41 @@ export default async function LeadPulseHomePage() {
                   );
                 });
               })()}
-              <tr
-                className="border-t"
-                style={{
-                  borderColor: "var(--lp-outline-variant)",
-                  backgroundColor: "var(--lp-surface-container-low)",
-                }}
-              >
-                <td
-                  className="px-[16px] py-[6px] font-semibold uppercase text-[11px]"
-                  style={{ color: "var(--lp-on-surface-variant)" }}
-                >
-                  Total
-                </td>
-                <td
-                  className="px-[16px] py-[6px] text-right font-semibold"
-                  style={{ color: "var(--lp-primary)" }}
-                >
-                  {sourceLeadCount.reduce((a, b) => a + b.leads, 0)}
-                </td>
-                <td
-                  className="px-[16px] py-[6px] text-right font-semibold"
-                  style={{ color: "var(--lp-on-surface-variant)" }}
-                >
-                  {sourceLeadCountLastMtd.reduce((a, b) => a + b.leads, 0)}
-                </td>
-              </tr>
+              {(() => {
+                const thisTotal = sourceLeadCount.reduce((a, b) => a + b.leads, 0);
+                const lastTotal = sourceLeadCountLastMtd.reduce((a, b) => a + b.leads, 0);
+                return (
+                  <tr
+                    className="border-t"
+                    style={{
+                      borderColor: "var(--lp-outline-variant)",
+                      backgroundColor: "var(--lp-surface-container-low)",
+                    }}
+                  >
+                    <td
+                      className="px-[16px] py-[6px] font-semibold uppercase text-[11px]"
+                      style={{ color: "var(--lp-on-surface-variant)" }}
+                    >
+                      Total
+                    </td>
+                    <td
+                      className="px-[16px] py-[6px] text-right font-semibold"
+                      style={{ color: "var(--lp-primary)" }}
+                    >
+                      <span className="inline-flex items-center justify-end gap-[6px]">
+                        <span>{thisTotal}</span>
+                        <TrendPill now={thisTotal} prev={lastTotal} />
+                      </span>
+                    </td>
+                    <td
+                      className="px-[16px] py-[6px] text-right font-semibold"
+                      style={{ color: "var(--lp-on-surface-variant)" }}
+                    >
+                      {lastTotal}
+                    </td>
+                  </tr>
+                );
+              })()}
             </tbody>
           </table>
         </Card>
@@ -482,6 +496,42 @@ export default async function LeadPulseHomePage() {
 function pctChange(now: number, prev: number): number | null {
   if (prev === 0) return now === 0 ? 0 : null;
   return Math.round(((now - prev) / prev) * 1000) / 10;
+}
+
+/**
+ * Tiny ▲X.X% / ▼X.X% pill comparing `now` vs `prev`. Renders nothing
+ * when prev is 0 (no baseline → no comparison) and a muted "—" when
+ * both sides are zero.
+ */
+function TrendPill({ now, prev }: { now: number; prev: number }) {
+  const delta = pctChange(now, prev);
+  if (delta == null) {
+    return (
+      <span className="text-[10px]" style={{ opacity: 0.5 }} title="No baseline last month">
+        new
+      </span>
+    );
+  }
+  if (delta === 0) {
+    return (
+      <span className="text-[10px]" style={{ color: "var(--lp-on-surface-variant)" }}>
+        ━ 0%
+      </span>
+    );
+  }
+  const up = delta > 0;
+  return (
+    <span
+      className="text-[10px] px-[6px] py-[1px] rounded-full"
+      style={{
+        backgroundColor: up ? "rgba(51, 228, 255, 0.18)" : "rgba(255, 180, 171, 0.18)",
+        color: up ? "var(--lp-cyan)" : "var(--lp-error)",
+      }}
+      title={`${now} vs ${prev} last MTD`}
+    >
+      {up ? "▲" : "▼"} {Math.abs(delta).toFixed(1)}%
+    </span>
+  );
 }
 
 function Kpi({
