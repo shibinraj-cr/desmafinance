@@ -676,48 +676,67 @@ export async function getMonthlyConversionBySource(
     thisMonthPct: number | null;
     lastMonthPct: number | null;
     avgPct: number | null;
+    thisMonthWon: number;
+    lastMonthWon: number;
+    avgWon: number | null;
   }>
 > {
-  async function windowPctMap(yy: number, mm: number) {
+  async function windowMaps(yy: number, mm: number) {
     const { start, end } = monthBounds(yy, mm);
     const leads = await getSourceLeadCount({ start, end });
     const rows = await getFunnelBySource({ start, end });
     const wonByCode = new Map(rows.map((r) => [r.sourceCode, r.l1Won + r.l2Won]));
-    const map = new Map<string, number | null>();
+    const pctMap = new Map<string, number | null>();
+    const wonMap = new Map<string, number>();
     for (const s of leads) {
       const won = wonByCode.get(s.sourceCode) ?? 0;
-      map.set(s.sourceCode, pct(won, s.leads));
+      pctMap.set(s.sourceCode, pct(won, s.leads));
+      wonMap.set(s.sourceCode, won);
     }
-    return map;
+    return { pctMap, wonMap };
   }
   const sources = await prisma.leadPulseSource.findMany({
     orderBy: [{ displayOrder: "asc" }, { label: "asc" }],
   });
-  const thisMonth = await windowPctMap(year, month);
+  const thisM = await windowMaps(year, month);
   const last = prevMonth(year, month);
-  const lastMonth = await windowPctMap(last.year, last.month);
-  // 3-month average — collect each month's pct, then average the
-  // non-null ones per source.
+  const lastM = await windowMaps(last.year, last.month);
+  // 3-month average — collect each month's pct + won, then average per source.
   const lastThree = lastNCompleteMonths(year, month, 3);
-  const perSource: Map<string, number[]> = new Map();
+  const perSourcePct: Map<string, number[]> = new Map();
+  const perSourceWon: Map<string, number[]> = new Map();
   for (const ym of lastThree) {
-    const map = await windowPctMap(ym.year, ym.month);
-    for (const [code, v] of map) {
+    const m = await windowMaps(ym.year, ym.month);
+    for (const [code, v] of m.pctMap) {
       if (v == null) continue;
-      const arr = perSource.get(code) ?? [];
+      const arr = perSourcePct.get(code) ?? [];
       arr.push(v);
-      perSource.set(code, arr);
+      perSourcePct.set(code, arr);
+    }
+    for (const [code, v] of m.wonMap) {
+      const arr = perSourceWon.get(code) ?? [];
+      arr.push(v);
+      perSourceWon.set(code, arr);
     }
   }
   return sources.map((s) => {
-    const arr = perSource.get(s.code) ?? [];
-    const avgPct = arr.length ? Math.round((arr.reduce((a, b) => a + b, 0) / arr.length) * 10) / 10 : null;
+    const pctArr = perSourcePct.get(s.code) ?? [];
+    const wonArr = perSourceWon.get(s.code) ?? [];
+    const avgPct = pctArr.length
+      ? Math.round((pctArr.reduce((a, b) => a + b, 0) / pctArr.length) * 10) / 10
+      : null;
+    const avgWon = wonArr.length
+      ? Math.round((wonArr.reduce((a, b) => a + b, 0) / wonArr.length) * 10) / 10
+      : null;
     return {
       sourceLabel: s.label,
       sourceCode: s.code,
-      thisMonthPct: thisMonth.get(s.code) ?? null,
-      lastMonthPct: lastMonth.get(s.code) ?? null,
+      thisMonthPct: thisM.pctMap.get(s.code) ?? null,
+      lastMonthPct: lastM.pctMap.get(s.code) ?? null,
       avgPct,
+      thisMonthWon: thisM.wonMap.get(s.code) ?? 0,
+      lastMonthWon: lastM.wonMap.get(s.code) ?? 0,
+      avgWon,
     };
   });
 }

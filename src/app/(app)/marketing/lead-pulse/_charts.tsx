@@ -163,6 +163,9 @@ export function GroupedConversionBySourceChart({
     thisMonthPct: number | null;
     lastMonthPct: number | null;
     avgPct: number | null;
+    thisMonthWon: number;
+    lastMonthWon: number;
+    avgWon: number | null;
   }[];
 }) {
   const rows = data
@@ -171,15 +174,18 @@ export function GroupedConversionBySourceChart({
       thisMonth: d.thisMonthPct ?? 0,
       lastMonth: d.lastMonthPct ?? 0,
       avg3Mo: d.avgPct ?? 0,
+      thisMonthWon: d.thisMonthWon,
+      lastMonthWon: d.lastMonthWon,
+      avg3MoWon: d.avgWon ?? 0,
     }))
     .sort(
       (a, b) =>
-        b.thisMonth - a.thisMonth ||
-        b.lastMonth - a.lastMonth ||
-        b.avg3Mo - a.avg3Mo ||
+        b.thisMonthWon - a.thisMonthWon ||
+        b.lastMonthWon - a.lastMonthWon ||
+        b.avg3MoWon - a.avg3MoWon ||
         a.sourceLabel.localeCompare(b.sourceLabel),
     );
-  const labelFmt = (v: number) => (v > 0 ? `${v.toFixed(1)}%` : "");
+  const intFmt = (v: number) => (v > 0 ? `${Math.round(v)}` : "");
   return (
     <ResponsiveContainer width="100%" height={Math.max(260, 48 * rows.length)}>
       <BarChart data={rows} layout="vertical" margin={{ top: 4, right: 48, left: 4, bottom: 4 }}>
@@ -201,16 +207,25 @@ export function GroupedConversionBySourceChart({
         />
         <Tooltip
           contentStyle={{ backgroundColor: "#231f14", border: `1px solid ${GRID}`, color: "#ebe2d0" }}
-          formatter={(v: number) => `${v.toFixed(1)}%`}
+          formatter={(v: number, name: string, ctx: { payload?: Record<string, number> }) => {
+            const wonKey =
+              name === "This month"
+                ? "thisMonthWon"
+                : name === "Last month"
+                  ? "lastMonthWon"
+                  : "avg3MoWon";
+            const won = ctx.payload?.[wonKey] ?? 0;
+            return [`${won} won · ${v.toFixed(1)}%`, name];
+          }}
         />
         <Bar dataKey="thisMonth" fill={GOLD} radius={[0, 3, 3, 0]} name="This month">
-          <LabelList dataKey="thisMonth" position="right" formatter={labelFmt} style={{ fill: GOLD, fontSize: 10 }} />
+          <LabelList dataKey="thisMonthWon" position="right" formatter={intFmt} style={{ fill: GOLD, fontSize: 11 }} />
         </Bar>
         <Bar dataKey="lastMonth" fill={CYAN} radius={[0, 3, 3, 0]} name="Last month">
-          <LabelList dataKey="lastMonth" position="right" formatter={labelFmt} style={{ fill: CYAN, fontSize: 10 }} />
+          <LabelList dataKey="lastMonthWon" position="right" formatter={intFmt} style={{ fill: CYAN, fontSize: 11 }} />
         </Bar>
         <Bar dataKey="avg3Mo" fill={ORANGE} radius={[0, 3, 3, 0]} name="3-mo avg">
-          <LabelList dataKey="avg3Mo" position="right" formatter={labelFmt} style={{ fill: ORANGE, fontSize: 10 }} />
+          <LabelList dataKey="avg3MoWon" position="right" formatter={intFmt} style={{ fill: ORANGE, fontSize: 11 }} />
         </Bar>
       </BarChart>
     </ResponsiveContainer>
