@@ -78,6 +78,8 @@ export default async function LeadPulseHomePage() {
     todays,
     alerts,
     activeRoles,
+    l1Count,
+    l2Count,
   ] = await Promise.all([
     getFunnelTotals({ start: monthStart, end: monthEnd }),
     getFunnelTotals({ start: prev.start, end: prev.end }),
@@ -92,6 +94,8 @@ export default async function LeadPulseHomePage() {
     getTodaysEntryStatus(),
     getPriorityAlerts(),
     prisma.leadPulseRole.count({ where: { role: { in: ["l1", "l2"] } } }),
+    prisma.leadPulseRole.count({ where: { role: "l1" } }),
+    prisma.leadPulseRole.count({ where: { role: "l2" } }),
   ]);
   void bySource;
   void convCompare;
@@ -123,7 +127,8 @@ export default async function LeadPulseHomePage() {
           label="L1 Total Leads"
           icon="alt_route"
           thisMonth={thisMonth.l1Leads}
-          lastMonth={lastMonth.l1Leads}
+          lastMonth={paced.l1Leads}
+          lastMonthLabel={`Last MTD (${paceLabel})`}
           avg={avg3.avgL1Leads}
           avgLabel={`Avg ${avg3.months}-mo`}
         />
@@ -131,26 +136,34 @@ export default async function LeadPulseHomePage() {
           label="L2 Total Leads"
           icon="handshake"
           thisMonth={thisMonth.l2Leads}
-          lastMonth={lastMonth.l2Leads}
+          lastMonth={paced.l2Leads}
+          lastMonthLabel={`Last MTD (${paceLabel})`}
           avg={avg3.avgL2Leads}
           avgLabel={`Avg ${avg3.months}-mo`}
         />
         <Kpi
           label="L1 → L2 %"
           value={thisMonth.l1ConversionPct == null ? "—" : `${thisMonth.l1ConversionPct.toFixed(1)}%`}
-          trend={pctChange(thisMonth.l1ConversionPct ?? 0, lastMonth.l1ConversionPct ?? 0)}
+          trend={pctChange(thisMonth.l1ConversionPct ?? 0, paced.l1ConversionPct ?? 0)}
           icon="trending_up"
+          subLabel={`Last MTD (${paceLabel})`}
+          subValue={paced.l1ConversionPct == null ? "—" : `${paced.l1ConversionPct.toFixed(1)}%`}
+          target="Target: 60%"
         />
         <Kpi
           label="Closed-Won"
           value={thisMonth.l2Won.toString()}
-          trend={wonTrend}
+          trend={pctChange(thisMonth.l2Won, paced.l2Won)}
           icon="emoji_events"
+          subLabel={`Last MTD (${paceLabel})`}
+          subValue={paced.l2Won.toString()}
         />
         <Kpi
-          label="Active Team"
-          value={`${submittedToday}/${activeRoles}`}
+          label="Team Strength"
+          value={`L1: ${l1Count} · L2: ${l2Count}`}
           icon="groups"
+          subLabel={"Submitted today"}
+          subValue={`${submittedToday}/${activeRoles}`}
         />
       </div>
       {/* keep the pace numbers reachable for future tiles */}
@@ -421,6 +434,9 @@ function Kpi({
   paceLabel,
   paceValue,
   paceTrend,
+  subLabel,
+  subValue,
+  target,
 }: {
   label: string;
   value: string;
@@ -429,6 +445,9 @@ function Kpi({
   paceLabel?: string;
   paceValue?: number;
   paceTrend?: number | null;
+  subLabel?: string;
+  subValue?: string;
+  target?: string;
 }) {
   return (
     <div
@@ -448,6 +467,22 @@ function Kpi({
         <p className="text-[26px] font-bold tabular-nums mt-[2px]" style={{ color: "var(--lp-primary)" }}>
           {value}
         </p>
+        {target && (
+          <p className="text-[11px] mt-[2px]" style={{ color: "var(--lp-on-surface-variant)" }}>
+            {target}
+          </p>
+        )}
+        {subLabel && subValue != null && (
+          <p
+            className="text-[11px] mt-[6px] flex flex-wrap items-baseline gap-[6px]"
+            style={{ color: "var(--lp-on-surface-variant)" }}
+          >
+            <span style={{ opacity: 0.8 }}>{subLabel}:</span>
+            <span className="tabular-nums" style={{ color: "var(--lp-on-surface)" }}>
+              {subValue}
+            </span>
+          </p>
+        )}
         {paceLabel && paceValue != null && (
           <p
             className="text-[11px] mt-[6px] flex items-center gap-[6px] flex-wrap"
@@ -501,6 +536,7 @@ function TripletKpi({
   icon,
   thisMonth,
   lastMonth,
+  lastMonthLabel = "Last month",
   avg,
   avgLabel,
 }: {
@@ -508,6 +544,7 @@ function TripletKpi({
   icon: string;
   thisMonth: number;
   lastMonth: number;
+  lastMonthLabel?: string;
   avg: number;
   avgLabel: string;
 }) {
@@ -542,7 +579,7 @@ function TripletKpi({
       </p>
       <div className="grid grid-cols-2 gap-[6px] mt-[8px] text-[11px]">
         <div>
-          <p style={{ color: "var(--lp-on-surface-variant)" }}>Last month</p>
+          <p style={{ color: "var(--lp-on-surface-variant)" }}>{lastMonthLabel}</p>
           <p className="font-mono">{lastMonth.toLocaleString("en-IN")}</p>
           {monthTrend != null && (
             <span
