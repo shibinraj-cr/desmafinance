@@ -215,7 +215,7 @@ export async function getTodaysEntryStatus(): Promise<
   const today = todayIst();
   const dateValue = toPrismaDate(today);
   const roles = await prisma.leadPulseRole.findMany({
-    where: { active: true, role: { in: ["l1", "l2"] } },
+    where: { role: { in: ["l1", "l2"] } },
     orderBy: [{ role: "asc" }, { displayName: "asc" }],
   });
   const todays = await prisma.leadPulseDailyEntry.findMany({
@@ -390,7 +390,6 @@ export async function getMonthlyMatrix(opts: {
   });
   const roleRows = await prisma.leadPulseRole.findMany({
     where: {
-      active: true,
       role: { in: ["l1", "l2"] },
       ...(opts.region ? { regionFocus: { has: opts.region } } : {}),
     },
@@ -764,7 +763,7 @@ export async function getL2WeeklyYouTubeConversion(): Promise<
   const ytSource = await prisma.leadPulseSource.findUnique({ where: { code: "youtube" } });
   if (!ytSource) return [];
   const roles = await prisma.leadPulseRole.findMany({
-    where: { active: true, role: "l2" },
+    where: { role: "l2" },
     orderBy: [{ displayName: "asc" }],
   });
   const out: Array<{ userId: string; displayName: string; thisWeek: number; lastWeek: number }> = [];
@@ -820,7 +819,7 @@ export async function getL2SourceLabels(
 > {
   const { start, end } = monthBounds(year, month);
   const roles = await prisma.leadPulseRole.findMany({
-    where: { active: true, role: "l2" },
+    where: { role: "l2" },
     orderBy: [{ displayName: "asc" }],
   });
   const sources = await prisma.leadPulseSource.findMany();
@@ -888,9 +887,10 @@ export async function getServiceConversionMatrix(
   month: number,
 ): Promise<ServiceMatrix> {
   const { start, end } = monthBounds(year, month);
-  // Active L2 BDEs (matched by display name + active flag).
+  // All L2 BDEs (active flag intentionally not filtered — supervisor
+  // wants the matrix to keep historical rosters in view).
   const roles = await prisma.leadPulseRole.findMany({
-    where: { active: true, role: "l2" },
+    where: { role: "l2" },
     include: { user: { select: { id: true, username: true } } },
     orderBy: [{ displayName: "asc" }],
   });
