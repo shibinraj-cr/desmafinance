@@ -92,7 +92,7 @@ export default async function LeadPulseHomePage() {
     paced,
     avg3,
     daily,
-    bySource,
+    sourceLeadCountLastMtd,
     sourceLeadCount,
     convCompare,
     youtubeWeekly,
@@ -108,8 +108,8 @@ export default async function LeadPulseHomePage() {
     getFunnelTotals({ start: prev.start, end: paceLastMonthEnd }),
     getAvgMonthlyTotals(year, month, 3),
     getDailyLeadVolumeWithPrior(30),
+    getSourceLeadCount({ start: prev.start, end: paceLastMonthEnd }),
     getSourceLeadCount({ start: monthStart, end: monthEnd }),
-    getSourceLeadCount({ start: monthStart, end: monthEnd }), // alias kept for shape
     getMonthlyConversionBySource(year, month),
     getL2WeeklyYouTubeConversion(),
     getL2SourceLabels(year, month),
@@ -119,7 +119,6 @@ export default async function LeadPulseHomePage() {
     prisma.leadPulseRole.count({ where: { active: true, role: "l1" } }),
     prisma.leadPulseRole.count({ where: { active: true, role: "l2" } }),
   ]);
-  void bySource;
   void convCompare;
 
   const totalLeadsThisMonth = thisMonth.l1Leads + thisMonth.l2Leads;
@@ -250,31 +249,68 @@ export default async function LeadPulseHomePage() {
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-[16px]">
-        <Card title="Source-wise Lead Count (this month)">
+        <Card title="Source-wise Lead Count">
           <p className="text-[11px] mb-[8px]" style={{ color: "var(--lp-on-surface-variant)" }}>
             Formula: L1 leads received + L2 direct leads (excludes L2 receivedFromL1
-            to avoid double-counting).
+            to avoid double-counting). Last MTD = last month, 1st to {paceLabel}.
           </p>
           <table className="w-full text-[13px] tabular-nums">
             <thead>
               <tr style={{ backgroundColor: "var(--lp-surface-container-low)" }}>
                 <Th>Source</Th>
-                <Th align="right">Leads</Th>
+                <Th align="right">This month</Th>
+                <Th align="right">Last MTD</Th>
               </tr>
             </thead>
             <tbody>
-              {sourceLeadCount.map((s) => (
-                <tr key={s.sourceCode} className="border-t" style={{ borderColor: "var(--lp-outline-variant)" }}>
-                  <td className="px-[16px] py-[6px]">{s.sourceLabel}</td>
-                  <td className="px-[16px] py-[6px] text-right">{s.leads}</td>
-                </tr>
-              ))}
-              <tr className="border-t" style={{ borderColor: "var(--lp-outline-variant)", backgroundColor: "var(--lp-surface-container-low)" }}>
-                <td className="px-[16px] py-[6px] font-semibold uppercase text-[11px]" style={{ color: "var(--lp-on-surface-variant)" }}>
+              {(() => {
+                const lastByCode = new Map(
+                  sourceLeadCountLastMtd.map((s) => [s.sourceCode, s.leads]),
+                );
+                return sourceLeadCount.map((s) => {
+                  const last = lastByCode.get(s.sourceCode) ?? 0;
+                  return (
+                    <tr
+                      key={s.sourceCode}
+                      className="border-t"
+                      style={{ borderColor: "var(--lp-outline-variant)" }}
+                    >
+                      <td className="px-[16px] py-[6px]">{s.sourceLabel}</td>
+                      <td className="px-[16px] py-[6px] text-right">{s.leads}</td>
+                      <td
+                        className="px-[16px] py-[6px] text-right"
+                        style={{ color: "var(--lp-on-surface-variant)" }}
+                      >
+                        {last}
+                      </td>
+                    </tr>
+                  );
+                });
+              })()}
+              <tr
+                className="border-t"
+                style={{
+                  borderColor: "var(--lp-outline-variant)",
+                  backgroundColor: "var(--lp-surface-container-low)",
+                }}
+              >
+                <td
+                  className="px-[16px] py-[6px] font-semibold uppercase text-[11px]"
+                  style={{ color: "var(--lp-on-surface-variant)" }}
+                >
                   Total
                 </td>
-                <td className="px-[16px] py-[6px] text-right font-semibold" style={{ color: "var(--lp-primary)" }}>
+                <td
+                  className="px-[16px] py-[6px] text-right font-semibold"
+                  style={{ color: "var(--lp-primary)" }}
+                >
                   {sourceLeadCount.reduce((a, b) => a + b.leads, 0)}
+                </td>
+                <td
+                  className="px-[16px] py-[6px] text-right font-semibold"
+                  style={{ color: "var(--lp-on-surface-variant)" }}
+                >
+                  {sourceLeadCountLastMtd.reduce((a, b) => a + b.leads, 0)}
                 </td>
               </tr>
             </tbody>
