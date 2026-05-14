@@ -192,10 +192,10 @@ export function GroupedConversionBySourceChart({
         <CartesianGrid stroke={GRID} horizontal={false} strokeDasharray="3 3" />
         <XAxis
           type="number"
+          allowDecimals={false}
           tick={{ fontSize: 11, fill: TEXT }}
           axisLine={{ stroke: GRID }}
           tickLine={false}
-          tickFormatter={(v: number) => `${v}%`}
         />
         <YAxis
           type="category"
@@ -207,24 +207,15 @@ export function GroupedConversionBySourceChart({
         />
         <Tooltip
           contentStyle={{ backgroundColor: "#231f14", border: `1px solid ${GRID}`, color: "#ebe2d0" }}
-          formatter={(v: number, name: string, ctx: { payload?: Record<string, number> }) => {
-            const wonKey =
-              name === "This month"
-                ? "thisMonthWon"
-                : name === "Last month"
-                  ? "lastMonthWon"
-                  : "avg3MoWon";
-            const won = ctx.payload?.[wonKey] ?? 0;
-            return [`${won} won · ${v.toFixed(1)}%`, name];
-          }}
+          formatter={(v: number) => [`${Math.round(v)} won`, ""]}
         />
-        <Bar dataKey="thisMonth" fill={GOLD} radius={[0, 3, 3, 0]} name="This month">
+        <Bar dataKey="thisMonthWon" fill={GOLD} radius={[0, 3, 3, 0]} name="This month">
           <LabelList dataKey="thisMonthWon" position="right" formatter={intFmt} style={{ fill: GOLD, fontSize: 11 }} />
         </Bar>
-        <Bar dataKey="lastMonth" fill={CYAN} radius={[0, 3, 3, 0]} name="Last month">
+        <Bar dataKey="lastMonthWon" fill={CYAN} radius={[0, 3, 3, 0]} name="Last month">
           <LabelList dataKey="lastMonthWon" position="right" formatter={intFmt} style={{ fill: CYAN, fontSize: 11 }} />
         </Bar>
-        <Bar dataKey="avg3Mo" fill={ORANGE} radius={[0, 3, 3, 0]} name="3-mo avg">
+        <Bar dataKey="avg3MoWon" fill={ORANGE} radius={[0, 3, 3, 0]} name="3-mo avg">
           <LabelList dataKey="avg3MoWon" position="right" formatter={intFmt} style={{ fill: ORANGE, fontSize: 11 }} />
         </Bar>
       </BarChart>
