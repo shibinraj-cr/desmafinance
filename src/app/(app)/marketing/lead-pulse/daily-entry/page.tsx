@@ -81,10 +81,34 @@ export default async function DailyEntryPage({
   // picker itself goes much further back so BDEs can browse their historical
   // entries in read-only mode.
   const historyEarliest = "2025-01-01";
+
+  // Default landing date for L1/L2 BDEs is the *last working day* (most
+  // recent non-Sunday, non-Holiday calendar day). Skipping today by
+  // default reflects how the team actually uses the sheet — they log
+  // yesterday's numbers when they sit down today.
+  const lookbackStart = new Date(`${today}T00:00:00.000Z`);
+  lookbackStart.setUTCDate(lookbackStart.getUTCDate() - 30);
+  const recentHolidays = await prisma.holiday.findMany({
+    where: { date: { gte: lookbackStart } },
+    select: { date: true },
+  });
+  const holidaySet = new Set(recentHolidays.map((h) => h.date.toISOString().slice(0, 10)));
+  function lastWorkingDay(fromStr: string): string {
+    const d = new Date(`${fromStr}T00:00:00.000Z`);
+    d.setUTCDate(d.getUTCDate() - 1);
+    for (let i = 0; i < 31; i++) {
+      const ds = d.toISOString().slice(0, 10);
+      if (d.getUTCDay() !== 0 && !holidaySet.has(ds)) return ds;
+      d.setUTCDate(d.getUTCDate() - 1);
+    }
+    return fromStr;
+  }
+  const defaultDate = lastWorkingDay(today);
+
   const requestedDate =
     searchParams.date && /^\d{4}-\d{2}-\d{2}$/.test(searchParams.date)
       ? searchParams.date
-      : today;
+      : defaultDate;
   const date =
     requestedDate > today
       ? today
