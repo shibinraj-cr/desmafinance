@@ -222,8 +222,16 @@ async function importSheet(
     }
   }
 
+  // Today (UTC) for the lock decision below.
+  const now = new Date();
+  const todayUtc = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()));
+
   for (const [dateStr, acc] of days) {
     const dateValue = new Date(`${dateStr}T00:00:00.000Z`);
+    // Only lock rows whose date is older than the 3-day editability window,
+    // so BDEs can still correct yesterday/today after a re-run.
+    const ageDays = Math.floor((todayUtc.getTime() - dateValue.getTime()) / 86400000);
+    const shouldLock = ageDays > 3;
     let perSourceTotalLeads = 0;
     for (const s of acc.perSource.values()) perSourceTotalLeads += s.leads;
     let didWrite = false;
@@ -283,7 +291,7 @@ async function importSheet(
               roleAtEntry: identity.role,
               status: "submitted",
               submittedAt: new Date(`${dateStr}T12:30:00.000Z`),
-              locked: true,
+              locked: shouldLock,
               ...data,
             },
           });
@@ -297,7 +305,7 @@ async function importSheet(
               roleAtEntry: identity.role,
               status: "submitted",
               submittedAt: new Date(`${dateStr}T12:30:00.000Z`),
-              locked: true,
+              locked: shouldLock,
               ...data,
             },
           });
@@ -329,9 +337,9 @@ async function importSheet(
             notes: null,
             status: "submitted",
             submittedAt: new Date(`${dateStr}T12:30:00.000Z`),
-            locked: true,
+            locked: shouldLock,
           },
-          update: { ...metaPayload, status: "submitted", locked: true },
+          update: { ...metaPayload, status: "submitted", locked: shouldLock },
         });
       }
     }
