@@ -72,6 +72,14 @@ export function DailyEntryForm(props: Props) {
   const [savingDraft, setSavingDraft] = useState(false);
   const [lastSavedAt, setLastSavedAt] = useState<number | null>(null);
   const [serverError, setServerError] = useState<string | null>(null);
+  const [successMsg, setSuccessMsg] = useState<string | null>(null);
+
+  // Auto-dismiss the success banner so it doesn't linger forever.
+  useEffect(() => {
+    if (!successMsg) return;
+    const t = setTimeout(() => setSuccessMsg(null), 6000);
+    return () => clearTimeout(t);
+  }, [successMsg]);
 
   // Refresh on date change. We re-fetch the day's data via the JSON API
   // so the URL reflects the chosen date and bookmarking works. Skipped in
@@ -205,12 +213,17 @@ export function DailyEntryForm(props: Props) {
   async function onSubmit() {
     if (firstError) {
       setServerError(`Validation error: ${rowErrorMsg(firstError.err, firstError.source.label)}`);
+      setSuccessMsg(null);
       return;
     }
     setSubmitting(true);
+    setSuccessMsg(null);
     const ok = await save("submit");
     setSubmitting(false);
-    if (ok) router.refresh();
+    if (ok) {
+      setSuccessMsg(`Entry submitted successfully for ${date}.`);
+      router.refresh();
+    }
   }
 
   async function onSaveDraft() {
@@ -328,6 +341,34 @@ export function DailyEntryForm(props: Props) {
         </Card>
       </div>
 
+      {!props.preview && successMsg && (
+        <div
+          className="rounded-[12px] border-2 flex items-center gap-[10px] px-[16px] py-[12px]"
+          style={{
+            backgroundColor: "rgba(51, 228, 255, 0.12)",
+            borderColor: "var(--lp-cyan)",
+            color: "var(--lp-on-surface)",
+          }}
+          role="status"
+        >
+          <span
+            className="material-symbols-outlined"
+            style={{ fontSize: 22, color: "var(--lp-cyan)" }}
+          >
+            check_circle
+          </span>
+          <span className="text-[13px] font-semibold">{successMsg}</span>
+          <button
+            onClick={() => setSuccessMsg(null)}
+            className="ml-auto text-[11px] underline"
+            style={{ color: "var(--lp-on-surface-variant)" }}
+            aria-label="Dismiss"
+          >
+            Dismiss
+          </button>
+        </div>
+      )}
+
       {!props.preview && (
       <div
         className="rounded-[12px] border flex flex-wrap items-center gap-[12px] px-[20px] py-[14px]"
@@ -349,7 +390,7 @@ export function DailyEntryForm(props: Props) {
               <span className="material-symbols-outlined align-middle" style={{ fontSize: 16 }}>
                 warning
               </span>{" "}
-              {rowErrorMsg(firstError.err, firstError.source.label)}
+              {rowErrorMsg(firstError.err, firstError.source.label)} · Fix this before submitting.
             </p>
           ) : lastSavedAt ? (
             <p className="text-[12px]" style={{ color: "var(--lp-on-surface-variant)" }}>
