@@ -272,6 +272,10 @@ export async function POST(req: NextRequest) {
             closedWon: r.closedWon,
             closedLost: r.closedLost,
           };
+      // Draft auto-saves must never downgrade a row that's already
+      // been submitted — only the explicit "submit" action can flip
+      // status. So we only write `status` on the update branch when
+      // the user explicitly submitted.
       await tx.leadPulseDailyEntry.upsert({
         where: {
           userId_entryDate_sourceId: {
@@ -292,8 +296,9 @@ export async function POST(req: NextRequest) {
         },
         update: {
           roleAtEntry: role,
-          status,
-          submittedAt: action === "submit" ? new Date() : undefined,
+          ...(action === "submit"
+            ? { status: "submitted", submittedAt: new Date() }
+            : {}),
           ...data,
         },
       });
@@ -317,8 +322,9 @@ export async function POST(req: NextRequest) {
         referredToDoc: role === "l2" ? meta.referredToDoc : null,
         referredToAbroad: meta.referredToAbroad,
         notes: meta.notes,
-        status,
-        submittedAt: action === "submit" ? new Date() : undefined,
+        ...(action === "submit"
+          ? { status: "submitted", submittedAt: new Date() }
+          : {}),
       },
     });
 

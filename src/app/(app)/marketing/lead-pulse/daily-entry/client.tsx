@@ -221,6 +221,10 @@ export function DailyEntryForm(props: Props) {
     const ok = await save("submit");
     setSubmitting(false);
     if (ok) {
+      // Reflect the new status locally so the button label flips to
+      // "Re-submit" immediately and the 2-second draft auto-save
+      // doesn't re-submit anything either.
+      setMeta((m) => ({ ...m, status: "submitted", submittedAt: new Date().toISOString() }));
       setSuccessMsg(`Entry submitted successfully for ${date}.`);
       router.refresh();
     }
