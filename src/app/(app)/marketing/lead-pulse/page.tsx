@@ -93,9 +93,9 @@ export default async function LeadPulseHomePage() {
     getL2SourceLabels(year, month),
     getTodaysEntryStatus(),
     getPriorityAlerts(),
-    prisma.leadPulseRole.count({ where: { role: { in: ["l1", "l2"] } } }),
-    prisma.leadPulseRole.count({ where: { role: "l1" } }),
-    prisma.leadPulseRole.count({ where: { role: "l2" } }),
+    prisma.leadPulseRole.count({ where: { active: true, role: { in: ["l1", "l2"] } } }),
+    prisma.leadPulseRole.count({ where: { active: true, role: "l1" } }),
+    prisma.leadPulseRole.count({ where: { active: true, role: "l2" } }),
   ]);
   void bySource;
   void convCompare;
