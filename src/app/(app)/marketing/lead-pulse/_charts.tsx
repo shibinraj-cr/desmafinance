@@ -306,3 +306,87 @@ export function PerformanceOverTimeChart({
     </ResponsiveContainer>
   );
 }
+
+/** Simple bar chart for the Meta-disqualified monthly view. */
+export function DisqualifiedMonthlyChart({
+  data,
+}: {
+  data: { label: string; count: number }[];
+}) {
+  return (
+    <ResponsiveContainer width="100%" height={180}>
+      <BarChart data={data} margin={{ top: 10, right: 12, left: 0, bottom: 0 }}>
+        <CartesianGrid stroke={GRID} strokeDasharray="3 3" vertical={false} />
+        <XAxis dataKey="label" tick={{ fontSize: 11, fill: TEXT }} axisLine={{ stroke: GRID }} tickLine={false} />
+        <YAxis allowDecimals={false} tick={{ fontSize: 11, fill: TEXT }} axisLine={{ stroke: GRID }} tickLine={false} width={32} />
+        <Tooltip contentStyle={{ backgroundColor: "#231f14", border: `1px solid ${GRID}`, color: "#ebe2d0" }} />
+        <Bar dataKey="count" fill={ORANGE} radius={[4, 4, 0, 0]} name="Disqualified">
+          <LabelList dataKey="count" position="top" formatter={(v: number) => (v > 0 ? String(v) : "")} style={{ fill: ORANGE, fontSize: 11 }} />
+        </Bar>
+      </BarChart>
+    </ResponsiveContainer>
+  );
+}
+
+/** 30d vs prior-30d overlay for disqualified leads. Mirrors LeadVolumeChart styling. */
+export function DisqualifiedDailyChart({
+  data,
+}: {
+  data: { date: string; count: number; priorDate: string; priorCount: number }[];
+}) {
+  return (
+    <ResponsiveContainer width="100%" height={200}>
+      <AreaChart data={data} margin={{ top: 10, right: 10, left: 0, bottom: 0 }}>
+        <defs>
+          <linearGradient id="disqCurr" x1="0" y1="0" x2="0" y2="1">
+            <stop offset="0%" stopColor={ORANGE} stopOpacity={0.35} />
+            <stop offset="100%" stopColor={ORANGE} stopOpacity={0.04} />
+          </linearGradient>
+          <linearGradient id="disqPrior" x1="0" y1="0" x2="0" y2="1">
+            <stop offset="0%" stopColor={CYAN} stopOpacity={0.15} />
+            <stop offset="100%" stopColor={CYAN} stopOpacity={0.02} />
+          </linearGradient>
+        </defs>
+        <CartesianGrid stroke={GRID} strokeDasharray="3 3" vertical={false} />
+        <XAxis
+          dataKey="date"
+          tickFormatter={(d: string) => d.slice(5)}
+          tick={{ fontSize: 11, fill: TEXT }}
+          axisLine={{ stroke: GRID }}
+          tickLine={false}
+        />
+        <YAxis allowDecimals={false} tick={{ fontSize: 11, fill: TEXT }} axisLine={{ stroke: GRID }} tickLine={false} width={32} />
+        <Tooltip
+          contentStyle={{ backgroundColor: "#231f14", border: `1px solid ${GRID}`, color: "#ebe2d0" }}
+          formatter={(value: number, name: string, ctx: { payload?: { priorDate?: string } }) => {
+            if (name === "Prior 30d") {
+              return [value, `Prior 30d (${ctx.payload?.priorDate ?? ""})`];
+            }
+            return [value, name];
+          }}
+        />
+        <Area
+          type="monotone"
+          dataKey="priorCount"
+          name="Prior 30d"
+          stroke={CYAN}
+          strokeWidth={1.5}
+          strokeDasharray="4 3"
+          fill="url(#disqPrior)"
+          dot={false}
+          isAnimationActive={false}
+        />
+        <Area
+          type="monotone"
+          dataKey="count"
+          name="This 30d"
+          stroke={ORANGE}
+          strokeWidth={2}
+          fill="url(#disqCurr)"
+          dot={false}
+          isAnimationActive={false}
+        />
+      </AreaChart>
+    </ResponsiveContainer>
+  );
+}

@@ -12,12 +12,18 @@ import {
   getSourceLeadCount,
   getSourceLeadCountAvgMonthly,
   getMonthlyConversionBySource,
+  getSourceDisqualifiedAnalysis,
   getL2WeeklyYouTubeConversion,
   getL2SourceLabels,
   monthBounds,
 } from "@/lib/lead-pulse-metrics";
 import { todayIst } from "@/lib/lead-pulse-dates";
-import { LeadVolumeChart, GroupedConversionBySourceChart } from "./_charts";
+import {
+  LeadVolumeChart,
+  GroupedConversionBySourceChart,
+  DisqualifiedMonthlyChart,
+  DisqualifiedDailyChart,
+} from "./_charts";
 
 export const dynamic = "force-dynamic";
 
@@ -104,6 +110,7 @@ export default async function LeadPulseHomePage() {
     activeRoles,
     l1Count,
     l2Count,
+    metaDisqAnalysis,
   ] = await Promise.all([
     getFunnelTotals({ start: monthStart, end: monthEnd }),
     getFunnelTotals({ start: prev.start, end: prev.end }),
@@ -123,6 +130,7 @@ export default async function LeadPulseHomePage() {
     prisma.leadPulseRole.count({ where: { active: true, role: { in: ["l1", "l2"] } } }),
     prisma.leadPulseRole.count({ where: { active: true, role: "l1" } }),
     prisma.leadPulseRole.count({ where: { active: true, role: "l2" } }),
+    getSourceDisqualifiedAnalysis("meta", year, month, 6),
   ]);
   void convCompare;
 
@@ -456,6 +464,61 @@ export default async function LeadPulseHomePage() {
               })()}
             </tbody>
           </table>
+        </Card>
+
+        <Card title={`${metaDisqAnalysis.sourceLabel} Disqualified — analysis`}>
+          <div
+            className="flex flex-wrap items-baseline gap-[12px] mb-[8px]"
+            style={{ color: "var(--lp-on-surface)" }}
+          >
+            <span className="text-[22px] font-bold tabular-nums" style={{ color: "var(--lp-orange)" }}>
+              {metaDisqAnalysis.summary.last30d}
+            </span>
+            <span className="text-[11px]" style={{ color: "var(--lp-on-surface-variant)" }}>
+              last 30 days vs <span className="tabular-nums">{metaDisqAnalysis.summary.prior30d}</span>{" "}
+              prior 30 days
+            </span>
+            {metaDisqAnalysis.summary.deltaPct != null && (
+              <span
+                className="text-[10px] px-[6px] py-[1px] rounded-full"
+                style={{
+                  backgroundColor:
+                    metaDisqAnalysis.summary.deltaPct <= 0
+                      ? "rgba(51, 228, 255, 0.18)"
+                      : "rgba(255, 180, 171, 0.18)",
+                  color:
+                    metaDisqAnalysis.summary.deltaPct <= 0
+                      ? "var(--lp-cyan)"
+                      : "var(--lp-error)",
+                }}
+                title="Lower disqualified count is better; flips colours accordingly."
+              >
+                {metaDisqAnalysis.summary.deltaPct >= 0 ? "▲" : "▼"}{" "}
+                {Math.abs(metaDisqAnalysis.summary.deltaPct).toFixed(1)}%
+              </span>
+            )}
+          </div>
+          <p
+            className="text-[11px] mt-[4px] mb-[2px] uppercase tracking-widest"
+            style={{ color: "var(--lp-on-surface-variant)" }}
+          >
+            Monthly trend (last 6 months)
+          </p>
+          <DisqualifiedMonthlyChart data={metaDisqAnalysis.monthly} />
+          <p
+            className="text-[11px] mt-[10px] mb-[2px] uppercase tracking-widest"
+            style={{ color: "var(--lp-on-surface-variant)" }}
+          >
+            Daily — last 30 days vs prior 30 days
+          </p>
+          <DisqualifiedDailyChart data={metaDisqAnalysis.daily} />
+          <div
+            className="flex items-center gap-[16px] mt-[6px] text-[11px]"
+            style={{ color: "var(--lp-on-surface-variant)" }}
+          >
+            <Legend color="var(--lp-orange)" label="This 30d" />
+            <Legend color="var(--lp-cyan)" label="Prior 30d" />
+          </div>
         </Card>
 
         <Card title="L2 YouTube — last 2 weeks">

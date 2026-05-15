@@ -1040,3 +1040,117 @@ export async function getServiceConversionMatrix(
     cells,
   };
 }
+
+/**
+ * Disqualified-lead analysis scoped to a single source (defaults to
+ * Meta). Returns:
+ *   - `monthly`: per-month totals for the current month + last N-1
+ *     complete months, sorted chronologically.
+ *   - `daily`: dual-window daily series — current 30 days + the
+ *     matching prior 30 days (offset-aligned by day position),
+ *     mirroring `getDailyLeadVolumeWithPrior` so the chart can
+ *     overlay both lines.
+ *   - `summary`: 30d vs prior 30d totals + % delta.
+ */
+export async function getSourceDisqualifiedAnalysis(
+  sourceCode: string,
+  year: number,
+  month: number,
+  monthsBack = 6,
+): Promise<{
+  sourceLabel: string;
+  monthly: Array<{ year: number; month: number; label: string; count: number }>;
+  daily: Array<{ date: string; count: number; priorDate: string; priorCount: number }>;
+  summary: {
+    last30d: number;
+    prior30d: number;
+    deltaPct: number | null;
+  };
+}> {
+  const source = await prisma.leadPulseSource.findUnique({ where: { code: sourceCode } });
+  if (!source) {
+    return {
+      sourceLabel: sourceCode,
+      monthly: [],
+      daily: [],
+      summary: { last30d: 0, prior30d: 0, deltaPct: null },
+    };
+  }
+
+  // Monthly view — current month + (monthsBack - 1) prior months.
+  const monthList: Array<{ year: number; month: number }> = [{ year, month }];
+  let y = year;
+  let m = month;
+  for (let i = 1; i < monthsBack; i++) {
+    ({ year: y, month: m } = prevMonth(y, m));
+    monthList.unshift({ year: y, month: m });
+  }
+  const monthly: Array<{ year: number; month: number; label: string; count: number }> = [];
+  const monthNames = [
+    "Jan", "Feb", "Mar", "Apr", "May", "Jun",
+    "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
+  ];
+  for (const ym of monthList) {
+    const { start, end } = monthBounds(ym.year, ym.month);
+    const agg = await prisma.leadPulseDailyEntry.aggregate({
+      where: {
+        sourceId: source.id,
+        status: "submitted",
+        entryDate: { gte: toPrismaDate(start), lte: toPrismaDate(end) },
+      },
+      _sum: { disqualified: true },
+    });
+    monthly.push({
+      year: ym.year,
+      month: ym.month,
+      label: `${monthNames[ym.month - 1]} '${String(ym.year).slice(-2)}`,
+      count: agg._sum.disqualified ?? 0,
+    });
+  }
+
+  // Daily 30d vs prior 30d.
+  const today = todayIst();
+  const currStart = addDays(today, -29);
+  const priorStart = addDays(currStart, -30);
+  const priorEnd = addDays(currStart, -1);
+  const rows = await prisma.leadPulseDailyEntry.findMany({
+    where: {
+      sourceId: source.id,
+      status: "submitted",
+      entryDate: { gte: toPrismaDate(priorStart), lte: toPrismaDate(today) },
+    },
+    select: { entryDate: true, disqualified: true },
+  });
+  const buckets = new Map<string, number>();
+  // Pre-seed the full 60-day range so missing days show 0.
+  for (let i = 0; i < 60; i++) buckets.set(addDays(priorStart, i), 0);
+  for (const r of rows) {
+    const d = r.entryDate.toISOString().slice(0, 10);
+    buckets.set(d, (buckets.get(d) ?? 0) + (r.disqualified ?? 0));
+  }
+  const daily: Array<{ date: string; count: number; priorDate: string; priorCount: number }> = [];
+  for (let i = 0; i < 30; i++) {
+    const date = addDays(currStart, i);
+    const priorDate = addDays(priorStart, i);
+    daily.push({
+      date,
+      count: buckets.get(date) ?? 0,
+      priorDate,
+      priorCount: buckets.get(priorDate) ?? 0,
+    });
+  }
+  const last30d = daily.reduce((a, r) => a + r.count, 0);
+  const prior30d = daily.reduce((a, r) => a + r.priorCount, 0);
+  const deltaPct =
+    prior30d === 0
+      ? null
+      : Math.round(((last30d - prior30d) / prior30d) * 1000) / 10;
+  void priorEnd; // referenced via the last priorDate
+
+  return {
+    sourceLabel: source.label,
+    monthly,
+    daily,
+    summary: { last30d, prior30d, deltaPct },
+  };
+}
