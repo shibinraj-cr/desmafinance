@@ -885,37 +885,55 @@ export async function getL2WeeklyYouTubeConversion(): Promise<{
     });
   }
 
-  // Allocation: top last-week scorer(s) among active BDEs get share=2.
-  const activeRows = partial.filter((p) => p.active);
-  const maxLastWeek = activeRows.reduce((m, p) => Math.max(m, p.lastWeek), 0);
+  // Only L2 BDEs who actually closed YouTube leads in either week are
+  // part of the allocation. BDEs with no YouTube activity (e.g. someone
+  // who handles other sources entirely) shouldn't show up in the
+  // round-robin order — that was confusing supervisors.
+  const ytActive = partial.filter(
+    (p) => p.active && (p.lastWeek > 0 || p.thisWeek > 0),
+  );
+  const maxLastWeek = ytActive.reduce((m, p) => Math.max(m, p.lastWeek), 0);
   const noWinner = maxLastWeek === 0;
   const leaders: Array<{ userId: string; displayName: string }> = [];
   if (!noWinner) {
-    for (const p of activeRows) {
+    for (const p of ytActive) {
       if (p.lastWeek === maxLastWeek) {
         leaders.push({ userId: p.userId, displayName: p.displayName });
       }
     }
   }
   const leaderIds = new Set(leaders.map((l) => l.userId));
+  const ytActiveIds = new Set(ytActive.map((p) => p.userId));
 
-  const rows: L2YouTubeWeeklyRow[] = partial.map((p) => ({
-    ...p,
-    share: !p.active
-      ? 1
-      : noWinner
+  // Highest closer on top of both the table and the allocation order:
+  // by last-week desc, then this-week desc, then displayName for
+  // determinism.
+  const compareWeekly = (a: typeof partial[number], b: typeof partial[number]) =>
+    b.lastWeek - a.lastWeek ||
+    b.thisWeek - a.thisWeek ||
+    a.displayName.localeCompare(b.displayName);
+
+  const rows: L2YouTubeWeeklyRow[] = partial
+    .slice()
+    .sort(compareWeekly)
+    .map((p) => ({
+      ...p,
+      share: !ytActiveIds.has(p.userId)
         ? 1
-        : leaderIds.has(p.userId)
-          ? 2
-          : 1,
-  }));
-  const order: Array<{ userId: string; displayName: string; share: 1 | 2 }> = activeRows.map(
-    (p) => ({
+        : noWinner
+          ? 1
+          : leaderIds.has(p.userId)
+            ? 2
+            : 1,
+    }));
+  const order: Array<{ userId: string; displayName: string; share: 1 | 2 }> = ytActive
+    .slice()
+    .sort(compareWeekly)
+    .map((p) => ({
       userId: p.userId,
       displayName: p.displayName,
       share: noWinner ? 1 : leaderIds.has(p.userId) ? 2 : 1,
-    }),
-  );
+    }));
 
   return {
     rows,
