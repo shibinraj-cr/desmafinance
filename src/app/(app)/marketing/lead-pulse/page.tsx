@@ -126,6 +126,68 @@ export default async function LeadPulseHomePage() {
   ]);
   void convCompare;
 
+  // Auto-insight for the 30-day vs prior-30-day chart. Deterministic
+  // narrative built from the same `daily` series the chart reads —
+  // total deltas, best/worst days, % change. Surfaced under the chart.
+  const leadVolumeInsight = (() => {
+    const fmt = (n: number) => n.toLocaleString("en-IN");
+    const totalThis = daily.reduce((a, r) => a + (r.leads ?? 0), 0);
+    const totalPrior = daily.reduce((a, r) => a + (r.priorLeads ?? 0), 0);
+    const delta =
+      totalPrior > 0
+        ? Math.round(((totalThis - totalPrior) / totalPrior) * 1000) / 10
+        : null;
+    const arrow = delta == null ? "" : delta > 0 ? "▲" : delta < 0 ? "▼" : "━";
+    const direction =
+      delta == null ? "is unchanged" : delta > 0 ? "is up" : delta < 0 ? "is down" : "is flat";
+    const pctText = delta == null ? "n/a" : `${arrow} ${Math.abs(delta).toFixed(1)}%`;
+
+    // Peak / quiet days in current window (skipping any explicit zero
+    // for the "quiet" pick so a not-yet-submitted future day doesn't win).
+    const sorted = [...daily].sort((a, b) => (b.leads ?? 0) - (a.leads ?? 0));
+    const peak = sorted[0];
+    const nonZero = daily.filter((r) => (r.leads ?? 0) > 0).sort((a, b) => (a.leads ?? 0) - (b.leads ?? 0));
+    const quiet = nonZero[0];
+
+    // Day-of-week peak/quiet — gives a "Mondays are strongest" angle.
+    const dowBuckets = new Map<number, { leads: number; count: number }>();
+    for (const r of daily) {
+      if ((r.leads ?? 0) === 0) continue;
+      const dow = new Date(`${r.date}T00:00:00.000Z`).getUTCDay();
+      const cur = dowBuckets.get(dow) ?? { leads: 0, count: 0 };
+      cur.leads += r.leads ?? 0;
+      cur.count += 1;
+      dowBuckets.set(dow, cur);
+    }
+    const dowAvg = Array.from(dowBuckets.entries())
+      .map(([dow, v]) => ({ dow, avg: v.leads / v.count }))
+      .sort((a, b) => b.avg - a.avg);
+    const dowLabels = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
+    const bestDow = dowAvg[0];
+
+    const sentences: string[] = [];
+    sentences.push(
+      delta == null
+        ? `Last 30 days: ${fmt(totalThis)} leads (no comparable prior-window data).`
+        : `Last 30 days: ${fmt(totalThis)} leads — ${direction} ${pctText} vs the prior 30 days (${fmt(totalPrior)}).`,
+    );
+    if (peak && (peak.leads ?? 0) > 0) {
+      sentences.push(`Peak day: ${peak.date} with ${fmt(peak.leads ?? 0)} leads.`);
+    }
+    if (quiet && (quiet.leads ?? 0) > 0 && quiet.date !== peak?.date) {
+      sentences.push(`Quietest active day: ${quiet.date} (${fmt(quiet.leads ?? 0)} leads).`);
+    }
+    if (bestDow && bestDow.avg > 0) {
+      sentences.push(
+        `${dowLabels[bestDow.dow]}s are the strongest day-of-week, averaging ${Math.round(bestDow.avg)} leads.`,
+      );
+    }
+    return {
+      tone: delta == null ? "info" : delta > 0 ? "up" : delta < 0 ? "down" : "info",
+      sentences,
+    } as { tone: "up" | "down" | "info"; sentences: string[] };
+  })();
+
   const totalLeadsThisMonth = thisMonth.l1Leads + thisMonth.l2Leads;
   const totalLeadsLastMonth = lastMonth.l1Leads + lastMonth.l2Leads;
   const paceLeadsLastMonth = paced.l1Leads + paced.l2Leads;
@@ -238,6 +300,47 @@ export default async function LeadPulseHomePage() {
             <span style={{ opacity: 0.7 }}>
               · X-axis = this-window date; hover for the matching prior-window date.
             </span>
+          </div>
+          <div
+            className="mt-[12px] rounded-[10px] border p-[12px] flex gap-[10px] items-start"
+            style={{
+              backgroundColor: "var(--lp-surface-container-low)",
+              borderColor:
+                leadVolumeInsight.tone === "up"
+                  ? "rgba(51, 228, 255, 0.45)"
+                  : leadVolumeInsight.tone === "down"
+                    ? "rgba(255, 180, 171, 0.45)"
+                    : "var(--lp-outline-variant)",
+            }}
+          >
+            <span
+              className="material-symbols-outlined"
+              style={{
+                fontSize: 18,
+                color:
+                  leadVolumeInsight.tone === "up"
+                    ? "var(--lp-cyan)"
+                    : leadVolumeInsight.tone === "down"
+                      ? "var(--lp-error)"
+                      : "var(--lp-primary)",
+              }}
+              aria-hidden
+            >
+              auto_awesome
+            </span>
+            <div className="flex-1 min-w-0">
+              <p
+                className="text-[10px] uppercase tracking-widest font-semibold mb-[4px]"
+                style={{ color: "var(--lp-primary)" }}
+              >
+                AI Insight
+              </p>
+              <ul className="space-y-[3px] text-[12px]" style={{ color: "var(--lp-on-surface)" }}>
+                {leadVolumeInsight.sentences.map((s, i) => (
+                  <li key={i}>{s}</li>
+                ))}
+              </ul>
+            </div>
           </div>
         </Card>
         <Card title="Conversion by Source — Current Month vs Last Month vs Last 3-months avg">
