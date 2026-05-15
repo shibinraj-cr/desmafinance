@@ -953,9 +953,15 @@ export async function getServiceConversionMatrix(
     orderBy: [{ displayName: "asc" }],
   });
 
-  // Active services that any L2 BDE has at least one party linked to,
-  // OR services that already have a target row for the month. Keeps
-  // the matrix focused on relevant columns.
+  // Show every active service as a column so the supervisor can set
+  // targets even for services no L2 BDE has touched yet. We also
+  // surface any historically-targeted inactive service so old targets
+  // remain visible in their month.
+  const allActiveServices = await prisma.service.findMany({
+    where: { isActive: true },
+    orderBy: { name: "asc" },
+    select: { id: true, name: true },
+  });
   const partyServices = await prisma.partyService.findMany({
     where: {
       party: {
@@ -972,11 +978,7 @@ export async function getServiceConversionMatrix(
   });
 
   const serviceMap = new Map<string, { id: string; name: string }>();
-  for (const ps of partyServices) {
-    if (ps.service.isActive) {
-      serviceMap.set(ps.service.id, { id: ps.service.id, name: ps.service.name });
-    }
-  }
+  for (const s of allActiveServices) serviceMap.set(s.id, s);
   for (const t of targets) {
     if (!serviceMap.has(t.serviceId)) {
       const svc = await prisma.service.findUnique({
