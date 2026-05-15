@@ -1059,7 +1059,14 @@ export async function getSourceDisqualifiedAnalysis(
   monthsBack = 6,
 ): Promise<{
   sourceLabel: string;
-  monthly: Array<{ year: number; month: number; label: string; count: number }>;
+  monthly: Array<{
+    year: number;
+    month: number;
+    label: string;
+    count: number;
+    leads: number;
+    pct: number | null;
+  }>;
   daily: Array<{ date: string; count: number; priorDate: string; priorCount: number }>;
   summary: {
     last30d: number;
@@ -1085,14 +1092,22 @@ export async function getSourceDisqualifiedAnalysis(
     ({ year: y, month: m } = prevMonth(y, m));
     monthList.unshift({ year: y, month: m });
   }
-  const monthly: Array<{ year: number; month: number; label: string; count: number }> = [];
+  const monthly: Array<{
+    year: number;
+    month: number;
+    label: string;
+    count: number;
+    leads: number;
+    pct: number | null;
+  }> = [];
   const monthNames = [
     "Jan", "Feb", "Mar", "Apr", "May", "Jun",
     "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
   ];
   for (const ym of monthList) {
     const { start, end } = monthBounds(ym.year, ym.month);
-    const agg = await prisma.leadPulseDailyEntry.aggregate({
+    // Disqualified count across both L1 and L2 for this source.
+    const disqAgg = await prisma.leadPulseDailyEntry.aggregate({
       where: {
         sourceId: source.id,
         status: "submitted",
@@ -1100,11 +1115,37 @@ export async function getSourceDisqualifiedAnalysis(
       },
       _sum: { disqualified: true },
     });
+    // Lead-count denominator uses the same dashboard formula:
+    // L1 leadsReceived + L2 directLeads (excludes L2 receivedFromL1 to
+    // avoid double-counting the L1→L2 hand-off).
+    const l1Leads = await prisma.leadPulseDailyEntry.aggregate({
+      where: {
+        sourceId: source.id,
+        roleAtEntry: "l1",
+        status: "submitted",
+        entryDate: { gte: toPrismaDate(start), lte: toPrismaDate(end) },
+      },
+      _sum: { leadsReceived: true },
+    });
+    const l2Direct = await prisma.leadPulseDailyEntry.aggregate({
+      where: {
+        sourceId: source.id,
+        roleAtEntry: "l2",
+        status: "submitted",
+        entryDate: { gte: toPrismaDate(start), lte: toPrismaDate(end) },
+      },
+      _sum: { directLeads: true },
+    });
+    const count = disqAgg._sum.disqualified ?? 0;
+    const leads = (l1Leads._sum.leadsReceived ?? 0) + (l2Direct._sum.directLeads ?? 0);
+    const pct = leads > 0 ? Math.round((count / leads) * 1000) / 10 : null;
     monthly.push({
       year: ym.year,
       month: ym.month,
       label: `${monthNames[ym.month - 1]} '${String(ym.year).slice(-2)}`,
-      count: agg._sum.disqualified ?? 0,
+      count,
+      leads,
+      pct,
     });
   }
 

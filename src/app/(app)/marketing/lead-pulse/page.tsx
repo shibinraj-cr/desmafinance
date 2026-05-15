@@ -505,6 +505,13 @@ export default async function LeadPulseHomePage() {
             Monthly trend (last 6 months)
           </p>
           <DisqualifiedMonthlyChart data={metaDisqAnalysis.monthly} />
+          <div
+            className="flex items-center gap-[16px] mt-[2px] text-[11px]"
+            style={{ color: "var(--lp-on-surface-variant)" }}
+          >
+            <Legend color="var(--lp-orange)" label="Disqualified count" />
+            <Legend color="var(--lp-primary)" label="Disqualified % (of total Meta leads)" />
+          </div>
           <p
             className="text-[11px] mt-[10px] mb-[2px] uppercase tracking-widest"
             style={{ color: "var(--lp-on-surface-variant)" }}

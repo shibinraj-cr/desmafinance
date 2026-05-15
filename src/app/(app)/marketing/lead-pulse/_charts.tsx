@@ -13,6 +13,7 @@ import {
   BarChart,
   Bar,
   LabelList,
+  ComposedChart,
 } from "recharts";
 
 const GOLD = "#facc15";
@@ -307,23 +308,71 @@ export function PerformanceOverTimeChart({
   );
 }
 
-/** Simple bar chart for the Meta-disqualified monthly view. */
+/**
+ * Composed monthly bar (disqualified count) + line (disqualification %)
+ * chart for the Meta Disqualified analysis card.
+ */
 export function DisqualifiedMonthlyChart({
   data,
 }: {
-  data: { label: string; count: number }[];
+  data: { label: string; count: number; leads: number; pct: number | null }[];
 }) {
+  const rows = data.map((d) => ({ ...d, pctVal: d.pct ?? 0 }));
   return (
-    <ResponsiveContainer width="100%" height={180}>
-      <BarChart data={data} margin={{ top: 10, right: 12, left: 0, bottom: 0 }}>
+    <ResponsiveContainer width="100%" height={200}>
+      <ComposedChart data={rows} margin={{ top: 14, right: 18, left: 0, bottom: 0 }}>
         <CartesianGrid stroke={GRID} strokeDasharray="3 3" vertical={false} />
         <XAxis dataKey="label" tick={{ fontSize: 11, fill: TEXT }} axisLine={{ stroke: GRID }} tickLine={false} />
-        <YAxis allowDecimals={false} tick={{ fontSize: 11, fill: TEXT }} axisLine={{ stroke: GRID }} tickLine={false} width={32} />
-        <Tooltip contentStyle={{ backgroundColor: "#231f14", border: `1px solid ${GRID}`, color: "#ebe2d0" }} />
-        <Bar dataKey="count" fill={ORANGE} radius={[4, 4, 0, 0]} name="Disqualified">
-          <LabelList dataKey="count" position="top" formatter={(v: number) => (v > 0 ? String(v) : "")} style={{ fill: ORANGE, fontSize: 11 }} />
+        <YAxis
+          yAxisId="count"
+          allowDecimals={false}
+          tick={{ fontSize: 11, fill: TEXT }}
+          axisLine={{ stroke: GRID }}
+          tickLine={false}
+          width={32}
+        />
+        <YAxis
+          yAxisId="pct"
+          orientation="right"
+          tick={{ fontSize: 11, fill: TEXT }}
+          axisLine={{ stroke: GRID }}
+          tickLine={false}
+          width={40}
+          tickFormatter={(v: number) => `${v}%`}
+        />
+        <Tooltip
+          contentStyle={{ backgroundColor: "#231f14", border: `1px solid ${GRID}`, color: "#ebe2d0" }}
+          formatter={(v: number, name: string) => {
+            if (name === "Disqualified %") return [`${v.toFixed(1)}%`, name];
+            return [v, name];
+          }}
+        />
+        <Bar yAxisId="count" dataKey="count" fill={ORANGE} radius={[4, 4, 0, 0]} name="Disqualified">
+          <LabelList
+            dataKey="count"
+            position="top"
+            formatter={(v: number) => (v > 0 ? String(v) : "")}
+            style={{ fill: ORANGE, fontSize: 11 }}
+          />
         </Bar>
-      </BarChart>
+        <Line
+          yAxisId="pct"
+          type="monotone"
+          dataKey="pctVal"
+          stroke={GOLD}
+          strokeWidth={2}
+          dot={{ r: 3, fill: GOLD }}
+          name="Disqualified %"
+        >
+          <LabelList
+            dataKey="pctVal"
+            position="top"
+            offset={10}
+            formatter={(v: number) => (v > 0 ? `${v.toFixed(1)}%` : "")}
+            style={{ fill: GOLD, fontSize: 10 }}
+          />
+        </Line>
+      </ComposedChart>
     </ResponsiveContainer>
   );
 }
