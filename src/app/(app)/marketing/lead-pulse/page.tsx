@@ -529,49 +529,126 @@ export default async function LeadPulseHomePage() {
         </Card>
 
         <Card title="L2 YouTube — last 2 weeks">
-          {youtubeWeekly.length === 0 ? (
+          {youtubeWeekly.rows.length === 0 ? (
             <p className="text-[12px]" style={{ color: "var(--lp-on-surface-variant)" }}>
               No active L2 BDEs.
             </p>
           ) : (
-            <table className="w-full text-[13px] tabular-nums">
-              <thead>
-                <tr style={{ backgroundColor: "var(--lp-surface-container-low)" }}>
-                  <Th>BDE</Th>
-                  <Th align="right">Last wk</Th>
-                  <Th align="right">This wk</Th>
-                  <Th align="right">Δ</Th>
-                </tr>
-              </thead>
-              <tbody>
-                {youtubeWeekly
-                  .filter((b) => b.thisWeek > 0 || b.lastWeek > 0)
-                  .map((b) => {
-                    const delta = b.thisWeek - b.lastWeek;
-                    return (
-                      <tr key={b.userId} className="border-t" style={{ borderColor: "var(--lp-outline-variant)" }}>
-                        <td className="px-[16px] py-[6px] font-semibold">{b.displayName}</td>
-                        <td className="px-[16px] py-[6px] text-right">{b.lastWeek}</td>
-                        <td className="px-[16px] py-[6px] text-right">{b.thisWeek}</td>
-                        <td
-                          className="px-[16px] py-[6px] text-right font-semibold"
-                          style={{ color: delta >= 0 ? "var(--lp-cyan)" : "var(--lp-error)" }}
-                        >
-                          {delta >= 0 ? "+" : ""}
-                          {delta}
-                        </td>
-                      </tr>
-                    );
-                  })}
-                {youtubeWeekly.every((b) => b.thisWeek === 0 && b.lastWeek === 0) && (
-                  <tr>
-                    <td colSpan={4} className="px-[16px] py-[16px] text-center" style={{ color: "var(--lp-on-surface-variant)" }}>
-                      No YouTube closes either week.
-                    </td>
+            <>
+              <table className="w-full text-[13px] tabular-nums">
+                <thead>
+                  <tr style={{ backgroundColor: "var(--lp-surface-container-low)" }}>
+                    <Th>BDE</Th>
+                    <Th align="right">Last wk</Th>
+                    <Th align="right">This wk</Th>
+                    <Th align="right">Δ</Th>
+                    <Th align="right">Next share</Th>
                   </tr>
+                </thead>
+                <tbody>
+                  {youtubeWeekly.rows
+                    .filter((b) => b.thisWeek > 0 || b.lastWeek > 0)
+                    .map((b) => {
+                      const delta = b.thisWeek - b.lastWeek;
+                      const isLeader = b.share === 2 && b.active;
+                      return (
+                        <tr
+                          key={b.userId}
+                          className="border-t"
+                          style={{ borderColor: "var(--lp-outline-variant)" }}
+                        >
+                          <td className="px-[16px] py-[6px] font-semibold">
+                            {b.displayName}
+                            {!b.active && (
+                              <span
+                                className="ml-[6px] text-[10px] uppercase tracking-widest"
+                                style={{ color: "var(--lp-on-surface-variant)" }}
+                              >
+                                inactive
+                              </span>
+                            )}
+                          </td>
+                          <td className="px-[16px] py-[6px] text-right">{b.lastWeek}</td>
+                          <td className="px-[16px] py-[6px] text-right">{b.thisWeek}</td>
+                          <td
+                            className="px-[16px] py-[6px] text-right font-semibold"
+                            style={{ color: delta >= 0 ? "var(--lp-cyan)" : "var(--lp-error)" }}
+                          >
+                            {delta >= 0 ? "+" : ""}
+                            {delta}
+                          </td>
+                          <td className="px-[16px] py-[6px] text-right">
+                            {!b.active ? (
+                              <span style={{ color: "var(--lp-on-surface-variant)", opacity: 0.6 }}>—</span>
+                            ) : isLeader ? (
+                              <span
+                                className="inline-flex items-center gap-[4px] font-semibold"
+                                style={{ color: "var(--lp-primary)" }}
+                                title="Top performer last week — gets 2 leads per allocation cycle"
+                              >
+                                <span aria-hidden>👑</span>
+                                <span>2 leads</span>
+                              </span>
+                            ) : (
+                              <span style={{ color: "var(--lp-on-surface-variant)" }}>1 lead</span>
+                            )}
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  {youtubeWeekly.rows.every((b) => b.thisWeek === 0 && b.lastWeek === 0) && (
+                    <tr>
+                      <td
+                        colSpan={5}
+                        className="px-[16px] py-[16px] text-center"
+                        style={{ color: "var(--lp-on-surface-variant)" }}
+                      >
+                        No YouTube closes either week.
+                      </td>
+                    </tr>
+                  )}
+                </tbody>
+              </table>
+              <div
+                className="mt-[12px] rounded-[10px] border p-[12px]"
+                style={{
+                  backgroundColor: "var(--lp-surface-container-low)",
+                  borderColor: "var(--lp-outline-variant)",
+                }}
+              >
+                <p
+                  className="text-[10px] uppercase tracking-widest font-semibold mb-[4px]"
+                  style={{ color: "var(--lp-primary)" }}
+                >
+                  Next allocation cycle
+                </p>
+                {youtubeWeekly.allocation.order.length === 0 ? (
+                  <p className="text-[12px]" style={{ color: "var(--lp-on-surface-variant)" }}>
+                    No active L2 BDEs to allocate to.
+                  </p>
+                ) : youtubeWeekly.allocation.noWinner ? (
+                  <p className="text-[12px]" style={{ color: "var(--lp-on-surface-variant)" }}>
+                    No closes last week — round-robin with equal shares of 1 lead each:{" "}
+                    <span style={{ color: "var(--lp-on-surface)" }}>
+                      {youtubeWeekly.allocation.order.map((o) => o.displayName).join(" → ")}
+                    </span>
+                    .
+                  </p>
+                ) : (
+                  <p className="text-[12px]" style={{ color: "var(--lp-on-surface-variant)" }}>
+                    Top performer
+                    {youtubeWeekly.allocation.leaders.length > 1 ? "s" : ""} last week → 2 leads/cycle.
+                    Others → 1 lead/cycle. Round-robin order:{" "}
+                    <span style={{ color: "var(--lp-on-surface)" }}>
+                      {youtubeWeekly.allocation.order
+                        .map((o) => (o.share === 2 ? `${o.displayName} ×2` : o.displayName))
+                        .join(" → ")}
+                    </span>
+                    .
+                  </p>
                 )}
-              </tbody>
-            </table>
+              </div>
+            </>
           )}
         </Card>
 

@@ -804,10 +804,33 @@ export async function getMonthlyConversionBySource(
 /**
  * Per-L2-BDE weekly closed-won counts of YouTube leads — current
  * week + the prior week. Week buckets are Mon–Sun in IST.
+ *
+ * Also returns the next-cycle allocation suggestion: the L2 BDE(s)
+ * with the highest closed-won last week get a share of 2, everyone
+ * else gets 1, distributed round-robin. Allocation is restricted to
+ * currently-active L2 BDEs; the historical `rows` table still
+ * lists every L2 BDE so inactive folks remain visible in the trend.
  */
-export async function getL2WeeklyYouTubeConversion(): Promise<
-  Array<{ userId: string; displayName: string; thisWeek: number; lastWeek: number }>
-> {
+export type L2YouTubeWeeklyRow = {
+  userId: string;
+  displayName: string;
+  thisWeek: number;
+  lastWeek: number;
+  active: boolean;
+  share: 1 | 2;
+};
+
+export type L2YouTubeAllocation = {
+  rule: "top-last-week-double";
+  leaders: Array<{ userId: string; displayName: string }>;
+  order: Array<{ userId: string; displayName: string; share: 1 | 2 }>;
+  noWinner: boolean;
+};
+
+export async function getL2WeeklyYouTubeConversion(): Promise<{
+  rows: L2YouTubeWeeklyRow[];
+  allocation: L2YouTubeAllocation;
+}> {
   const today = todayIst();
   // Find Monday of the current ISO-ish week.
   const [yy, mm, dd] = today.split("-").map(Number);
@@ -819,12 +842,17 @@ export async function getL2WeeklyYouTubeConversion(): Promise<
   const thisSun = addDays(thisMon, 6);
 
   const ytSource = await prisma.leadPulseSource.findUnique({ where: { code: "youtube" } });
-  if (!ytSource) return [];
+  if (!ytSource) {
+    return {
+      rows: [],
+      allocation: { rule: "top-last-week-double", leaders: [], order: [], noWinner: true },
+    };
+  }
   const roles = await prisma.leadPulseRole.findMany({
     where: { role: "l2" },
     orderBy: [{ displayName: "asc" }],
   });
-  const out: Array<{ userId: string; displayName: string; thisWeek: number; lastWeek: number }> = [];
+  const partial: Array<Omit<L2YouTubeWeeklyRow, "share">> = [];
   for (const r of roles) {
     const [thisAgg, lastAgg] = await Promise.all([
       prisma.leadPulseDailyEntry.aggregate({
@@ -848,14 +876,51 @@ export async function getL2WeeklyYouTubeConversion(): Promise<
         _sum: { closedWon: true },
       }),
     ]);
-    out.push({
+    partial.push({
       userId: r.userId,
       displayName: r.displayName,
       thisWeek: thisAgg._sum.closedWon ?? 0,
       lastWeek: lastAgg._sum.closedWon ?? 0,
+      active: r.active,
     });
   }
-  return out;
+
+  // Allocation: top last-week scorer(s) among active BDEs get share=2.
+  const activeRows = partial.filter((p) => p.active);
+  const maxLastWeek = activeRows.reduce((m, p) => Math.max(m, p.lastWeek), 0);
+  const noWinner = maxLastWeek === 0;
+  const leaders: Array<{ userId: string; displayName: string }> = [];
+  if (!noWinner) {
+    for (const p of activeRows) {
+      if (p.lastWeek === maxLastWeek) {
+        leaders.push({ userId: p.userId, displayName: p.displayName });
+      }
+    }
+  }
+  const leaderIds = new Set(leaders.map((l) => l.userId));
+
+  const rows: L2YouTubeWeeklyRow[] = partial.map((p) => ({
+    ...p,
+    share: !p.active
+      ? 1
+      : noWinner
+        ? 1
+        : leaderIds.has(p.userId)
+          ? 2
+          : 1,
+  }));
+  const order: Array<{ userId: string; displayName: string; share: 1 | 2 }> = activeRows.map(
+    (p) => ({
+      userId: p.userId,
+      displayName: p.displayName,
+      share: noWinner ? 1 : leaderIds.has(p.userId) ? 2 : 1,
+    }),
+  );
+
+  return {
+    rows,
+    allocation: { rule: "top-last-week-double", leaders, order, noWinner },
+  };
 }
 
 /**
