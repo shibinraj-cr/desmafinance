@@ -215,6 +215,7 @@ export async function POST(req: NextRequest) {
           quoteSent: r.quoteSent,
           closedWon: r.closedWon,
           closedLost: r.closedLost,
+          disqualified: r.disqualified,
         });
     if (err) {
       return NextResponse.json(
@@ -263,7 +264,10 @@ export async function POST(req: NextRequest) {
         : {
             leadsReceived: null,
             connectedCalls: null,
-            disqualified: null,
+            // disqualified is a shared field — L2 supervisors track
+            // candidates they screen out as well, so we persist it on
+            // L2 rows too.
+            disqualified: r.disqualified,
             transferredToL2: null,
             receivedFromL1: r.receivedFromL1,
             directLeads: r.directLeads,

@@ -57,6 +57,7 @@ describe("validateL2Row", () => {
         quoteSent: 0,
         closedWon: 0,
         closedLost: 0,
+        disqualified: 0,
       }),
     ).toBeNull();
   });
@@ -69,6 +70,7 @@ describe("validateL2Row", () => {
         quoteSent: 1,
         closedWon: 1,
         closedLost: 1,
+        disqualified: 0,
       }),
     ).toBeNull();
   });
@@ -81,6 +83,7 @@ describe("validateL2Row", () => {
         quoteSent: 0,
         closedWon: 2,
         closedLost: 1,
+        disqualified: 0,
       }),
     ).toBe("outcomes_exceed_received");
   });
@@ -93,6 +96,7 @@ describe("validateL2Row", () => {
         quoteSent: 3,
         closedWon: 0,
         closedLost: 0,
+        disqualified: 0,
       }),
     ).toBe("outcomes_exceed_received");
   });

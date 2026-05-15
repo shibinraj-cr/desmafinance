@@ -19,6 +19,7 @@ export type L2Row = {
   quoteSent: number;
   closedWon: number;
   closedLost: number;
+  disqualified: number;
 };
 
 export type RowError = "outcomes_exceed_received" | "negative" | "non_integer" | null;
@@ -62,6 +63,7 @@ export function validateL2Row(r: L2Row): RowError {
     r.quoteSent,
     r.closedWon,
     r.closedLost,
+    r.disqualified,
   ];
   for (const v of vals) {
     if (!Number.isFinite(v)) return "non_integer";
@@ -71,7 +73,11 @@ export function validateL2Row(r: L2Row): RowError {
   const totalIn = r.receivedFromL1 + r.directLeads;
   if (r.connected > totalIn) return "outcomes_exceed_received";
   if (r.quoteSent > totalIn) return "outcomes_exceed_received";
-  if (r.closedWon + r.closedLost > totalIn) return "outcomes_exceed_received";
+  // closed-won, closed-lost and disqualified are terminal, mutually
+  // exclusive outcomes — a single lead lands in one bucket.
+  if (r.closedWon + r.closedLost + r.disqualified > totalIn) {
+    return "outcomes_exceed_received";
+  }
   return null;
 }
 
