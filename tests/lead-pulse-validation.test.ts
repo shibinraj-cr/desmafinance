@@ -17,9 +17,22 @@ describe("validateL1Row", () => {
       validateL1Row({ leadsReceived: 10, connectedCalls: 3, disqualified: 1, transferredToL2: 1 }),
     ).toBeNull();
   });
-  it("flags when outcomes exceed received", () => {
+  it("accepts overlapping rows (connected covers disqualified + transferred)", () => {
+    // Krishna's real case: 10 received, 4 connected, of which 4 were
+    // disqualified and 4 transferred. Connected is a funnel step, not
+    // an outcome bucket, so this is legitimate data.
     expect(
-      validateL1Row({ leadsReceived: 3, connectedCalls: 2, disqualified: 1, transferredToL2: 2 }),
+      validateL1Row({ leadsReceived: 10, connectedCalls: 4, disqualified: 4, transferredToL2: 4 }),
+    ).toBeNull();
+  });
+  it("flags when disqualified + transferred exceed received", () => {
+    expect(
+      validateL1Row({ leadsReceived: 3, connectedCalls: 0, disqualified: 2, transferredToL2: 2 }),
+    ).toBe("outcomes_exceed_received");
+  });
+  it("flags when connected calls exceed received", () => {
+    expect(
+      validateL1Row({ leadsReceived: 3, connectedCalls: 5, disqualified: 0, transferredToL2: 0 }),
     ).toBe("outcomes_exceed_received");
   });
   it("rejects negative numbers", () => {
@@ -59,13 +72,25 @@ describe("validateL2Row", () => {
       }),
     ).toBeNull();
   });
-  it("flags when outcomes exceed received_from_l1 + direct", () => {
+  it("flags when closed_won + closed_lost exceed received", () => {
     expect(
       validateL2Row({
         receivedFromL1: 1,
         directLeads: 1,
-        connected: 2,
-        quoteSent: 1,
+        connected: 0,
+        quoteSent: 0,
+        closedWon: 2,
+        closedLost: 1,
+      }),
+    ).toBe("outcomes_exceed_received");
+  });
+  it("flags when quote_sent exceeds received", () => {
+    expect(
+      validateL2Row({
+        receivedFromL1: 1,
+        directLeads: 1,
+        connected: 0,
+        quoteSent: 3,
         closedWon: 0,
         closedLost: 0,
       }),

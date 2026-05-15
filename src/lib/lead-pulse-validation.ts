@@ -23,7 +23,15 @@ export type L2Row = {
 
 export type RowError = "outcomes_exceed_received" | "negative" | "non_integer" | null;
 
-/** L1 rule: connected_calls + disqualified + transferred_to_l2 ≤ leads_received. */
+/**
+ * L1 rules:
+ *   - all fields are non-negative integers
+ *   - connectedCalls ≤ leadsReceived (can't connect more than you got)
+ *   - disqualified + transferredToL2 ≤ leadsReceived (mutually-exclusive
+ *     terminal outcomes — but they overlap with connectedCalls because
+ *     connectedCalls is a parallel funnel step, not another outcome
+ *     bucket. So connectedCalls is NOT summed in here.)
+ */
 export function validateL1Row(r: L1Row): RowError {
   const vals = [r.leadsReceived, r.connectedCalls, r.disqualified, r.transferredToL2];
   for (const v of vals) {
@@ -31,13 +39,21 @@ export function validateL1Row(r: L1Row): RowError {
     if (!Number.isInteger(v)) return "non_integer";
     if (v < 0) return "negative";
   }
-  if (r.connectedCalls + r.disqualified + r.transferredToL2 > r.leadsReceived) {
+  if (r.connectedCalls > r.leadsReceived) return "outcomes_exceed_received";
+  if (r.disqualified + r.transferredToL2 > r.leadsReceived) {
     return "outcomes_exceed_received";
   }
   return null;
 }
 
-/** L2 rule: connected + quote_sent + closed_won + closed_lost ≤ received_from_l1 + direct_leads. */
+/**
+ * L2 rules:
+ *   - all fields are non-negative integers
+ *   - connected ≤ totalIn and quoteSent ≤ totalIn (funnel steps, not
+ *     exclusive outcomes — they overlap with the close columns).
+ *   - closedWon + closedLost ≤ totalIn (mutually-exclusive outcomes).
+ *   where totalIn = receivedFromL1 + directLeads.
+ */
 export function validateL2Row(r: L2Row): RowError {
   const vals = [
     r.receivedFromL1,
@@ -53,8 +69,9 @@ export function validateL2Row(r: L2Row): RowError {
     if (v < 0) return "negative";
   }
   const totalIn = r.receivedFromL1 + r.directLeads;
-  const totalOut = r.connected + r.quoteSent + r.closedWon + r.closedLost;
-  if (totalOut > totalIn) return "outcomes_exceed_received";
+  if (r.connected > totalIn) return "outcomes_exceed_received";
+  if (r.quoteSent > totalIn) return "outcomes_exceed_received";
+  if (r.closedWon + r.closedLost > totalIn) return "outcomes_exceed_received";
   return null;
 }
 
