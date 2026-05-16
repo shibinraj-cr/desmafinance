@@ -28,6 +28,15 @@ type ProposedTx = {
 type TabKey = "pending" | "approved" | "rejected";
 type TypeFilter = "all" | "Revenue" | "Expense";
 
+/** YYYY-MM-DD (or ISO) → DD-MM-YY for display. */
+function fmtDDMMYY(s: string): string {
+  if (!s) return "—";
+  const m = s.match(/^(\d{4})-(\d{2})-(\d{2})/);
+  if (!m) return s;
+  const [, y, mm, dd] = m;
+  return `${dd}-${mm}-${y.slice(2)}`;
+}
+
 export default async function ApprovalsPage({
   params,
   searchParams,
@@ -250,7 +259,7 @@ export default async function ApprovalsPage({
                   <span className="text-caption text-on-surface-variant ml-auto">
                     submitted by{" "}
                     <strong>{p.submittedBy?.username ?? "(deleted user)"}</strong> on{" "}
-                    {p.createdAt.toISOString().slice(0, 10)}
+                    {fmtDDMMYY(p.createdAt.toISOString())}
                   </span>
                 </div>
 
@@ -272,7 +281,7 @@ export default async function ApprovalsPage({
                 {p.reviewedBy && p.reviewedAt && (
                   <p className="text-caption text-on-surface-variant">
                     Reviewed by <strong>{p.reviewedBy.username}</strong> on{" "}
-                    {p.reviewedAt.toISOString().slice(0, 10)}
+                    {fmtDDMMYY(p.reviewedAt.toISOString())}
                   </p>
                 )}
 
@@ -469,7 +478,7 @@ function DiffCard({
               if (v === null || v === undefined || v === "") return "—";
               if (f.key === "partyId") return renderPartyId(v);
               if (f.key === "amount") return inrFull(Number(v));
-              if (f.key === "date" && typeof v === "string") return v.slice(0, 10);
+              if (f.key === "date" && typeof v === "string") return fmtDDMMYY(v);
               return String(v);
             };
             return (

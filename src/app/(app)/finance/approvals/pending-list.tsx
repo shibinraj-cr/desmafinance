@@ -4,6 +4,15 @@ import { useMemo, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import { inrFull } from "@/lib/format";
 
+/** Format a YYYY-MM-DD (or ISO) string as DD-MM-YY for display. */
+function fmtDDMMYY(s: string): string {
+  if (!s) return "—";
+  const m = s.match(/^(\d{4})-(\d{2})-(\d{2})/);
+  if (!m) return s;
+  const [, y, mm, dd] = m;
+  return `${dd}-${mm}-${y.slice(2)}`;
+}
+
 export type PendingRow = {
   id: string;
   kind: "create" | "update" | "delete";
@@ -220,7 +229,7 @@ export function PendingList({
                   key={r.id}
                   className={"border-t border-outline-variant/60 " + rowTint}
                 >
-                  <td className="px-md py-sm font-mono text-on-surface">{r.date.slice(0, 10)}</td>
+                  <td className="px-md py-sm font-mono text-on-surface">{fmtDDMMYY(r.date)}</td>
                   <td className="px-md py-sm">{r.type}</td>
                   <td className="px-md py-sm">{r.category}</td>
                   <td className="px-md py-sm">{r.subItem}</td>
@@ -235,7 +244,7 @@ export function PendingList({
                   <td className="px-md py-sm text-right font-mono font-semibold">{inrFull(r.amount)}</td>
                   <td className="px-md py-sm text-caption">
                     <div className="text-on-surface">{r.submittedBy}</div>
-                    <div className="text-on-surface-variant">{r.createdAt.slice(0, 10)}</div>
+                    <div className="text-on-surface-variant">{fmtDDMMYY(r.createdAt)}</div>
                   </td>
                   <td className="px-md py-sm">
                     <KindBadge kind={r.kind} />
@@ -363,5 +372,5 @@ function KindBadge({ kind }: { kind: "create" | "update" | "delete" }) {
 }
 
 function labelFor(r: PendingRow) {
-  return `${r.date.slice(0, 10)} · ${r.subItem} · ${inrFull(r.amount)}`;
+  return `${fmtDDMMYY(r.date)} · ${r.subItem} · ${inrFull(r.amount)}`;
 }
