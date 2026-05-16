@@ -199,7 +199,46 @@ export async function POST() {
        END $$`,
     );
 
-    // 5. Holiday table for the marketing module's holiday calendar.
+    // 4b. Service.showInL2Targets toggle for the L2 Targets visibility sub-page.
+    await step(
+      "Service.showInL2Targets column",
+      `ALTER TABLE "Service" ADD COLUMN IF NOT EXISTS "showInL2Targets" BOOLEAN NOT NULL DEFAULT true`,
+    );
+
+    // 5a. LeadPulseDailyMeta supervisor-review fields for the daily-
+    // entry approval workflow.
+    await step(
+      "LeadPulseDailyMeta.reviewedById column",
+      `ALTER TABLE "LeadPulseDailyMeta" ADD COLUMN IF NOT EXISTS "reviewedById" TEXT`,
+    );
+    await step(
+      "LeadPulseDailyMeta.reviewedAt column",
+      `ALTER TABLE "LeadPulseDailyMeta" ADD COLUMN IF NOT EXISTS "reviewedAt" TIMESTAMP(3)`,
+    );
+    await step(
+      "LeadPulseDailyMeta.reviewNote column",
+      `ALTER TABLE "LeadPulseDailyMeta" ADD COLUMN IF NOT EXISTS "reviewNote" TEXT`,
+    );
+    await step(
+      "LeadPulseDailyMeta status index",
+      `CREATE INDEX IF NOT EXISTS "LeadPulseDailyMeta_status_idx" ON "LeadPulseDailyMeta"("status")`,
+    );
+    await step(
+      "LeadPulseDailyMeta reviewedById index",
+      `CREATE INDEX IF NOT EXISTS "LeadPulseDailyMeta_reviewedById_idx" ON "LeadPulseDailyMeta"("reviewedById")`,
+    );
+    await step(
+      "LeadPulseDailyMeta.reviewedById foreign key",
+      `DO $$ BEGIN
+         IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'LeadPulseDailyMeta_reviewedById_fkey') THEN
+           ALTER TABLE "LeadPulseDailyMeta"
+             ADD CONSTRAINT "LeadPulseDailyMeta_reviewedById_fkey"
+             FOREIGN KEY ("reviewedById") REFERENCES "User"("id") ON DELETE SET NULL;
+         END IF;
+       END $$`,
+    );
+
+    // 5b. Holiday table for the marketing module's holiday calendar.
     await step(
       "Holiday table",
       `CREATE TABLE IF NOT EXISTS "Holiday" (

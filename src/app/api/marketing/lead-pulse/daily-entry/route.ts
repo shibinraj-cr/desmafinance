@@ -229,21 +229,29 @@ export async function POST(req: NextRequest) {
   const status = action === "submit" ? "submitted" : "draft";
   const submittedAt = action === "submit" ? new Date() : null;
 
-  // Verify nothing in this date is locked. If even one row is locked,
-  // refuse the save (a supervisor must override first).
-  const existingLocked = await prisma.leadPulseDailyEntry.findFirst({
-    where: { userId: actorId, entryDate: dateValue, locked: true },
-    select: { id: true },
-  });
-  if (existingLocked) {
-    return NextResponse.json({ error: "locked" }, { status: 409 });
-  }
-  const existingMetaLocked = await prisma.leadPulseDailyMeta.findUnique({
+  // Verify nothing in this date is locked. Rejected entries are
+  // explicitly editable so the BDE can correct supervisor flags and
+  // re-submit, regardless of the locked flag. Approved entries are
+  // off-limits without a supervisor override.
+  const existingMeta = await prisma.leadPulseDailyMeta.findUnique({
     where: { userId_entryDate: { userId: actorId, entryDate: dateValue } },
-    select: { locked: true },
+    select: { locked: true, status: true },
   });
-  if (existingMetaLocked?.locked) {
-    return NextResponse.json({ error: "locked" }, { status: 409 });
+  const lockBypass = existingMeta?.status === "rejected";
+  if (!lockBypass) {
+    const existingLocked = await prisma.leadPulseDailyEntry.findFirst({
+      where: { userId: actorId, entryDate: dateValue, locked: true },
+      select: { id: true },
+    });
+    if (existingLocked) {
+      return NextResponse.json({ error: "locked" }, { status: 409 });
+    }
+    if (existingMeta?.locked) {
+      return NextResponse.json({ error: "locked" }, { status: 409 });
+    }
+    if (existingMeta?.status === "approved") {
+      return NextResponse.json({ error: "approved_locked" }, { status: 409 });
+    }
   }
 
   await prisma.$transaction(async (tx) => {

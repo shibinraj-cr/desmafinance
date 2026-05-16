@@ -57,10 +57,17 @@ export default async function TargetsPage({
         <div>
           <h1 className="text-[30px] font-bold tracking-tight">L2 Service Targets</h1>
           <p className="mt-[4px] text-[13px]" style={{ color: "var(--lp-on-surface-variant)" }}>
-            {monthLabel} · {matrix.bdes.length} BDE{matrix.bdes.length === 1 ? "" : "s"} ·{" "}
-            {matrix.services.length} service{matrix.services.length === 1 ? "" : "s"}
+            {monthLabel} · {matrix.bdes.length} active L2 BDE{matrix.bdes.length === 1 ? "" : "s"} ·{" "}
+            {matrix.services.length} service{matrix.services.length === 1 ? "" : "s"} on the matrix
           </p>
         </div>
+        <a
+          href="/marketing/lead-pulse/targets/services"
+          className="h-[36px] inline-flex items-center px-[14px] rounded-[8px] border text-[13px] font-semibold"
+          style={{ borderColor: "var(--lp-outline-variant)", color: "var(--lp-on-surface)" }}
+        >
+          Manage services
+        </a>
       </header>
 
       <form

@@ -28,6 +28,7 @@ model User {
   leadPulseRole       LeadPulseRole?
   leadPulseEntries    LeadPulseDailyEntry[] @relation("LeadPulseEntries")
   leadPulseMeta       LeadPulseDailyMeta[]  @relation("LeadPulseMeta")
+  leadPulseMetaReviewed LeadPulseDailyMeta[] @relation("LeadPulseMetaReviewed")
   leadPulseAuditLogs  LeadPulseAuditLog[]   @relation("LeadPulseAudit")
   leadPulseTargets        LeadPulseTarget[]   @relation("LeadPulseTargets")
   leadPulseTargetsEdited  LeadPulseTarget[]   @relation("LeadPulseTargetEditors")
@@ -132,6 +133,11 @@ model Service {
   description String?
   isActive    Boolean       @default(true)
   isSystem    Boolean       @default(false)
+  // Whether this service appears as a column on the L2 Targets matrix.
+  // Some services are tracked elsewhere and don't need monthly L2
+  // targets, so supervisors hide them from the sheet without
+  // deactivating the service globally.
+  showInL2Targets Boolean   @default(true)
   createdAt   DateTime      @default(now())
   updatedAt   DateTime      @updatedAt
   subItems    SubCategory[]
@@ -264,14 +270,23 @@ model LeadPulseDailyMeta {
   referredToDoc    Int?      // L2 only
   referredToAbroad Int?      // L1 or L2
   notes            String?
+  // status: 'draft' (in progress) | 'submitted' (awaiting supervisor) |
+  //         'approved' (signed off) | 'rejected' (sent back to BDE)
   status           String    @default("draft")
   submittedAt      DateTime?
   locked           Boolean   @default(false)
+  // Supervisor review trail for the approval workflow.
+  reviewedById     String?
+  reviewedBy       User?     @relation(name: "LeadPulseMetaReviewed", fields: [reviewedById], references: [id], onDelete: SetNull)
+  reviewedAt       DateTime?
+  reviewNote       String?
   createdAt        DateTime  @default(now())
   updatedAt        DateTime  @updatedAt
 
   @@unique([userId, entryDate])
   @@index([entryDate])
+  @@index([status])
+  @@index([reviewedById])
 }
 
 model LeadPulseAuditLog {

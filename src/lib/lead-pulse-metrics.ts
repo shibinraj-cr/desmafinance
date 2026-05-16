@@ -1079,20 +1079,20 @@ export async function getServiceConversionMatrix(
   month: number,
 ): Promise<ServiceMatrix> {
   const { start, end } = monthBounds(year, month);
-  // All L2 BDEs (active flag intentionally not filtered — supervisor
-  // wants the matrix to keep historical rosters in view).
+  // L2 Targets sheet only lists currently-active L2 BDEs — historical
+  // rosters surface in other views.
   const roles = await prisma.leadPulseRole.findMany({
-    where: { role: "l2" },
+    where: { role: "l2", active: true },
     include: { user: { select: { id: true, username: true } } },
     orderBy: [{ displayName: "asc" }],
   });
 
-  // Show every active service as a column so the supervisor can set
-  // targets even for services no L2 BDE has touched yet. We also
-  // surface any historically-targeted inactive service so old targets
-  // remain visible in their month.
+  // Columns: every active service flagged showInL2Targets = true.
+  // Inactive services and hidden ones are skipped, but any service
+  // that already has a target row for the month still surfaces so
+  // historical targets remain visible (handled further down).
   const allActiveServices = await prisma.service.findMany({
-    where: { isActive: true },
+    where: { isActive: true, showInL2Targets: true },
     orderBy: { name: "asc" },
     select: { id: true, name: true },
   });

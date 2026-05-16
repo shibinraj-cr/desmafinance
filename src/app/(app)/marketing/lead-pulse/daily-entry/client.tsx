@@ -44,6 +44,9 @@ type Props = {
   sources: Source[];
   initialEntries: Row[];
   initialMeta: Meta;
+  /** If the supervisor sent this day back for correction, the
+   *  rejection note + timestamp surface in a banner above the form. */
+  rejection?: { note: string; reviewedAt: string | null } | null;
   /** Read-only preview for admins / supervisors viewing the form
    *  shape. No date picker, no save / submit buttons, no auto-save
    *  fetch, no remote refetch on date change. */
@@ -267,6 +270,40 @@ export function DailyEntryForm(props: Props) {
           <DatePicker date={date} earliest={props.earliest} today={props.today} onChange={setDate} />
         )}
       </header>
+
+      {!props.preview && props.rejection && (
+        <div
+          className="rounded-[12px] border-2 p-[14px] flex items-start gap-[12px]"
+          style={{
+            backgroundColor: "rgba(255, 180, 171, 0.12)",
+            borderColor: "var(--lp-error)",
+            color: "var(--lp-on-surface)",
+          }}
+          role="alert"
+        >
+          <span
+            className="material-symbols-outlined mt-[2px]"
+            style={{ fontSize: 26, color: "var(--lp-error)" }}
+            aria-hidden
+          >
+            assignment_return
+          </span>
+          <div className="flex-1 min-w-0">
+            <p className="text-[14px] font-bold mb-[2px]">
+              Sent back by supervisor — fix and re-submit.
+            </p>
+            <p className="text-[13px]" style={{ color: "var(--lp-on-surface)" }}>
+              <span style={{ color: "var(--lp-on-surface-variant)" }}>Remark:</span>{" "}
+              <span className="font-semibold">{props.rejection.note || "(no remark provided)"}</span>
+            </p>
+            {props.rejection.reviewedAt && (
+              <p className="text-[11px] mt-[2px]" style={{ color: "var(--lp-on-surface-variant)" }}>
+                Reviewed {new Date(props.rejection.reviewedAt).toLocaleString("en-IN")}
+              </p>
+            )}
+          </div>
+        </div>
+      )}
 
       {!props.preview && <NoticeStrip />}
 

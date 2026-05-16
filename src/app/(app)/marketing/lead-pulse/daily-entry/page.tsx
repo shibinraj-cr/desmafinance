@@ -131,7 +131,23 @@ export default async function DailyEntryPage({
     }),
   ]);
 
-  const editable = !entries.some((e) => e.locked) && !meta?.locked;
+  // Rejected entries get a hard re-edit pass: the lock and any
+  // `entry.locked` flags are overridden so the BDE can fix the
+  // supervisor's flagged issues. Approved entries are read-only.
+  const anyLocked = entries.some((e) => e.locked) || (meta?.locked ?? false);
+  const editable =
+    meta?.status === "rejected"
+      ? true
+      : meta?.status === "approved"
+        ? false
+        : !anyLocked;
+  const rejection =
+    meta?.status === "rejected"
+      ? {
+          note: meta.reviewNote ?? "",
+          reviewedAt: meta.reviewedAt?.toISOString() ?? null,
+        }
+      : null;
 
   return (
     <DailyEntryForm
@@ -141,6 +157,7 @@ export default async function DailyEntryPage({
       today={today}
       earliest={historyEarliest}
       editable={editable}
+      rejection={rejection}
       sources={sources.map((s) => ({
         id: s.id,
         code: s.code,
