@@ -74,13 +74,6 @@ export function DailyEntryForm(props: Props) {
   const [serverError, setServerError] = useState<string | null>(null);
   const [successMsg, setSuccessMsg] = useState<string | null>(null);
 
-  // Auto-dismiss the success banner so it doesn't linger forever.
-  useEffect(() => {
-    if (!successMsg) return;
-    const t = setTimeout(() => setSuccessMsg(null), 6000);
-    return () => clearTimeout(t);
-  }, [successMsg]);
-
   // Refresh on date change. We re-fetch the day's data via the JSON API
   // so the URL reflects the chosen date and bookmarking works. Skipped in
   // preview mode — the form never refetches, and the date never changes
@@ -165,30 +158,38 @@ export function DailyEntryForm(props: Props) {
         const r = rows[s.id] ?? blankRow(s.id);
         return { ...r, sourceId: s.id };
       });
-      const res = await fetch("/api/marketing/lead-pulse/daily-entry", {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({
-          date,
-          action,
-          rows: payloadRows,
-          meta: {
-            totalFollowups: meta.totalFollowups,
-            referredToDoc: meta.referredToDoc,
-            referredToAbroad: meta.referredToAbroad,
-            notes: meta.notes,
-          },
-        }),
-      });
-      if (!res.ok) {
-        const data = await res.json().catch(() => ({}));
-        const code = (data as { error?: string }).error ?? "save_failed";
-        setServerError(humanError(code));
+      try {
+        const res = await fetch("/api/marketing/lead-pulse/daily-entry", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({
+            date,
+            action,
+            rows: payloadRows,
+            meta: {
+              totalFollowups: meta.totalFollowups,
+              referredToDoc: meta.referredToDoc,
+              referredToAbroad: meta.referredToAbroad,
+              notes: meta.notes,
+            },
+          }),
+        });
+        if (!res.ok) {
+          const data = await res.json().catch(() => ({}));
+          const code = (data as { error?: string }).error ?? "save_failed";
+          setServerError(humanError(code));
+          return false;
+        }
+        setServerError(null);
+        setLastSavedAt(Date.now());
+        return true;
+      } catch (e) {
+        // Network / connectivity failure — bubble a human-readable
+        // error so the user isn't left staring at a silent button.
+        const msg = e instanceof Error ? e.message : "Network error";
+        setServerError(`Could not reach the server (${msg}). Check your connection and try again.`);
         return false;
       }
-      setServerError(null);
-      setLastSavedAt(Date.now());
-      return true;
     },
     [date, meta, rows, sources],
   );
@@ -225,7 +226,7 @@ export function DailyEntryForm(props: Props) {
       // "Re-submit" immediately and the 2-second draft auto-save
       // doesn't re-submit anything either.
       setMeta((m) => ({ ...m, status: "submitted", submittedAt: new Date().toISOString() }));
-      setSuccessMsg(`Entry submitted successfully for ${date}.`);
+      setSuccessMsg(date);
       router.refresh();
     }
   }
@@ -347,24 +348,35 @@ export function DailyEntryForm(props: Props) {
 
       {!props.preview && successMsg && (
         <div
-          className="rounded-[12px] border-2 flex items-center gap-[10px] px-[16px] py-[12px]"
+          className="rounded-[14px] border-2 px-[20px] py-[16px] flex items-start gap-[14px] shadow-lg"
           style={{
-            backgroundColor: "rgba(51, 228, 255, 0.12)",
+            backgroundColor: "rgba(51, 228, 255, 0.18)",
             borderColor: "var(--lp-cyan)",
             color: "var(--lp-on-surface)",
           }}
           role="status"
+          aria-live="polite"
         >
           <span
-            className="material-symbols-outlined"
-            style={{ fontSize: 22, color: "var(--lp-cyan)" }}
+            className="material-symbols-outlined mt-[2px]"
+            style={{ fontSize: 32, color: "var(--lp-cyan)" }}
+            aria-hidden
           >
             check_circle
           </span>
-          <span className="text-[13px] font-semibold">{successMsg}</span>
+          <div className="flex-1 min-w-0">
+            <p className="text-[15px] font-bold mb-[2px]">Entry submitted successfully.</p>
+            <p className="text-[13px]" style={{ color: "var(--lp-on-surface-variant)" }}>
+              Date: <span className="font-semibold tabular-nums" style={{ color: "var(--lp-on-surface)" }}>{successMsg}</span>
+              {" · "}submitted at{" "}
+              <span className="tabular-nums" style={{ color: "var(--lp-on-surface)" }}>
+                {new Date().toLocaleTimeString("en-IN", { hour: "2-digit", minute: "2-digit" })}
+              </span>
+            </p>
+          </div>
           <button
             onClick={() => setSuccessMsg(null)}
-            className="ml-auto text-[11px] underline"
+            className="text-[12px] underline shrink-0 mt-[4px]"
             style={{ color: "var(--lp-on-surface-variant)" }}
             aria-label="Dismiss"
           >
