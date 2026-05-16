@@ -7,6 +7,7 @@ import { canApprove } from "@/lib/rbac";
 import { getCurrentUserAndPermissions } from "@/lib/permissions";
 import { ApprovalActions } from "./actions";
 import { ResubmitEditor } from "./resubmit-editor";
+import { PendingList, type PendingRow, type PartyLookup } from "./pending-list";
 
 export const dynamic = "force-dynamic";
 
@@ -90,6 +91,48 @@ export default async function ApprovalsPage({
   const [pendingCount, approvedCount, rejectedCount] = counts;
   const [categories, parties] = masters;
   const partyById = new Map(parties.map((pt) => [pt.id, pt]));
+  // Lookup shape consumed by the new list-view client component.
+  const partyLookup: PartyLookup = Object.fromEntries(
+    parties.map((pt) => [pt.id, { name: pt.name, group: pt.group }]),
+  );
+
+  const isReviewerPending = tab === "pending" && reviewer;
+  const pendingRows: PendingRow[] = isReviewerPending
+    ? items.map((p) => {
+        const proposed = (p.proposed as unknown as ProposedTx | null) ?? null;
+        // create/update show the proposed values; delete shows what is
+        // about to be removed.
+        const src: Partial<ProposedTx> & { partyId?: string | null } =
+          p.kind === "delete" && p.targetTx
+            ? {
+                date: p.targetTx.date.toISOString().slice(0, 10),
+                type: p.targetTx.type,
+                category: p.targetTx.category,
+                subItem: p.targetTx.subItem,
+                partyId: p.targetTx.partyId,
+                description: p.targetTx.description,
+                paymentMode: p.targetTx.paymentMode,
+                flow: p.targetTx.flow,
+                amount: Number(p.targetTx.amount.toString()),
+              }
+            : proposed ?? {};
+        return {
+          id: p.id,
+          kind: p.kind as PendingRow["kind"],
+          submittedBy: p.submittedBy?.username ?? "(deleted user)",
+          createdAt: p.createdAt.toISOString(),
+          date: typeof src.date === "string" ? src.date.slice(0, 10) : "",
+          type: src.type ?? "",
+          category: src.category ?? "",
+          subItem: src.subItem ?? "",
+          partyId: src.partyId ?? null,
+          description: src.description ?? null,
+          paymentMode: src.paymentMode ?? "",
+          flow: src.flow ?? "",
+          amount: typeof src.amount === "number" ? src.amount : Number(src.amount ?? 0),
+        };
+      })
+    : [];
   const tabSubtitle =
     tab === "pending"
       ? `${items.length} pending`
@@ -109,7 +152,9 @@ export default async function ApprovalsPage({
           counts={{ pending: pendingCount, approved: approvedCount, rejected: rejectedCount }}
         />
 
-        {items.length === 0 ? (
+        {isReviewerPending ? (
+          <PendingList rows={pendingRows} partyById={partyLookup} />
+        ) : items.length === 0 ? (
           <Section title="">
             <div className="py-lg text-center text-on-surface-variant">
               {tab === "pending"
