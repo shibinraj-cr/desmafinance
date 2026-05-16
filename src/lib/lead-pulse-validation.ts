@@ -27,11 +27,12 @@ export type RowError = "outcomes_exceed_received" | "negative" | "non_integer" |
 /**
  * L1 rules:
  *   - all fields are non-negative integers
- *   - connectedCalls ≤ leadsReceived (can't connect more than you got)
- *   - disqualified + transferredToL2 ≤ leadsReceived (mutually-exclusive
- *     terminal outcomes — but they overlap with connectedCalls because
- *     connectedCalls is a parallel funnel step, not another outcome
- *     bucket. So connectedCalls is NOT summed in here.)
+ *
+ * NB: we deliberately don't compare any outcome column against the
+ * day's `leadsReceived` — a BDE's connected/disqualified/transferred
+ * counts include follow-up calls on leads received earlier days, so
+ * the daily numbers can legitimately exceed the day's new intake.
+ * Funnel-integrity checks live at the monthly/aggregate level instead.
  */
 export function validateL1Row(r: L1Row): RowError {
   const vals = [r.leadsReceived, r.connectedCalls, r.disqualified, r.transferredToL2];
@@ -40,20 +41,18 @@ export function validateL1Row(r: L1Row): RowError {
     if (!Number.isInteger(v)) return "non_integer";
     if (v < 0) return "negative";
   }
-  if (r.connectedCalls > r.leadsReceived) return "outcomes_exceed_received";
-  if (r.disqualified + r.transferredToL2 > r.leadsReceived) {
-    return "outcomes_exceed_received";
-  }
   return null;
 }
 
 /**
  * L2 rules:
  *   - all fields are non-negative integers
- *   - connected ≤ totalIn and quoteSent ≤ totalIn (funnel steps, not
- *     exclusive outcomes — they overlap with the close columns).
- *   - closedWon + closedLost ≤ totalIn (mutually-exclusive outcomes).
- *   where totalIn = receivedFromL1 + directLeads.
+ *
+ * Same rationale as L1 — connected/quoteSent/closedWon/closedLost/
+ * disqualified on a given day can include outcomes on leads received
+ * earlier (closed-won today on a Meta lead from three weeks ago is
+ * common). Upper-bound checks against today's `receivedFromL1 +
+ * directLeads` would block valid entries.
  */
 export function validateL2Row(r: L2Row): RowError {
   const vals = [
@@ -69,14 +68,6 @@ export function validateL2Row(r: L2Row): RowError {
     if (!Number.isFinite(v)) return "non_integer";
     if (!Number.isInteger(v)) return "non_integer";
     if (v < 0) return "negative";
-  }
-  const totalIn = r.receivedFromL1 + r.directLeads;
-  if (r.connected > totalIn) return "outcomes_exceed_received";
-  if (r.quoteSent > totalIn) return "outcomes_exceed_received";
-  // closed-won, closed-lost and disqualified are terminal, mutually
-  // exclusive outcomes — a single lead lands in one bucket.
-  if (r.closedWon + r.closedLost + r.disqualified > totalIn) {
-    return "outcomes_exceed_received";
   }
   return null;
 }

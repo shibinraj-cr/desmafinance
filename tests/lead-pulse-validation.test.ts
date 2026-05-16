@@ -17,23 +17,14 @@ describe("validateL1Row", () => {
       validateL1Row({ leadsReceived: 10, connectedCalls: 3, disqualified: 1, transferredToL2: 1 }),
     ).toBeNull();
   });
-  it("accepts overlapping rows (connected covers disqualified + transferred)", () => {
-    // Krishna's real case: 10 received, 4 connected, of which 4 were
-    // disqualified and 4 transferred. Connected is a funnel step, not
-    // an outcome bucket, so this is legitimate data.
+  it("accepts outcomes that exceed today's received — follow-up calls on prior days' leads count too", () => {
+    // BDE receives 3 new leads today but also makes follow-ups on
+    // 12 leads from earlier in the week. 10 connect, 4 disqualify,
+    // 6 transfer. Legitimate data — the daily outcomes pull from a
+    // backlog wider than today's new intake.
     expect(
-      validateL1Row({ leadsReceived: 10, connectedCalls: 4, disqualified: 4, transferredToL2: 4 }),
+      validateL1Row({ leadsReceived: 3, connectedCalls: 10, disqualified: 4, transferredToL2: 6 }),
     ).toBeNull();
-  });
-  it("flags when disqualified + transferred exceed received", () => {
-    expect(
-      validateL1Row({ leadsReceived: 3, connectedCalls: 0, disqualified: 2, transferredToL2: 2 }),
-    ).toBe("outcomes_exceed_received");
-  });
-  it("flags when connected calls exceed received", () => {
-    expect(
-      validateL1Row({ leadsReceived: 3, connectedCalls: 5, disqualified: 0, transferredToL2: 0 }),
-    ).toBe("outcomes_exceed_received");
   });
   it("rejects negative numbers", () => {
     expect(
@@ -61,43 +52,46 @@ describe("validateL2Row", () => {
       }),
     ).toBeNull();
   });
-  it("compares outcomes to received_from_l1 + direct combined", () => {
+  it("accepts outcomes that exceed today's received — follow-ups on prior-day leads", () => {
+    // L2 closes 3 deals today, all of which came in last week.
+    // Today's receivedFromL1 + directLeads = 0; the outcomes are
+    // still valid.
     expect(
       validateL2Row({
-        receivedFromL1: 3,
-        directLeads: 2,
-        connected: 2,
-        quoteSent: 1,
-        closedWon: 1,
+        receivedFromL1: 0,
+        directLeads: 0,
+        connected: 5,
+        quoteSent: 4,
+        closedWon: 3,
         closedLost: 1,
-        disqualified: 0,
+        disqualified: 1,
       }),
     ).toBeNull();
   });
-  it("flags when closed_won + closed_lost exceed received", () => {
+  it("rejects negative numbers", () => {
     expect(
       validateL2Row({
-        receivedFromL1: 1,
-        directLeads: 1,
+        receivedFromL1: -1,
+        directLeads: 0,
         connected: 0,
         quoteSent: 0,
-        closedWon: 2,
-        closedLost: 1,
-        disqualified: 0,
-      }),
-    ).toBe("outcomes_exceed_received");
-  });
-  it("flags when quote_sent exceeds received", () => {
-    expect(
-      validateL2Row({
-        receivedFromL1: 1,
-        directLeads: 1,
-        connected: 0,
-        quoteSent: 3,
         closedWon: 0,
         closedLost: 0,
         disqualified: 0,
       }),
-    ).toBe("outcomes_exceed_received");
+    ).toBe("negative");
+  });
+  it("rejects fractional numbers", () => {
+    expect(
+      validateL2Row({
+        receivedFromL1: 2.5,
+        directLeads: 0,
+        connected: 0,
+        quoteSent: 0,
+        closedWon: 0,
+        closedLost: 0,
+        disqualified: 0,
+      }),
+    ).toBe("non_integer");
   });
 });
