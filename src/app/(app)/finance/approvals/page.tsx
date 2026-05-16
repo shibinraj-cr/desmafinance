@@ -58,10 +58,13 @@ export default async function ApprovalsPage({
       prisma.pendingApproval.count({ where: { ...ownershipWhere, status: "rejected" } }),
     ]),
     // Master data needed by ResubmitEditor (categories + parties).
-    // Skipped for reviewers since they don't resubmit.
-    tab === "rejected"
-      ? Promise.all([
-          prisma.category.findMany({
+    // Categories stay tab-specific (only the rejected resubmit flow
+    // needs them), but parties are now always loaded so the DiffCard
+    // can resolve `partyId` → friendly "Name (Group)" for reviewers
+    // in every tab.
+    Promise.all([
+      tab === "rejected"
+        ? prisma.category.findMany({
             orderBy: [{ type: "asc" }, { name: "asc" }],
             include: {
               subItems: {
@@ -69,27 +72,24 @@ export default async function ApprovalsPage({
                 select: { id: true, name: true, isActive: true },
               },
             },
-          }),
-          prisma.party.findMany({
-            where: { isActive: true },
-            orderBy: [{ group: "asc" }, { name: "asc" }],
-            select: { id: true, name: true, group: true, txTypes: true, isActive: true },
-          }),
-        ])
-      : Promise.resolve([[], []] as [
-          {
+          })
+        : Promise.resolve([] as {
             id: string;
             name: string;
             type: string;
             isActive: boolean;
             subItems: { id: string; name: string; isActive: boolean }[];
-          }[],
-          { id: string; name: string; group: string; txTypes: string; isActive: boolean }[],
-        ]),
+          }[]),
+      prisma.party.findMany({
+        orderBy: [{ group: "asc" }, { name: "asc" }],
+        select: { id: true, name: true, group: true, txTypes: true, isActive: true },
+      }),
+    ]),
   ]);
 
   const [pendingCount, approvedCount, rejectedCount] = counts;
   const [categories, parties] = masters;
+  const partyById = new Map(parties.map((pt) => [pt.id, pt]));
   const tabSubtitle =
     tab === "pending"
       ? `${items.length} pending`
@@ -182,10 +182,14 @@ export default async function ApprovalsPage({
                   </span>
                 </div>
 
-                {p.kind === "delete" && before && <DiffCard before={before} after={null} />}
-                {p.kind === "create" && proposed && <DiffCard before={null} after={proposed} />}
+                {p.kind === "delete" && before && (
+                  <DiffCard before={before} after={null} partyById={partyById} />
+                )}
+                {p.kind === "create" && proposed && (
+                  <DiffCard before={null} after={proposed} partyById={partyById} />
+                )}
                 {p.kind === "update" && (
-                  <DiffCard before={before} after={proposed} />
+                  <DiffCard before={before} after={proposed} partyById={partyById} />
                 )}
 
                 {p.reviewNote && (
@@ -287,24 +291,37 @@ function Tabs({
   );
 }
 
+type DiffField = {
+  key: keyof ProposedTx;
+  label: string;
+};
+
 function DiffCard({
   before,
   after,
+  partyById,
 }: {
   before: ProposedTx | null;
   after: ProposedTx | null;
+  partyById: Map<string, { id: string; name: string; group: string }>;
 }) {
-  const fields: Array<keyof ProposedTx> = [
-    "date",
-    "month",
-    "type",
-    "category",
-    "subItem",
-    "description",
-    "paymentMode",
-    "amount",
-    "flow",
+  const fields: DiffField[] = [
+    { key: "date", label: "Date" },
+    { key: "month", label: "Month" },
+    { key: "type", label: "Type" },
+    { key: "category", label: "Category" },
+    { key: "subItem", label: "Sub-item" },
+    { key: "partyId", label: "Party" },
+    { key: "description", label: "Description" },
+    { key: "paymentMode", label: "Payment mode" },
+    { key: "flow", label: "Flow" },
+    { key: "amount", label: "Total amount" },
   ];
+  const renderPartyId = (id: unknown) => {
+    if (id === null || id === undefined || id === "") return "—";
+    const p = partyById.get(String(id));
+    return p ? `${p.name} (${p.group})` : `(deleted party: ${String(id).slice(0, 8)})`;
+  };
   return (
     <div className="overflow-x-auto rounded-lg border border-outline-variant">
       <table className="w-full text-body-md">
@@ -317,20 +334,28 @@ function DiffCard({
         </thead>
         <tbody>
           {fields.map((f) => {
-            const b = before?.[f];
-            const a = after?.[f];
+            const b = before?.[f.key];
+            const a = after?.[f.key];
             const changed = String(b ?? "") !== String(a ?? "");
             const fmt = (v: unknown) => {
-              if (v === null || v === undefined) return "—";
-              if (f === "amount") return inrFull(Number(v));
-              if (f === "date" && typeof v === "string") return v.slice(0, 10);
+              if (v === null || v === undefined || v === "") return "—";
+              if (f.key === "partyId") return renderPartyId(v);
+              if (f.key === "amount") return inrFull(Number(v));
+              if (f.key === "date" && typeof v === "string") return v.slice(0, 10);
               return String(v);
             };
             return (
-              <tr key={f} className={"border-t border-outline-variant/60 " + (changed ? "bg-amber-50/40" : "")}>
-                <td className="px-md py-sm text-on-surface-variant">{f}</td>
+              <tr
+                key={f.key}
+                className={
+                  "border-t border-outline-variant/60 " + (changed ? "bg-amber-50/40" : "")
+                }
+              >
+                <td className="px-md py-sm text-on-surface-variant">{f.label}</td>
                 <td className="px-md py-sm font-mono">{fmt(b)}</td>
-                <td className={"px-md py-sm font-mono " + (changed ? "font-semibold text-on-surface" : "")}>
+                <td
+                  className={"px-md py-sm font-mono " + (changed ? "font-semibold text-on-surface" : "")}
+                >
                   {fmt(a)}
                 </td>
               </tr>
