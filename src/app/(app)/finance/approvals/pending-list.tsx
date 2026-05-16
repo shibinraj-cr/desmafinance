@@ -59,19 +59,6 @@ export function PendingList({
     }));
   }
 
-  function setAll(decision: Decision) {
-    setState((prev) => {
-      const next = { ...prev };
-      for (const r of rows) {
-        next[r.id] = {
-          decision,
-          remarks: decision === "reject" ? (prev[r.id]?.remarks ?? "") : "",
-        };
-      }
-      return next;
-    });
-  }
-
   const summary = useMemo(() => {
     let approveCount = 0;
     let rejectCount = 0;
@@ -95,7 +82,6 @@ export function PendingList({
       rejectCount,
       approveTotal,
       rejectTotal,
-      net: approveTotal - rejectTotal,
       invalidRejects,
     };
   }, [rows, state]);
@@ -150,10 +136,6 @@ export function PendingList({
     });
   }
 
-  const allSelected =
-    rows.length > 0 && rows.every((r) => state[r.id]?.decision !== null);
-  const someSelected =
-    !allSelected && rows.some((r) => state[r.id]?.decision !== null);
   const firstInvalidRow = summary.invalidRejects[0];
 
   return (
@@ -172,13 +154,6 @@ export function PendingList({
           total={summary.rejectTotal}
           tone="danger"
         />
-        <div className="text-caption text-on-surface-variant">
-          Net effect:{" "}
-          <span className="font-mono text-on-surface">
-            {summary.net >= 0 ? "+" : "−"}
-            {inrFull(Math.abs(summary.net))}
-          </span>
-        </div>
         <div className="ml-auto flex items-center gap-base">
           {summary.invalidRejects.length > 0 && firstInvalidRow && (
             <span className="text-label-sm font-semibold rounded-full px-md py-xs bg-amber-50 text-amber-800 border border-amber-200">
@@ -209,41 +184,6 @@ export function PendingList({
           {serverError}
         </div>
       )}
-
-      {/* Bulk picker row */}
-      <div className="flex items-center gap-base text-caption text-on-surface-variant">
-        <span>Quick mark all rows:</span>
-        <button
-          type="button"
-          onClick={() => setAll("approve")}
-          className="underline hover:text-primary"
-        >
-          Approve all
-        </button>
-        <span>·</span>
-        <button
-          type="button"
-          onClick={() => setAll("reject")}
-          className="underline hover:text-error"
-        >
-          Reject all
-        </button>
-        <span>·</span>
-        <button
-          type="button"
-          onClick={() => setAll(null)}
-          className="underline hover:text-on-surface"
-        >
-          Clear
-        </button>
-        <span className="ml-auto">
-          {allSelected
-            ? "All rows have a decision"
-            : someSelected
-              ? `${rows.length - rows.filter((r) => state[r.id]?.decision === null).length}/${rows.length} decided`
-              : `${rows.length} pending`}
-        </span>
-      </div>
 
       <div className="overflow-x-auto rounded-xl border border-outline-variant">
         <table className="w-full text-body-md min-w-[1400px]">
