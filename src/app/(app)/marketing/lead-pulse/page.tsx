@@ -703,32 +703,63 @@ export default async function LeadPulseHomePage() {
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-[16px]">
         <div className="lg:col-span-2">
-          <Card title={`Last Working Day's Entries (${lastWorkingDay})`}>
+          <Card title={`Recent Submissions (anchor: ${lastWorkingDay})`}>
+            <p
+              className="text-[11px] mb-[8px]"
+              style={{ color: "var(--lp-on-surface-variant)" }}
+            >
+              Each row shows the BDE&apos;s most recent submitted (or draft) entry within the last 5 days.
+              A BDE who logged for the wrong date still surfaces here so off-by-one submissions don&apos;t hide.
+            </p>
             <table className="w-full text-[13px]">
               <thead>
                 <tr style={{ backgroundColor: "var(--lp-surface-container-low)" }}>
                   <Th>BDE</Th>
                   <Th>Role</Th>
+                  <Th>Latest Entry</Th>
                   <Th align="right">Leads Logged</Th>
                   <Th>Status</Th>
                 </tr>
               </thead>
               <tbody>
-                {todays.map((t) => (
-                  <tr key={t.userId} className="border-t" style={{ borderColor: "var(--lp-outline-variant)" }}>
-                    <td className="px-[16px] py-[8px] font-semibold">{t.displayName}</td>
-                    <td className="px-[16px] py-[8px] uppercase text-[11px]" style={{ color: roleColor(t.role) }}>
-                      {t.role}
-                    </td>
-                    <td className="px-[16px] py-[8px] text-right tabular-nums">{t.leadsLogged}</td>
-                    <td className="px-[16px] py-[8px]">
-                      <StatusPill status={t.status} />
-                    </td>
-                  </tr>
-                ))}
+                {todays.map((t) => {
+                  const dateLabel = t.latestDate ?? "—";
+                  const mismatched = t.latestDate && t.latestDate !== lastWorkingDay;
+                  return (
+                    <tr
+                      key={t.userId}
+                      className="border-t"
+                      style={{ borderColor: "var(--lp-outline-variant)" }}
+                    >
+                      <td className="px-[16px] py-[8px] font-semibold">{t.displayName}</td>
+                      <td
+                        className="px-[16px] py-[8px] uppercase text-[11px]"
+                        style={{ color: roleColor(t.role) }}
+                      >
+                        {t.role}
+                      </td>
+                      <td className="px-[16px] py-[8px] tabular-nums">
+                        <span
+                          style={{ color: mismatched ? "var(--lp-orange)" : "var(--lp-on-surface)" }}
+                          title={
+                            mismatched
+                              ? `Submitted for ${t.latestDate} instead of ${lastWorkingDay}`
+                              : undefined
+                          }
+                        >
+                          {dateLabel}
+                        </span>
+                      </td>
+                      <td className="px-[16px] py-[8px] text-right tabular-nums">{t.leadsLogged}</td>
+                      <td className="px-[16px] py-[8px]">
+                        <StatusPill status={t.status} />
+                      </td>
+                    </tr>
+                  );
+                })}
                 {todays.length === 0 && (
                   <tr>
-                    <td colSpan={4} className="px-[16px] py-[16px] text-center" style={{ color: "var(--lp-on-surface-variant)" }}>
+                    <td colSpan={5} className="px-[16px] py-[16px] text-center" style={{ color: "var(--lp-on-surface-variant)" }}>
                       No active BDEs rostered yet.
                     </td>
                   </tr>

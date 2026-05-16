@@ -203,13 +203,21 @@ export async function getDailyLeadVolumeWithPrior(
 }
 
 /**
- * Per-BDE roster snapshot. Default subject = today, default filter = all
- * rostered L1/L2 BDEs. Pass `date` to look at a different working day
- * (e.g. last working day) and `activeOnly` to scope to active BDEs only.
+ * Per-BDE roster snapshot. The dashboard panel needs a "did this BDE
+ * recently submit" view that doesn't miss off-by-one submissions (e.g.
+ * a BDE who logged yesterday's numbers against the day-before by
+ * mistake). So we anchor on `date` but also look across a small
+ * `lookbackDays` window — for each BDE we surface their most recent
+ * submitted entry within the window, with that submission's date.
+ *
+ * - `date` (default today) is the anchor day shown in the empty state.
+ * - `lookbackDays` controls how far back we'll search for a submission.
+ * - `activeOnly` filters the BDE roster to currently-active members.
  */
 export async function getTodaysEntryStatus(opts?: {
   date?: string;
   activeOnly?: boolean;
+  lookbackDays?: number;
 }): Promise<
   Array<{
     userId: string;
@@ -217,10 +225,13 @@ export async function getTodaysEntryStatus(opts?: {
     role: string;
     leadsLogged: number;
     status: "submitted" | "draft" | "missing";
+    /** ISO date (YYYY-MM-DD) of the most recent entry, or null if none. */
+    latestDate: string | null;
   }>
 > {
   const targetDate = opts?.date ?? todayIst();
-  const dateValue = toPrismaDate(targetDate);
+  const lookbackDays = Math.max(1, opts?.lookbackDays ?? 5);
+  const lookbackStart = addDays(targetDate, -(lookbackDays - 1));
   const roles = await prisma.leadPulseRole.findMany({
     where: {
       role: { in: ["l1", "l2"] },
@@ -228,39 +239,70 @@ export async function getTodaysEntryStatus(opts?: {
     },
     orderBy: [{ role: "asc" }, { displayName: "asc" }],
   });
-  const todays = await prisma.leadPulseDailyEntry.findMany({
-    where: { entryDate: dateValue },
+  // Pull all entries in the window in one go; we'll bucket per BDE
+  // and pick the latest in-memory.
+  const windowEntries = await prisma.leadPulseDailyEntry.findMany({
+    where: {
+      entryDate: { gte: toPrismaDate(lookbackStart), lte: toPrismaDate(targetDate) },
+    },
     select: {
       userId: true,
+      entryDate: true,
       status: true,
       leadsReceived: true,
       receivedFromL1: true,
       directLeads: true,
       roleAtEntry: true,
     },
+    orderBy: { entryDate: "desc" },
   });
-  const grouped = new Map<string, { leads: number; submitted: boolean; draft: boolean }>();
-  for (const e of todays) {
-    const cur = grouped.get(e.userId) ?? { leads: 0, submitted: false, draft: false };
+  // Per (BDE, calendar day) totals — same shape the panel renders.
+  const perBdePerDay = new Map<
+    string,
+    Map<string, { leads: number; submitted: boolean; draft: boolean }>
+  >();
+  for (const e of windowEntries) {
+    const ds = e.entryDate.toISOString().slice(0, 10);
+    const days = perBdePerDay.get(e.userId) ?? new Map<string, { leads: number; submitted: boolean; draft: boolean }>();
+    const cur = days.get(ds) ?? { leads: 0, submitted: false, draft: false };
     cur.leads +=
       e.roleAtEntry === "l1"
         ? (e.leadsReceived ?? 0)
         : (e.receivedFromL1 ?? 0) + (e.directLeads ?? 0);
     if (e.status === "submitted") cur.submitted = true;
     else cur.draft = true;
-    grouped.set(e.userId, cur);
+    days.set(ds, cur);
+    perBdePerDay.set(e.userId, days);
   }
   return roles.map((r) => {
-    const g = grouped.get(r.userId);
+    const days = perBdePerDay.get(r.userId);
+    if (!days || days.size === 0) {
+      return {
+        userId: r.userId,
+        displayName: r.displayName,
+        role: r.role,
+        leadsLogged: 0,
+        status: "missing" as const,
+        latestDate: null,
+      };
+    }
+    // Prefer the most recent SUBMITTED day; fall back to the most
+    // recent draft if no submission lands in the window.
+    const sortedDays = Array.from(days.entries()).sort((a, b) => (a[0] < b[0] ? 1 : -1));
+    const submitted = sortedDays.find(([, v]) => v.submitted);
+    const draft = sortedDays.find(([, v]) => v.draft);
+    const pick = submitted ?? draft ?? sortedDays[0];
+    const [ds, v] = pick;
     let status: "submitted" | "draft" | "missing" = "missing";
-    if (g?.submitted) status = "submitted";
-    else if (g?.draft) status = "draft";
+    if (v.submitted) status = "submitted";
+    else if (v.draft) status = "draft";
     return {
       userId: r.userId,
       displayName: r.displayName,
       role: r.role,
-      leadsLogged: g?.leads ?? 0,
+      leadsLogged: v.leads,
       status,
+      latestDate: ds,
     };
   });
 }
