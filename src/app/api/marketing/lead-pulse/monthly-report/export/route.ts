@@ -24,11 +24,16 @@ export async function GET(req: NextRequest) {
   const month = Number(url.searchParams.get("month"));
   const sourceCode = url.searchParams.get("source") || null;
   const region = url.searchParams.get("region") || null;
+  const DATE_RX = /^\d{4}-\d{2}-\d{2}$/;
+  const rawStart = url.searchParams.get("startDate");
+  const rawEnd = url.searchParams.get("endDate");
+  const startDate = rawStart && DATE_RX.test(rawStart) ? rawStart : null;
+  const endDate = rawEnd && DATE_RX.test(rawEnd) ? rawEnd : null;
   if (!Number.isInteger(year) || !Number.isInteger(month)) {
     return NextResponse.json({ error: "invalid_params" }, { status: 400 });
   }
 
-  const matrix = await getMonthlyMatrix({ year, month, sourceCode, region });
+  const matrix = await getMonthlyMatrix({ year, month, sourceCode, region, startDate, endDate });
 
   // Build the tabular layout with two header rows like the on-screen one.
   const sources = matrix.sources;

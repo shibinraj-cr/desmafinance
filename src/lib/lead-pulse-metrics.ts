@@ -392,8 +392,17 @@ export async function getMonthlyMatrix(opts: {
   month: number;
   sourceCode?: string | null;
   region?: string | null;
+  /**
+   * Optional date-range override. When both are provided the matrix
+   * is computed across this window instead of the full month, so
+   * the report can be sliced down to e.g. "1st–10th" of a month.
+   */
+  startDate?: string | null;
+  endDate?: string | null;
 }): Promise<Matrix> {
-  const { start, end } = monthBounds(opts.year, opts.month);
+  const monthFallback = monthBounds(opts.year, opts.month);
+  const start = opts.startDate || monthFallback.start;
+  const end = opts.endDate || monthFallback.end;
   const sources = await prisma.leadPulseSource.findMany({
     where: { active: true, ...(opts.sourceCode ? { code: opts.sourceCode } : {}) },
     orderBy: [{ displayOrder: "asc" }, { label: "asc" }],

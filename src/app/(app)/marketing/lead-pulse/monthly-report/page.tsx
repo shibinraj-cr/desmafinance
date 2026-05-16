@@ -19,10 +19,19 @@ import { HistoricalFunnelChart } from "../_charts";
 
 export const dynamic = "force-dynamic";
 
+const DATE_RX = /^\d{4}-\d{2}-\d{2}$/;
+
 export default async function MonthlyReportPage({
   searchParams,
 }: {
-  searchParams: { year?: string; month?: string; source?: string; region?: string };
+  searchParams: {
+    year?: string;
+    month?: string;
+    source?: string;
+    region?: string;
+    startDate?: string;
+    endDate?: string;
+  };
 }) {
   const { userId, perms } = await getCurrentUserAndPermissions();
   if (!userId || !perms) redirect("/login");
@@ -55,6 +64,10 @@ export default async function MonthlyReportPage({
     : Number(today.slice(5, 7));
   const sourceCode = searchParams.source || null;
   const region = searchParams.region || null;
+  const startDate =
+    searchParams.startDate && DATE_RX.test(searchParams.startDate) ? searchParams.startDate : null;
+  const endDate =
+    searchParams.endDate && DATE_RX.test(searchParams.endDate) ? searchParams.endDate : null;
 
   const [allSources, allRegions] = await Promise.all([
     prisma.leadPulseSource.findMany({
@@ -64,17 +77,45 @@ export default async function MonthlyReportPage({
     prisma.leadPulseRegion.findMany({ where: { active: true }, orderBy: [{ label: "asc" }] }),
   ]);
 
-  const { start, end } = monthBounds(year, month);
+  const monthRange = monthBounds(year, month);
+  // Effective range: caller-supplied date filter overrides the month
+  // bounds, clamped within the picked month so e.g. May 1–10 reports
+  // can't accidentally pull April data.
+  const effStart = startDate
+    ? startDate < monthRange.start
+      ? monthRange.start
+      : startDate
+    : monthRange.start;
+  const effEnd = endDate
+    ? endDate > monthRange.end
+      ? monthRange.end
+      : endDate
+    : monthRange.end;
+  // Match the same windowed offset for the prior-month comparison so
+  // KPI trends are like-for-like (e.g. May 1–10 vs Apr 1–10).
   const prevMonth = month === 1 ? 12 : month - 1;
   const prevYear = month === 1 ? year - 1 : year;
   const prev = monthBounds(prevYear, prevMonth);
+  const dayOfMonthStart = Number(effStart.slice(8, 10));
+  const dayOfMonthEnd = Number(effEnd.slice(8, 10));
+  const prevDays = new Date(prevYear, prevMonth, 0).getDate();
+  const prevEffStart = `${prevYear}-${String(prevMonth).padStart(2, "0")}-${String(Math.min(dayOfMonthStart, prevDays)).padStart(2, "0")}`;
+  const prevEffEnd = `${prevYear}-${String(prevMonth).padStart(2, "0")}-${String(Math.min(dayOfMonthEnd, prevDays)).padStart(2, "0")}`;
+  const hasDateFilter = effStart !== monthRange.start || effEnd !== monthRange.end;
 
   const sourceId = sourceCode ? allSources.find((s) => s.code === sourceCode)?.id ?? null : null;
 
   const [matrix, totals, prevTotals, history] = await Promise.all([
-    getMonthlyMatrix({ year, month, sourceCode, region }),
-    getFunnelTotals({ start, end, sourceId }),
-    getFunnelTotals({ start: prev.start, end: prev.end, sourceId }),
+    getMonthlyMatrix({
+      year,
+      month,
+      sourceCode,
+      region,
+      startDate: effStart,
+      endDate: effEnd,
+    }),
+    getFunnelTotals({ start: effStart, end: effEnd, sourceId }),
+    getFunnelTotals({ start: prevEffStart, end: prevEffEnd, sourceId }),
     getHistoricalFunnel({ endYear: year, endMonth: month, monthsBack: 6 }),
   ]);
 
@@ -84,9 +125,14 @@ export default async function MonthlyReportPage({
     month: "long",
     year: "numeric",
   });
+  const rangeLabel = hasDateFilter ? `${effStart} → ${effEnd}` : monthLabel;
   const insight = generateInsightNarrative(matrix);
 
-  const exportHref = `/api/marketing/lead-pulse/monthly-report/export?year=${year}&month=${month}${sourceCode ? `&source=${sourceCode}` : ""}${region ? `&region=${region}` : ""}`;
+  const exportHref =
+    `/api/marketing/lead-pulse/monthly-report/export?year=${year}&month=${month}` +
+    (sourceCode ? `&source=${sourceCode}` : "") +
+    (region ? `&region=${region}` : "") +
+    (hasDateFilter ? `&startDate=${effStart}&endDate=${effEnd}` : "");
 
   return (
     <div className="px-[24px] py-[24px] space-y-[16px]">
@@ -94,7 +140,7 @@ export default async function MonthlyReportPage({
         <div>
           <h1 className="text-[30px] font-bold tracking-tight">Monthly Funnel Report</h1>
           <p className="mt-[4px] text-[13px]" style={{ color: "var(--lp-on-surface-variant)" }}>
-            {monthLabel} · {totalLeads} leads · {totalWon} closed-won
+            {rangeLabel} · {totalLeads} leads · {totalWon} closed-won
           </p>
         </div>
         <div className="flex items-center gap-[8px]">
@@ -136,6 +182,20 @@ export default async function MonthlyReportPage({
           defaultValue={region ?? ""}
           options={[["", "All Regions"] as const, ...allRegions.map((r) => [r.code, r.label] as const)]}
         />
+        <DateInput
+          name="startDate"
+          defaultValue={startDate ?? ""}
+          min={monthRange.start}
+          max={monthRange.end}
+          placeholder="From"
+        />
+        <DateInput
+          name="endDate"
+          defaultValue={endDate ?? ""}
+          min={monthRange.start}
+          max={monthRange.end}
+          placeholder="To"
+        />
         <button
           type="submit"
           className="h-[36px] px-[14px] rounded-[8px] text-[13px] font-semibold"
@@ -143,6 +203,15 @@ export default async function MonthlyReportPage({
         >
           Apply
         </button>
+        {hasDateFilter && (
+          <Link
+            href={`/marketing/lead-pulse/monthly-report?year=${year}&month=${month}${sourceCode ? `&source=${sourceCode}` : ""}${region ? `&region=${region}` : ""}`}
+            className="h-[36px] px-[10px] rounded-[8px] text-[12px] inline-flex items-center underline"
+            style={{ color: "var(--lp-on-surface-variant)" }}
+          >
+            Clear date range
+          </Link>
+        )}
       </form>
 
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-[16px]">
@@ -599,6 +668,37 @@ function Select({
         </option>
       ))}
     </select>
+  );
+}
+
+function DateInput({
+  name,
+  defaultValue,
+  min,
+  max,
+  placeholder,
+}: {
+  name: string;
+  defaultValue: string;
+  min: string;
+  max: string;
+  placeholder: string;
+}) {
+  return (
+    <label
+      className="inline-flex items-center gap-[6px] text-[12px]"
+      style={{ color: "var(--lp-on-surface-variant)" }}
+    >
+      <span>{placeholder}</span>
+      <input
+        type="date"
+        name={name}
+        defaultValue={defaultValue}
+        min={min}
+        max={max}
+        className="h-[36px] px-[10px] rounded-[8px] text-[13px]"
+      />
+    </label>
   );
 }
 
