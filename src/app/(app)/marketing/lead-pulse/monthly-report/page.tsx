@@ -8,6 +8,7 @@ import {
   getMonthlyMatrix,
   getMonthsWithData,
   getHistoricalFunnel,
+  getAvgMonthlyTotals,
   generateInsightNarrative,
   monthBounds,
   type Matrix,
@@ -16,6 +17,7 @@ import {
 } from "@/lib/lead-pulse-metrics";
 import { todayIst } from "@/lib/lead-pulse-dates";
 import { HistoricalFunnelChart } from "../_charts";
+import { Kpi as LpKpi, TripletKpi, pctChange as lpPctChange } from "../_kpi";
 
 export const dynamic = "force-dynamic";
 
@@ -105,7 +107,7 @@ export default async function MonthlyReportPage({
 
   const sourceId = sourceCode ? allSources.find((s) => s.code === sourceCode)?.id ?? null : null;
 
-  const [matrix, totals, prevTotals, history] = await Promise.all([
+  const [matrix, totals, prevTotals, history, avg3] = await Promise.all([
     getMonthlyMatrix({
       year,
       month,
@@ -117,6 +119,7 @@ export default async function MonthlyReportPage({
     getFunnelTotals({ start: effStart, end: effEnd, sourceId }),
     getFunnelTotals({ start: prevEffStart, end: prevEffEnd, sourceId }),
     getHistoricalFunnel({ endYear: year, endMonth: month, monthsBack: 6 }),
+    getAvgMonthlyTotals(year, month, 3),
   ]);
 
   const totalLeads = totals.l1Leads + totals.l2Leads;
@@ -214,23 +217,44 @@ export default async function MonthlyReportPage({
         )}
       </form>
 
-      <div className="grid grid-cols-2 lg:grid-cols-4 gap-[16px]">
-        <Kpi
-          label="Total Leads"
-          value={totalLeads.toString()}
-          trend={pctChange(totalLeads, prevTotals.l1Leads + prevTotals.l2Leads)}
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-[16px]">
+        <TripletKpi
+          label="L1 Total Leads"
+          icon="alt_route"
+          thisMonth={totals.l1Leads}
+          lastMonth={prevTotals.l1Leads}
+          lastMonthLabel={`Last MTD (${prevEffStart.slice(5)}–${prevEffEnd.slice(8)})`}
+          avg={avg3.avgL1Leads}
+          avgLabel={`Avg ${avg3.months}-mo`}
         />
-        <Kpi
-          label="L1 Conversion"
+        <TripletKpi
+          label="L2 Total Leads"
+          icon="handshake"
+          thisMonth={totals.l2Leads}
+          lastMonth={prevTotals.l2Leads}
+          lastMonthLabel={`Last MTD (${prevEffStart.slice(5)}–${prevEffEnd.slice(8)})`}
+          avg={avg3.avgL2Leads}
+          avgLabel={`Avg ${avg3.months}-mo`}
+        />
+        <LpKpi
+          label="L1 → L2 %"
           value={totals.l1ConversionPct == null ? "—" : `${totals.l1ConversionPct.toFixed(1)}%`}
-          trend={pctChange(totals.l1ConversionPct ?? 0, prevTotals.l1ConversionPct ?? 0)}
+          trend={lpPctChange(totals.l1ConversionPct ?? 0, prevTotals.l1ConversionPct ?? 0)}
+          icon="trending_up"
+          target="Target: 60%"
+          subLabel={`Last MTD (${prevEffStart.slice(5)}–${prevEffEnd.slice(8)})`}
+          subValue={
+            prevTotals.l1ConversionPct == null ? "—" : `${prevTotals.l1ConversionPct.toFixed(1)}%`
+          }
         />
-        <Kpi
-          label="L2 Conversion"
-          value={totals.l2ConversionPct == null ? "—" : `${totals.l2ConversionPct.toFixed(1)}%`}
-          trend={pctChange(totals.l2ConversionPct ?? 0, prevTotals.l2ConversionPct ?? 0)}
+        <LpKpi
+          label="Closed-Won"
+          value={totalWon.toString()}
+          trend={lpPctChange(totalWon, prevTotals.l2Won)}
+          icon="emoji_events"
+          subLabel={`Last MTD (${prevEffStart.slice(5)}–${prevEffEnd.slice(8)})`}
+          subValue={prevTotals.l2Won.toString()}
         />
-        <Kpi label="Closed-Won" value={totalWon.toString()} trend={pctChange(totalWon, prevTotals.l2Won)} />
       </div>
 
       <PerformanceMatrix matrix={matrix} />
@@ -593,40 +617,6 @@ function CellsBlack({ cell, bold }: { cell: MatrixCell; bold?: boolean }) {
   );
 }
 
-function Kpi({ label, value, trend }: { label: string; value: string; trend?: number | null }) {
-  return (
-    <div
-      className="rounded-[12px] p-[16px] border flex items-start justify-between"
-      style={{ backgroundColor: "var(--lp-surface-container)", borderColor: "var(--lp-outline-variant)" }}
-    >
-      <div>
-        <p
-          className="text-[10px] uppercase tracking-widest"
-          style={{ color: "var(--lp-on-surface-variant)" }}
-        >
-          {label}
-        </p>
-        <p
-          className="text-[26px] font-bold tabular-nums mt-[2px]"
-          style={{ color: "var(--lp-primary)" }}
-        >
-          {value}
-        </p>
-      </div>
-      {trend != null && (
-        <span
-          className="text-[11px] px-[8px] py-[2px] rounded-full"
-          style={{
-            backgroundColor: trend >= 0 ? "rgba(51, 228, 255, 0.18)" : "rgba(255, 180, 171, 0.18)",
-            color: trend >= 0 ? "var(--lp-cyan)" : "var(--lp-error)",
-          }}
-        >
-          {trend >= 0 ? "▲" : "▼"} {Math.abs(trend).toFixed(1)}%
-        </span>
-      )}
-    </div>
-  );
-}
 
 function Card({ title, children }: { title: string; children: React.ReactNode }) {
   return (
