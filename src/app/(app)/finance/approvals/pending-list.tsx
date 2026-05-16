@@ -229,7 +229,7 @@ export function PendingList({
                   key={r.id}
                   className={"border-t border-outline-variant/60 " + rowTint}
                 >
-                  <td className="px-md py-sm font-mono text-on-surface">{fmtDDMMYY(r.date)}</td>
+                  <td className="px-md py-sm font-mono text-on-surface whitespace-nowrap">{fmtDDMMYY(r.date)}</td>
                   <td className="px-md py-sm">{r.type}</td>
                   <td className="px-md py-sm">{r.category}</td>
                   <td className="px-md py-sm">{r.subItem}</td>
@@ -242,7 +242,7 @@ export function PendingList({
                   <td className="px-md py-sm">{r.paymentMode}</td>
                   <td className="px-md py-sm">{r.flow}</td>
                   <td className="px-md py-sm text-right font-mono font-semibold">{inrFull(r.amount)}</td>
-                  <td className="px-md py-sm text-caption">
+                  <td className="px-md py-sm text-caption whitespace-nowrap">
                     <div className="text-on-surface">{r.submittedBy}</div>
                     <div className="text-on-surface-variant">{fmtDDMMYY(r.createdAt)}</div>
                   </td>
