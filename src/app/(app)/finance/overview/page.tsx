@@ -27,13 +27,30 @@ export default async function OverviewPage({
 }) {
   const period = parsePeriod(searchParams);
   const range = rangeFor(period);
-  const [totals, series, services, expBreak, paceData] = await Promise.all([
-    totalsByType(range),
-    monthlySeries(range),
-    topRevenueServicesSplit(6, range),
-    expenseBreakdown(8, range),
-    pace(),
-  ]);
+  // "Current Month Revenue" tile is anchored to the running calendar
+  // month regardless of the page's period filter, so the headline
+  // number tracks where we are right now even if a supervisor is
+  // browsing a different window.
+  const now = new Date();
+  const currentMonthStart = new Date(now.getFullYear(), now.getMonth(), 1);
+  const currentMonthEnd = new Date(now.getFullYear(), now.getMonth() + 1, 1);
+  const prevMonthStart = new Date(now.getFullYear(), now.getMonth() - 1, 1);
+  const prevMonthEnd = currentMonthStart;
+  const [totals, series, services, expBreak, paceData, currentMonthTotals, prevMonthTotals] =
+    await Promise.all([
+      totalsByType(range),
+      monthlySeries(range),
+      topRevenueServicesSplit(6, range),
+      expenseBreakdown(8, range),
+      pace(),
+      totalsByType({ from: currentMonthStart, to: currentMonthEnd }),
+      totalsByType({ from: prevMonthStart, to: prevMonthEnd }),
+    ]);
+  const currentMonthRevenueTrend =
+    prevMonthTotals.revenue > 0
+      ? ((currentMonthTotals.revenue - prevMonthTotals.revenue) / prevMonthTotals.revenue) * 100
+      : null;
+  const currentMonthLabel = now.toLocaleString("en-US", { month: "long", year: "numeric" });
 
   const margin = totals.revenue ? Math.round((totals.net / totals.revenue) * 100) : 0;
 
@@ -99,7 +116,15 @@ export default async function OverviewPage({
       />
       <div className="p-margin space-y-lg">
         {/* Hero Net Position card spans full width on lg, alongside compact KPIs */}
-        <section className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-gutter">
+        <section className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-5 gap-gutter">
+          <KpiCard
+            label={`Current Month Revenue · ${currentMonthLabel}`}
+            value={currentMonthTotals.revenue}
+            tone="primary"
+            hero
+            trendPct={currentMonthRevenueTrend}
+            hint="Calendar month — independent of the period filter above"
+          />
           <KpiCard
             label="Net Position"
             value={totals.net}
