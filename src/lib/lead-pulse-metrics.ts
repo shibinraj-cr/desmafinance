@@ -224,7 +224,10 @@ export async function getTodaysEntryStatus(opts?: {
     displayName: string;
     role: string;
     leadsLogged: number;
+    /** Submission state on the entry rows themselves. */
     status: "submitted" | "draft" | "missing";
+    /** Supervisor-side state from LeadPulseDailyMeta for the same day. */
+    approvalStatus: "approved" | "rejected" | "pending" | "draft" | "missing";
     /** ISO date (YYYY-MM-DD) of the most recent entry, or null if none. */
     latestDate: string | null;
   }>
@@ -239,8 +242,6 @@ export async function getTodaysEntryStatus(opts?: {
     },
     orderBy: [{ role: "asc" }, { displayName: "asc" }],
   });
-  // Pull all entries in the window in one go; we'll bucket per BDE
-  // and pick the latest in-memory.
   const windowEntries = await prisma.leadPulseDailyEntry.findMany({
     where: {
       entryDate: { gte: toPrismaDate(lookbackStart), lte: toPrismaDate(targetDate) },
@@ -256,7 +257,19 @@ export async function getTodaysEntryStatus(opts?: {
     },
     orderBy: { entryDate: "desc" },
   });
-  // Per (BDE, calendar day) totals — same shape the panel renders.
+  // Same window for the meta records so we can pair approval state
+  // with the picked day.
+  const windowMetas = await prisma.leadPulseDailyMeta.findMany({
+    where: {
+      entryDate: { gte: toPrismaDate(lookbackStart), lte: toPrismaDate(targetDate) },
+    },
+    select: { userId: true, entryDate: true, status: true },
+  });
+  const metaByKey = new Map<string, string>();
+  for (const m of windowMetas) {
+    const ds = m.entryDate.toISOString().slice(0, 10);
+    metaByKey.set(`${m.userId}|${ds}`, m.status);
+  }
   const perBdePerDay = new Map<
     string,
     Map<string, { leads: number; submitted: boolean; draft: boolean }>
@@ -274,6 +287,15 @@ export async function getTodaysEntryStatus(opts?: {
     days.set(ds, cur);
     perBdePerDay.set(e.userId, days);
   }
+  function approvalFor(userId: string, ds: string | null): "approved" | "rejected" | "pending" | "draft" | "missing" {
+    if (!ds) return "missing";
+    const m = metaByKey.get(`${userId}|${ds}`);
+    if (m === "approved") return "approved";
+    if (m === "rejected") return "rejected";
+    if (m === "submitted") return "pending";
+    if (m === "draft") return "draft";
+    return "missing";
+  }
   return roles.map((r) => {
     const days = perBdePerDay.get(r.userId);
     if (!days || days.size === 0) {
@@ -283,11 +305,10 @@ export async function getTodaysEntryStatus(opts?: {
         role: r.role,
         leadsLogged: 0,
         status: "missing" as const,
+        approvalStatus: "missing" as const,
         latestDate: null,
       };
     }
-    // Prefer the most recent SUBMITTED day; fall back to the most
-    // recent draft if no submission lands in the window.
     const sortedDays = Array.from(days.entries()).sort((a, b) => (a[0] < b[0] ? 1 : -1));
     const submitted = sortedDays.find(([, v]) => v.submitted);
     const draft = sortedDays.find(([, v]) => v.draft);
@@ -302,6 +323,7 @@ export async function getTodaysEntryStatus(opts?: {
       role: r.role,
       leadsLogged: v.leads,
       status,
+      approvalStatus: approvalFor(r.userId, ds),
       latestDate: ds,
     };
   });
@@ -1070,8 +1092,11 @@ export type ServiceMatrixCell = {
 
 export type ServiceMatrix = {
   bdes: Array<{ userId: string; displayName: string }>;
+  // Columns of the L2 Targets matrix. Now always groups; the field
+  // name stays `services` for backwards compatibility with the
+  // existing client. Each "service" here is actually a ServiceGroup.
   services: Array<{ id: string; name: string }>;
-  cells: Map<string, ServiceMatrixCell>; // key = `${userId}|${serviceId}`
+  cells: Map<string, ServiceMatrixCell>; // key = `${userId}|${groupId}`
 };
 
 export async function getServiceConversionMatrix(
@@ -1079,23 +1104,45 @@ export async function getServiceConversionMatrix(
   month: number,
 ): Promise<ServiceMatrix> {
   const { start, end } = monthBounds(year, month);
-  // L2 Targets sheet only lists currently-active L2 BDEs — historical
-  // rosters surface in other views.
+  // L2 Targets sheet only lists currently-active L2 BDEs.
   const roles = await prisma.leadPulseRole.findMany({
     where: { role: "l2", active: true },
     include: { user: { select: { id: true, username: true } } },
     orderBy: [{ displayName: "asc" }],
   });
 
-  // Columns: every active service flagged showInL2Targets = true.
-  // Inactive services and hidden ones are skipped, but any service
-  // that already has a target row for the month still surfaces so
-  // historical targets remain visible (handled further down).
-  const allActiveServices = await prisma.service.findMany({
-    where: { isActive: true, showInL2Targets: true },
-    orderBy: { name: "asc" },
+  // Columns: every active ServiceGroup. Any inactive group that
+  // already has a target row for the month is also surfaced so
+  // historical targets stay visible.
+  const allGroups = await prisma.serviceGroup.findMany({
+    where: { isActive: true },
+    orderBy: [{ displayOrder: "asc" }, { name: "asc" }],
     select: { id: true, name: true },
   });
+  const targets = await prisma.leadPulseTarget.findMany({
+    where: { year, month, groupId: { not: null } },
+  });
+  const groupMap = new Map<string, { id: string; name: string }>();
+  for (const g of allGroups) groupMap.set(g.id, g);
+  for (const t of targets) {
+    if (!t.groupId) continue;
+    if (!groupMap.has(t.groupId)) {
+      const g = await prisma.serviceGroup.findUnique({
+        where: { id: t.groupId },
+        select: { id: true, name: true },
+      });
+      if (g) groupMap.set(g.id, g);
+    }
+  }
+  const groups = Array.from(groupMap.values());
+
+  // Resolve each service → group so we can credit a party's services
+  // to the right group column for actuals.
+  const services = await prisma.service.findMany({
+    select: { id: true, groupId: true },
+  });
+  const serviceGroupById = new Map(services.map((s) => [s.id, s.groupId]));
+
   const partyServices = await prisma.partyService.findMany({
     where: {
       party: {
@@ -1107,27 +1154,6 @@ export async function getServiceConversionMatrix(
       service: { select: { id: true, name: true, isActive: true } },
     },
   });
-  const targets = await prisma.leadPulseTarget.findMany({
-    where: { year, month },
-  });
-
-  const serviceMap = new Map<string, { id: string; name: string }>();
-  for (const s of allActiveServices) serviceMap.set(s.id, s);
-  for (const t of targets) {
-    if (!serviceMap.has(t.serviceId)) {
-      const svc = await prisma.service.findUnique({
-        where: { id: t.serviceId },
-        select: { id: true, name: true },
-      });
-      if (svc) serviceMap.set(svc.id, svc);
-    }
-  }
-  const services = Array.from(serviceMap.values()).sort((a, b) =>
-    a.name.localeCompare(b.name),
-  );
-
-  // Build the (BDE × Service) cells, computing actuals via revenue
-  // transactions in the window.
   const partyIdsToWatch = new Set(partyServices.map((ps) => ps.party.id));
   const revTxs =
     partyIdsToWatch.size === 0
@@ -1148,13 +1174,14 @@ export async function getServiceConversionMatrix(
 
   const cells = new Map<string, ServiceMatrixCell>();
   for (const r of roles) {
-    for (const s of services) {
-      const key = `${r.userId}|${s.id}`;
+    for (const g of groups) {
+      const key = `${r.userId}|${g.id}`;
       cells.set(key, { target: 0, actual: 0, partyNames: [] });
     }
   }
   for (const t of targets) {
-    const key = `${t.userId}|${t.serviceId}`;
+    if (!t.groupId) continue;
+    const key = `${t.userId}|${t.groupId}`;
     const c = cells.get(key);
     if (c) c.target = t.target;
     else cells.set(key, { target: t.target, actual: 0, partyNames: [] });
@@ -1162,15 +1189,17 @@ export async function getServiceConversionMatrix(
   for (const ps of partyServices) {
     if (!ps.party.assignedL2BdeId) continue;
     if (!partiesWithRev.has(ps.party.id)) continue;
-    const key = `${ps.party.assignedL2BdeId}|${ps.service.id}`;
+    const gId = serviceGroupById.get(ps.service.id);
+    if (!gId) continue;
+    const key = `${ps.party.assignedL2BdeId}|${gId}`;
     const c = cells.get(key);
     if (!c) continue;
     c.actual++;
-    c.partyNames.push(ps.party.name);
+    if (!c.partyNames.includes(ps.party.name)) c.partyNames.push(ps.party.name);
   }
   return {
     bdes: roles.map((r) => ({ userId: r.userId, displayName: r.displayName })),
-    services,
+    services: groups,
     cells,
   };
 }

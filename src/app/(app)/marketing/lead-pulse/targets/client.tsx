@@ -48,12 +48,15 @@ export function TargetsMatrix({
   async function saveAll() {
     setBusy(true);
     setError(null);
-    const updates: Array<{ userId: string; serviceId: string; target: number }> = [];
+    // Matrix columns are now ServiceGroups (the metric helper returns
+    // groups in the existing `services` field for backwards compat);
+    // each id is a groupId so the save API stores a group target.
+    const updates: Array<{ userId: string; groupId: string; target: number }> = [];
     for (const b of bdes) {
       for (const s of services) {
         const key = `${b.userId}|${s.id}`;
         if ((drafts[key] ?? 0) !== (cells[key]?.target ?? 0)) {
-          updates.push({ userId: b.userId, serviceId: s.id, target: drafts[key] ?? 0 });
+          updates.push({ userId: b.userId, groupId: s.id, target: drafts[key] ?? 0 });
         }
       }
     }

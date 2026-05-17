@@ -7,15 +7,14 @@ import { getLeadPulseAccess } from "@/lib/lead-pulse-rbac";
 export const dynamic = "force-dynamic";
 
 /**
- * Bulk-upsert monthly L2-BDE × Service targets. Supervisor-only.
+ * Bulk-upsert monthly L2-BDE × ServiceGroup targets. Supervisor-only.
  *
- * Body: { year, month, updates: [{ userId, serviceId, target }] }
+ * Body: { year, month, updates: [{ userId, groupId, target }] }
  *
- * Each update upserts on (year, month, userId, serviceId) and writes
- * a LeadPulseAuditLog row per cell so we have provenance on who set
- * which target when. Target=0 is treated as a valid value (means
- * "no target this month"); the row is still upserted so the audit
- * log captures the intent.
+ * The matrix is now group-based — `serviceId` stays as a legacy
+ * fallback so older clients keep working, but every new write should
+ * use `groupId`. Each cell upserts on (year, month, userId, groupId)
+ * and writes a LeadPulseAuditLog row.
  */
 const Schema = z.object({
   year: z.number().int().min(2024).max(2100),
@@ -24,7 +23,8 @@ const Schema = z.object({
     .array(
       z.object({
         userId: z.string().min(1),
-        serviceId: z.string().min(1),
+        groupId: z.string().min(1).optional(),
+        serviceId: z.string().min(1).optional(),
         target: z.number().int().min(0).max(10_000),
       }),
     )
@@ -51,52 +51,88 @@ export async function POST(req: NextRequest) {
 
   let upserted = 0;
   for (const u of updates) {
-    const existing = await prisma.leadPulseTarget.findUnique({
-      where: {
-        year_month_userId_serviceId: {
+    if (u.groupId) {
+      const existing = await prisma.leadPulseTarget.findUnique({
+        where: {
+          year_month_userId_groupId: {
+            year,
+            month,
+            userId: u.userId,
+            groupId: u.groupId,
+          },
+        },
+      });
+      if (existing && existing.target === u.target) continue;
+      await prisma.leadPulseTarget.upsert({
+        where: {
+          year_month_userId_groupId: {
+            year,
+            month,
+            userId: u.userId,
+            groupId: u.groupId,
+          },
+        },
+        create: {
+          year,
+          month,
+          userId: u.userId,
+          groupId: u.groupId,
+          target: u.target,
+          updatedById: userId,
+        },
+        update: { target: u.target, updatedById: userId },
+      });
+      upserted++;
+      await prisma.leadPulseAuditLog.create({
+        data: {
+          actorUserId: userId,
+          eventType: "entry_edited",
+          targetId: u.userId,
+          metadata: {
+            kind: "group_target_update",
+            year,
+            month,
+            groupId: u.groupId,
+            previousTarget: existing?.target ?? null,
+            newTarget: u.target,
+          },
+        },
+      });
+      continue;
+    }
+    if (u.serviceId) {
+      const existing = await prisma.leadPulseTarget.findUnique({
+        where: {
+          year_month_userId_serviceId: {
+            year,
+            month,
+            userId: u.userId,
+            serviceId: u.serviceId,
+          },
+        },
+      });
+      if (existing && existing.target === u.target) continue;
+      await prisma.leadPulseTarget.upsert({
+        where: {
+          year_month_userId_serviceId: {
+            year,
+            month,
+            userId: u.userId,
+            serviceId: u.serviceId,
+          },
+        },
+        create: {
           year,
           month,
           userId: u.userId,
           serviceId: u.serviceId,
+          target: u.target,
+          updatedById: userId,
         },
-      },
-    });
-    if (existing && existing.target === u.target) continue; // no-op skip
-    await prisma.leadPulseTarget.upsert({
-      where: {
-        year_month_userId_serviceId: {
-          year,
-          month,
-          userId: u.userId,
-          serviceId: u.serviceId,
-        },
-      },
-      create: {
-        year,
-        month,
-        userId: u.userId,
-        serviceId: u.serviceId,
-        target: u.target,
-        updatedById: userId,
-      },
-      update: { target: u.target, updatedById: userId },
-    });
-    upserted++;
-    await prisma.leadPulseAuditLog.create({
-      data: {
-        actorUserId: userId,
-        eventType: "entry_edited",
-        targetId: u.userId,
-        metadata: {
-          kind: "target_update",
-          year,
-          month,
-          serviceId: u.serviceId,
-          previousTarget: existing?.target ?? null,
-          newTarget: u.target,
-        },
-      },
-    });
+        update: { target: u.target, updatedById: userId },
+      });
+      upserted++;
+    }
   }
 
   return NextResponse.json({

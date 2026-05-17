@@ -28,16 +28,29 @@ export default async function L2TargetServicesPage() {
     );
   }
 
-  const services = await prisma.service.findMany({
-    orderBy: [{ isActive: "desc" }, { name: "asc" }],
-    select: {
-      id: true,
-      name: true,
-      description: true,
-      isActive: true,
-      showInL2Targets: true,
-    },
-  });
+  const [groups, services] = await Promise.all([
+    prisma.serviceGroup.findMany({
+      orderBy: [{ displayOrder: "asc" }, { name: "asc" }],
+      select: {
+        id: true,
+        name: true,
+        description: true,
+        displayOrder: true,
+        isActive: true,
+      },
+    }),
+    prisma.service.findMany({
+      orderBy: [{ isActive: "desc" }, { name: "asc" }],
+      select: {
+        id: true,
+        name: true,
+        description: true,
+        isActive: true,
+        showInL2Targets: true,
+        groupId: true,
+      },
+    }),
+  ]);
 
-  return <ServiceVisibilityClient services={services} />;
+  return <ServiceVisibilityClient groups={groups} services={services} />;
 }

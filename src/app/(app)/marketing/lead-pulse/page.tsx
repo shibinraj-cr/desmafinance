@@ -752,7 +752,10 @@ export default async function LeadPulseHomePage() {
                       </td>
                       <td className="px-[16px] py-[8px] text-right tabular-nums">{t.leadsLogged}</td>
                       <td className="px-[16px] py-[8px]">
-                        <StatusPill status={t.status} />
+                        <div className="flex flex-wrap items-center gap-[6px]">
+                          <StatusPill status={t.status} />
+                          <ApprovalPill status={t.approvalStatus} />
+                        </div>
                       </td>
                     </tr>
                   );
@@ -891,6 +894,41 @@ function StatusPill({ status }: { status: "submitted" | "draft" | "missing" }) {
   return (
     <span
       className="text-[11px] px-[8px] py-[2px] rounded-full font-semibold"
+      style={{ backgroundColor: bg, color }}
+    >
+      {label}
+    </span>
+  );
+}
+
+/** Supervisor-side review state shown next to StatusPill. */
+function ApprovalPill({
+  status,
+}: {
+  status: "approved" | "rejected" | "pending" | "draft" | "missing";
+}) {
+  if (status === "missing" || status === "draft") return null;
+  const map = {
+    pending: {
+      label: "Pending for approval",
+      bg: "rgba(250, 204, 21, 0.18)",
+      color: "var(--lp-primary)",
+    },
+    approved: {
+      label: "Approved",
+      bg: "rgba(51, 228, 255, 0.18)",
+      color: "var(--lp-cyan)",
+    },
+    rejected: {
+      label: "Rejected",
+      bg: "rgba(255, 180, 171, 0.18)",
+      color: "var(--lp-error)",
+    },
+  } as const;
+  const { label, bg, color } = map[status as "pending" | "approved" | "rejected"];
+  return (
+    <span
+      className="text-[10px] px-[8px] py-[2px] rounded-full font-semibold whitespace-nowrap"
       style={{ backgroundColor: bg, color }}
     >
       {label}

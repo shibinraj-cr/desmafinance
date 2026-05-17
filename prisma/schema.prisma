@@ -134,10 +134,12 @@ model Service {
   isActive    Boolean       @default(true)
   isSystem    Boolean       @default(false)
   // Whether this service appears as a column on the L2 Targets matrix.
-  // Some services are tracked elsewhere and don't need monthly L2
-  // targets, so supervisors hide them from the sheet without
-  // deactivating the service globally.
   showInL2Targets Boolean   @default(true)
+  // Optional grouping for the L2 Targets matrix. Services in the same
+  // group share a single per-month target; the matrix columns are
+  // groups, not individual services.
+  groupId     String?
+  group       ServiceGroup? @relation(fields: [groupId], references: [id], onDelete: SetNull)
   createdAt   DateTime      @default(now())
   updatedAt   DateTime      @updatedAt
   subItems    SubCategory[]
@@ -147,6 +149,26 @@ model Service {
   leadPulseTargets LeadPulseTarget[]
 
   @@index([isActive])
+  @@index([groupId])
+}
+
+/// Groups that bundle multiple Services together so the L2 Targets
+/// matrix can be driven at the group level (e.g. "Australia", "New
+/// Zealand", "Study Abroad"). Each Service belongs to at most one
+/// group.
+model ServiceGroup {
+  id           String   @id @default(cuid())
+  name         String   @unique
+  description  String?
+  displayOrder Int      @default(0)
+  isActive     Boolean  @default(true)
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+  services     Service[]
+  leadPulseTargets LeadPulseTarget[]
+
+  @@index([isActive])
+  @@index([displayOrder])
 }
 
 /// Explicit join between Party and Service that carries the candidate-
@@ -335,8 +357,14 @@ model LeadPulseTarget {
   month       Int
   userId      String
   user        User     @relation(name: "LeadPulseTargets", fields: [userId], references: [id], onDelete: Cascade)
-  serviceId   String
-  service     Service  @relation(fields: [serviceId], references: [id], onDelete: Restrict)
+  // A target is either against an individual Service (legacy rows) or
+  // a ServiceGroup (current model). Exactly one of these is set per
+  // row — enforced at the API layer rather than as a DB check
+  // constraint so the migration can keep historical per-service rows.
+  serviceId   String?
+  service     Service? @relation(fields: [serviceId], references: [id], onDelete: Restrict)
+  groupId     String?
+  group       ServiceGroup? @relation(fields: [groupId], references: [id], onDelete: Restrict)
   target      Int      @default(0)
   updatedById String?
   updatedBy   User?    @relation(name: "LeadPulseTargetEditors", fields: [updatedById], references: [id], onDelete: SetNull)
@@ -344,8 +372,10 @@ model LeadPulseTarget {
   updatedAt   DateTime @updatedAt
 
   @@unique([year, month, userId, serviceId])
+  @@unique([year, month, userId, groupId])
   @@index([year, month])
   @@index([userId])
+  @@index([groupId])
 }
 
 // Marketing holiday calendar. Sundays are implicit and never stored.

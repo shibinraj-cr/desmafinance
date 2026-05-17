@@ -204,6 +204,77 @@ export async function POST() {
       "Service.showInL2Targets column",
       `ALTER TABLE "Service" ADD COLUMN IF NOT EXISTS "showInL2Targets" BOOLEAN NOT NULL DEFAULT true`,
     );
+    // 4c. ServiceGroup + Service.groupId + LeadPulseTarget.groupId for
+    // group-based L2 targets.
+    await step(
+      "ServiceGroup table",
+      `CREATE TABLE IF NOT EXISTS "ServiceGroup" (
+         "id" TEXT NOT NULL,
+         "name" TEXT NOT NULL,
+         "description" TEXT,
+         "displayOrder" INTEGER NOT NULL DEFAULT 0,
+         "isActive" BOOLEAN NOT NULL DEFAULT true,
+         "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+         "updatedAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+         CONSTRAINT "ServiceGroup_pkey" PRIMARY KEY ("id")
+       )`,
+    );
+    await step(
+      "ServiceGroup unique name",
+      `CREATE UNIQUE INDEX IF NOT EXISTS "ServiceGroup_name_key" ON "ServiceGroup"("name")`,
+    );
+    await step(
+      "ServiceGroup isActive index",
+      `CREATE INDEX IF NOT EXISTS "ServiceGroup_isActive_idx" ON "ServiceGroup"("isActive")`,
+    );
+    await step(
+      "ServiceGroup displayOrder index",
+      `CREATE INDEX IF NOT EXISTS "ServiceGroup_displayOrder_idx" ON "ServiceGroup"("displayOrder")`,
+    );
+    await step(
+      "Service.groupId column",
+      `ALTER TABLE "Service" ADD COLUMN IF NOT EXISTS "groupId" TEXT`,
+    );
+    await step(
+      "Service.groupId index",
+      `CREATE INDEX IF NOT EXISTS "Service_groupId_idx" ON "Service"("groupId")`,
+    );
+    await step(
+      "Service.groupId foreign key",
+      `DO $$ BEGIN
+         IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'Service_groupId_fkey') THEN
+           ALTER TABLE "Service"
+             ADD CONSTRAINT "Service_groupId_fkey"
+             FOREIGN KEY ("groupId") REFERENCES "ServiceGroup"("id") ON DELETE SET NULL;
+         END IF;
+       END $$`,
+    );
+    await step(
+      "LeadPulseTarget.groupId column",
+      `ALTER TABLE "LeadPulseTarget" ADD COLUMN IF NOT EXISTS "groupId" TEXT`,
+    );
+    await step(
+      "LeadPulseTarget.serviceId nullable",
+      `ALTER TABLE "LeadPulseTarget" ALTER COLUMN "serviceId" DROP NOT NULL`,
+    );
+    await step(
+      "LeadPulseTarget.groupId index",
+      `CREATE INDEX IF NOT EXISTS "LeadPulseTarget_groupId_idx" ON "LeadPulseTarget"("groupId")`,
+    );
+    await step(
+      "LeadPulseTarget unique (year,month,userId,groupId)",
+      `CREATE UNIQUE INDEX IF NOT EXISTS "LeadPulseTarget_year_month_userId_groupId_key" ON "LeadPulseTarget"("year", "month", "userId", "groupId")`,
+    );
+    await step(
+      "LeadPulseTarget.groupId foreign key",
+      `DO $$ BEGIN
+         IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'LeadPulseTarget_groupId_fkey') THEN
+           ALTER TABLE "LeadPulseTarget"
+             ADD CONSTRAINT "LeadPulseTarget_groupId_fkey"
+             FOREIGN KEY ("groupId") REFERENCES "ServiceGroup"("id") ON DELETE RESTRICT;
+         END IF;
+       END $$`,
+    );
 
     // 5a. LeadPulseDailyMeta supervisor-review fields for the daily-
     // entry approval workflow.
