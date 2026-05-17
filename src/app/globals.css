@@ -65,6 +65,22 @@ body {
   font-feature-settings: "tnum";
   text-align: right;
 }
+/* Native date pickers in the Lead Pulse dark theme: tell the browser
+   to render native UI (calendar popup + icon) in dark mode so the
+   icon shows up against the surface, and tint it to brand gold. */
+.lp-scope input[type="date"] {
+  color-scheme: dark;
+}
+.lp-scope input[type="date"]::-webkit-calendar-picker-indicator {
+  /* invert(1) flips the default black glyph to white, then sepia/saturate/
+     hue-rotate pushes it toward the gold of --lp-primary (#facc15). */
+  filter: invert(1) sepia(1) saturate(6) hue-rotate(-2deg);
+  cursor: pointer;
+  opacity: 0.95;
+}
+.lp-scope input[type="date"]::-webkit-calendar-picker-indicator:hover {
+  opacity: 1;
+}
 .lp-scope ::placeholder {
   color: var(--lp-outline, #9a9078);
 }
