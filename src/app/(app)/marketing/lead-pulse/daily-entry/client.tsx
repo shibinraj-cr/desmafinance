@@ -563,7 +563,8 @@ function DatePicker({
         min={earliest}
         max={today}
         onChange={(e) => onChange(e.target.value)}
-        className="rounded-[8px] px-[10px] h-[36px] text-[13px]"
+        className="rounded-[8px] px-[10px] h-[36px] text-[13px] lp-date-input"
+        style={{ colorScheme: "dark" }}
       />
     </label>
   );

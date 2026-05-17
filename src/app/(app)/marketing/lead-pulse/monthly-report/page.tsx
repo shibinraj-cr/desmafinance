@@ -686,7 +686,8 @@ function DateInput({
         defaultValue={defaultValue}
         min={min}
         max={max}
-        className="h-[36px] px-[10px] rounded-[8px] text-[13px]"
+        className="h-[36px] px-[10px] rounded-[8px] text-[13px] lp-date-input"
+        style={{ colorScheme: "dark" }}
       />
     </label>
   );

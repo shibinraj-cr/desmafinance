@@ -88,7 +88,8 @@ export function DirectorEntryClient({
               value={pickedDate}
               max={today}
               onChange={(e) => setPickedDate(e.target.value)}
-              className="rounded-[8px] px-[10px] h-[36px] text-[13px]"
+              className="rounded-[8px] px-[10px] h-[36px] text-[13px] lp-date-input"
+              style={{ colorScheme: "dark" }}
             />
           </label>
           <div className="text-right">
