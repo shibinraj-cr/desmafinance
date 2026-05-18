@@ -9,6 +9,7 @@ import {
   getMonthsWithData,
   getHistoricalFunnel,
   getAvgMonthlyTotals,
+  getServiceConversionMatrix,
   generateInsightNarrative,
   monthBounds,
   type Matrix,
@@ -18,6 +19,7 @@ import {
 import { todayIst } from "@/lib/lead-pulse-dates";
 import { HistoricalFunnelChart } from "../_charts";
 import { Kpi as LpKpi, TripletKpi, pctChange as lpPctChange } from "../_kpi";
+import { TargetAchievementCard } from "../_target-achievement";
 
 export const dynamic = "force-dynamic";
 
@@ -107,7 +109,7 @@ export default async function MonthlyReportPage({
 
   const sourceId = sourceCode ? allSources.find((s) => s.code === sourceCode)?.id ?? null : null;
 
-  const [matrix, totals, prevTotals, history, avg3] = await Promise.all([
+  const [matrix, totals, prevTotals, history, avg3, serviceMatrix] = await Promise.all([
     getMonthlyMatrix({
       year,
       month,
@@ -120,6 +122,7 @@ export default async function MonthlyReportPage({
     getFunnelTotals({ start: prevEffStart, end: prevEffEnd, sourceId }),
     getHistoricalFunnel({ endYear: year, endMonth: month, monthsBack: 6 }),
     getAvgMonthlyTotals(year, month, 3),
+    getServiceConversionMatrix(year, month),
   ]);
 
   const totalLeads = totals.l1Leads + totals.l2Leads;
@@ -258,6 +261,8 @@ export default async function MonthlyReportPage({
       </div>
 
       <PerformanceMatrix matrix={matrix} />
+
+      <TargetAchievementCard matrix={serviceMatrix} monthLabel={monthLabel} />
 
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-[16px]">
         <Card title="Historical Funnel Trends">
