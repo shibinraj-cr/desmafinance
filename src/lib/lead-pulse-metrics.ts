@@ -921,6 +921,13 @@ export async function getL2WeeklyYouTubeConversion(): Promise<{
       allocation: { rule: "top-last-week-double", leaders: [], order: [], noWinner: true },
     };
   }
+  // The director (Devika) is excluded from the round-robin even
+  // though she's a roster L2 BDE — she doesn't pick up incoming leads.
+  const director = await prisma.user.findFirst({
+    where: { username: { equals: "devika", mode: "insensitive" } },
+    select: { id: true },
+  });
+  const excludeUserIds = new Set<string>(director ? [director.id] : []);
   const roles = await prisma.leadPulseRole.findMany({
     where: { role: "l2" },
     orderBy: [{ displayName: "asc" }],
@@ -961,9 +968,13 @@ export async function getL2WeeklyYouTubeConversion(): Promise<{
   // Only L2 BDEs who actually closed YouTube leads in either week are
   // part of the allocation. BDEs with no YouTube activity (e.g. someone
   // who handles other sources entirely) shouldn't show up in the
-  // round-robin order — that was confusing supervisors.
+  // round-robin order. Director-level users are also excluded — they
+  // don't pick up incoming leads.
   const ytActive = partial.filter(
-    (p) => p.active && (p.lastWeek > 0 || p.thisWeek > 0),
+    (p) =>
+      p.active &&
+      !excludeUserIds.has(p.userId) &&
+      (p.lastWeek > 0 || p.thisWeek > 0),
   );
   const maxLastWeek = ytActive.reduce((m, p) => Math.max(m, p.lastWeek), 0);
   const noWinner = maxLastWeek === 0;
