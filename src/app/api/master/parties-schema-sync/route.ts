@@ -281,6 +281,46 @@ export async function POST() {
        END $$`,
     );
 
+    // 4d. LeadPulseDailyClose — per-close service tag for L2 entries.
+    await step(
+      "LeadPulseDailyClose table",
+      `CREATE TABLE IF NOT EXISTS "LeadPulseDailyClose" (
+         "id" TEXT NOT NULL,
+         "entryId" TEXT NOT NULL,
+         "serviceId" TEXT NOT NULL,
+         "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+         CONSTRAINT "LeadPulseDailyClose_pkey" PRIMARY KEY ("id")
+       )`,
+    );
+    await step(
+      "LeadPulseDailyClose entryId index",
+      `CREATE INDEX IF NOT EXISTS "LeadPulseDailyClose_entryId_idx" ON "LeadPulseDailyClose"("entryId")`,
+    );
+    await step(
+      "LeadPulseDailyClose serviceId index",
+      `CREATE INDEX IF NOT EXISTS "LeadPulseDailyClose_serviceId_idx" ON "LeadPulseDailyClose"("serviceId")`,
+    );
+    await step(
+      "LeadPulseDailyClose.entryId foreign key",
+      `DO $$ BEGIN
+         IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'LeadPulseDailyClose_entryId_fkey') THEN
+           ALTER TABLE "LeadPulseDailyClose"
+             ADD CONSTRAINT "LeadPulseDailyClose_entryId_fkey"
+             FOREIGN KEY ("entryId") REFERENCES "LeadPulseDailyEntry"("id") ON DELETE CASCADE;
+         END IF;
+       END $$`,
+    );
+    await step(
+      "LeadPulseDailyClose.serviceId foreign key",
+      `DO $$ BEGIN
+         IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'LeadPulseDailyClose_serviceId_fkey') THEN
+           ALTER TABLE "LeadPulseDailyClose"
+             ADD CONSTRAINT "LeadPulseDailyClose_serviceId_fkey"
+             FOREIGN KEY ("serviceId") REFERENCES "Service"("id") ON DELETE RESTRICT;
+         END IF;
+       END $$`,
+    );
+
     // 5a. LeadPulseDailyMeta supervisor-review fields for the daily-
     // entry approval workflow.
     await step(

@@ -152,6 +152,7 @@ model Service {
   parties     Party[]
   partyServices PartyService[]
   leadPulseTargets LeadPulseTarget[]
+  leadPulseCloses LeadPulseDailyClose[]
 
   @@index([isActive])
   @@index([groupId])
@@ -281,11 +282,31 @@ model LeadPulseDailyEntry {
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
 
+  // Per-close service tag — only populated for L2 rows with
+  // closedWon > 0. One row per closed lead so the same service can
+  // appear multiple times for a single (BDE, source, date).
+  closes LeadPulseDailyClose[]
+
   @@unique([userId, entryDate, sourceId])
   @@index([entryDate])
   @@index([userId, entryDate])
   @@index([sourceId])
   @@index([status])
+}
+
+/// One row per closed-won lead an L2 BDE logged on a given (user,
+/// date, source). Captures which Service the BDE intended to credit
+/// the close to. Same service can appear N times for N closes.
+model LeadPulseDailyClose {
+  id        String              @id @default(cuid())
+  entryId   String
+  entry     LeadPulseDailyEntry @relation(fields: [entryId], references: [id], onDelete: Cascade)
+  serviceId String
+  service   Service             @relation(fields: [serviceId], references: [id], onDelete: Restrict)
+  createdAt DateTime            @default(now())
+
+  @@index([entryId])
+  @@index([serviceId])
 }
 
 model LeadPulseDailyMeta {

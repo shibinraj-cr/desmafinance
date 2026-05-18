@@ -105,7 +105,7 @@ export function TargetsMatrix({
     <div className="space-y-[12px]">
       <div className="flex flex-wrap items-center justify-between gap-[8px]">
         <p className="text-[12px]" style={{ color: "var(--lp-on-surface-variant)" }}>
-          Each cell shows <span className="font-mono">target / actual</span>. Target is
+          Each cell shows <span className="font-mono">actual / target</span>. Target is
           editable inline; actual is the count of candidates (
           <span className="font-mono">assignedL2BdeId</span> = BDE) with the service in
           their party-services AND a Revenue transaction recorded in this month.
@@ -211,6 +211,16 @@ export function TargetsMatrix({
                         }
                       >
                         <div className="flex items-center justify-center gap-[4px]">
+                          <span
+                            className="w-[28px] text-right font-mono"
+                            style={{
+                              color: hit ? "var(--lp-cyan)" : "var(--lp-on-surface)",
+                              fontWeight: hit ? 700 : 500,
+                            }}
+                          >
+                            {cell.actual}
+                          </span>
+                          <span style={{ color: "var(--lp-on-surface-variant)" }}>/</span>
                           <input
                             type="number"
                             min={0}
@@ -224,16 +234,6 @@ export function TargetsMatrix({
                             className="w-[44px] h-[26px] text-right rounded text-[12px] tabular-nums"
                             style={{ border: "1px solid var(--lp-outline-variant)" }}
                           />
-                          <span style={{ color: "var(--lp-on-surface-variant)" }}>/</span>
-                          <span
-                            className="w-[28px] text-right font-mono"
-                            style={{
-                              color: hit ? "var(--lp-cyan)" : "var(--lp-on-surface)",
-                              fontWeight: hit ? 700 : 500,
-                            }}
-                          >
-                            {cell.actual}
-                          </span>
                         </div>
                       </td>
                     );
@@ -242,7 +242,7 @@ export function TargetsMatrix({
                     className="px-[8px] py-[6px] text-right border-l font-semibold"
                     style={{ borderColor: "var(--lp-outline-variant)", color: "var(--lp-primary)" }}
                   >
-                    {totals.target} / {totals.actual}
+                    {totals.actual} / {totals.target}
                   </td>
                 </tr>
               );
@@ -271,7 +271,7 @@ export function TargetsMatrix({
                     className="px-[6px] py-[8px] text-center border-l"
                     style={{ borderColor: "var(--lp-outline-variant)", color: "var(--lp-on-surface-variant)" }}
                   >
-                    {t.target} / {t.actual}
+                    {t.actual} / {t.target}
                   </td>
                 );
               })}
@@ -279,8 +279,8 @@ export function TargetsMatrix({
                 className="px-[8px] py-[8px] text-right border-l font-bold"
                 style={{ borderColor: "var(--lp-outline-variant)", color: "var(--lp-primary)" }}
               >
-                {bdes.reduce((a, b) => a + rowTotals(b).target, 0)} /{" "}
-                {bdes.reduce((a, b) => a + rowTotals(b).actual, 0)}
+                {bdes.reduce((a, b) => a + rowTotals(b).actual, 0)} /{" "}
+                {bdes.reduce((a, b) => a + rowTotals(b).target, 0)}
               </td>
             </tr>
           </tbody>

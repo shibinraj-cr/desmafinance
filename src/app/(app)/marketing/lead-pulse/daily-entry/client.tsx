@@ -6,6 +6,8 @@ import { validateL1Row, validateL2Row, type RowError } from "@/lib/lead-pulse-va
 
 type Source = { id: string; code: string; label: string; displayOrder: number };
 
+type ServiceOption = { id: string; name: string };
+
 type Row = {
   sourceId: string;
   leadsReceived: number;
@@ -18,6 +20,10 @@ type Row = {
   quoteSent: number;
   closedWon: number;
   closedLost: number;
+  /** L2 only — one Service id per closed lead. Length must equal
+   *  closedWon at submit-time; padded with "" during edit so the
+   *  pickers stay in sync with the count. */
+  closedServiceIds: string[];
   status?: string;
   locked?: boolean;
   submittedAt?: string | null;
@@ -42,6 +48,9 @@ type Props = {
   earliest: string;
   editable: boolean;
   sources: Source[];
+  /** Service options the L2 BDE picks per close. Filtered server-side
+   *  to active services flagged showInL2Targets. */
+  services: ServiceOption[];
   initialEntries: Row[];
   initialMeta: Meta;
   /** If the supervisor sent this day back for correction, the
@@ -333,7 +342,14 @@ export function DailyEntryForm(props: Props) {
           {role === "l1" ? (
             <L1Table sources={sources} rows={rows} setRows={setRows} editable={editable} errors={rowErrors} />
           ) : (
-            <L2Table sources={sources} rows={rows} setRows={setRows} editable={editable} errors={rowErrors} />
+            <L2Table
+              sources={sources}
+              services={props.services}
+              rows={rows}
+              setRows={setRows}
+              editable={editable}
+              errors={rowErrors}
+            />
           )}
         </div>
       </div>
@@ -522,6 +538,7 @@ function blankRow(sourceId: string): Row {
     quoteSent: 0,
     closedWon: 0,
     closedLost: 0,
+    closedServiceIds: [],
   };
 }
 
@@ -624,17 +641,40 @@ function L1Table({
 
 function L2Table({
   sources,
+  services,
   rows,
   setRows,
   editable,
   errors,
 }: {
   sources: Source[];
+  services: ServiceOption[];
   rows: Record<string, Row>;
   setRows: (next: Record<string, Row> | ((prev: Record<string, Row>) => Record<string, Row>)) => void;
   editable: boolean;
   errors: Record<string, RowError>;
 }) {
+  function setClosedWon(sourceId: string, next: number) {
+    setRows((prev) => {
+      const cur = prev[sourceId] ?? blankRow(sourceId);
+      const ids = cur.closedServiceIds.slice();
+      if (next > ids.length) {
+        while (ids.length < next) ids.push("");
+      } else if (next < ids.length) {
+        ids.length = next;
+      }
+      return { ...prev, [sourceId]: { ...cur, closedWon: next, closedServiceIds: ids } };
+    });
+  }
+  function setServiceAt(sourceId: string, index: number, serviceId: string) {
+    setRows((prev) => {
+      const cur = prev[sourceId] ?? blankRow(sourceId);
+      const ids = cur.closedServiceIds.slice();
+      while (ids.length <= index) ids.push("");
+      ids[index] = serviceId;
+      return { ...prev, [sourceId]: { ...cur, closedServiceIds: ids } };
+    });
+  }
   return (
     <table className="w-full text-[13px]">
       <thead>
@@ -644,12 +684,18 @@ function L2Table({
           <Th align="right">Direct</Th>
           <Th align="right">Disqualified</Th>
           <Th align="right" goldText>Closed-Won</Th>
+          <Th>Services</Th>
         </tr>
       </thead>
       <tbody>
         {sources.map((s) => {
           const r = rows[s.id] ?? blankRow(s.id);
           const err = errors[s.id];
+          const n = Math.max(0, Math.floor(r.closedWon));
+          // Visible pickers: one per close. Pad with "" so the
+          // dropdown count always matches closedWon.
+          const ids = (r.closedServiceIds ?? []).slice(0, n);
+          while (ids.length < n) ids.push("");
           return (
             <Tr key={s.id} err={err}>
               <Td>
@@ -667,10 +713,52 @@ function L2Table({
               <NumCell value={r.disqualified} onChange={(v) => updateRow(setRows, s.id, "disqualified", v)} disabled={!editable} />
               <NumCell
                 value={r.closedWon}
-                onChange={(v) => updateRow(setRows, s.id, "closedWon", v)}
+                onChange={(v) => setClosedWon(s.id, v)}
                 disabled={!editable}
                 goldText
               />
+              <Td>
+                {n === 0 ? (
+                  <span
+                    className="text-[11px]"
+                    style={{ color: "var(--lp-on-surface-variant)", opacity: 0.7 }}
+                  >
+                    —
+                  </span>
+                ) : (
+                  <div className="flex flex-col gap-[4px]">
+                    {ids.map((sel, idx) => (
+                      <select
+                        key={idx}
+                        value={sel}
+                        onChange={(e) => setServiceAt(s.id, idx, e.target.value)}
+                        disabled={!editable}
+                        aria-invalid={sel === "" ? true : undefined}
+                        title={
+                          sel === ""
+                            ? `Pick a service for close ${idx + 1} of ${n}`
+                            : undefined
+                        }
+                        className="h-[28px] rounded-[6px] px-[6px] text-[11px] w-[200px]"
+                        style={{
+                          borderColor:
+                            sel === "" ? "rgba(255, 180, 147, 0.6)" : undefined,
+                        }}
+                      >
+                        <option value="">— pick service —</option>
+                        {services.map((sv) => (
+                          <option key={sv.id} value={sv.id}>
+                            {sv.name}
+                          </option>
+                        ))}
+                        {sel && !services.some((sv) => sv.id === sel) && (
+                          <option value={sel}>(hidden service)</option>
+                        )}
+                      </select>
+                    ))}
+                  </div>
+                )}
+              </Td>
             </Tr>
           );
         })}
@@ -859,9 +947,11 @@ function roleColor(role: "l1" | "l2") {
  */
 export function AdminDailyEntryPreview({
   sources,
+  services,
   today,
 }: {
   sources: Source[];
+  services: ServiceOption[];
   today: string;
 }) {
   const [role, setRoleState] = useState<"l1" | "l2">("l1");
@@ -925,6 +1015,7 @@ export function AdminDailyEntryPreview({
         earliest={today}
         editable={false}
         sources={sources}
+        services={services}
         initialEntries={blankEntries}
         initialMeta={blankMeta}
         preview

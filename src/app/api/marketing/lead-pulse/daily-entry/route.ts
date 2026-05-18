@@ -57,6 +57,12 @@ export async function GET(req: NextRequest) {
   });
   const entries = await prisma.leadPulseDailyEntry.findMany({
     where: { userId: targetUserId, entryDate: toPrismaDate(dateParse.data) },
+    include: {
+      closes: {
+        orderBy: { createdAt: "asc" },
+        select: { serviceId: true },
+      },
+    },
   });
   const meta = await prisma.leadPulseDailyMeta.findUnique({
     where: { userId_entryDate: { userId: targetUserId, entryDate: toPrismaDate(dateParse.data) } },
@@ -95,6 +101,7 @@ export async function GET(req: NextRequest) {
       quoteSent: e.quoteSent ?? 0,
       closedWon: e.closedWon ?? 0,
       closedLost: e.closedLost ?? 0,
+      closedServiceIds: e.closes.map((c) => c.serviceId),
       status: e.status,
       locked: e.locked,
       submittedAt: e.submittedAt?.toISOString() ?? null,
@@ -136,6 +143,10 @@ const RowSchema = z.object({
   quoteSent: z.number().int().min(0).default(0),
   closedWon: z.number().int().min(0).default(0),
   closedLost: z.number().int().min(0).default(0),
+  // L2 only — one entry per closed lead, identifying which Service
+  // the BDE credits the close to. Empty strings allowed for drafts;
+  // on submit, the array length must equal closedWon.
+  closedServiceIds: z.array(z.string()).optional().default([]),
 });
 
 const SaveSchema = z.object({
@@ -223,6 +234,43 @@ export async function POST(req: NextRequest) {
         { status: 400 },
       );
     }
+    // Service-count check for L2 closes. Drafts can save with a
+    // shorter or partly-empty list (BDE may be mid-edit); submits
+    // must pick exactly closedWon services with no empty slots.
+    if (role === "l2") {
+      const filledIds = (r.closedServiceIds ?? []).filter((s) => s.trim() !== "");
+      if (action === "submit") {
+        if (filledIds.length !== r.closedWon) {
+          return NextResponse.json(
+            {
+              error: "service_count_mismatch",
+              sourceId: r.sourceId,
+              expected: r.closedWon,
+              got: filledIds.length,
+            },
+            { status: 400 },
+          );
+        }
+      }
+    }
+  }
+
+  // Validate every supplied serviceId resolves to a real Service row.
+  const allServiceIds = Array.from(
+    new Set(
+      rows
+        .flatMap((r) => r.closedServiceIds ?? [])
+        .filter((s) => s.trim() !== ""),
+    ),
+  );
+  if (allServiceIds.length > 0) {
+    const found = await prisma.service.findMany({
+      where: { id: { in: allServiceIds } },
+      select: { id: true },
+    });
+    if (found.length !== allServiceIds.length) {
+      return NextResponse.json({ error: "unknown_service" }, { status: 400 });
+    }
   }
 
   const dateValue = toPrismaDate(date);
@@ -288,7 +336,7 @@ export async function POST(req: NextRequest) {
       // been submitted — only the explicit "submit" action can flip
       // status. So we only write `status` on the update branch when
       // the user explicitly submitted.
-      await tx.leadPulseDailyEntry.upsert({
+      const upserted = await tx.leadPulseDailyEntry.upsert({
         where: {
           userId_entryDate_sourceId: {
             userId: actorId,
@@ -314,6 +362,18 @@ export async function POST(req: NextRequest) {
           ...data,
         },
       });
+      // Replace per-close service rows for L2 entries. We always
+      // wipe and re-write so the stored set matches the payload
+      // exactly — including dropping rows when closedWon shrinks.
+      if (role === "l2") {
+        await tx.leadPulseDailyClose.deleteMany({ where: { entryId: upserted.id } });
+        const ids = (r.closedServiceIds ?? []).filter((s) => s.trim() !== "");
+        if (ids.length > 0) {
+          await tx.leadPulseDailyClose.createMany({
+            data: ids.map((serviceId) => ({ entryId: upserted.id, serviceId })),
+          });
+        }
+      }
     }
 
     await tx.leadPulseDailyMeta.upsert({

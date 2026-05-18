@@ -39,10 +39,17 @@ export default async function DailyEntryPage({
         </div>
       );
     }
-    const previewSources = await prisma.leadPulseSource.findMany({
-      where: { active: true },
-      orderBy: [{ displayOrder: "asc" }, { label: "asc" }],
-    });
+    const [previewSources, previewServices] = await Promise.all([
+      prisma.leadPulseSource.findMany({
+        where: { active: true },
+        orderBy: [{ displayOrder: "asc" }, { label: "asc" }],
+      }),
+      prisma.service.findMany({
+        where: { isActive: true, showInL2Targets: true },
+        orderBy: { name: "asc" },
+        select: { id: true, name: true },
+      }),
+    ]);
     return (
       <AdminDailyEntryPreview
         sources={previewSources.map((s) => ({
@@ -51,6 +58,7 @@ export default async function DailyEntryPage({
           label: s.label,
           displayOrder: s.displayOrder,
         }))}
+        services={previewServices}
         today={todayIst()}
       />
     );
@@ -118,16 +126,29 @@ export default async function DailyEntryPage({
 
   // Server-render the initial payload so the form has correct values
   // before hydration. The client will refetch on date change.
-  const [sources, entries, meta] = await Promise.all([
+  const [sources, entries, meta, serviceOptions] = await Promise.all([
     prisma.leadPulseSource.findMany({
       where: { active: true },
       orderBy: [{ displayOrder: "asc" }, { label: "asc" }],
     }),
     prisma.leadPulseDailyEntry.findMany({
       where: { userId, entryDate: toPrismaDate(date) },
+      include: {
+        closes: {
+          orderBy: { createdAt: "asc" },
+          select: { serviceId: true },
+        },
+      },
     }),
     prisma.leadPulseDailyMeta.findUnique({
       where: { userId_entryDate: { userId, entryDate: toPrismaDate(date) } },
+    }),
+    // Active services that show on the L2 Targets matrix — the
+    // dropdown for per-close service tagging.
+    prisma.service.findMany({
+      where: { isActive: true, showInL2Targets: true },
+      orderBy: { name: "asc" },
+      select: { id: true, name: true },
     }),
   ]);
 
@@ -164,6 +185,7 @@ export default async function DailyEntryPage({
         label: s.label,
         displayOrder: s.displayOrder,
       }))}
+      services={serviceOptions}
       initialEntries={entries.map((e) => ({
         sourceId: e.sourceId,
         leadsReceived: e.leadsReceived ?? 0,
@@ -176,6 +198,7 @@ export default async function DailyEntryPage({
         quoteSent: e.quoteSent ?? 0,
         closedWon: e.closedWon ?? 0,
         closedLost: e.closedLost ?? 0,
+        closedServiceIds: e.closes.map((c) => c.serviceId),
         status: e.status,
         locked: e.locked,
         submittedAt: e.submittedAt?.toISOString() ?? null,
