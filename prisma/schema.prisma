@@ -135,6 +135,11 @@ model Service {
   isSystem    Boolean       @default(false)
   // Whether this service appears as a column on the L2 Targets matrix.
   showInL2Targets Boolean   @default(true)
+  // Weight of this service when computing a group's actual on the
+  // L2 Targets matrix. e.g. weight = 2 means a party closed against
+  // this service counts as 2 toward the BDE's group total. Default
+  // 1 means every service counts equally.
+  weight      Float         @default(1)
   // Optional grouping for the L2 Targets matrix. Services in the same
   // group share a single per-month target; the matrix columns are
   // groups, not individual services.

@@ -204,6 +204,11 @@ export async function POST() {
       "Service.showInL2Targets column",
       `ALTER TABLE "Service" ADD COLUMN IF NOT EXISTS "showInL2Targets" BOOLEAN NOT NULL DEFAULT true`,
     );
+    // 4b2. Service.weight for group-target actuals weighting.
+    await step(
+      "Service.weight column",
+      `ALTER TABLE "Service" ADD COLUMN IF NOT EXISTS "weight" DOUBLE PRECISION NOT NULL DEFAULT 1`,
+    );
     // 4c. ServiceGroup + Service.groupId + LeadPulseTarget.groupId for
     // group-based L2 targets.
     await step(

@@ -18,6 +18,7 @@ type Service = {
   description: string | null;
   isActive: boolean;
   showInL2Targets: boolean;
+  weight: number;
   groupId: string | null;
 };
 
@@ -64,6 +65,29 @@ export function ServiceVisibilityClient({
         setError((d as { error?: string }).error ?? "Update failed.");
         setServiceState((arr) =>
           arr.map((s) => (s.id === serviceId ? { ...s, showInL2Targets: !next } : s)),
+        );
+      }
+    });
+  }
+
+  async function setWeight(serviceId: string, next: number) {
+    setError(null);
+    const safe = Math.max(0, Math.round(next * 10) / 10);
+    const prevState = serviceState.find((s) => s.id === serviceId)?.weight ?? 1;
+    setServiceState((arr) =>
+      arr.map((s) => (s.id === serviceId ? { ...s, weight: safe } : s)),
+    );
+    startTransition(async () => {
+      const res = await fetch("/api/marketing/lead-pulse/targets/services", {
+        method: "PATCH",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ serviceId, weight: safe }),
+      });
+      if (!res.ok) {
+        const d = await res.json().catch(() => ({}));
+        setError((d as { error?: string }).error ?? "Update failed.");
+        setServiceState((arr) =>
+          arr.map((s) => (s.id === serviceId ? { ...s, weight: prevState } : s)),
         );
       }
     });
@@ -299,6 +323,7 @@ export function ServiceVisibilityClient({
                     busy={busy}
                     onToggleVisibility={toggleVisibility}
                     onAssignGroup={assignGroup}
+                    onWeightChange={setWeight}
                   />
                 ))}
               </ul>
@@ -334,6 +359,7 @@ export function ServiceVisibilityClient({
               busy={busy}
               onToggleVisibility={toggleVisibility}
               onAssignGroup={assignGroup}
+              onWeightChange={setWeight}
             />
           ))}
           {(grouped.get("__ungrouped__") ?? []).length === 0 && (
@@ -362,12 +388,14 @@ function ServiceRow({
   busy,
   onToggleVisibility,
   onAssignGroup,
+  onWeightChange,
 }: {
   service: Service;
   groups: Group[];
   busy: boolean;
   onToggleVisibility: (id: string, next: boolean) => void;
   onAssignGroup: (id: string, groupId: string | null) => void;
+  onWeightChange: (id: string, next: number) => void;
 }) {
   return (
     <li className="flex flex-wrap items-center gap-[12px] px-[16px] py-[10px]">
@@ -410,6 +438,28 @@ function ServiceRow({
           </option>
         ))}
       </select>
+      <label className="inline-flex items-center gap-[6px]">
+        <span
+          className="text-[10px] uppercase tracking-widest"
+          style={{ color: "var(--lp-on-surface-variant)" }}
+        >
+          Weight
+        </span>
+        <input
+          type="number"
+          min={0}
+          step={0.5}
+          defaultValue={service.weight}
+          disabled={busy}
+          onBlur={(e) => {
+            const v = Number(e.target.value);
+            if (!Number.isFinite(v) || v === service.weight) return;
+            onWeightChange(service.id, v);
+          }}
+          className="h-[32px] w-[64px] rounded-[6px] px-[6px] text-[12px] text-right font-mono"
+          title="Multiplier applied when crediting this service to the group's actual on the L2 Targets matrix."
+        />
+      </label>
       <label className="inline-flex items-center gap-[6px] cursor-pointer">
         <span className="text-[11px]" style={{ color: "var(--lp-on-surface-variant)" }}>
           {service.showInL2Targets ? "Shown" : "Hidden"}

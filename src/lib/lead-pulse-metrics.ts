@@ -1147,12 +1147,14 @@ export async function getServiceConversionMatrix(
   }
   const groups = Array.from(groupMap.values());
 
-  // Resolve each service → group so we can credit a party's services
-  // to the right group column for actuals.
+  // Resolve each service → (groupId, weight) so we can credit a
+  // party's services to the right group column and apply the
+  // configured weight (defaults to 1).
   const services = await prisma.service.findMany({
-    select: { id: true, groupId: true },
+    select: { id: true, groupId: true, weight: true },
   });
   const serviceGroupById = new Map(services.map((s) => [s.id, s.groupId]));
+  const serviceWeightById = new Map(services.map((s) => [s.id, s.weight]));
 
   const partyServices = await prisma.partyService.findMany({
     where: {
@@ -1202,11 +1204,19 @@ export async function getServiceConversionMatrix(
     if (!partiesWithRev.has(ps.party.id)) continue;
     const gId = serviceGroupById.get(ps.service.id);
     if (!gId) continue;
+    const w = serviceWeightById.get(ps.service.id) ?? 1;
     const key = `${ps.party.assignedL2BdeId}|${gId}`;
     const c = cells.get(key);
     if (!c) continue;
-    c.actual++;
+    // Weight each party-service contribution; a 2-weight service
+    // counts double toward the group's actual. Default weight = 1
+    // preserves the count-of-parties behaviour.
+    c.actual += w;
     if (!c.partyNames.includes(ps.party.name)) c.partyNames.push(ps.party.name);
+  }
+  // Round to one decimal so the matrix doesn't render floats like 3.0000001.
+  for (const c of cells.values()) {
+    c.actual = Math.round(c.actual * 10) / 10;
   }
   return {
     bdes: roles.map((r) => ({ userId: r.userId, displayName: r.displayName })),

@@ -8,10 +8,14 @@ export const dynamic = "force-dynamic";
 
 const PatchSchema = z.object({
   serviceId: z.string().min(1),
-  showInL2Targets: z.boolean(),
+  showInL2Targets: z.boolean().optional(),
+  weight: z.number().min(0).max(100).optional(),
 });
 
-/** PATCH — supervisor toggles whether a service shows on the L2 Targets matrix. */
+/**
+ * PATCH — supervisor updates Show/Hide or the weight of a service
+ * on the L2 Targets matrix. At least one field must be supplied.
+ */
 export async function PATCH(req: NextRequest) {
   const { userId, perms } = await getCurrentUserAndPermissions();
   if (!userId || !perms) return NextResponse.json({ error: "unauthorized" }, { status: 401 });
@@ -25,12 +29,18 @@ export async function PATCH(req: NextRequest) {
   if (!parsed.success) {
     return NextResponse.json({ error: "validation_failed" }, { status: 400 });
   }
-  const { serviceId, showInL2Targets } = parsed.data;
+  const { serviceId, showInL2Targets, weight } = parsed.data;
+  if (showInL2Targets === undefined && weight === undefined) {
+    return NextResponse.json({ error: "nothing_to_update" }, { status: 400 });
+  }
   const svc = await prisma.service.findUnique({ where: { id: serviceId } });
   if (!svc) return NextResponse.json({ error: "not_found" }, { status: 404 });
   await prisma.service.update({
     where: { id: serviceId },
-    data: { showInL2Targets },
+    data: {
+      ...(showInL2Targets !== undefined ? { showInL2Targets } : {}),
+      ...(weight !== undefined ? { weight } : {}),
+    },
   });
   return NextResponse.json({ ok: true });
 }

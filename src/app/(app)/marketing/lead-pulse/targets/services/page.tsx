@@ -47,6 +47,7 @@ export default async function L2TargetServicesPage() {
         description: true,
         isActive: true,
         showInL2Targets: true,
+        weight: true,
         groupId: true,
       },
     }),
