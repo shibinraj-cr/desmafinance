@@ -439,3 +439,61 @@ export function DisqualifiedDailyChart({
     </ResponsiveContainer>
   );
 }
+
+/**
+ * Horizontal bar chart comparing each BDE's monthly actual against
+ * their target. Two side-by-side bars per BDE — gold (actual) and
+ * cyan (target) — so the gap reads at a glance.
+ */
+export function TargetAchievementChart({
+  data,
+}: {
+  data: Array<{ name: string; actual: number; target: number }>;
+}) {
+  return (
+    <ResponsiveContainer width="100%" height={Math.max(220, 48 * data.length)}>
+      <BarChart
+        data={data}
+        layout="vertical"
+        margin={{ top: 6, right: 40, left: 8, bottom: 4 }}
+      >
+        <CartesianGrid stroke={GRID} strokeDasharray="3 3" vertical={false} />
+        <XAxis
+          type="number"
+          allowDecimals={false}
+          tick={{ fontSize: 11, fill: TEXT }}
+          axisLine={{ stroke: GRID }}
+          tickLine={false}
+        />
+        <YAxis
+          type="category"
+          dataKey="name"
+          width={100}
+          tick={{ fontSize: 12, fill: TEXT }}
+          axisLine={{ stroke: GRID }}
+          tickLine={false}
+        />
+        <Tooltip
+          contentStyle={{ backgroundColor: "#231f14", border: `1px solid ${GRID}`, color: "#ebe2d0" }}
+          formatter={(v: number) => [v, ""]}
+        />
+        <Bar dataKey="actual" fill={GOLD} radius={[0, 4, 4, 0]} name="Actual">
+          <LabelList
+            dataKey="actual"
+            position="right"
+            formatter={(v: number) => (v > 0 ? String(Math.round(v * 10) / 10) : "")}
+            style={{ fill: GOLD, fontSize: 11 }}
+          />
+        </Bar>
+        <Bar dataKey="target" fill={CYAN} radius={[0, 4, 4, 0]} name="Target">
+          <LabelList
+            dataKey="target"
+            position="right"
+            formatter={(v: number) => (v > 0 ? String(v) : "")}
+            style={{ fill: CYAN, fontSize: 11 }}
+          />
+        </Bar>
+      </BarChart>
+    </ResponsiveContainer>
+  );
+}

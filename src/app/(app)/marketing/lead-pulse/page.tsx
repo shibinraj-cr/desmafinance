@@ -15,6 +15,7 @@ import {
   getSourceDisqualifiedAnalysis,
   getL2WeeklyYouTubeConversion,
   getL2SourceLabels,
+  getServiceConversionMatrix,
   monthBounds,
 } from "@/lib/lead-pulse-metrics";
 import { todayIst } from "@/lib/lead-pulse-dates";
@@ -23,6 +24,7 @@ import {
   GroupedConversionBySourceChart,
   DisqualifiedMonthlyChart,
   DisqualifiedDailyChart,
+  TargetAchievementChart,
 } from "./_charts";
 import { Kpi, TripletKpi, pctChange } from "./_kpi";
 
@@ -59,6 +61,10 @@ export default async function LeadPulseHomePage() {
   const today = todayIst();
   const year = Number(today.slice(0, 4));
   const month = Number(today.slice(5, 7));
+  const monthLabel = new Date(Date.UTC(year, month - 1, 1)).toLocaleString("en-US", {
+    month: "long",
+    year: "numeric",
+  });
   const dayOfMonth = Number(today.slice(8, 10));
   const { start: monthStart, end: monthEnd } = monthBounds(year, month);
   // Previous month for trend deltas + the like-for-like pace window
@@ -112,6 +118,7 @@ export default async function LeadPulseHomePage() {
     l1Count,
     l2Count,
     metaDisqAnalysis,
+    serviceMatrix,
   ] = await Promise.all([
     getFunnelTotals({ start: monthStart, end: monthEnd }),
     getFunnelTotals({ start: prev.start, end: prev.end }),
@@ -132,8 +139,39 @@ export default async function LeadPulseHomePage() {
     prisma.leadPulseRole.count({ where: { active: true, role: "l1" } }),
     prisma.leadPulseRole.count({ where: { active: true, role: "l2" } }),
     getSourceDisqualifiedAnalysis("meta", year, month, 6),
+    getServiceConversionMatrix(year, month),
   ]);
   void convCompare;
+
+  // Roll the (BDE × group) service matrix up to per-BDE totals so we
+  // can plot one bar per BDE for actual vs target this month.
+  const achievementRows = serviceMatrix.bdes
+    .map((b) => {
+      let actual = 0;
+      let target = 0;
+      for (const s of serviceMatrix.services) {
+        const c = serviceMatrix.cells.get(`${b.userId}|${s.id}`);
+        if (!c) continue;
+        actual += c.actual;
+        target += c.target;
+      }
+      return {
+        name: b.displayName,
+        actual: Math.round(actual * 10) / 10,
+        target,
+        pct: target > 0 ? Math.round((actual / target) * 1000) / 10 : null,
+      };
+    })
+    .filter((r) => r.actual > 0 || r.target > 0)
+    .sort((a, b) => (b.pct ?? -1) - (a.pct ?? -1) || b.actual - a.actual);
+  const teamActual = achievementRows.reduce((a, r) => a + r.actual, 0);
+  const teamTarget = achievementRows.reduce((a, r) => a + r.target, 0);
+  const teamPct = teamTarget > 0 ? Math.round((teamActual / teamTarget) * 1000) / 10 : null;
+  const leader = achievementRows.find((r) => r.pct != null);
+  const trailing = [...achievementRows]
+    .filter((r) => r.pct != null)
+    .sort((a, b) => (a.pct ?? 0) - (b.pct ?? 0))[0];
+  const noTargets = achievementRows.every((r) => r.target === 0);
 
   // Auto-insight for the 30-day vs prior-30-day chart. Deterministic
   // narrative built from the same `daily` series the chart reads —
@@ -700,6 +738,280 @@ export default async function LeadPulseHomePage() {
           )}
         </Card>
       </div>
+
+      {/* Monthly target achievement — per-BDE bars + team summary + auto-narrative. */}
+      <Card title={`Monthly Target Achievement — ${monthLabel}`} wide>
+        {achievementRows.length === 0 ? (
+          <p className="text-[12px]" style={{ color: "var(--lp-on-surface-variant)" }}>
+            No active L2 BDEs with targets or closes yet for this month.
+          </p>
+        ) : (
+          <>
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-[12px] mb-[12px]">
+              <div
+                className="rounded-[10px] border p-[12px]"
+                style={{
+                  backgroundColor: "var(--lp-surface-container-low)",
+                  borderColor: "var(--lp-outline-variant)",
+                }}
+              >
+                <p
+                  className="text-[10px] uppercase tracking-widest"
+                  style={{ color: "var(--lp-on-surface-variant)" }}
+                >
+                  Team Actual
+                </p>
+                <p
+                  className="text-[26px] font-bold tabular-nums"
+                  style={{ color: "var(--lp-primary)" }}
+                >
+                  {Math.round(teamActual * 10) / 10}
+                </p>
+              </div>
+              <div
+                className="rounded-[10px] border p-[12px]"
+                style={{
+                  backgroundColor: "var(--lp-surface-container-low)",
+                  borderColor: "var(--lp-outline-variant)",
+                }}
+              >
+                <p
+                  className="text-[10px] uppercase tracking-widest"
+                  style={{ color: "var(--lp-on-surface-variant)" }}
+                >
+                  Team Target
+                </p>
+                <p
+                  className="text-[26px] font-bold tabular-nums"
+                  style={{ color: "var(--lp-cyan)" }}
+                >
+                  {teamTarget}
+                </p>
+              </div>
+              <div
+                className="rounded-[10px] border p-[12px]"
+                style={{
+                  backgroundColor: "var(--lp-surface-container-low)",
+                  borderColor:
+                    teamPct != null && teamPct >= 100
+                      ? "var(--lp-cyan)"
+                      : "var(--lp-outline-variant)",
+                }}
+              >
+                <p
+                  className="text-[10px] uppercase tracking-widest"
+                  style={{ color: "var(--lp-on-surface-variant)" }}
+                >
+                  Achievement
+                </p>
+                <p
+                  className="text-[26px] font-bold tabular-nums"
+                  style={{
+                    color:
+                      teamPct == null
+                        ? "var(--lp-on-surface-variant)"
+                        : teamPct >= 100
+                          ? "var(--lp-cyan)"
+                          : teamPct >= 70
+                            ? "var(--lp-primary)"
+                            : "var(--lp-error)",
+                  }}
+                >
+                  {teamPct == null ? "—" : `${teamPct.toFixed(1)}%`}
+                </p>
+              </div>
+            </div>
+            <TargetAchievementChart
+              data={achievementRows.map((r) => ({
+                name: r.name,
+                actual: r.actual,
+                target: r.target,
+              }))}
+            />
+            <div
+              className="flex items-center gap-[16px] mt-[6px] text-[11px]"
+              style={{ color: "var(--lp-on-surface-variant)" }}
+            >
+              <Legend color="var(--lp-primary)" label="Actual" />
+              <Legend color="var(--lp-cyan)" label="Target" />
+            </div>
+
+            {/* Per-BDE table for precise numbers + analysis. */}
+            <table className="w-full text-[12px] tabular-nums mt-[12px]">
+              <thead>
+                <tr style={{ backgroundColor: "var(--lp-surface-container-low)" }}>
+                  <Th>BDE</Th>
+                  <Th align="right">Actual</Th>
+                  <Th align="right">Target</Th>
+                  <Th align="right">Achievement</Th>
+                </tr>
+              </thead>
+              <tbody>
+                {achievementRows.map((r) => (
+                  <tr
+                    key={r.name}
+                    className="border-t"
+                    style={{ borderColor: "var(--lp-outline-variant)" }}
+                  >
+                    <td className="px-[12px] py-[6px] font-semibold">{r.name}</td>
+                    <td
+                      className="px-[12px] py-[6px] text-right"
+                      style={{ color: "var(--lp-primary)" }}
+                    >
+                      {r.actual}
+                    </td>
+                    <td
+                      className="px-[12px] py-[6px] text-right"
+                      style={{ color: "var(--lp-cyan)" }}
+                    >
+                      {r.target}
+                    </td>
+                    <td
+                      className="px-[12px] py-[6px] text-right font-semibold"
+                      style={{
+                        color:
+                          r.pct == null
+                            ? "var(--lp-on-surface-variant)"
+                            : r.pct >= 100
+                              ? "var(--lp-cyan)"
+                              : r.pct >= 70
+                                ? "var(--lp-primary)"
+                                : "var(--lp-error)",
+                      }}
+                    >
+                      {r.pct == null ? "no target" : `${r.pct.toFixed(1)}%`}
+                    </td>
+                  </tr>
+                ))}
+                <tr
+                  className="border-t"
+                  style={{
+                    borderColor: "var(--lp-outline-variant)",
+                    backgroundColor: "var(--lp-surface-container-low)",
+                  }}
+                >
+                  <td
+                    className="px-[12px] py-[6px] font-semibold uppercase text-[11px]"
+                    style={{ color: "var(--lp-on-surface-variant)" }}
+                  >
+                    Team
+                  </td>
+                  <td
+                    className="px-[12px] py-[6px] text-right font-bold"
+                    style={{ color: "var(--lp-primary)" }}
+                  >
+                    {Math.round(teamActual * 10) / 10}
+                  </td>
+                  <td
+                    className="px-[12px] py-[6px] text-right font-bold"
+                    style={{ color: "var(--lp-cyan)" }}
+                  >
+                    {teamTarget}
+                  </td>
+                  <td
+                    className="px-[12px] py-[6px] text-right font-bold"
+                    style={{
+                      color:
+                        teamPct == null
+                          ? "var(--lp-on-surface-variant)"
+                          : teamPct >= 100
+                            ? "var(--lp-cyan)"
+                            : teamPct >= 70
+                              ? "var(--lp-primary)"
+                              : "var(--lp-error)",
+                    }}
+                  >
+                    {teamPct == null ? "no target" : `${teamPct.toFixed(1)}%`}
+                  </td>
+                </tr>
+              </tbody>
+            </table>
+
+            <div
+              className="mt-[10px] rounded-[10px] border p-[12px] flex items-start gap-[10px]"
+              style={{
+                backgroundColor: "var(--lp-surface-container-low)",
+                borderColor:
+                  teamPct != null && teamPct >= 100
+                    ? "rgba(51, 228, 255, 0.45)"
+                    : "var(--lp-outline-variant)",
+              }}
+            >
+              <span
+                className="material-symbols-outlined"
+                style={{
+                  fontSize: 18,
+                  color:
+                    teamPct == null
+                      ? "var(--lp-on-surface-variant)"
+                      : teamPct >= 100
+                        ? "var(--lp-cyan)"
+                        : "var(--lp-primary)",
+                }}
+                aria-hidden
+              >
+                auto_awesome
+              </span>
+              <div className="flex-1 text-[12px]" style={{ color: "var(--lp-on-surface)" }}>
+                <p
+                  className="text-[10px] uppercase tracking-widest font-semibold mb-[4px]"
+                  style={{ color: "var(--lp-primary)" }}
+                >
+                  Analysis
+                </p>
+                {noTargets ? (
+                  <p>
+                    No monthly targets set yet — head to{" "}
+                    <Link
+                      href="/marketing/lead-pulse/targets"
+                      className="underline"
+                      style={{ color: "var(--lp-primary)" }}
+                    >
+                      L2 Service Targets
+                    </Link>{" "}
+                    to define them.
+                  </p>
+                ) : (
+                  <ul className="space-y-[3px]">
+                    <li>
+                      Team is at{" "}
+                      <span className="font-semibold">
+                        {teamPct == null ? "—" : `${teamPct.toFixed(1)}%`}
+                      </span>{" "}
+                      of monthly target ({Math.round(teamActual * 10) / 10} of{" "}
+                      {teamTarget}{" "}
+                      {teamTarget === 1 ? "close" : "closes"}).
+                      {teamPct != null && teamPct < 100 && (
+                        <>
+                          {" "}
+                          Still {(teamTarget - teamActual).toFixed(1)} to go.
+                        </>
+                      )}
+                    </li>
+                    {leader && leader.pct != null && (
+                      <li>
+                        Top of the leaderboard:{" "}
+                        <span className="font-semibold">{leader.name}</span> at{" "}
+                        {leader.pct.toFixed(1)}% ({leader.actual} of {leader.target}).
+                      </li>
+                    )}
+                    {trailing &&
+                      trailing.pct != null &&
+                      trailing.name !== leader?.name && (
+                        <li>
+                          Needs a push:{" "}
+                          <span className="font-semibold">{trailing.name}</span> at{" "}
+                          {trailing.pct.toFixed(1)}% ({trailing.actual} of{" "}
+                          {trailing.target}).
+                        </li>
+                      )}
+                  </ul>
+                )}
+              </div>
+            </div>
+          </>
+        )}
+      </Card>
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-[16px]">
         <div className="lg:col-span-2">
