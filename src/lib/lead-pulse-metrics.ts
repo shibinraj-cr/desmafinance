@@ -1147,44 +1147,15 @@ export async function getServiceConversionMatrix(
   }
   const groups = Array.from(groupMap.values());
 
-  // Resolve each service → (groupId, weight) so we can credit a
-  // party's services to the right group column and apply the
-  // configured weight (defaults to 1).
+  // Resolve each service → (groupId, weight, name) so each close
+  // can be credited to the right group column with the configured
+  // weight (default 1).
   const services = await prisma.service.findMany({
-    select: { id: true, groupId: true, weight: true },
+    select: { id: true, name: true, groupId: true, weight: true },
   });
-  const serviceGroupById = new Map(services.map((s) => [s.id, s.groupId]));
-  const serviceWeightById = new Map(services.map((s) => [s.id, s.weight]));
+  const serviceById = new Map(services.map((s) => [s.id, s]));
 
-  const partyServices = await prisma.partyService.findMany({
-    where: {
-      party: {
-        assignedL2BdeId: { in: roles.map((r) => r.userId) },
-      },
-    },
-    include: {
-      party: { select: { id: true, name: true, assignedL2BdeId: true } },
-      service: { select: { id: true, name: true, isActive: true } },
-    },
-  });
-  const partyIdsToWatch = new Set(partyServices.map((ps) => ps.party.id));
-  const revTxs =
-    partyIdsToWatch.size === 0
-      ? []
-      : await prisma.transaction.findMany({
-          where: {
-            partyId: { in: Array.from(partyIdsToWatch) },
-            deletedAt: null,
-            type: "Revenue",
-            date: { gte: toPrismaDate(start), lte: toPrismaDate(end) },
-          },
-          select: { partyId: true },
-        });
-  const partiesWithRev = new Set<string>();
-  for (const t of revTxs) {
-    if (t.partyId) partiesWithRev.add(t.partyId);
-  }
-
+  // Cell seed.
   const cells = new Map<string, ServiceMatrixCell>();
   for (const r of roles) {
     for (const g of groups) {
@@ -1199,24 +1170,49 @@ export async function getServiceConversionMatrix(
     if (c) c.target = t.target;
     else cells.set(key, { target: t.target, actual: 0, partyNames: [] });
   }
-  for (const ps of partyServices) {
-    if (!ps.party.assignedL2BdeId) continue;
-    if (!partiesWithRev.has(ps.party.id)) continue;
-    const gId = serviceGroupById.get(ps.service.id);
-    if (!gId) continue;
-    const w = serviceWeightById.get(ps.service.id) ?? 1;
-    const key = `${ps.party.assignedL2BdeId}|${gId}`;
-    const c = cells.get(key);
-    if (!c) continue;
-    // Weight each party-service contribution; a 2-weight service
-    // counts double toward the group's actual. Default weight = 1
-    // preserves the count-of-parties behaviour.
-    c.actual += w;
-    if (!c.partyNames.includes(ps.party.name)) c.partyNames.push(ps.party.name);
+
+  // Actuals come from per-close service picks captured in the daily
+  // entry form. Each LeadPulseDailyClose row contributes `service.weight`
+  // (default 1) to its (BDE, group) cell.
+  const closes = await prisma.leadPulseDailyClose.findMany({
+    where: {
+      entry: {
+        userId: { in: roles.map((r) => r.userId) },
+        roleAtEntry: "l2",
+        status: "submitted",
+        entryDate: { gte: toPrismaDate(start), lte: toPrismaDate(end) },
+      },
+    },
+    select: {
+      serviceId: true,
+      entry: { select: { userId: true } },
+    },
+  });
+  // Track service-name × count for the hover tooltip.
+  const breakdownByCell = new Map<string, Map<string, number>>();
+  for (const c of closes) {
+    const svc = serviceById.get(c.serviceId);
+    if (!svc || !svc.groupId) continue;
+    const key = `${c.entry.userId}|${svc.groupId}`;
+    const cell = cells.get(key);
+    if (!cell) continue;
+    cell.actual += svc.weight ?? 1;
+    const bm = breakdownByCell.get(key) ?? new Map<string, number>();
+    bm.set(svc.name, (bm.get(svc.name) ?? 0) + 1);
+    breakdownByCell.set(key, bm);
   }
   // Round to one decimal so the matrix doesn't render floats like 3.0000001.
-  for (const c of cells.values()) {
+  for (const [key, c] of cells) {
     c.actual = Math.round(c.actual * 10) / 10;
+    const bm = breakdownByCell.get(key);
+    if (bm) {
+      // Reuse the partyNames slot for the per-service breakdown so
+      // the existing client tooltip surfaces it without a type
+      // change. Format: "AHPRA OBA Pathway × 4".
+      c.partyNames = Array.from(bm.entries())
+        .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
+        .map(([name, n]) => `${name} × ${n}`);
+    }
   }
   return {
     bdes: roles.map((r) => ({ userId: r.userId, displayName: r.displayName })),
