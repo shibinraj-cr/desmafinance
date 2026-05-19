@@ -69,7 +69,12 @@ export default async function VoxbayPage({
       where: {
         callStartTime: { gte: istDayStartUtc(priorFrom), lte: istDayEndUtc(priorTo) },
       },
-      select: { userStatus: true, totalDurationSec: true, answeredDurationSec: true },
+      select: {
+        userStatus: true,
+        callStatus: true,
+        totalDurationSec: true,
+        answeredDurationSec: true,
+      },
     }),
   ]);
 
@@ -79,6 +84,7 @@ export default async function VoxbayPage({
   let priorFailed = 0;
   let priorTotalSec = 0;
   let priorAnsSec = 0;
+  let priorChannelLimitExceeded = 0;
   for (const c of priorAgg) {
     const u = (c.userStatus ?? "").toUpperCase();
     if (u === "ANSWERED") {
@@ -88,6 +94,9 @@ export default async function VoxbayPage({
       priorFailed += 1;
     }
     priorTotalSec += c.totalDurationSec;
+    if ((c.callStatus ?? "").toUpperCase() === "CHANNEL_LIMIT_EXCEEDED") {
+      priorChannelLimitExceeded += 1;
+    }
   }
   const priorTotal = priorAgg.length;
   const priorAvgSec = priorTotal > 0 ? priorTotalSec / priorTotal : 0;
@@ -136,6 +145,7 @@ export default async function VoxbayPage({
         failed: priorFailed,
         avgSec: priorAvgSec,
         ansAvgSec: priorAnsAvgSec,
+        channelLimitExceeded: priorChannelLimitExceeded,
       }}
     />
   );

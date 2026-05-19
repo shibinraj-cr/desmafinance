@@ -10,6 +10,7 @@ type PriorSummary = {
   failed: number;
   avgSec: number;
   ansAvgSec: number;
+  channelLimitExceeded: number;
 };
 import {
   ResponsiveContainer,
@@ -126,11 +127,51 @@ export function VoxbayClient({
       const u = (c.userStatus ?? "").toUpperCase();
       return u === "FAILED" || u === "NOANSWER" || u === "TIMEOUT" || u === "BUSY";
     }).length;
+    const channelLimitExceeded = calls.filter(
+      (c) => (c.callStatus ?? "").toUpperCase() === "CHANNEL_LIMIT_EXCEEDED",
+    ).length;
     const sum = calls.reduce((a, c) => a + c.totalDurationSec, 0);
     const avg = total > 0 ? sum / total : 0;
     const ansSum = calls.reduce((a, c) => a + c.answeredDurationSec, 0);
     const ansAvg = answered > 0 ? ansSum / answered : 0;
-    return { total, answered, failed, avg, ansAvg };
+    return { total, answered, failed, channelLimitExceeded, avg, ansAvg };
+  }, [calls]);
+
+  // Channel-Limit-Exceeded breakdown — by IST hour-of-day (peak saturation)
+  // and by DID number (which incoming line gets hit). Surfaces *when* and
+  // *where* the channel cap is biting so the team can size capacity.
+  const cleBreakdown = useMemo(() => {
+    const byHour = Array.from({ length: 24 }, (_, h) => ({
+      hour: h,
+      label: `${String(h).padStart(2, "0")}:00`,
+      cle: 0,
+      total: 0,
+    }));
+    const byDay = new Map<string, { date: string; cle: number; total: number }>();
+    const byDid = new Map<string, number>();
+    for (const c of calls) {
+      if (!c.callStartTime) continue;
+      const istHour = istHourFromIso(c.callStartTime);
+      byHour[istHour].total += 1;
+      const dayKey = istDateFromIso(c.callStartTime);
+      const day = byDay.get(dayKey) ?? { date: dayKey, cle: 0, total: 0 };
+      day.total += 1;
+      const cle = (c.callStatus ?? "").toUpperCase() === "CHANNEL_LIMIT_EXCEEDED";
+      if (cle) {
+        byHour[istHour].cle += 1;
+        day.cle += 1;
+        const did = (c.didNumber ?? "—").trim() || "—";
+        byDid.set(did, (byDid.get(did) ?? 0) + 1);
+      }
+      byDay.set(dayKey, day);
+    }
+    const daily = Array.from(byDay.values()).sort((a, b) => a.date.localeCompare(b.date));
+    const did = Array.from(byDid.entries())
+      .map(([didNumber, count]) => ({ didNumber, count }))
+      .sort((a, b) => b.count - a.count)
+      .slice(0, 6);
+    const peakHour = byHour.reduce((best, h) => (h.cle > best.cle ? h : best), byHour[0]);
+    return { byHour, daily, did, peakHour };
   }, [calls]);
 
   // Per-day volume + per-status breakdown
@@ -486,6 +527,18 @@ export function VoxbayClient({
             />
           </div>
 
+          {/* Channel-Limit-Exceeded breakdown */}
+          <ChannelLimitExceededCard
+            total={summary.total}
+            count={summary.channelLimitExceeded}
+            priorTotal={prior.total}
+            priorCount={prior.channelLimitExceeded}
+            byHour={cleBreakdown.byHour}
+            daily={cleBreakdown.daily}
+            did={cleBreakdown.did}
+            peakHour={cleBreakdown.peakHour}
+          />
+
           <div className="grid grid-cols-1 lg:grid-cols-3 gap-[16px]">
             {/* Call volume area chart */}
             <Card title="Call Volume — daily" wide>
@@ -779,6 +832,250 @@ function Kpi({
   );
 }
 
+function ChannelLimitExceededCard({
+  total,
+  count,
+  priorTotal,
+  priorCount,
+  byHour,
+  daily,
+  did,
+  peakHour,
+}: {
+  total: number;
+  count: number;
+  priorTotal: number;
+  priorCount: number;
+  byHour: { hour: number; label: string; cle: number; total: number }[];
+  daily: { date: string; cle: number; total: number }[];
+  did: { didNumber: string; count: number }[];
+  peakHour: { hour: number; label: string; cle: number };
+}) {
+  const rate = total > 0 ? (count / total) * 100 : 0;
+  const priorRate = priorTotal > 0 ? (priorCount / priorTotal) * 100 : 0;
+  // Rate-point change (e.g. 9.2 → 11.4 = +2.2pp). Lower is better, so
+  // we invert the colour treatment.
+  const rateDelta = total > 0 && priorTotal > 0 ? rate - priorRate : null;
+  const dailyData = daily.map((d) => ({
+    ...d,
+    label: d.date.slice(5),
+    rate: d.total > 0 ? (d.cle / d.total) * 100 : 0,
+  }));
+  return (
+    <div
+      className="rounded-[12px] border p-[16px]"
+      style={{
+        backgroundColor: "var(--lp-surface-container)",
+        borderColor: "var(--lp-outline-variant)",
+      }}
+    >
+      <div className="flex flex-wrap items-start justify-between gap-[12px] mb-[10px]">
+        <div>
+          <h2 className="text-[14px] font-semibold" style={{ color: "var(--lp-on-surface)" }}>
+            Channel Limit Exceeded
+          </h2>
+          <p
+            className="text-[11px] mt-[2px]"
+            style={{ color: "var(--lp-on-surface-variant)" }}
+          >
+            Incoming calls dropped because all Voxbay channels were occupied.
+            Peak saturation: <span style={{ color: "var(--lp-on-surface)" }}>{peakHour.label} IST</span>
+            {peakHour.cle > 0 ? (
+              <>
+                {" "}
+                ({peakHour.cle.toLocaleString("en-IN")} call{peakHour.cle === 1 ? "" : "s"})
+              </>
+            ) : null}
+            .
+          </p>
+        </div>
+      </div>
+
+      <div className="grid grid-cols-1 lg:grid-cols-3 gap-[12px]">
+        {/* Stat block */}
+        <div
+          className="rounded-[10px] p-[14px] border flex flex-col gap-[6px]"
+          style={{
+            backgroundColor: "var(--lp-surface-container-low)",
+            borderColor: "var(--lp-outline-variant)",
+          }}
+        >
+          <p
+            className="text-[10px] uppercase tracking-widest"
+            style={{ color: "var(--lp-on-surface-variant)" }}
+          >
+            Drop Rate
+          </p>
+          <div className="flex items-baseline gap-[10px]">
+            <p
+              className="text-[34px] font-bold tabular-nums leading-none"
+              style={{ color: "var(--lp-orange)" }}
+            >
+              {rate.toFixed(1)}%
+            </p>
+            {rateDelta != null && (
+              <span
+                className="text-[11px] px-[8px] py-[2px] rounded-full whitespace-nowrap"
+                style={{
+                  backgroundColor:
+                    rateDelta <= 0 ? "rgba(51, 228, 255, 0.18)" : "rgba(255, 180, 171, 0.18)",
+                  color: rateDelta <= 0 ? "var(--lp-cyan)" : "var(--lp-error)",
+                }}
+                title="Rate-point change vs prior window (lower is better)"
+              >
+                {rateDelta >= 0 ? "▲" : "▼"} {Math.abs(rateDelta).toFixed(1)}pp
+              </span>
+            )}
+          </div>
+          <p
+            className="text-[12px] mt-[2px]"
+            style={{ color: "var(--lp-on-surface-variant)" }}
+          >
+            <span style={{ color: "var(--lp-on-surface)" }}>{count.toLocaleString("en-IN")}</span>{" "}
+            of{" "}
+            <span style={{ color: "var(--lp-on-surface)" }}>{total.toLocaleString("en-IN")}</span>{" "}
+            calls
+          </p>
+          <p
+            className="text-[11px]"
+            style={{ color: "var(--lp-on-surface-variant)" }}
+          >
+            Prior:{" "}
+            <span style={{ color: "var(--lp-on-surface)" }}>
+              {priorCount.toLocaleString("en-IN")}
+            </span>{" "}
+            ({priorRate.toFixed(1)}%)
+          </p>
+
+          {did.length > 0 && (
+            <div className="mt-[8px] pt-[8px] border-t" style={{ borderColor: "var(--lp-outline-variant)" }}>
+              <p
+                className="text-[10px] uppercase tracking-widest mb-[4px]"
+                style={{ color: "var(--lp-on-surface-variant)" }}
+              >
+                Top DIDs affected
+              </p>
+              <ul className="space-y-[3px] text-[12px]">
+                {did.map((d) => (
+                  <li key={d.didNumber} className="flex justify-between gap-[8px] font-mono">
+                    <span style={{ color: "var(--lp-on-surface)" }}>{d.didNumber}</span>
+                    <span className="tabular-nums" style={{ color: "var(--lp-orange)" }}>
+                      {d.count.toLocaleString("en-IN")}
+                    </span>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
+        </div>
+
+        {/* Hour-of-day */}
+        <div className="lg:col-span-2">
+          <p
+            className="text-[10px] uppercase tracking-widest mb-[4px]"
+            style={{ color: "var(--lp-on-surface-variant)" }}
+          >
+            By hour of day (IST)
+          </p>
+          <ResponsiveContainer width="100%" height={180}>
+            <BarChart data={byHour} margin={{ top: 6, right: 10, left: 0, bottom: 0 }}>
+              <CartesianGrid stroke={GRID} strokeDasharray="3 3" vertical={false} />
+              <XAxis
+                dataKey="label"
+                tick={{ fontSize: 10, fill: TEXT }}
+                axisLine={{ stroke: GRID }}
+                tickLine={false}
+                interval={1}
+              />
+              <YAxis
+                allowDecimals={false}
+                tick={{ fontSize: 10, fill: TEXT }}
+                axisLine={{ stroke: GRID }}
+                tickLine={false}
+                width={28}
+              />
+              <Tooltip
+                contentStyle={{
+                  backgroundColor: "#231f14",
+                  border: `1px solid ${GRID}`,
+                  color: "#ebe2d0",
+                  fontSize: 11,
+                }}
+                formatter={(v: number, _name, p) => {
+                  const total = (p?.payload as { total?: number })?.total ?? 0;
+                  const rate = total > 0 ? ((v as number) / total) * 100 : 0;
+                  return [`${v} dropped (${rate.toFixed(1)}% of ${total})`, "Channel limit"];
+                }}
+              />
+              <Bar dataKey="cle" fill={ORANGE} radius={[3, 3, 0, 0]} name="Channel limit" />
+            </BarChart>
+          </ResponsiveContainer>
+
+          {dailyData.length > 1 && (
+            <>
+              <p
+                className="text-[10px] uppercase tracking-widest mt-[8px] mb-[4px]"
+                style={{ color: "var(--lp-on-surface-variant)" }}
+              >
+                Daily drop count
+              </p>
+              <ResponsiveContainer width="100%" height={130}>
+                <BarChart data={dailyData} margin={{ top: 6, right: 10, left: 0, bottom: 0 }}>
+                  <CartesianGrid stroke={GRID} strokeDasharray="3 3" vertical={false} />
+                  <XAxis
+                    dataKey="label"
+                    tick={{ fontSize: 10, fill: TEXT }}
+                    axisLine={{ stroke: GRID }}
+                    tickLine={false}
+                  />
+                  <YAxis
+                    allowDecimals={false}
+                    tick={{ fontSize: 10, fill: TEXT }}
+                    axisLine={{ stroke: GRID }}
+                    tickLine={false}
+                    width={28}
+                  />
+                  <Tooltip
+                    contentStyle={{
+                      backgroundColor: "#231f14",
+                      border: `1px solid ${GRID}`,
+                      color: "#ebe2d0",
+                      fontSize: 11,
+                    }}
+                    formatter={(v: number, _n, p) => {
+                      const rate = (p?.payload as { rate?: number })?.rate ?? 0;
+                      return [`${v} (${rate.toFixed(1)}%)`, "Channel limit"];
+                    }}
+                  />
+                  <Bar dataKey="cle" fill={ORANGE} radius={[3, 3, 0, 0]} name="Channel limit" />
+                </BarChart>
+              </ResponsiveContainer>
+            </>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function istHourFromIso(iso: string): number {
+  // ISO string has the "Z" suffix → parses as UTC. Adding the IST offset
+  // gives the IST clock-time; we read the UTC hour of that shifted Date.
+  const t = Date.parse(iso);
+  if (!Number.isFinite(t)) return 0;
+  return new Date(t + 5.5 * 60 * 60 * 1000).getUTCHours();
+}
+
+function istDateFromIso(iso: string): string {
+  const t = Date.parse(iso);
+  if (!Number.isFinite(t)) return iso.slice(0, 10);
+  const dt = new Date(t + 5.5 * 60 * 60 * 1000);
+  const y = dt.getUTCFullYear();
+  const m = String(dt.getUTCMonth() + 1).padStart(2, "0");
+  const d = String(dt.getUTCDate()).padStart(2, "0");
+  return `${y}-${m}-${d}`;
+}
+
 function pctChange(now: number, prev: number): number | null {
   if (prev === 0) return now === 0 ? 0 : null;
   return Math.round(((now - prev) / prev) * 1000) / 10;
@@ -861,6 +1158,7 @@ function StatusChip({ status }: { status: string | null }) {
     NOANSWER: { bg: "rgba(255, 180, 147, 0.18)", color: "var(--lp-orange)" },
     BUSY: { bg: "rgba(255, 180, 147, 0.18)", color: "var(--lp-orange)" },
     TIMEOUT: { bg: "rgba(255, 180, 147, 0.18)", color: "var(--lp-orange)" },
+    CHANNEL_LIMIT_EXCEEDED: { bg: "rgba(255, 180, 147, 0.18)", color: "var(--lp-orange)" },
   };
   const tone = map[s] ?? { bg: "rgba(154, 144, 120, 0.18)", color: "var(--lp-on-surface-variant)" };
   return (
