@@ -137,6 +137,67 @@ export function VoxbayClient({
     return { total, answered, failed, channelLimitExceeded, avg, ansAvg };
   }, [calls]);
 
+  // Channel sizing — minute-bucket sweep over the window:
+  //   diff[startMin]+=1, diff[endMin+1]-=1 for every non-CLE call that
+  //   actually occupied a slot. Prefix-sum gives concurrent-slots-in-use
+  //   at each minute (= "current observed channel ceiling"). CLE drops
+  //   are added on top at their own minute — that's the true demand the
+  //   team would have served with more channels. Recommend peak demand
+  //   plus a 10% headroom (rounded up).
+  const sizing = useMemo(() => {
+    const MIN_MS = 60_000;
+    const HEADROOM = 1.1;
+    const diff = new Map<number, number>();
+    const cleByMin = new Map<number, number>();
+    let cleEvents = 0;
+    let activeEvents = 0;
+    for (const c of calls) {
+      if (!c.callStartTime) continue;
+      const startMs = Date.parse(c.callStartTime);
+      if (!Number.isFinite(startMs)) continue;
+      const startMin = Math.floor(startMs / MIN_MS);
+      if ((c.callStatus ?? "").toUpperCase() === "CHANNEL_LIMIT_EXCEEDED") {
+        cleByMin.set(startMin, (cleByMin.get(startMin) ?? 0) + 1);
+        cleEvents += 1;
+        continue;
+      }
+      if (c.totalDurationSec <= 0) continue;
+      const endMin = Math.floor((startMs + c.totalDurationSec * 1000) / MIN_MS);
+      diff.set(startMin, (diff.get(startMin) ?? 0) + 1);
+      diff.set(endMin + 1, (diff.get(endMin + 1) ?? 0) - 1);
+      activeEvents += 1;
+    }
+    if (activeEvents === 0 && cleEvents === 0) {
+      return { peakConcurrent: 0, peakDemand: 0, recommended: 0, peakDemandAt: null as string | null };
+    }
+    const eventMins = Array.from(new Set([...diff.keys(), ...cleByMin.keys()])).sort(
+      (a, b) => a - b,
+    );
+    let concurrent = 0;
+    let peakConcurrent = 0;
+    let peakDemand = 0;
+    let peakDemandMin: number | null = null;
+    for (const m of eventMins) {
+      concurrent += diff.get(m) ?? 0;
+      if (concurrent > peakConcurrent) peakConcurrent = concurrent;
+      const demand = concurrent + (cleByMin.get(m) ?? 0);
+      if (demand > peakDemand) {
+        peakDemand = demand;
+        peakDemandMin = m;
+      }
+    }
+    const recommended = Math.max(peakDemand, peakConcurrent, 1) * 1;
+    return {
+      peakConcurrent,
+      peakDemand: Math.max(peakDemand, peakConcurrent),
+      recommended: Math.max(Math.ceil(recommended * HEADROOM), peakConcurrent),
+      peakDemandAt:
+        peakDemandMin != null
+          ? new Date(peakDemandMin * MIN_MS + 5.5 * 60 * 60 * 1000).toISOString()
+          : null,
+    };
+  }, [calls]);
+
   // Channel-Limit-Exceeded breakdown — by IST hour-of-day (peak saturation)
   // and by DID number (which incoming line gets hit). Surfaces *when* and
   // *where* the channel cap is biting so the team can size capacity.
@@ -279,8 +340,17 @@ export function VoxbayClient({
         );
         return;
       }
-      const data = (await res.json()) as { rowCount: number };
-      setToast(`Uploaded ${data.rowCount.toLocaleString("en-IN")} calls. Previous data overwritten.`);
+      const data = (await res.json()) as {
+        rowCount: number;
+        inserted?: number;
+        skipped?: number;
+      };
+      const inserted = data.inserted ?? data.rowCount;
+      const skipped = data.skipped ?? 0;
+      setToast(
+        `Merged ${data.rowCount.toLocaleString("en-IN")} rows — ` +
+          `${inserted.toLocaleString("en-IN")} new, ${skipped.toLocaleString("en-IN")} already on file.`,
+      );
       router.refresh();
     });
   }
@@ -294,7 +364,8 @@ export function VoxbayClient({
           <h1 className="text-[28px] font-bold tracking-tight">Voxbay Call Analysis</h1>
           <p className="mt-[4px] text-[13px]" style={{ color: "var(--lp-on-surface-variant)" }}>
             Incoming-call analytics from the Voxbay export. Suhaina re-uploads the CSV
-            whenever a fresh snapshot is needed — the previous load is replaced in one click.
+            whenever a fresh snapshot is needed — new rows are merged in, rows already
+            on file are skipped, and anything missing from the new export is preserved.
           </p>
         </div>
         {canUpload && (
@@ -537,6 +608,7 @@ export function VoxbayClient({
             daily={cleBreakdown.daily}
             did={cleBreakdown.did}
             peakHour={cleBreakdown.peakHour}
+            sizing={sizing}
           />
 
           <div className="grid grid-cols-1 lg:grid-cols-3 gap-[16px]">
@@ -841,6 +913,7 @@ function ChannelLimitExceededCard({
   daily,
   did,
   peakHour,
+  sizing,
 }: {
   total: number;
   count: number;
@@ -850,6 +923,12 @@ function ChannelLimitExceededCard({
   daily: { date: string; cle: number; total: number }[];
   did: { didNumber: string; count: number }[];
   peakHour: { hour: number; label: string; cle: number };
+  sizing: {
+    peakConcurrent: number;
+    peakDemand: number;
+    recommended: number;
+    peakDemandAt: string | null;
+  };
 }) {
   const rate = total > 0 ? (count / total) * 100 : 0;
   const priorRate = priorTotal > 0 ? (priorCount / priorTotal) * 100 : 0;
@@ -1054,6 +1133,150 @@ function ChannelLimitExceededCard({
           )}
         </div>
       </div>
+
+      <ChannelSizingPanel sizing={sizing} cleCount={count} />
+    </div>
+  );
+}
+
+function ChannelSizingPanel({
+  sizing,
+  cleCount,
+}: {
+  sizing: {
+    peakConcurrent: number;
+    peakDemand: number;
+    recommended: number;
+    peakDemandAt: string | null;
+  };
+  cleCount: number;
+}) {
+  if (sizing.peakConcurrent === 0 && sizing.peakDemand === 0) return null;
+  const headroomCalls = Math.max(0, sizing.recommended - sizing.peakDemand);
+  const peakIstLabel = sizing.peakDemandAt
+    ? new Date(sizing.peakDemandAt).toUTCString().replace(" GMT", " IST")
+    : null;
+  const isSufficient = cleCount === 0;
+  return (
+    <div
+      className="mt-[12px] rounded-[10px] border p-[14px]"
+      style={{
+        backgroundColor: "var(--lp-surface-container-low)",
+        borderColor: "var(--lp-outline-variant)",
+      }}
+    >
+      <div className="flex items-baseline justify-between gap-[10px] mb-[8px] flex-wrap">
+        <p
+          className="text-[10px] uppercase tracking-widest"
+          style={{ color: "var(--lp-on-surface-variant)" }}
+        >
+          Channel sizing recommendation
+        </p>
+        <p
+          className="text-[10px]"
+          style={{ color: "var(--lp-on-surface-variant)", opacity: 0.7 }}
+        >
+          minute-bucket peak, +10% headroom
+        </p>
+      </div>
+
+      <div className="grid grid-cols-3 gap-[10px]">
+        <SizingTile
+          label="Peak observed"
+          value={sizing.peakConcurrent.toLocaleString("en-IN")}
+          sub="concurrent calls served"
+          tone="cyan"
+        />
+        <SizingTile
+          label="Peak demand"
+          value={sizing.peakDemand.toLocaleString("en-IN")}
+          sub={cleCount > 0 ? "served + dropped" : "no drops in window"}
+          tone="orange"
+        />
+        <SizingTile
+          label="Recommended"
+          value={sizing.recommended.toLocaleString("en-IN")}
+          sub={
+            isSufficient
+              ? "current capacity is sufficient"
+              : `+${headroomCalls} call${headroomCalls === 1 ? "" : "s"} of headroom`
+          }
+          tone="gold"
+        />
+      </div>
+
+      <p
+        className="mt-[10px] text-[11px]"
+        style={{ color: "var(--lp-on-surface-variant)" }}
+      >
+        {isSufficient ? (
+          <>
+            No Channel-Limit-Exceeded events in this window — current
+            capacity comfortably handled the busiest minute
+            {peakIstLabel ? <> at {peakIstLabel}</> : null}.
+          </>
+        ) : (
+          <>
+            The busiest minute saw{" "}
+            <span style={{ color: "var(--lp-on-surface)" }}>
+              {sizing.peakDemand.toLocaleString("en-IN")}
+            </span>{" "}
+            simultaneous incoming calls (
+            <span style={{ color: "var(--lp-on-surface)" }}>
+              {sizing.peakConcurrent.toLocaleString("en-IN")}
+            </span>{" "}
+            served +{" "}
+            <span style={{ color: "var(--lp-orange)" }}>
+              {(sizing.peakDemand - sizing.peakConcurrent).toLocaleString("en-IN")}
+            </span>{" "}
+            dropped). Provisioning at least{" "}
+            <span style={{ color: "var(--lp-primary)" }}>
+              {sizing.recommended.toLocaleString("en-IN")}
+            </span>{" "}
+            Voxbay channels would have absorbed that peak with 10% room to spare.
+          </>
+        )}
+      </p>
+    </div>
+  );
+}
+
+function SizingTile({
+  label,
+  value,
+  sub,
+  tone,
+}: {
+  label: string;
+  value: string;
+  sub: string;
+  tone: "gold" | "cyan" | "orange";
+}) {
+  const color =
+    tone === "gold" ? "var(--lp-primary)" : tone === "cyan" ? "var(--lp-cyan)" : "var(--lp-orange)";
+  return (
+    <div
+      className="rounded-[8px] p-[10px] border"
+      style={{
+        backgroundColor: "var(--lp-surface-container)",
+        borderColor: "var(--lp-outline-variant)",
+      }}
+    >
+      <p
+        className="text-[10px] uppercase tracking-widest"
+        style={{ color: "var(--lp-on-surface-variant)" }}
+      >
+        {label}
+      </p>
+      <p className="text-[24px] font-bold tabular-nums leading-none mt-[2px]" style={{ color }}>
+        {value}
+      </p>
+      <p
+        className="text-[10px] mt-[4px]"
+        style={{ color: "var(--lp-on-surface-variant)" }}
+      >
+        {sub}
+      </p>
     </div>
   );
 }

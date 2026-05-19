@@ -11,10 +11,11 @@ export const runtime = "nodejs";
  * POST /api/marketing/voxbay/upload
  * Multipart form: `file` = CSV from Voxbay's incoming-call export.
  *
- * Supervisor-gated. Each upload **wipes** all existing VoxbayCall rows
- * and replaces them with the parsed contents — the user explicitly
- * asked for overwrite semantics so re-uploading the same export
- * (with corrections) is idempotent.
+ * Supervisor-gated. Each upload **merges** the parsed rows into
+ * VoxbayCall using a deterministic signature (sourceNumber, didNumber,
+ * callStartTime) as the unique key. Rows already on file are skipped;
+ * rows missing from the new CSV are preserved. A partial Voxbay export
+ * therefore never wipes history.
  */
 export async function POST(req: NextRequest) {
   const { userId, perms } = await getCurrentUserAndPermissions();
@@ -72,14 +73,18 @@ export async function POST(req: NextRequest) {
     const connStr = get("call_connected_time");
     const totalDispl = get("totalDuration") || null;
     const ansDispl = get("answeredDuration") || null;
+    const sourceNumber = get("sourceNumber") || null;
+    const didNumber = get("didNumber") || null;
+    const callStartTime = parseDateTimeOrNull(startStr);
     parsed.push({
+      signature: makeSignature(sourceNumber, didNumber, callStartTime),
       slNo: parseIntOrNull(get("Sl No.")),
       contactName: get("contact_name") || null,
-      sourceNumber: get("sourceNumber") || null,
-      didNumber: get("didNumber") || null,
+      sourceNumber,
+      didNumber,
       cost: parseFloatOrNull(get("cost")),
       dtmfSeq: get("dtmfSeq") || null,
-      callStartTime: parseDateTimeOrNull(startStr),
+      callStartTime,
       callConnectedTime: parseDateTimeOrNull(connStr),
       callStatus: get("call_status") || null,
       userStatus: get("user_status") || null,
@@ -102,25 +107,57 @@ export async function POST(req: NextRequest) {
     });
   }
 
+  // De-dup within the CSV by signature — a single export occasionally
+  // includes a row twice (e.g. CRM sync glitches). createMany's
+  // skipDuplicates only protects against existing-row conflicts.
+  const seen = new Set<string>();
+  const dedupedNamed = parsed.filter((row) => {
+    if (!row.signature) return true; // null signature → can't dedup, let it through
+    if (seen.has(row.signature)) return false;
+    seen.add(row.signature);
+    return true;
+  });
+
+  let inserted = 0;
   await prisma.$transaction(async (tx) => {
-    await tx.voxbayCall.deleteMany({});
-    // Bulk insert in chunks (Prisma's createMany handles a few thousand
-    // rows comfortably; we still chunk to be safe on Neon).
     const chunk = 500;
-    for (let i = 0; i < parsed.length; i += chunk) {
-      await tx.voxbayCall.createMany({ data: parsed.slice(i, i + chunk) });
+    for (let i = 0; i < dedupedNamed.length; i += chunk) {
+      const result = await tx.voxbayCall.createMany({
+        data: dedupedNamed.slice(i, i + chunk),
+        skipDuplicates: true,
+      });
+      inserted += result.count;
     }
     await tx.voxbayUpload.create({
       data: {
         uploadedById: userId,
         filename:
           typeof (file as File).name === "string" ? (file as File).name : null,
-        rowCount: parsed.length,
+        rowCount: dedupedNamed.length,
       },
     });
   });
 
-  return NextResponse.json({ ok: true, rowCount: parsed.length });
+  const skipped = dedupedNamed.length - inserted;
+  return NextResponse.json({
+    ok: true,
+    rowCount: dedupedNamed.length,
+    inserted,
+    skipped,
+  });
+}
+
+/** Identity key for merge-on-upload. Mirrors the Postgres expression
+ *  in the schema-sync DDL. Returns null only when *all* three identity
+ *  parts are missing — in that case we let the row through without a
+ *  unique-key claim. */
+function makeSignature(
+  sourceNumber: string | null,
+  didNumber: string | null,
+  callStartTime: Date | null,
+): string | null {
+  if (!sourceNumber && !didNumber && !callStartTime) return null;
+  return `${sourceNumber ?? ""}|${didNumber ?? ""}|${callStartTime?.toISOString() ?? ""}`;
 }
 
 /** RFC-4180-ish CSV parser. Handles quoted fields with embedded commas and CRLF lines. */
