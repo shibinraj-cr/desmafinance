@@ -435,6 +435,30 @@ export async function POST() {
       `CREATE INDEX IF NOT EXISTS "VoxbayCall_lastTriedName_idx" ON "VoxbayCall"("lastTriedName")`,
     );
 
+    // VoxbayCall.signature — deterministic identity key so re-uploads
+    // merge instead of wipe. The matching JS hash is
+    // `${sourceNumber ?? ""}|${didNumber ?? ""}|${callStartTime.toISOString()}`.
+    // toISOString() in JS yields YYYY-MM-DDTHH:MM:SS.sssZ; the Postgres
+    // to_char format string below mirrors that exactly.
+    await step(
+      "VoxbayCall signature column",
+      `ALTER TABLE "VoxbayCall" ADD COLUMN IF NOT EXISTS "signature" TEXT`,
+    );
+    await step(
+      "VoxbayCall signature backfill",
+      `UPDATE "VoxbayCall"
+         SET signature =
+           coalesce("sourceNumber", '') || '|' ||
+           coalesce("didNumber", '') || '|' ||
+           to_char(("callStartTime" AT TIME ZONE 'UTC')::timestamp,
+                   'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"')
+         WHERE signature IS NULL AND "callStartTime" IS NOT NULL`,
+    );
+    await step(
+      "VoxbayCall signature unique index",
+      `CREATE UNIQUE INDEX IF NOT EXISTS "VoxbayCall_signature_key" ON "VoxbayCall"("signature")`,
+    );
+
     // 5b. Holiday table for the marketing module's holiday calendar.
     await step(
       "Holiday table",
