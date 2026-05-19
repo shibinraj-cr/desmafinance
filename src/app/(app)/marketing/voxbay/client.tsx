@@ -2,6 +2,15 @@
 
 import { useMemo, useRef, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
+
+type Range = { from: string; to: string };
+type PriorSummary = {
+  total: number;
+  answered: number;
+  failed: number;
+  avgSec: number;
+  ansAvgSec: number;
+};
 import {
   ResponsiveContainer,
   AreaChart,
@@ -52,6 +61,9 @@ export function VoxbayClient({
   canUpload,
   latestUpload,
   calls,
+  range,
+  priorRange,
+  prior,
 }: {
   canUpload: boolean;
   latestUpload: {
@@ -61,6 +73,9 @@ export function VoxbayClient({
     uploadedBy: string | null;
   } | null;
   calls: Call[];
+  range: Range;
+  priorRange: Range;
+  prior: PriorSummary;
 }) {
   const router = useRouter();
   const fileRef = useRef<HTMLInputElement | null>(null);
@@ -70,6 +85,39 @@ export function VoxbayClient({
   const [search, setSearch] = useState("");
   const [statusFilter, setStatusFilter] = useState<string>("all");
   const [agentFilter, setAgentFilter] = useState<string>("all");
+  const [fromInput, setFromInput] = useState(range.from);
+  const [toInput, setToInput] = useState(range.to);
+  const [, startNav] = useTransition();
+
+  function applyRange(nextFrom: string, nextTo: string) {
+    setFromInput(nextFrom);
+    setToInput(nextTo);
+    const params = new URLSearchParams();
+    params.set("from", nextFrom);
+    params.set("to", nextTo);
+    startNav(() => {
+      router.push(`/marketing/voxbay?${params.toString()}`);
+    });
+  }
+
+  const presets = useMemo(() => {
+    const today = todayIst();
+    const monthFirst = today.slice(0, 8) + "01";
+    const todayMinus = (n: number) => addDaysIst(today, -n);
+    const lastMonthFirst = lastMonthFirstIst(today);
+    const lastMonthLast = addDaysIst(monthFirst, -1);
+    return [
+      { label: "MTD", from: monthFirst, to: today },
+      { label: "Last 7d", from: todayMinus(6), to: today },
+      { label: "Last 30d", from: todayMinus(29), to: today },
+      { label: "Last month", from: lastMonthFirst, to: lastMonthLast },
+    ];
+  }, []);
+
+  const isPreset = useMemo(
+    () => presets.find((p) => p.from === range.from && p.to === range.to)?.label ?? null,
+    [presets, range],
+  );
 
   const summary = useMemo(() => {
     const total = calls.length;
@@ -236,6 +284,82 @@ export function VoxbayClient({
         )}
       </header>
 
+      {/* Filter row */}
+      <div
+        className="rounded-[10px] border p-[12px] flex flex-wrap items-center gap-[10px] text-[12px]"
+        style={{
+          backgroundColor: "var(--lp-surface-container)",
+          borderColor: "var(--lp-outline-variant)",
+          color: "var(--lp-on-surface-variant)",
+        }}
+      >
+        <span className="material-symbols-outlined" style={{ fontSize: 18, color: "var(--lp-primary)" }}>
+          filter_alt
+        </span>
+        <span className="text-[11px] uppercase tracking-widest" style={{ color: "var(--lp-on-surface-variant)" }}>
+          Range
+        </span>
+        <input
+          type="date"
+          value={fromInput}
+          onChange={(e) => setFromInput(e.target.value)}
+          className="h-[30px] rounded-[6px] px-[8px] text-[12px]"
+          style={{
+            backgroundColor: "var(--lp-surface-container-high)",
+            color: "var(--lp-on-surface)",
+            border: "1px solid var(--lp-outline-variant)",
+          }}
+        />
+        <span style={{ opacity: 0.6 }}>→</span>
+        <input
+          type="date"
+          value={toInput}
+          onChange={(e) => setToInput(e.target.value)}
+          className="h-[30px] rounded-[6px] px-[8px] text-[12px]"
+          style={{
+            backgroundColor: "var(--lp-surface-container-high)",
+            color: "var(--lp-on-surface)",
+            border: "1px solid var(--lp-outline-variant)",
+          }}
+        />
+        <button
+          onClick={() => applyRange(fromInput, toInput || fromInput)}
+          className="h-[30px] px-[12px] rounded-[6px] text-[12px] font-semibold"
+          style={{ backgroundColor: "var(--lp-primary)", color: "var(--lp-on-primary)" }}
+        >
+          Apply
+        </button>
+        <div className="flex flex-wrap items-center gap-[6px] ml-auto">
+          {presets.map((p) => {
+            const active = isPreset === p.label;
+            return (
+              <button
+                key={p.label}
+                onClick={() => applyRange(p.from, p.to)}
+                className="h-[28px] px-[10px] rounded-full text-[11px] font-semibold"
+                style={{
+                  backgroundColor: active
+                    ? "rgba(250, 204, 21, 0.18)"
+                    : "var(--lp-surface-container-high)",
+                  color: active ? "var(--lp-primary)" : "var(--lp-on-surface)",
+                  border: `1px solid ${active ? "var(--lp-primary)" : "var(--lp-outline-variant)"}`,
+                }}
+              >
+                {p.label}
+              </button>
+            );
+          })}
+        </div>
+        <div
+          className="w-full flex flex-wrap items-baseline gap-[6px] mt-[2px] text-[11px]"
+          style={{ color: "var(--lp-on-surface-variant)" }}
+        >
+          Comparing <span style={{ color: "var(--lp-on-surface)" }}>{formatRange(range)}</span>{" "}
+          vs prior{" "}
+          <span style={{ color: "var(--lp-on-surface)" }}>{formatRange(priorRange)}</span>
+        </div>
+      </div>
+
       {/* Upload status strip */}
       <div
         className="rounded-[10px] border p-[12px] flex flex-wrap items-center gap-[12px] text-[12px]"
@@ -315,16 +439,51 @@ export function VoxbayClient({
             color: "var(--lp-on-surface-variant)",
           }}
         >
-          Upload a Voxbay incoming-call CSV to see the dashboard.
+          {latestUpload
+            ? "No calls in the selected range. Try a different window or preset."
+            : "Upload a Voxbay incoming-call CSV to see the dashboard."}
         </div>
       ) : (
         <>
-          {/* KPI strip */}
+          {/* KPI strip — value + delta vs same-length prior window */}
           <div className="grid grid-cols-2 sm:grid-cols-4 gap-[12px]">
-            <Kpi label="Total Calls" value={summary.total.toLocaleString("en-IN")} icon="call" tone="gold" />
-            <Kpi label="Answered" value={summary.answered.toLocaleString("en-IN")} icon="check_circle" tone="cyan" />
-            <Kpi label="Missed / Failed" value={summary.failed.toLocaleString("en-IN")} icon="error" tone="orange" />
-            <Kpi label="Avg Call" value={secondsToHms(summary.avg)} icon="timer" tone="gold" />
+            <Kpi
+              label="Total Calls"
+              value={summary.total.toLocaleString("en-IN")}
+              icon="call"
+              tone="gold"
+              priorLabel="Prior"
+              priorValue={prior.total.toLocaleString("en-IN")}
+              trend={pctChange(summary.total, prior.total)}
+            />
+            <Kpi
+              label="Answered"
+              value={summary.answered.toLocaleString("en-IN")}
+              icon="check_circle"
+              tone="cyan"
+              priorLabel="Prior"
+              priorValue={prior.answered.toLocaleString("en-IN")}
+              trend={pctChange(summary.answered, prior.answered)}
+            />
+            <Kpi
+              label="Missed / Failed"
+              value={summary.failed.toLocaleString("en-IN")}
+              icon="error"
+              tone="orange"
+              priorLabel="Prior"
+              priorValue={prior.failed.toLocaleString("en-IN")}
+              trend={pctChange(summary.failed, prior.failed)}
+              invertTrend
+            />
+            <Kpi
+              label="Avg Call"
+              value={secondsToHms(summary.avg)}
+              icon="timer"
+              tone="gold"
+              priorLabel="Prior"
+              priorValue={secondsToHms(prior.avgSec)}
+              trend={pctChange(summary.avg, prior.avgSec)}
+            />
           </div>
 
           <div className="grid grid-cols-1 lg:grid-cols-3 gap-[16px]">
@@ -551,37 +710,119 @@ function Kpi({
   value,
   icon,
   tone,
+  priorLabel,
+  priorValue,
+  trend,
+  invertTrend,
 }: {
   label: string;
   value: string;
   icon: string;
   tone: "gold" | "cyan" | "orange";
+  priorLabel?: string;
+  priorValue?: string;
+  trend?: number | null;
+  /** When true, downward movement is "good" (used for Missed / Failed). */
+  invertTrend?: boolean;
 }) {
   const color = tone === "gold" ? "var(--lp-primary)" : tone === "cyan" ? "var(--lp-cyan)" : "var(--lp-orange)";
+  const trendIsGood = trend == null ? null : invertTrend ? trend <= 0 : trend >= 0;
   return (
     <div
-      className="rounded-[12px] p-[16px] border"
+      className="rounded-[12px] p-[16px] border flex items-start justify-between gap-[8px]"
       style={{
         backgroundColor: "var(--lp-surface-container)",
         borderColor: "var(--lp-outline-variant)",
       }}
     >
-      <span
-        className="inline-flex items-center justify-center w-[32px] h-[32px] rounded-[8px] mb-[8px]"
-        style={{ backgroundColor: "var(--lp-surface-container-high)", color }}
-      >
-        <span className="material-symbols-outlined" style={{ fontSize: 18 }}>
-          {icon}
+      <div className="min-w-0">
+        <span
+          className="inline-flex items-center justify-center w-[32px] h-[32px] rounded-[8px] mb-[8px]"
+          style={{ backgroundColor: "var(--lp-surface-container-high)", color }}
+        >
+          <span className="material-symbols-outlined" style={{ fontSize: 18 }}>
+            {icon}
+          </span>
         </span>
-      </span>
-      <p className="text-[10px] uppercase tracking-widest" style={{ color: "var(--lp-on-surface-variant)" }}>
-        {label}
-      </p>
-      <p className="text-[26px] font-bold tabular-nums mt-[2px]" style={{ color }}>
-        {value}
-      </p>
+        <p className="text-[10px] uppercase tracking-widest" style={{ color: "var(--lp-on-surface-variant)" }}>
+          {label}
+        </p>
+        <p className="text-[26px] font-bold tabular-nums mt-[2px]" style={{ color }}>
+          {value}
+        </p>
+        {priorLabel && priorValue != null && (
+          <p
+            className="text-[11px] mt-[6px] flex flex-wrap items-baseline gap-[6px]"
+            style={{ color: "var(--lp-on-surface-variant)" }}
+          >
+            <span style={{ opacity: 0.8 }}>{priorLabel}:</span>
+            <span className="tabular-nums" style={{ color: "var(--lp-on-surface)" }}>
+              {priorValue}
+            </span>
+          </p>
+        )}
+      </div>
+      {trend != null && (
+        <span
+          className="text-[11px] px-[8px] py-[2px] rounded-full whitespace-nowrap"
+          style={{
+            backgroundColor:
+              trendIsGood ? "rgba(51, 228, 255, 0.18)" : "rgba(255, 180, 171, 0.18)",
+            color: trendIsGood ? "var(--lp-cyan)" : "var(--lp-error)",
+          }}
+          title="vs prior window"
+        >
+          {trend >= 0 ? "▲" : "▼"} {Math.abs(trend).toFixed(1)}%
+        </span>
+      )}
     </div>
   );
+}
+
+function pctChange(now: number, prev: number): number | null {
+  if (prev === 0) return now === 0 ? 0 : null;
+  return Math.round(((now - prev) / prev) * 1000) / 10;
+}
+
+function formatRange(r: Range): string {
+  return `${formatShort(r.from)} – ${formatShort(r.to)}`;
+}
+
+function formatShort(yyyyMmDd: string): string {
+  const [y, m, d] = yyyyMmDd.split("-").map(Number);
+  return new Intl.DateTimeFormat("en-IN", {
+    month: "short",
+    day: "numeric",
+    year: "numeric",
+    timeZone: "UTC",
+  }).format(new Date(Date.UTC(y, m - 1, d)));
+}
+
+function todayIst(): string {
+  const fmt = new Intl.DateTimeFormat("en-CA", {
+    timeZone: "Asia/Kolkata",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  });
+  return fmt.format(new Date());
+}
+
+function addDaysIst(yyyyMmDd: string, days: number): string {
+  const [y, m, d] = yyyyMmDd.split("-").map(Number);
+  const dt = new Date(Date.UTC(y, m - 1, d));
+  dt.setUTCDate(dt.getUTCDate() + days);
+  const yy = dt.getUTCFullYear();
+  const mm = String(dt.getUTCMonth() + 1).padStart(2, "0");
+  const dd = String(dt.getUTCDate()).padStart(2, "0");
+  return `${yy}-${mm}-${dd}`;
+}
+
+function lastMonthFirstIst(today: string): string {
+  const [y, m] = today.split("-").map(Number);
+  const ly = m === 1 ? y - 1 : y;
+  const lm = m === 1 ? 12 : m - 1;
+  return `${ly}-${String(lm).padStart(2, "0")}-01`;
 }
 
 function Card({ title, children, wide }: { title: string; children: React.ReactNode; wide?: boolean }) {
