@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
 import { getCurrentUserAndPermissions } from "@/lib/permissions";
 import { getLeadPulseAccess } from "@/lib/lead-pulse-rbac";
@@ -59,7 +60,7 @@ export async function POST(req: NextRequest) {
     }
   }
 
-  const parsed: Array<Record<string, unknown>> = [];
+  const parsed: Prisma.VoxbayCallCreateManyInput[] = [];
   for (let i = 1; i < rows.length; i++) {
     const r = rows[i];
     if (r.length === 0 || r.every((c) => !c.trim())) continue;
@@ -107,8 +108,7 @@ export async function POST(req: NextRequest) {
     // rows comfortably; we still chunk to be safe on Neon).
     const chunk = 500;
     for (let i = 0; i < parsed.length; i += chunk) {
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      await tx.voxbayCall.createMany({ data: parsed.slice(i, i + chunk) as any });
+      await tx.voxbayCall.createMany({ data: parsed.slice(i, i + chunk) });
     }
     await tx.voxbayUpload.create({
       data: {
