@@ -2,6 +2,16 @@
 
 import { useMemo, useRef, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
+
+type Range = { from: string; to: string };
+type PriorSummary = {
+  total: number;
+  answered: number;
+  failed: number;
+  avgSec: number;
+  ansAvgSec: number;
+  channelLimitExceeded: number;
+};
 import {
   ResponsiveContainer,
   AreaChart,
@@ -52,6 +62,9 @@ export function VoxbayClient({
   canUpload,
   latestUpload,
   calls,
+  range,
+  priorRange,
+  prior,
 }: {
   canUpload: boolean;
   latestUpload: {
@@ -61,6 +74,9 @@ export function VoxbayClient({
     uploadedBy: string | null;
   } | null;
   calls: Call[];
+  range: Range;
+  priorRange: Range;
+  prior: PriorSummary;
 }) {
   const router = useRouter();
   const fileRef = useRef<HTMLInputElement | null>(null);
@@ -70,6 +86,39 @@ export function VoxbayClient({
   const [search, setSearch] = useState("");
   const [statusFilter, setStatusFilter] = useState<string>("all");
   const [agentFilter, setAgentFilter] = useState<string>("all");
+  const [fromInput, setFromInput] = useState(range.from);
+  const [toInput, setToInput] = useState(range.to);
+  const [, startNav] = useTransition();
+
+  function applyRange(nextFrom: string, nextTo: string) {
+    setFromInput(nextFrom);
+    setToInput(nextTo);
+    const params = new URLSearchParams();
+    params.set("from", nextFrom);
+    params.set("to", nextTo);
+    startNav(() => {
+      router.push(`/marketing/voxbay?${params.toString()}`);
+    });
+  }
+
+  const presets = useMemo(() => {
+    const today = todayIst();
+    const monthFirst = today.slice(0, 8) + "01";
+    const todayMinus = (n: number) => addDaysIst(today, -n);
+    const lastMonthFirst = lastMonthFirstIst(today);
+    const lastMonthLast = addDaysIst(monthFirst, -1);
+    return [
+      { label: "MTD", from: monthFirst, to: today },
+      { label: "Last 7d", from: todayMinus(6), to: today },
+      { label: "Last 30d", from: todayMinus(29), to: today },
+      { label: "Last month", from: lastMonthFirst, to: lastMonthLast },
+    ];
+  }, []);
+
+  const isPreset = useMemo(
+    () => presets.find((p) => p.from === range.from && p.to === range.to)?.label ?? null,
+    [presets, range],
+  );
 
   const summary = useMemo(() => {
     const total = calls.length;
@@ -78,11 +127,51 @@ export function VoxbayClient({
       const u = (c.userStatus ?? "").toUpperCase();
       return u === "FAILED" || u === "NOANSWER" || u === "TIMEOUT" || u === "BUSY";
     }).length;
+    const channelLimitExceeded = calls.filter(
+      (c) => (c.callStatus ?? "").toUpperCase() === "CHANNEL_LIMIT_EXCEEDED",
+    ).length;
     const sum = calls.reduce((a, c) => a + c.totalDurationSec, 0);
     const avg = total > 0 ? sum / total : 0;
     const ansSum = calls.reduce((a, c) => a + c.answeredDurationSec, 0);
     const ansAvg = answered > 0 ? ansSum / answered : 0;
-    return { total, answered, failed, avg, ansAvg };
+    return { total, answered, failed, channelLimitExceeded, avg, ansAvg };
+  }, [calls]);
+
+  // Channel-Limit-Exceeded breakdown — by IST hour-of-day (peak saturation)
+  // and by DID number (which incoming line gets hit). Surfaces *when* and
+  // *where* the channel cap is biting so the team can size capacity.
+  const cleBreakdown = useMemo(() => {
+    const byHour = Array.from({ length: 24 }, (_, h) => ({
+      hour: h,
+      label: `${String(h).padStart(2, "0")}:00`,
+      cle: 0,
+      total: 0,
+    }));
+    const byDay = new Map<string, { date: string; cle: number; total: number }>();
+    const byDid = new Map<string, number>();
+    for (const c of calls) {
+      if (!c.callStartTime) continue;
+      const istHour = istHourFromIso(c.callStartTime);
+      byHour[istHour].total += 1;
+      const dayKey = istDateFromIso(c.callStartTime);
+      const day = byDay.get(dayKey) ?? { date: dayKey, cle: 0, total: 0 };
+      day.total += 1;
+      const cle = (c.callStatus ?? "").toUpperCase() === "CHANNEL_LIMIT_EXCEEDED";
+      if (cle) {
+        byHour[istHour].cle += 1;
+        day.cle += 1;
+        const did = (c.didNumber ?? "—").trim() || "—";
+        byDid.set(did, (byDid.get(did) ?? 0) + 1);
+      }
+      byDay.set(dayKey, day);
+    }
+    const daily = Array.from(byDay.values()).sort((a, b) => a.date.localeCompare(b.date));
+    const did = Array.from(byDid.entries())
+      .map(([didNumber, count]) => ({ didNumber, count }))
+      .sort((a, b) => b.count - a.count)
+      .slice(0, 6);
+    const peakHour = byHour.reduce((best, h) => (h.cle > best.cle ? h : best), byHour[0]);
+    return { byHour, daily, did, peakHour };
   }, [calls]);
 
   // Per-day volume + per-status breakdown
@@ -236,6 +325,82 @@ export function VoxbayClient({
         )}
       </header>
 
+      {/* Filter row */}
+      <div
+        className="rounded-[10px] border p-[12px] flex flex-wrap items-center gap-[10px] text-[12px]"
+        style={{
+          backgroundColor: "var(--lp-surface-container)",
+          borderColor: "var(--lp-outline-variant)",
+          color: "var(--lp-on-surface-variant)",
+        }}
+      >
+        <span className="material-symbols-outlined" style={{ fontSize: 18, color: "var(--lp-primary)" }}>
+          filter_alt
+        </span>
+        <span className="text-[11px] uppercase tracking-widest" style={{ color: "var(--lp-on-surface-variant)" }}>
+          Range
+        </span>
+        <input
+          type="date"
+          value={fromInput}
+          onChange={(e) => setFromInput(e.target.value)}
+          className="h-[30px] rounded-[6px] px-[8px] text-[12px]"
+          style={{
+            backgroundColor: "var(--lp-surface-container-high)",
+            color: "var(--lp-on-surface)",
+            border: "1px solid var(--lp-outline-variant)",
+          }}
+        />
+        <span style={{ opacity: 0.6 }}>→</span>
+        <input
+          type="date"
+          value={toInput}
+          onChange={(e) => setToInput(e.target.value)}
+          className="h-[30px] rounded-[6px] px-[8px] text-[12px]"
+          style={{
+            backgroundColor: "var(--lp-surface-container-high)",
+            color: "var(--lp-on-surface)",
+            border: "1px solid var(--lp-outline-variant)",
+          }}
+        />
+        <button
+          onClick={() => applyRange(fromInput, toInput || fromInput)}
+          className="h-[30px] px-[12px] rounded-[6px] text-[12px] font-semibold"
+          style={{ backgroundColor: "var(--lp-primary)", color: "var(--lp-on-primary)" }}
+        >
+          Apply
+        </button>
+        <div className="flex flex-wrap items-center gap-[6px] ml-auto">
+          {presets.map((p) => {
+            const active = isPreset === p.label;
+            return (
+              <button
+                key={p.label}
+                onClick={() => applyRange(p.from, p.to)}
+                className="h-[28px] px-[10px] rounded-full text-[11px] font-semibold"
+                style={{
+                  backgroundColor: active
+                    ? "rgba(250, 204, 21, 0.18)"
+                    : "var(--lp-surface-container-high)",
+                  color: active ? "var(--lp-primary)" : "var(--lp-on-surface)",
+                  border: `1px solid ${active ? "var(--lp-primary)" : "var(--lp-outline-variant)"}`,
+                }}
+              >
+                {p.label}
+              </button>
+            );
+          })}
+        </div>
+        <div
+          className="w-full flex flex-wrap items-baseline gap-[6px] mt-[2px] text-[11px]"
+          style={{ color: "var(--lp-on-surface-variant)" }}
+        >
+          Comparing <span style={{ color: "var(--lp-on-surface)" }}>{formatRange(range)}</span>{" "}
+          vs prior{" "}
+          <span style={{ color: "var(--lp-on-surface)" }}>{formatRange(priorRange)}</span>
+        </div>
+      </div>
+
       {/* Upload status strip */}
       <div
         className="rounded-[10px] border p-[12px] flex flex-wrap items-center gap-[12px] text-[12px]"
@@ -315,17 +480,64 @@ export function VoxbayClient({
             color: "var(--lp-on-surface-variant)",
           }}
         >
-          Upload a Voxbay incoming-call CSV to see the dashboard.
+          {latestUpload
+            ? "No calls in the selected range. Try a different window or preset."
+            : "Upload a Voxbay incoming-call CSV to see the dashboard."}
         </div>
       ) : (
         <>
-          {/* KPI strip */}
+          {/* KPI strip — value + delta vs same-length prior window */}
           <div className="grid grid-cols-2 sm:grid-cols-4 gap-[12px]">
-            <Kpi label="Total Calls" value={summary.total.toLocaleString("en-IN")} icon="call" tone="gold" />
-            <Kpi label="Answered" value={summary.answered.toLocaleString("en-IN")} icon="check_circle" tone="cyan" />
-            <Kpi label="Missed / Failed" value={summary.failed.toLocaleString("en-IN")} icon="error" tone="orange" />
-            <Kpi label="Avg Call" value={secondsToHms(summary.avg)} icon="timer" tone="gold" />
+            <Kpi
+              label="Total Calls"
+              value={summary.total.toLocaleString("en-IN")}
+              icon="call"
+              tone="gold"
+              priorLabel="Prior"
+              priorValue={prior.total.toLocaleString("en-IN")}
+              trend={pctChange(summary.total, prior.total)}
+            />
+            <Kpi
+              label="Answered"
+              value={summary.answered.toLocaleString("en-IN")}
+              icon="check_circle"
+              tone="cyan"
+              priorLabel="Prior"
+              priorValue={prior.answered.toLocaleString("en-IN")}
+              trend={pctChange(summary.answered, prior.answered)}
+            />
+            <Kpi
+              label="Missed / Failed"
+              value={summary.failed.toLocaleString("en-IN")}
+              icon="error"
+              tone="orange"
+              priorLabel="Prior"
+              priorValue={prior.failed.toLocaleString("en-IN")}
+              trend={pctChange(summary.failed, prior.failed)}
+              invertTrend
+            />
+            <Kpi
+              label="Avg Call"
+              value={secondsToHms(summary.avg)}
+              icon="timer"
+              tone="gold"
+              priorLabel="Prior"
+              priorValue={secondsToHms(prior.avgSec)}
+              trend={pctChange(summary.avg, prior.avgSec)}
+            />
           </div>
+
+          {/* Channel-Limit-Exceeded breakdown */}
+          <ChannelLimitExceededCard
+            total={summary.total}
+            count={summary.channelLimitExceeded}
+            priorTotal={prior.total}
+            priorCount={prior.channelLimitExceeded}
+            byHour={cleBreakdown.byHour}
+            daily={cleBreakdown.daily}
+            did={cleBreakdown.did}
+            peakHour={cleBreakdown.peakHour}
+          />
 
           <div className="grid grid-cols-1 lg:grid-cols-3 gap-[16px]">
             {/* Call volume area chart */}
@@ -551,37 +763,363 @@ function Kpi({
   value,
   icon,
   tone,
+  priorLabel,
+  priorValue,
+  trend,
+  invertTrend,
 }: {
   label: string;
   value: string;
   icon: string;
   tone: "gold" | "cyan" | "orange";
+  priorLabel?: string;
+  priorValue?: string;
+  trend?: number | null;
+  /** When true, downward movement is "good" (used for Missed / Failed). */
+  invertTrend?: boolean;
 }) {
   const color = tone === "gold" ? "var(--lp-primary)" : tone === "cyan" ? "var(--lp-cyan)" : "var(--lp-orange)";
+  const trendIsGood = trend == null ? null : invertTrend ? trend <= 0 : trend >= 0;
   return (
     <div
-      className="rounded-[12px] p-[16px] border"
+      className="rounded-[12px] p-[16px] border flex items-start justify-between gap-[8px]"
       style={{
         backgroundColor: "var(--lp-surface-container)",
         borderColor: "var(--lp-outline-variant)",
       }}
     >
-      <span
-        className="inline-flex items-center justify-center w-[32px] h-[32px] rounded-[8px] mb-[8px]"
-        style={{ backgroundColor: "var(--lp-surface-container-high)", color }}
-      >
-        <span className="material-symbols-outlined" style={{ fontSize: 18 }}>
-          {icon}
+      <div className="min-w-0">
+        <span
+          className="inline-flex items-center justify-center w-[32px] h-[32px] rounded-[8px] mb-[8px]"
+          style={{ backgroundColor: "var(--lp-surface-container-high)", color }}
+        >
+          <span className="material-symbols-outlined" style={{ fontSize: 18 }}>
+            {icon}
+          </span>
         </span>
-      </span>
-      <p className="text-[10px] uppercase tracking-widest" style={{ color: "var(--lp-on-surface-variant)" }}>
-        {label}
-      </p>
-      <p className="text-[26px] font-bold tabular-nums mt-[2px]" style={{ color }}>
-        {value}
-      </p>
+        <p className="text-[10px] uppercase tracking-widest" style={{ color: "var(--lp-on-surface-variant)" }}>
+          {label}
+        </p>
+        <p className="text-[26px] font-bold tabular-nums mt-[2px]" style={{ color }}>
+          {value}
+        </p>
+        {priorLabel && priorValue != null && (
+          <p
+            className="text-[11px] mt-[6px] flex flex-wrap items-baseline gap-[6px]"
+            style={{ color: "var(--lp-on-surface-variant)" }}
+          >
+            <span style={{ opacity: 0.8 }}>{priorLabel}:</span>
+            <span className="tabular-nums" style={{ color: "var(--lp-on-surface)" }}>
+              {priorValue}
+            </span>
+          </p>
+        )}
+      </div>
+      {trend != null && (
+        <span
+          className="text-[11px] px-[8px] py-[2px] rounded-full whitespace-nowrap"
+          style={{
+            backgroundColor:
+              trendIsGood ? "rgba(51, 228, 255, 0.18)" : "rgba(255, 180, 171, 0.18)",
+            color: trendIsGood ? "var(--lp-cyan)" : "var(--lp-error)",
+          }}
+          title="vs prior window"
+        >
+          {trend >= 0 ? "▲" : "▼"} {Math.abs(trend).toFixed(1)}%
+        </span>
+      )}
     </div>
   );
+}
+
+function ChannelLimitExceededCard({
+  total,
+  count,
+  priorTotal,
+  priorCount,
+  byHour,
+  daily,
+  did,
+  peakHour,
+}: {
+  total: number;
+  count: number;
+  priorTotal: number;
+  priorCount: number;
+  byHour: { hour: number; label: string; cle: number; total: number }[];
+  daily: { date: string; cle: number; total: number }[];
+  did: { didNumber: string; count: number }[];
+  peakHour: { hour: number; label: string; cle: number };
+}) {
+  const rate = total > 0 ? (count / total) * 100 : 0;
+  const priorRate = priorTotal > 0 ? (priorCount / priorTotal) * 100 : 0;
+  // Rate-point change (e.g. 9.2 → 11.4 = +2.2pp). Lower is better, so
+  // we invert the colour treatment.
+  const rateDelta = total > 0 && priorTotal > 0 ? rate - priorRate : null;
+  const dailyData = daily.map((d) => ({
+    ...d,
+    label: d.date.slice(5),
+    rate: d.total > 0 ? (d.cle / d.total) * 100 : 0,
+  }));
+  return (
+    <div
+      className="rounded-[12px] border p-[16px]"
+      style={{
+        backgroundColor: "var(--lp-surface-container)",
+        borderColor: "var(--lp-outline-variant)",
+      }}
+    >
+      <div className="flex flex-wrap items-start justify-between gap-[12px] mb-[10px]">
+        <div>
+          <h2 className="text-[14px] font-semibold" style={{ color: "var(--lp-on-surface)" }}>
+            Channel Limit Exceeded
+          </h2>
+          <p
+            className="text-[11px] mt-[2px]"
+            style={{ color: "var(--lp-on-surface-variant)" }}
+          >
+            Incoming calls dropped because all Voxbay channels were occupied.
+            Peak saturation: <span style={{ color: "var(--lp-on-surface)" }}>{peakHour.label} IST</span>
+            {peakHour.cle > 0 ? (
+              <>
+                {" "}
+                ({peakHour.cle.toLocaleString("en-IN")} call{peakHour.cle === 1 ? "" : "s"})
+              </>
+            ) : null}
+            .
+          </p>
+        </div>
+      </div>
+
+      <div className="grid grid-cols-1 lg:grid-cols-3 gap-[12px]">
+        {/* Stat block */}
+        <div
+          className="rounded-[10px] p-[14px] border flex flex-col gap-[6px]"
+          style={{
+            backgroundColor: "var(--lp-surface-container-low)",
+            borderColor: "var(--lp-outline-variant)",
+          }}
+        >
+          <p
+            className="text-[10px] uppercase tracking-widest"
+            style={{ color: "var(--lp-on-surface-variant)" }}
+          >
+            Drop Rate
+          </p>
+          <div className="flex items-baseline gap-[10px]">
+            <p
+              className="text-[34px] font-bold tabular-nums leading-none"
+              style={{ color: "var(--lp-orange)" }}
+            >
+              {rate.toFixed(1)}%
+            </p>
+            {rateDelta != null && (
+              <span
+                className="text-[11px] px-[8px] py-[2px] rounded-full whitespace-nowrap"
+                style={{
+                  backgroundColor:
+                    rateDelta <= 0 ? "rgba(51, 228, 255, 0.18)" : "rgba(255, 180, 171, 0.18)",
+                  color: rateDelta <= 0 ? "var(--lp-cyan)" : "var(--lp-error)",
+                }}
+                title="Rate-point change vs prior window (lower is better)"
+              >
+                {rateDelta >= 0 ? "▲" : "▼"} {Math.abs(rateDelta).toFixed(1)}pp
+              </span>
+            )}
+          </div>
+          <p
+            className="text-[12px] mt-[2px]"
+            style={{ color: "var(--lp-on-surface-variant)" }}
+          >
+            <span style={{ color: "var(--lp-on-surface)" }}>{count.toLocaleString("en-IN")}</span>{" "}
+            of{" "}
+            <span style={{ color: "var(--lp-on-surface)" }}>{total.toLocaleString("en-IN")}</span>{" "}
+            calls
+          </p>
+          <p
+            className="text-[11px]"
+            style={{ color: "var(--lp-on-surface-variant)" }}
+          >
+            Prior:{" "}
+            <span style={{ color: "var(--lp-on-surface)" }}>
+              {priorCount.toLocaleString("en-IN")}
+            </span>{" "}
+            ({priorRate.toFixed(1)}%)
+          </p>
+
+          {did.length > 0 && (
+            <div className="mt-[8px] pt-[8px] border-t" style={{ borderColor: "var(--lp-outline-variant)" }}>
+              <p
+                className="text-[10px] uppercase tracking-widest mb-[4px]"
+                style={{ color: "var(--lp-on-surface-variant)" }}
+              >
+                Top DIDs affected
+              </p>
+              <ul className="space-y-[3px] text-[12px]">
+                {did.map((d) => (
+                  <li key={d.didNumber} className="flex justify-between gap-[8px] font-mono">
+                    <span style={{ color: "var(--lp-on-surface)" }}>{d.didNumber}</span>
+                    <span className="tabular-nums" style={{ color: "var(--lp-orange)" }}>
+                      {d.count.toLocaleString("en-IN")}
+                    </span>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
+        </div>
+
+        {/* Hour-of-day */}
+        <div className="lg:col-span-2">
+          <p
+            className="text-[10px] uppercase tracking-widest mb-[4px]"
+            style={{ color: "var(--lp-on-surface-variant)" }}
+          >
+            By hour of day (IST)
+          </p>
+          <ResponsiveContainer width="100%" height={180}>
+            <BarChart data={byHour} margin={{ top: 6, right: 10, left: 0, bottom: 0 }}>
+              <CartesianGrid stroke={GRID} strokeDasharray="3 3" vertical={false} />
+              <XAxis
+                dataKey="label"
+                tick={{ fontSize: 10, fill: TEXT }}
+                axisLine={{ stroke: GRID }}
+                tickLine={false}
+                interval={1}
+              />
+              <YAxis
+                allowDecimals={false}
+                tick={{ fontSize: 10, fill: TEXT }}
+                axisLine={{ stroke: GRID }}
+                tickLine={false}
+                width={28}
+              />
+              <Tooltip
+                contentStyle={{
+                  backgroundColor: "#231f14",
+                  border: `1px solid ${GRID}`,
+                  color: "#ebe2d0",
+                  fontSize: 11,
+                }}
+                formatter={(v: number, _name, p) => {
+                  const total = (p?.payload as { total?: number })?.total ?? 0;
+                  const rate = total > 0 ? ((v as number) / total) * 100 : 0;
+                  return [`${v} dropped (${rate.toFixed(1)}% of ${total})`, "Channel limit"];
+                }}
+              />
+              <Bar dataKey="cle" fill={ORANGE} radius={[3, 3, 0, 0]} name="Channel limit" />
+            </BarChart>
+          </ResponsiveContainer>
+
+          {dailyData.length > 1 && (
+            <>
+              <p
+                className="text-[10px] uppercase tracking-widest mt-[8px] mb-[4px]"
+                style={{ color: "var(--lp-on-surface-variant)" }}
+              >
+                Daily drop count
+              </p>
+              <ResponsiveContainer width="100%" height={130}>
+                <BarChart data={dailyData} margin={{ top: 6, right: 10, left: 0, bottom: 0 }}>
+                  <CartesianGrid stroke={GRID} strokeDasharray="3 3" vertical={false} />
+                  <XAxis
+                    dataKey="label"
+                    tick={{ fontSize: 10, fill: TEXT }}
+                    axisLine={{ stroke: GRID }}
+                    tickLine={false}
+                  />
+                  <YAxis
+                    allowDecimals={false}
+                    tick={{ fontSize: 10, fill: TEXT }}
+                    axisLine={{ stroke: GRID }}
+                    tickLine={false}
+                    width={28}
+                  />
+                  <Tooltip
+                    contentStyle={{
+                      backgroundColor: "#231f14",
+                      border: `1px solid ${GRID}`,
+                      color: "#ebe2d0",
+                      fontSize: 11,
+                    }}
+                    formatter={(v: number, _n, p) => {
+                      const rate = (p?.payload as { rate?: number })?.rate ?? 0;
+                      return [`${v} (${rate.toFixed(1)}%)`, "Channel limit"];
+                    }}
+                  />
+                  <Bar dataKey="cle" fill={ORANGE} radius={[3, 3, 0, 0]} name="Channel limit" />
+                </BarChart>
+              </ResponsiveContainer>
+            </>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function istHourFromIso(iso: string): number {
+  // ISO string has the "Z" suffix → parses as UTC. Adding the IST offset
+  // gives the IST clock-time; we read the UTC hour of that shifted Date.
+  const t = Date.parse(iso);
+  if (!Number.isFinite(t)) return 0;
+  return new Date(t + 5.5 * 60 * 60 * 1000).getUTCHours();
+}
+
+function istDateFromIso(iso: string): string {
+  const t = Date.parse(iso);
+  if (!Number.isFinite(t)) return iso.slice(0, 10);
+  const dt = new Date(t + 5.5 * 60 * 60 * 1000);
+  const y = dt.getUTCFullYear();
+  const m = String(dt.getUTCMonth() + 1).padStart(2, "0");
+  const d = String(dt.getUTCDate()).padStart(2, "0");
+  return `${y}-${m}-${d}`;
+}
+
+function pctChange(now: number, prev: number): number | null {
+  if (prev === 0) return now === 0 ? 0 : null;
+  return Math.round(((now - prev) / prev) * 1000) / 10;
+}
+
+function formatRange(r: Range): string {
+  return `${formatShort(r.from)} – ${formatShort(r.to)}`;
+}
+
+function formatShort(yyyyMmDd: string): string {
+  const [y, m, d] = yyyyMmDd.split("-").map(Number);
+  return new Intl.DateTimeFormat("en-IN", {
+    month: "short",
+    day: "numeric",
+    year: "numeric",
+    timeZone: "UTC",
+  }).format(new Date(Date.UTC(y, m - 1, d)));
+}
+
+function todayIst(): string {
+  const fmt = new Intl.DateTimeFormat("en-CA", {
+    timeZone: "Asia/Kolkata",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  });
+  return fmt.format(new Date());
+}
+
+function addDaysIst(yyyyMmDd: string, days: number): string {
+  const [y, m, d] = yyyyMmDd.split("-").map(Number);
+  const dt = new Date(Date.UTC(y, m - 1, d));
+  dt.setUTCDate(dt.getUTCDate() + days);
+  const yy = dt.getUTCFullYear();
+  const mm = String(dt.getUTCMonth() + 1).padStart(2, "0");
+  const dd = String(dt.getUTCDate()).padStart(2, "0");
+  return `${yy}-${mm}-${dd}`;
+}
+
+function lastMonthFirstIst(today: string): string {
+  const [y, m] = today.split("-").map(Number);
+  const ly = m === 1 ? y - 1 : y;
+  const lm = m === 1 ? 12 : m - 1;
+  return `${ly}-${String(lm).padStart(2, "0")}-01`;
 }
 
 function Card({ title, children, wide }: { title: string; children: React.ReactNode; wide?: boolean }) {
@@ -620,6 +1158,7 @@ function StatusChip({ status }: { status: string | null }) {
     NOANSWER: { bg: "rgba(255, 180, 147, 0.18)", color: "var(--lp-orange)" },
     BUSY: { bg: "rgba(255, 180, 147, 0.18)", color: "var(--lp-orange)" },
     TIMEOUT: { bg: "rgba(255, 180, 147, 0.18)", color: "var(--lp-orange)" },
+    CHANNEL_LIMIT_EXCEEDED: { bg: "rgba(255, 180, 147, 0.18)", color: "var(--lp-orange)" },
   };
   const tone = map[s] ?? { bg: "rgba(154, 144, 120, 0.18)", color: "var(--lp-on-surface-variant)" };
   return (
