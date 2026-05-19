@@ -104,6 +104,11 @@ export const MODULES: AppModule[] = [
         label: "Holiday Calendar",
         icon: "event",
       },
+      {
+        href: "/marketing/voxbay",
+        label: "Voxbay Call Analysis",
+        icon: "phone_in_talk",
+      },
     ],
   },
   {

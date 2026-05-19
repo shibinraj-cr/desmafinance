@@ -354,6 +354,87 @@ export async function POST() {
        END $$`,
     );
 
+    // 5a2. Voxbay call analysis — upload metadata + parsed call rows.
+    await step(
+      "VoxbayUpload table",
+      `CREATE TABLE IF NOT EXISTS "VoxbayUpload" (
+         "id" TEXT NOT NULL,
+         "uploadedById" TEXT,
+         "filename" TEXT,
+         "rowCount" INTEGER NOT NULL DEFAULT 0,
+         "uploadedAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+         CONSTRAINT "VoxbayUpload_pkey" PRIMARY KEY ("id")
+       )`,
+    );
+    await step(
+      "VoxbayUpload uploadedAt index",
+      `CREATE INDEX IF NOT EXISTS "VoxbayUpload_uploadedAt_idx" ON "VoxbayUpload"("uploadedAt")`,
+    );
+    await step(
+      "VoxbayUpload.uploadedById foreign key",
+      `DO $$ BEGIN
+         IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'VoxbayUpload_uploadedById_fkey') THEN
+           ALTER TABLE "VoxbayUpload"
+             ADD CONSTRAINT "VoxbayUpload_uploadedById_fkey"
+             FOREIGN KEY ("uploadedById") REFERENCES "User"("id") ON DELETE SET NULL;
+         END IF;
+       END $$`,
+    );
+    await step(
+      "VoxbayCall table",
+      `CREATE TABLE IF NOT EXISTS "VoxbayCall" (
+         "id" TEXT NOT NULL,
+         "slNo" INTEGER,
+         "contactName" TEXT,
+         "sourceNumber" TEXT,
+         "didNumber" TEXT,
+         "cost" DOUBLE PRECISION,
+         "dtmfSeq" TEXT,
+         "callStartTime" TIMESTAMP(3),
+         "callConnectedTime" TIMESTAMP(3),
+         "callStatus" TEXT,
+         "userStatus" TEXT,
+         "stickyStatus" TEXT,
+         "holdTime" TEXT,
+         "callRecordFile" TEXT,
+         "application" TEXT,
+         "extNumber" TEXT,
+         "appName" TEXT,
+         "agentName" TEXT,
+         "lastTriedName" TEXT,
+         "firstTriedName" TEXT,
+         "totalDurationSec" INTEGER NOT NULL DEFAULT 0,
+         "totalDurationDisplay" TEXT,
+         "answeredDurationSec" INTEGER NOT NULL DEFAULT 0,
+         "answeredDurationDisplay" TEXT,
+         "deptName" TEXT,
+         "disposition" TEXT,
+         "latestComment" TEXT,
+         "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+         CONSTRAINT "VoxbayCall_pkey" PRIMARY KEY ("id")
+       )`,
+    );
+    await step(
+      "VoxbayCall callStartTime index",
+      `CREATE INDEX IF NOT EXISTS "VoxbayCall_callStartTime_idx" ON "VoxbayCall"("callStartTime")`,
+    );
+    await step(
+      "VoxbayCall callStatus index",
+      `CREATE INDEX IF NOT EXISTS "VoxbayCall_callStatus_idx" ON "VoxbayCall"("callStatus")`,
+    );
+    await step(
+      "VoxbayCall userStatus index",
+      `CREATE INDEX IF NOT EXISTS "VoxbayCall_userStatus_idx" ON "VoxbayCall"("userStatus")`,
+    );
+    await step(
+      "VoxbayCall agentName index",
+      `CREATE INDEX IF NOT EXISTS "VoxbayCall_agentName_idx" ON "VoxbayCall"("agentName")`,
+    );
+    await step(
+      "VoxbayCall lastTriedName index",
+      `CREATE INDEX IF NOT EXISTS "VoxbayCall_lastTriedName_idx" ON "VoxbayCall"("lastTriedName")`,
+    );
+
     // 5b. Holiday table for the marketing module's holiday calendar.
     await step(
       "Holiday table",

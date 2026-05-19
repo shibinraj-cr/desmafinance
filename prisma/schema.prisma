@@ -38,6 +38,8 @@ model User {
   // Marketing holiday calendar edits
   holidaysCreated     Holiday[]             @relation("HolidaysCreated")
   holidaysUpdated     Holiday[]             @relation("HolidaysUpdated")
+  // Voxbay CSV uploads
+  voxbayUploads       VoxbayUpload[]        @relation("VoxbayUploads")
 
   @@index([roleId])
 }
@@ -495,4 +497,58 @@ model PendingApproval {
   @@index([status, createdAt])
   @@index([submittedById])
   @@index([targetTxId])
+}
+
+/// Metadata about each Voxbay CSV upload. The actual call rows live
+/// in VoxbayCall. A new upload wipes the existing rows and replaces
+/// them — historical snapshots aren't kept.
+model VoxbayUpload {
+  id            String   @id @default(cuid())
+  uploadedById  String?
+  uploadedBy    User?    @relation(name: "VoxbayUploads", fields: [uploadedById], references: [id], onDelete: SetNull)
+  filename      String?
+  rowCount      Int      @default(0)
+  uploadedAt    DateTime @default(now())
+
+  @@index([uploadedAt])
+}
+
+/// One parsed row from the Voxbay incoming-call report. Durations
+/// are normalised to seconds for analytics; the original HH:MM:SS
+/// string is preserved on `*Display` for the table.
+model VoxbayCall {
+  id                  String    @id @default(cuid())
+  slNo                Int?
+  contactName         String?
+  sourceNumber        String?
+  didNumber           String?
+  cost                Float?
+  dtmfSeq             String?
+  callStartTime       DateTime?
+  callConnectedTime   DateTime?
+  callStatus          String?
+  userStatus          String?
+  stickyStatus        String?
+  holdTime            String?
+  callRecordFile      String?
+  application         String?
+  extNumber           String?
+  appName             String?
+  agentName           String?
+  lastTriedName       String?
+  firstTriedName      String?
+  totalDurationSec    Int       @default(0)
+  totalDurationDisplay String?
+  answeredDurationSec Int       @default(0)
+  answeredDurationDisplay String?
+  deptName            String?
+  disposition         String?
+  latestComment       String?
+  createdAt           DateTime  @default(now())
+
+  @@index([callStartTime])
+  @@index([callStatus])
+  @@index([userStatus])
+  @@index([agentName])
+  @@index([lastTriedName])
 }
