@@ -107,16 +107,18 @@ export async function submitCreate(opts: {
   return { applied: false as const, pending };
 }
 
-/** Edit an existing draft. Only the owner can edit. */
+/** Edit an existing draft. The owner can always edit; admins can edit
+ *  any draft (so they can support Ganga's review if needed). */
 export async function updateDraft(opts: {
   draftId: string;
   userId: string;
+  perms: Permissions;
   data: TxProposed;
 }) {
-  const { draftId, userId, data } = opts;
+  const { draftId, userId, perms, data } = opts;
   const draft = await prisma.transactionDraft.findUnique({ where: { id: draftId } });
   if (!draft) return { error: "not_found" as const };
-  if (draft.submittedById !== userId) return { error: "forbidden" as const };
+  if (draft.submittedById !== userId && !perms.isAdmin) return { error: "forbidden" as const };
   const updated = await prisma.transactionDraft.update({
     where: { id: draftId },
     data: {
@@ -142,12 +144,16 @@ export async function updateDraft(opts: {
   return { ok: true as const, draft: updated };
 }
 
-/** Discard a draft without submitting. Only the owner can discard. */
-export async function discardDraft(opts: { draftId: string; userId: string }) {
-  const { draftId, userId } = opts;
+/** Discard a draft without submitting. Owner or admin. */
+export async function discardDraft(opts: {
+  draftId: string;
+  userId: string;
+  perms: Permissions;
+}) {
+  const { draftId, userId, perms } = opts;
   const draft = await prisma.transactionDraft.findUnique({ where: { id: draftId } });
   if (!draft) return { error: "not_found" as const };
-  if (draft.submittedById !== userId) return { error: "forbidden" as const };
+  if (draft.submittedById !== userId && !perms.isAdmin) return { error: "forbidden" as const };
   await prisma.transactionDraft.delete({ where: { id: draftId } });
   await recordAudit({
     entityType: "TransactionDraft",
@@ -171,7 +177,11 @@ export async function submitDraftToPending(opts: {
   const { draftId, userId, perms } = opts;
   const draft = await prisma.transactionDraft.findUnique({ where: { id: draftId } });
   if (!draft) return { error: "not_found" as const };
-  if (draft.submittedById !== userId) return { error: "forbidden" as const };
+  // Owner or admin can submit. The downstream PendingApproval /
+  // Transaction is always attributed to the *draft owner* — admins
+  // who push on Ganga's behalf show up only in the audit log.
+  if (draft.submittedById !== userId && !perms.isAdmin) return { error: "forbidden" as const };
+  const ownerId = draft.submittedById;
 
   const proposed: TxProposed = {
     date: draft.date.toISOString(),
@@ -200,7 +210,7 @@ export async function submitDraftToPending(opts: {
           amount: draft.amount,
           flow: draft.flow,
           partyId: draft.partyId,
-          createdById: userId,
+          createdById: ownerId,
         },
       });
       await tx.transactionDraft.delete({ where: { id: draftId } });
@@ -211,7 +221,7 @@ export async function submitDraftToPending(opts: {
       entityId: result.id,
       action: "CREATE",
       userId,
-      changes: { ...proposed, fromDraftId: draftId },
+      changes: { ...proposed, fromDraftId: draftId, draftOwnerId: ownerId },
     });
     return { applied: true as const, transaction: result };
   }
@@ -222,7 +232,7 @@ export async function submitDraftToPending(opts: {
         kind: "create",
         status: "pending",
         proposed: proposed as unknown as object,
-        submittedById: userId,
+        submittedById: ownerId,
       },
     });
     await tx.transactionDraft.delete({ where: { id: draftId } });
@@ -233,7 +243,7 @@ export async function submitDraftToPending(opts: {
     entityId: pending.id,
     action: "SUBMIT_CREATE",
     userId,
-    changes: { ...proposed, fromDraftId: draftId },
+    changes: { ...proposed, fromDraftId: draftId, draftOwnerId: ownerId },
   });
   return { applied: false as const, pending };
 }

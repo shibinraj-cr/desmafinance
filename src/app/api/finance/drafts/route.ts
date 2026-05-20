@@ -11,14 +11,21 @@ export const dynamic = "force-dynamic";
 export async function GET() {
   const { perms, userId } = await getCurrentUserAndPermissions();
   if (!perms || !userId) return NextResponse.json({ error: "unauthorized" }, { status: 401 });
-  if (!perms.draftFirst) {
-    // Non-draftFirst users shouldn't see drafts at all — return empty.
+  if (!perms.draftFirst && !perms.isAdmin) {
+    // Anyone who isn't on the draft workflow and isn't an admin has
+    // no business listing drafts.
     return NextResponse.json({ drafts: [] });
   }
+  // Admins see every user's drafts (oversight); draftFirst users see
+  // only their own.
+  const where = perms.isAdmin ? {} : { submittedById: userId };
   const drafts = await prisma.transactionDraft.findMany({
-    where: { submittedById: userId },
+    where,
     orderBy: [{ createdAt: "desc" }],
-    include: { party: { select: { id: true, name: true, group: true } } },
+    include: {
+      party: { select: { id: true, name: true, group: true } },
+      submittedBy: { select: { id: true, username: true } },
+    },
   });
   return NextResponse.json({
     drafts: drafts.map((d) => ({
@@ -35,6 +42,8 @@ export async function GET() {
       partyId: d.partyId,
       partyName: d.party?.name ?? null,
       partyGroup: d.party?.group ?? null,
+      submittedById: d.submittedById,
+      submittedByUsername: d.submittedBy?.username ?? null,
       createdAt: d.createdAt.toISOString(),
     })),
   });

@@ -17,16 +17,22 @@ export const dynamic = "force-dynamic";
 export default async function MyDraftsPage() {
   const { perms, userId } = await getCurrentUserAndPermissions();
   if (!perms || !userId) redirect("/login");
-  if (!perms.draftFirst) {
-    // Anyone without the flag has nothing to do here.
+  // Admins also see this screen for oversight — they get the full list
+  // of every draft-first user's pending drafts. Anyone else without the
+  // flag has nothing to do here.
+  if (!perms.draftFirst && !perms.isAdmin) {
     redirect("/finance/approvals/pending");
   }
+  const isAdminViewer = perms.isAdmin && !perms.draftFirst;
 
   const [drafts, masters, counts] = await Promise.all([
     prisma.transactionDraft.findMany({
-      where: { submittedById: userId },
+      where: isAdminViewer ? {} : { submittedById: userId },
       orderBy: [{ createdAt: "desc" }],
-      include: { party: { select: { id: true, name: true, group: true } } },
+      include: {
+        party: { select: { id: true, name: true, group: true } },
+        submittedBy: { select: { id: true, username: true } },
+      },
     }),
     Promise.all([
       prisma.category.findMany({
@@ -47,9 +53,15 @@ export default async function MyDraftsPage() {
       }),
     ]),
     Promise.all([
-      prisma.pendingApproval.count({ where: { submittedById: userId, status: "pending" } }),
-      prisma.pendingApproval.count({ where: { submittedById: userId, status: "approved" } }),
-      prisma.pendingApproval.count({ where: { submittedById: userId, status: "rejected" } }),
+      prisma.pendingApproval.count({
+        where: { ...(isAdminViewer ? {} : { submittedById: userId }), status: "pending" },
+      }),
+      prisma.pendingApproval.count({
+        where: { ...(isAdminViewer ? {} : { submittedById: userId }), status: "approved" },
+      }),
+      prisma.pendingApproval.count({
+        where: { ...(isAdminViewer ? {} : { submittedById: userId }), status: "rejected" },
+      }),
     ]),
   ]);
 
@@ -60,7 +72,11 @@ export default async function MyDraftsPage() {
     <>
       <TopBar
         title="Approvals"
-        subtitle={`${drafts.length} draft${drafts.length === 1 ? "" : "s"} · review and submit for approval`}
+        subtitle={
+          isAdminViewer
+            ? `${drafts.length} draft${drafts.length === 1 ? "" : "s"} across all users · admin oversight`
+            : `${drafts.length} draft${drafts.length === 1 ? "" : "s"} · review and submit for approval`
+        }
       />
       <div className="p-margin space-y-lg">
         <Tabs
@@ -69,6 +85,7 @@ export default async function MyDraftsPage() {
           myDrafts={{ count: drafts.length }}
         />
         <MyDraftsClient
+          isAdminViewer={isAdminViewer}
           drafts={drafts.map((d) => ({
             id: d.id,
             date: d.date.toISOString().slice(0, 10),
@@ -83,6 +100,7 @@ export default async function MyDraftsPage() {
             partyId: d.partyId,
             partyName: d.party?.name ?? null,
             partyGroup: d.party?.group ?? null,
+            submittedByUsername: d.submittedBy?.username ?? null,
             createdAt: d.createdAt.toISOString(),
           }))}
           categories={categories.map((c) => ({

@@ -18,6 +18,7 @@ export type Draft = {
   partyId: string | null;
   partyName: string | null;
   partyGroup: string | null;
+  submittedByUsername: string | null;
   createdAt: string;
 };
 
@@ -40,10 +41,15 @@ export function MyDraftsClient({
   drafts: initial,
   categories,
   parties,
+  isAdminViewer,
 }: {
   drafts: Draft[];
   categories: CategoryMaster[];
   parties: PartyMaster[];
+  /** True when the viewer is an admin who isn't the draft owner —
+   *  shows a Submitter column and is mostly read-oriented (admin can
+   *  still act, but the page is framed as oversight). */
+  isAdminViewer: boolean;
 }) {
   const router = useRouter();
   const [drafts, setDrafts] = useState<Draft[]>(initial);
@@ -252,6 +258,7 @@ export function MyDraftsClient({
               <tr className="text-left">
                 <Th align="center"> </Th>
                 <Th>Date</Th>
+                {isAdminViewer && <Th>Submitter</Th>}
                 <Th>Type</Th>
                 <Th>Category</Th>
                 <Th>Sub-item</Th>
@@ -312,6 +319,11 @@ export function MyDraftsClient({
                         <span className="font-mono">{fmtDDMMYY(row.date)}</span>
                       )}
                     </td>
+                    {isAdminViewer && (
+                      <td className="px-sm py-sm text-on-surface-variant whitespace-nowrap">
+                        {d.submittedByUsername ?? "—"}
+                      </td>
+                    )}
                     <td className="px-sm py-sm">
                       {isEditing ? (
                         <select

@@ -108,9 +108,16 @@ export default async function ApprovalsPage({
         select: { id: true, name: true, group: true, txTypes: true, isActive: true },
       }),
     ]),
+    // Draft tab counts:
+    //   - draftFirst users: count of their own drafts
+    //   - admins (without draftFirst): count of every draft in the
+    //     system, since they oversee the queue
+    //   - everyone else: hidden (count of 0 doesn't matter, tab not rendered)
     perms?.draftFirst && userId
       ? prisma.transactionDraft.count({ where: { submittedById: userId } })
-      : Promise.resolve(0),
+      : perms?.isAdmin
+        ? prisma.transactionDraft.count()
+        : Promise.resolve(0),
   ]);
 
   const [pendingCount, approvedCount, rejectedCount] = counts;
@@ -191,7 +198,9 @@ export default async function ApprovalsPage({
         <Tabs
           active={tab}
           counts={{ pending: pendingCount, approved: approvedCount, rejected: rejectedCount }}
-          myDrafts={perms?.draftFirst ? { count: draftsCount } : undefined}
+          myDrafts={
+            perms?.draftFirst || perms?.isAdmin ? { count: draftsCount } : undefined
+          }
         />
 
         <TypeTabs tab={tab} active={typeFilter} counts={typeCounts} />

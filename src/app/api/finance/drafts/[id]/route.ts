@@ -38,7 +38,7 @@ export async function PATCH(req: NextRequest, { params }: { params: { id: string
     flow: parsed.data.flow,
     partyId: parsed.data.partyId ?? null,
   };
-  const result = await updateDraft({ draftId: params.id, userId, data });
+  const result = await updateDraft({ draftId: params.id, userId, perms, data });
   if ("error" in result && result.error) {
     return NextResponse.json(
       { error: result.error },
@@ -51,7 +51,7 @@ export async function PATCH(req: NextRequest, { params }: { params: { id: string
 export async function DELETE(_req: NextRequest, { params }: { params: { id: string } }) {
   const { perms, userId } = await getCurrentUserAndPermissions();
   if (!perms || !userId) return NextResponse.json({ error: "unauthorized" }, { status: 401 });
-  const result = await discardDraft({ draftId: params.id, userId });
+  const result = await discardDraft({ draftId: params.id, userId, perms });
   if ("error" in result && result.error) {
     return NextResponse.json(
       { error: result.error },
