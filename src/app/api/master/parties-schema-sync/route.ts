@@ -656,6 +656,48 @@ export async function POST() {
          END IF;
        END $$`,
     );
+
+    // 7. LeadPulseBdeInsight — monthly AI-style coaching loop per BDE
+    await step(
+      "LeadPulseBdeInsight table",
+      `CREATE TABLE IF NOT EXISTS "LeadPulseBdeInsight" (
+         "id" TEXT NOT NULL,
+         "userId" TEXT NOT NULL,
+         "year" INTEGER NOT NULL,
+         "month" INTEGER NOT NULL,
+         "analysis" TEXT NOT NULL,
+         "questions" JSONB NOT NULL,
+         "answers" JSONB,
+         "feedback" TEXT,
+         "status" TEXT NOT NULL DEFAULT 'draft',
+         "answeredAt" TIMESTAMP(3),
+         "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+         "updatedAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+         CONSTRAINT "LeadPulseBdeInsight_pkey" PRIMARY KEY ("id")
+       )`,
+    );
+    await step(
+      "LeadPulseBdeInsight unique (userId, year, month)",
+      `CREATE UNIQUE INDEX IF NOT EXISTS "LeadPulseBdeInsight_userId_year_month_key" ON "LeadPulseBdeInsight"("userId", "year", "month")`,
+    );
+    await step(
+      "LeadPulseBdeInsight userId index",
+      `CREATE INDEX IF NOT EXISTS "LeadPulseBdeInsight_userId_idx" ON "LeadPulseBdeInsight"("userId")`,
+    );
+    await step(
+      "LeadPulseBdeInsight (year, month) index",
+      `CREATE INDEX IF NOT EXISTS "LeadPulseBdeInsight_year_month_idx" ON "LeadPulseBdeInsight"("year", "month")`,
+    );
+    await step(
+      "LeadPulseBdeInsight.userId foreign key",
+      `DO $$ BEGIN
+         IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'LeadPulseBdeInsight_userId_fkey') THEN
+           ALTER TABLE "LeadPulseBdeInsight"
+             ADD CONSTRAINT "LeadPulseBdeInsight_userId_fkey"
+             FOREIGN KEY ("userId") REFERENCES "User"("id") ON DELETE CASCADE;
+         END IF;
+       END $$`,
+    );
   } catch (e) {
     return NextResponse.json(
       { error: "ddl_failed", log, message: e instanceof Error ? e.message : String(e) },

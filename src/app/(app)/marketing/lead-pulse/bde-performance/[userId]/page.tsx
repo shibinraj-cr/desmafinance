@@ -15,18 +15,24 @@ import {
 } from "@/lib/lead-pulse-metrics";
 import { addDays, todayIst, fromPrismaDate, toPrismaDate } from "@/lib/lead-pulse-dates";
 import { PerformanceOverTimeChart } from "../../_charts";
+import { BdeInsightCard } from "./_bde-insight-card";
 
 export const dynamic = "force-dynamic";
 
-const RANGE_OPTIONS = ["30d", "90d", "ytd", "all"] as const;
+const RANGE_OPTIONS = ["30d", "90d", "ytd", "all", "month"] as const;
 type RangeKey = (typeof RANGE_OPTIONS)[number];
+
+const MONTH_LABELS = [
+  "Jan", "Feb", "Mar", "Apr", "May", "Jun",
+  "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
+];
 
 export default async function BdePerformanceDetail({
   params,
   searchParams,
 }: {
   params: { userId: string };
-  searchParams: { range?: string };
+  searchParams: { range?: string; year?: string; month?: string };
 }) {
   const { userId: actorId, perms } = await getCurrentUserAndPermissions();
   if (!actorId || !perms) redirect("/login");
@@ -66,23 +72,37 @@ export default async function BdePerformanceDetail({
           ? "ytd"
           : searchParams.range === "all"
             ? "all"
-            : "90d";
+            : searchParams.range === "month"
+              ? "month"
+              : "90d";
 
   const today = todayIst();
+  const yearNow = Number(today.slice(0, 4));
+  const monthNow = Number(today.slice(5, 7));
+  const pickYear = searchParams.year ? Math.max(2024, Math.min(2100, Number(searchParams.year))) : yearNow;
+  const pickMonth = searchParams.month ? Math.max(1, Math.min(12, Number(searchParams.month))) : monthNow;
+
   let start: string;
+  let end: string = today;
   if (range === "30d") start = addDays(today, -29);
   else if (range === "90d") start = addDays(today, -89);
   else if (range === "ytd") start = `${today.slice(0, 4)}-01-01`;
-  else start = "2000-01-01";
+  else if (range === "month") {
+    const mb = monthBounds(pickYear, pickMonth);
+    start = mb.start;
+    // Cap end at today if viewing the current month so we don't pull
+    // future-dated rows into a series.
+    end = mb.end > today ? today : mb.end;
+  } else start = "2000-01-01";
 
   const userId = params.userId;
 
-  const [totals, sourceRows, teamTotals, dailyEntries, recent] = await Promise.all([
-    getFunnelTotals({ start, end: today, userId }),
-    getFunnelBySource({ start, end: today }),
-    getFunnelTotals({ start, end: today }),
+  const [totals, sourceRows, teamTotals, dailyEntries, recent, insightRow] = await Promise.all([
+    getFunnelTotals({ start, end, userId }),
+    getFunnelBySource({ start, end }),
+    getFunnelTotals({ start, end }),
     prisma.leadPulseDailyEntry.findMany({
-      where: { userId, entryDate: { gte: toPrismaDate(start), lte: toPrismaDate(today) }, status: "submitted" },
+      where: { userId, entryDate: { gte: toPrismaDate(start), lte: toPrismaDate(end) }, status: "submitted" },
       select: { entryDate: true, leadsReceived: true, transferredToL2: true, receivedFromL1: true, directLeads: true, closedWon: true, roleAtEntry: true },
     }),
     prisma.leadPulseDailyEntry.findMany({
@@ -90,6 +110,18 @@ export default async function BdePerformanceDetail({
       orderBy: [{ entryDate: "desc" }],
       take: 60,
       include: { source: { select: { label: true } } },
+    }),
+    // Insight is always scoped to a calendar month — use the month
+    // picker when active, otherwise default to the current calendar
+    // month even if the user is looking at 90d/YTD/all on the funnel.
+    prisma.leadPulseBdeInsight.findUnique({
+      where: {
+        userId_year_month: {
+          userId,
+          year: range === "month" ? pickYear : yearNow,
+          month: range === "month" ? pickMonth : monthNow,
+        },
+      },
     }),
   ]);
 
@@ -105,14 +137,14 @@ export default async function BdePerformanceDetail({
   // Build a per-day series for the time-series chart. Bucket weekly when
   // the range is > 30 days for readability.
   const useWeekly = range !== "30d" && range !== "all";
-  const series = buildSeries(dailyEntries, role, start, today, useWeekly);
+  const series = buildSeries(dailyEntries, role, start, end, useWeekly);
 
   // Per-source rows reduced to the BDE's own data.
   const ownPerSource = await Promise.all(
     sourceRows.map(async (s) => {
       const own = await getFunnelTotals({
         start,
-        end: today,
+        end,
         userId,
         sourceId: s.sourceId,
       });
@@ -155,7 +187,7 @@ export default async function BdePerformanceDetail({
             <span>· @{target.username}</span>
           </div>
         </div>
-        <RangeTabs current={range} userId={userId} />
+        <RangeTabs current={range} userId={userId} pickYear={pickYear} pickMonth={pickMonth} />
       </header>
 
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-[16px]">
@@ -171,6 +203,33 @@ export default async function BdePerformanceDetail({
           tone={vsTeam == null ? "neutral" : vsTeam >= 0 ? "positive" : "negative"}
         />
       </div>
+
+      <BdeInsightCard
+        initial={
+          insightRow
+            ? {
+                id: insightRow.id,
+                userId: insightRow.userId,
+                year: insightRow.year,
+                month: insightRow.month,
+                analysis: insightRow.analysis,
+                questions: insightRow.questions as unknown as Array<{ id: string; question: string; hint?: string }>,
+                answers: (insightRow.answers as unknown as Record<string, string> | null) ?? null,
+                feedback: insightRow.feedback,
+                status: insightRow.status as "draft" | "answered",
+                answeredAt: insightRow.answeredAt?.toISOString() ?? null,
+                createdAt: insightRow.createdAt.toISOString(),
+                updatedAt: insightRow.updatedAt.toISOString(),
+              }
+            : null
+        }
+        bdeUserId={userId}
+        bdeDisplayName={target.leadPulseRole.displayName}
+        isSelf={actorId === userId}
+        canSupervise={access.canSupervise}
+        year={range === "month" ? pickYear : yearNow}
+        month={range === "month" ? pickMonth : monthNow}
+      />
 
       <Card title="Performance Over Time">
         <PerformanceOverTimeChart data={series} role={role} />
@@ -379,19 +438,43 @@ function StatusPill({ status, locked }: { status: string; locked: boolean }) {
   );
 }
 
-function RangeTabs({ current, userId }: { current: RangeKey; userId: string }) {
+function RangeTabs({
+  current,
+  userId,
+  pickYear,
+  pickMonth,
+}: {
+  current: RangeKey;
+  userId: string;
+  pickYear: number;
+  pickMonth: number;
+}) {
   const labels: Record<RangeKey, string> = {
     "30d": "30 days",
     "90d": "90 days",
     ytd: "YTD",
     all: "All time",
+    month: "Month",
   };
+  // 12 most recent months as picker options.
+  const monthOpts: Array<{ y: number; m: number }> = [];
+  let y = pickYear;
+  let m = pickMonth;
+  for (let i = 0; i < 12; i++) {
+    monthOpts.push({ y, m });
+    m -= 1;
+    if (m < 1) { m = 12; y -= 1; }
+  }
   return (
-    <div className="flex items-center gap-[4px]">
+    <div className="flex flex-wrap items-center gap-[4px]">
       {RANGE_OPTIONS.map((r) => (
         <Link
           key={r}
-          href={`/marketing/lead-pulse/bde-performance/${userId}?range=${r}`}
+          href={
+            r === "month"
+              ? `/marketing/lead-pulse/bde-performance/${userId}?range=month&year=${pickYear}&month=${pickMonth}`
+              : `/marketing/lead-pulse/bde-performance/${userId}?range=${r}`
+          }
           className="h-[32px] px-[12px] rounded-[8px] inline-flex items-center text-[12px] font-semibold border"
           style={{
             borderColor: current === r ? "var(--lp-primary)" : "var(--lp-outline-variant)",
@@ -402,6 +485,36 @@ function RangeTabs({ current, userId }: { current: RangeKey; userId: string }) {
           {labels[r]}
         </Link>
       ))}
+      {current === "month" && (
+        <form action={`/marketing/lead-pulse/bde-performance/${userId}`} className="flex items-center gap-[4px]">
+          <input type="hidden" name="range" value="month" />
+          <select
+            name="year"
+            defaultValue={String(pickYear)}
+            className="h-[32px] px-[6px] rounded-[6px] text-[12px]"
+          >
+            {Array.from(new Set(monthOpts.map((o) => o.y))).map((yy) => (
+              <option key={yy} value={yy}>{yy}</option>
+            ))}
+          </select>
+          <select
+            name="month"
+            defaultValue={String(pickMonth)}
+            className="h-[32px] px-[6px] rounded-[6px] text-[12px]"
+          >
+            {Array.from({ length: 12 }, (_, i) => i + 1).map((mm) => (
+              <option key={mm} value={mm}>{MONTH_LABELS[mm - 1]}</option>
+            ))}
+          </select>
+          <button
+            type="submit"
+            className="h-[32px] px-[10px] rounded-[6px] text-[12px] font-semibold"
+            style={{ backgroundColor: "var(--lp-primary)", color: "var(--lp-on-primary)" }}
+          >
+            Apply
+          </button>
+        </form>
+      )}
     </div>
   );
 }

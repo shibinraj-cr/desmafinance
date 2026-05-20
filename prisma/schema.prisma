@@ -48,6 +48,8 @@ model User {
   transactionDrafts   TransactionDraft[]
   // L2 BDE pipeline (in-flight expected closes)
   leadPulsePipeline   LeadPulsePipeline[]   @relation("LeadPulsePipeline")
+  // Monthly AI-style insight + Q&A loop on the BDE performance page
+  leadPulseBdeInsights LeadPulseBdeInsight[] @relation("BdeInsights")
 
   @@index([roleId])
 }
@@ -642,4 +644,37 @@ model VoxbayCall {
   @@index([userStatus])
   @@index([agentName])
   @@index([lastTriedName])
+}
+
+/// One per (BDE, year, month) row holding the AI-style coaching loop
+/// shown on the BDE performance page. The system writes the initial
+/// analysis + 3 questions; the BDE writes their answers; the system
+/// writes follow-up feedback. Admins can read everyone's; BDEs only
+/// see their own.
+model LeadPulseBdeInsight {
+  id          String   @id @default(cuid())
+  userId      String
+  user        User     @relation(name: "BdeInsights", fields: [userId], references: [id], onDelete: Cascade)
+  year        Int
+  month       Int
+
+  /// Initial markdown analysis the BDE reads before answering.
+  analysis    String
+  /// JSON: Array<{ id: string; question: string; hint?: string }>.
+  questions   Json
+  /// JSON: Record<string, string>  (question id → BDE's answer).
+  answers     Json?
+  /// Follow-up markdown feedback written after answers are submitted.
+  feedback    String?
+
+  /// 'draft' before BDE answers, 'answered' once submitted.
+  status      String   @default("draft")
+  answeredAt  DateTime?
+
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@unique([userId, year, month])
+  @@index([userId])
+  @@index([year, month])
 }
