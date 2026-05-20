@@ -60,6 +60,11 @@ export const MODULES: AppModule[] = [
         icon: "edit_note",
       },
       {
+        href: "/marketing/lead-pulse/pipeline",
+        label: "Pipeline",
+        icon: "timeline",
+      },
+      {
         href: "/marketing/lead-pulse/monthly-report",
         label: "Monthly Report",
         icon: "table_chart",

@@ -1388,3 +1388,220 @@ export async function getSourceDisqualifiedAnalysis(
     summary: { last30d, prior30d, deltaPct },
   };
 }
+
+/**
+ * Pipeline forecast: per-L2-BDE × service. For each row, we sum
+ *   - `actualCount` = closed_won this month so far (LeadPulseDailyClose
+ *     rows whose entry sits in the month, scoped to the BDE × service)
+ *   - `openCount` = open pipeline rows with expectedCloseDate in the
+ *     month, scoped to the BDE × service
+ *   - `expectedRevenue` = SUM(expectedFirstInstallment) over the open
+ *     pipeline rows scoped above
+ *   - `actualRevenue` = SUM(expectedFirstInstallment) over the closed_won
+ *     pipeline rows scoped above (uses the pipeline row's installment, not
+ *     a fresh DB lookup — matches what the BDE recorded at close-time)
+ *   - `targetCount` = LeadPulseTarget.target for (year, month, userId,
+ *     serviceId/groupId). Prefers service-group target when set.
+ *
+ * `forecastCount = actualCount + openCount`. The supervisor card on the
+ * dashboard uses the per-BDE roll-up of these totals.
+ */
+export async function getPipelineForecast(
+  year: number,
+  month: number,
+  opts?: { userId?: string },
+): Promise<{
+  byBde: Array<{
+    userId: string;
+    displayName: string;
+    byService: Array<{
+      serviceId: string;
+      serviceName: string;
+      serviceGroupId: string | null;
+      serviceGroupName: string | null;
+      actualCount: number;
+      openCount: number;
+      forecastCount: number;
+      targetCount: number;
+      expectedRevenue: number;
+      actualRevenue: number;
+    }>;
+    totals: {
+      actualCount: number;
+      openCount: number;
+      forecastCount: number;
+      targetCount: number;
+      expectedRevenue: number;
+      actualRevenue: number;
+    };
+  }>;
+}> {
+  const monthStart = new Date(Date.UTC(year, month - 1, 1));
+  const monthEnd = new Date(Date.UTC(year, month, 0, 23, 59, 59, 999));
+
+  // All L2 BDEs (matches the rest of the dashboard — historical rosters
+  // included so old data stays visible).
+  const roles = await prisma.leadPulseRole.findMany({
+    where: opts?.userId
+      ? { userId: opts.userId, role: "l2" }
+      : { role: "l2" },
+    orderBy: [{ displayName: "asc" }],
+  });
+  const userIds = roles.map((r) => r.userId);
+  if (userIds.length === 0) return { byBde: [] };
+
+  // Pipeline rows in month for these BDEs.
+  const pipelineRows = await prisma.leadPulsePipeline.findMany({
+    where: {
+      userId: { in: userIds },
+      OR: [
+        { expectedCloseDate: { gte: monthStart, lte: monthEnd } },
+        { closedDate: { gte: monthStart, lte: monthEnd } },
+      ],
+    },
+    include: {
+      service: { select: { id: true, name: true, groupId: true, group: { select: { id: true, name: true } } } },
+    },
+  });
+
+  // Actual closes this month — from LeadPulseDailyClose. The pipeline
+  // sync writes here, but BDEs can also close directly from the daily-
+  // entry form, so we read this table (not just pipeline rows) for the
+  // true actual count.
+  const dailyCloses = await prisma.leadPulseDailyClose.findMany({
+    where: {
+      entry: {
+        userId: { in: userIds },
+        entryDate: { gte: monthStart, lte: monthEnd },
+      },
+    },
+    select: {
+      serviceId: true,
+      entry: { select: { userId: true } },
+    },
+  });
+
+  // Targets for the month — keyed by userId + (groupId or serviceId).
+  const targets = await prisma.leadPulseTarget.findMany({
+    where: { year, month, userId: { in: userIds } },
+    select: { userId: true, serviceId: true, groupId: true, target: true },
+  });
+  const targetByGroup = new Map<string, number>(); // key = `${userId}|${groupId}`
+  const targetByService = new Map<string, number>(); // key = `${userId}|${serviceId}`
+  for (const t of targets) {
+    if (t.groupId) targetByGroup.set(`${t.userId}|${t.groupId}`, t.target);
+    else if (t.serviceId) targetByService.set(`${t.userId}|${t.serviceId}`, t.target);
+  }
+
+  // Build per-(userId, serviceId) buckets.
+  type Bucket = {
+    serviceId: string;
+    serviceName: string;
+    serviceGroupId: string | null;
+    serviceGroupName: string | null;
+    actualCount: number;
+    openCount: number;
+    expectedRevenue: number;
+    actualRevenue: number;
+  };
+  const perBde = new Map<string, Map<string, Bucket>>(); // userId → serviceId → Bucket
+
+  function bucketFor(userId: string, svc: { id: string; name: string; groupId: string | null; group: { id: string; name: string } | null }): Bucket {
+    const userMap = perBde.get(userId) ?? new Map<string, Bucket>();
+    perBde.set(userId, userMap);
+    let b = userMap.get(svc.id);
+    if (!b) {
+      b = {
+        serviceId: svc.id,
+        serviceName: svc.name,
+        serviceGroupId: svc.groupId ?? null,
+        serviceGroupName: svc.group?.name ?? null,
+        actualCount: 0,
+        openCount: 0,
+        expectedRevenue: 0,
+        actualRevenue: 0,
+      };
+      userMap.set(svc.id, b);
+    }
+    return b;
+  }
+
+  // Lookup the service for daily-closes that aren't tied to a pipeline
+  // row (BDE closed directly from the daily-entry form).
+  const closeServiceIds = Array.from(new Set(dailyCloses.map((c) => c.serviceId)));
+  const closeServices = closeServiceIds.length
+    ? await prisma.service.findMany({
+        where: { id: { in: closeServiceIds } },
+        select: { id: true, name: true, groupId: true, group: { select: { id: true, name: true } } },
+      })
+    : [];
+  const closeServiceById = new Map(closeServices.map((s) => [s.id, s]));
+
+  for (const c of dailyCloses) {
+    const svc = closeServiceById.get(c.serviceId);
+    if (!svc) continue;
+    const b = bucketFor(c.entry.userId, svc);
+    b.actualCount += 1;
+  }
+
+  for (const r of pipelineRows) {
+    const b = bucketFor(r.userId, r.service);
+    const amount = Number(r.expectedFirstInstallment.toString());
+    if (r.status === "open") {
+      b.openCount += 1;
+      b.expectedRevenue += amount;
+    } else if (r.status === "closed_won") {
+      // actualCount is driven by LeadPulseDailyClose above (single source
+      // of truth), so we only attribute revenue here.
+      b.actualRevenue += amount;
+    }
+    // lost rows contribute nothing.
+  }
+
+  const byBde = roles.map((r) => {
+    const userMap = perBde.get(r.userId) ?? new Map<string, Bucket>();
+    const rows = Array.from(userMap.values())
+      .map((b) => {
+        const targetCount =
+          (b.serviceGroupId
+            ? targetByGroup.get(`${r.userId}|${b.serviceGroupId}`)
+            : undefined) ??
+          targetByService.get(`${r.userId}|${b.serviceId}`) ??
+          0;
+        return {
+          ...b,
+          targetCount,
+          forecastCount: b.actualCount + b.openCount,
+        };
+      })
+      .sort((a, b) => a.serviceName.localeCompare(b.serviceName));
+
+    const totals = rows.reduce(
+      (acc, x) => ({
+        actualCount: acc.actualCount + x.actualCount,
+        openCount: acc.openCount + x.openCount,
+        forecastCount: acc.forecastCount + x.forecastCount,
+        targetCount: acc.targetCount + x.targetCount,
+        expectedRevenue: acc.expectedRevenue + x.expectedRevenue,
+        actualRevenue: acc.actualRevenue + x.actualRevenue,
+      }),
+      {
+        actualCount: 0,
+        openCount: 0,
+        forecastCount: 0,
+        targetCount: 0,
+        expectedRevenue: 0,
+        actualRevenue: 0,
+      },
+    );
+
+    return {
+      userId: r.userId,
+      displayName: r.displayName,
+      byService: rows,
+      totals,
+    };
+  });
+
+  return { byBde };
+}

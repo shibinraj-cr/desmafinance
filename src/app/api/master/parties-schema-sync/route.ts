@@ -560,6 +560,102 @@ export async function POST() {
          END IF;
        END $$`,
     );
+
+    // 6. LeadPulsePipeline — L2 BDE in-flight deal tracker
+    await step(
+      "LeadPulsePipeline table",
+      `CREATE TABLE IF NOT EXISTS "LeadPulsePipeline" (
+         "id" TEXT NOT NULL,
+         "userId" TEXT NOT NULL,
+         "candidateName" TEXT NOT NULL,
+         "partyId" TEXT,
+         "serviceId" TEXT NOT NULL,
+         "sourceId" TEXT NOT NULL,
+         "expectedCloseDate" DATE NOT NULL,
+         "expectedFirstInstallment" DECIMAL(14,2) NOT NULL DEFAULT 0,
+         "status" TEXT NOT NULL DEFAULT 'open',
+         "closedDate" DATE,
+         "dailyCloseId" TEXT,
+         "notes" TEXT,
+         "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+         "updatedAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+         CONSTRAINT "LeadPulsePipeline_pkey" PRIMARY KEY ("id")
+       )`,
+    );
+    await step(
+      "LeadPulsePipeline dailyCloseId unique",
+      `CREATE UNIQUE INDEX IF NOT EXISTS "LeadPulsePipeline_dailyCloseId_key" ON "LeadPulsePipeline"("dailyCloseId")`,
+    );
+    await step(
+      "LeadPulsePipeline (userId, expectedCloseDate, status) index",
+      `CREATE INDEX IF NOT EXISTS "LeadPulsePipeline_userId_expectedCloseDate_status_idx" ON "LeadPulsePipeline"("userId", "expectedCloseDate", "status")`,
+    );
+    await step(
+      "LeadPulsePipeline partyId index",
+      `CREATE INDEX IF NOT EXISTS "LeadPulsePipeline_partyId_idx" ON "LeadPulsePipeline"("partyId")`,
+    );
+    await step(
+      "LeadPulsePipeline serviceId index",
+      `CREATE INDEX IF NOT EXISTS "LeadPulsePipeline_serviceId_idx" ON "LeadPulsePipeline"("serviceId")`,
+    );
+    await step(
+      "LeadPulsePipeline sourceId index",
+      `CREATE INDEX IF NOT EXISTS "LeadPulsePipeline_sourceId_idx" ON "LeadPulsePipeline"("sourceId")`,
+    );
+    await step(
+      "LeadPulsePipeline (status, expectedCloseDate) index",
+      `CREATE INDEX IF NOT EXISTS "LeadPulsePipeline_status_expectedCloseDate_idx" ON "LeadPulsePipeline"("status", "expectedCloseDate")`,
+    );
+    await step(
+      "LeadPulsePipeline.userId foreign key",
+      `DO $$ BEGIN
+         IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'LeadPulsePipeline_userId_fkey') THEN
+           ALTER TABLE "LeadPulsePipeline"
+             ADD CONSTRAINT "LeadPulsePipeline_userId_fkey"
+             FOREIGN KEY ("userId") REFERENCES "User"("id") ON DELETE CASCADE;
+         END IF;
+       END $$`,
+    );
+    await step(
+      "LeadPulsePipeline.partyId foreign key",
+      `DO $$ BEGIN
+         IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'LeadPulsePipeline_partyId_fkey') THEN
+           ALTER TABLE "LeadPulsePipeline"
+             ADD CONSTRAINT "LeadPulsePipeline_partyId_fkey"
+             FOREIGN KEY ("partyId") REFERENCES "Party"("id") ON DELETE SET NULL;
+         END IF;
+       END $$`,
+    );
+    await step(
+      "LeadPulsePipeline.serviceId foreign key",
+      `DO $$ BEGIN
+         IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'LeadPulsePipeline_serviceId_fkey') THEN
+           ALTER TABLE "LeadPulsePipeline"
+             ADD CONSTRAINT "LeadPulsePipeline_serviceId_fkey"
+             FOREIGN KEY ("serviceId") REFERENCES "Service"("id") ON DELETE RESTRICT;
+         END IF;
+       END $$`,
+    );
+    await step(
+      "LeadPulsePipeline.sourceId foreign key",
+      `DO $$ BEGIN
+         IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'LeadPulsePipeline_sourceId_fkey') THEN
+           ALTER TABLE "LeadPulsePipeline"
+             ADD CONSTRAINT "LeadPulsePipeline_sourceId_fkey"
+             FOREIGN KEY ("sourceId") REFERENCES "LeadPulseSource"("id") ON DELETE RESTRICT;
+         END IF;
+       END $$`,
+    );
+    await step(
+      "LeadPulsePipeline.dailyCloseId foreign key",
+      `DO $$ BEGIN
+         IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'LeadPulsePipeline_dailyCloseId_fkey') THEN
+           ALTER TABLE "LeadPulsePipeline"
+             ADD CONSTRAINT "LeadPulsePipeline_dailyCloseId_fkey"
+             FOREIGN KEY ("dailyCloseId") REFERENCES "LeadPulseDailyClose"("id") ON DELETE SET NULL;
+         END IF;
+       END $$`,
+    );
   } catch (e) {
     return NextResponse.json(
       { error: "ddl_failed", log, message: e instanceof Error ? e.message : String(e) },

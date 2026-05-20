@@ -46,6 +46,8 @@ model User {
   // Used for Ganga's review-before-submit flow.
   draftFirst          Boolean               @default(false)
   transactionDrafts   TransactionDraft[]
+  // L2 BDE pipeline (in-flight expected closes)
+  leadPulsePipeline   LeadPulsePipeline[]   @relation("LeadPulsePipeline")
 
   @@index([roleId])
 }
@@ -161,6 +163,7 @@ model Service {
   partyServices PartyService[]
   leadPulseTargets LeadPulseTarget[]
   leadPulseCloses LeadPulseDailyClose[]
+  leadPulsePipeline LeadPulsePipeline[]
 
   @@index([isActive])
   @@index([groupId])
@@ -242,6 +245,7 @@ model LeadPulseSource {
   entries      LeadPulseDailyEntry[]
   snapshots    LeadPulseMonthlySnapshot[]
   parties      Party[]
+  leadPulsePipeline LeadPulsePipeline[]
 
   @@index([active])
   @@index([displayOrder])
@@ -312,9 +316,54 @@ model LeadPulseDailyClose {
   serviceId String
   service   Service             @relation(fields: [serviceId], references: [id], onDelete: Restrict)
   createdAt DateTime            @default(now())
+  // Back-reference: the pipeline row whose closed_won flip created
+  // this close (if any). Lets the status route find + remove the
+  // close cleanly when a row is re-opened.
+  pipeline  LeadPulsePipeline?  @relation("PipelineDailyClose")
 
   @@index([entryId])
   @@index([serviceId])
+}
+
+/// L2 BDE in-flight deal pipeline. One row per (BDE, candidate,
+/// service) — a deal expected to close on `expectedCloseDate` with
+/// `expectedFirstInstallment` ₹. Flipping `status` to closed_won
+/// also inserts a LeadPulseDailyClose into the BDE's daily entry
+/// for `closedDate`, so the existing Targets matrix picks it up.
+model LeadPulsePipeline {
+  id                       String   @id @default(cuid())
+  userId                   String
+  user                     User     @relation("LeadPulsePipeline", fields: [userId], references: [id], onDelete: Cascade)
+
+  candidateName            String
+  partyId                  String?
+  party                    Party?   @relation("PartyPipeline", fields: [partyId], references: [id], onDelete: SetNull)
+
+  serviceId                String
+  service                  Service  @relation(fields: [serviceId], references: [id], onDelete: Restrict)
+  sourceId                 String
+  source                   LeadPulseSource @relation(fields: [sourceId], references: [id], onDelete: Restrict)
+
+  expectedCloseDate        DateTime @db.Date
+  expectedFirstInstallment Decimal  @db.Decimal(14, 2) @default(0)
+
+  // 'open' | 'closed_won' | 'lost'
+  status                   String   @default("open")
+  closedDate               DateTime? @db.Date
+  // If a closed_won flip created a LeadPulseDailyClose, link to it
+  // so re-opening can delete it cleanly.
+  dailyCloseId             String?  @unique
+  dailyClose               LeadPulseDailyClose? @relation("PipelineDailyClose", fields: [dailyCloseId], references: [id], onDelete: SetNull)
+  notes                    String?
+
+  createdAt                DateTime @default(now())
+  updatedAt                DateTime @updatedAt
+
+  @@index([userId, expectedCloseDate, status])
+  @@index([partyId])
+  @@index([serviceId])
+  @@index([sourceId])
+  @@index([status, expectedCloseDate])
 }
 
 model LeadPulseDailyMeta {
@@ -463,6 +512,7 @@ model Party {
   // migrate-party-services has been run everywhere.
   services      Service[]
   partyServices PartyService[]
+  pipelineRows  LeadPulsePipeline[] @relation("PartyPipeline")
 
   @@index([group])
   @@index([isActive])
