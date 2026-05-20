@@ -11,7 +11,10 @@ type AuditAction =
   | "APPROVE_CREATE"
   | "APPROVE_UPDATE"
   | "APPROVE_DELETE"
-  | "REJECT";
+  | "REJECT"
+  | "DRAFT_CREATE"
+  | "DRAFT_UPDATE"
+  | "DRAFT_DISCARD";
 
 export async function recordAudit(opts: {
   entityType: string;

@@ -23,11 +23,13 @@ export async function getCurrentUserPermissions(): Promise<Permissions | null> {
       isAdmin: user.roleRef.isAdmin,
       canApprove: user.roleRef.canApprove,
       needsApproval: user.roleRef.needsApproval,
+      draftFirst: user.draftFirst,
       pages: user.roleRef.pages,
       roleName: user.roleRef.name,
     };
   }
-  return fromLegacyString(user.role);
+  const legacy = fromLegacyString(user.role);
+  return { ...legacy, draftFirst: user.draftFirst };
 }
 
 export async function getCurrentUserAndPermissions() {
@@ -43,9 +45,10 @@ export async function getCurrentUserAndPermissions() {
         isAdmin: user.roleRef.isAdmin,
         canApprove: user.roleRef.canApprove,
         needsApproval: user.roleRef.needsApproval,
+        draftFirst: user.draftFirst,
         pages: user.roleRef.pages,
         roleName: user.roleRef.name,
       }
-    : fromLegacyString(user.role);
+    : { ...fromLegacyString(user.role), draftFirst: user.draftFirst };
   return { session, perms, userId: user.id };
 }

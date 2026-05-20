@@ -16,11 +16,16 @@ export type TxProposed = {
 };
 
 /**
- * For admin/manager: create the transaction directly.
- * For executive: enqueue a PendingApproval.create record.
+ * Submit a new transaction. Routing:
+ *   1. perms.draftFirst → store as TransactionDraft (user reviews on
+ *      My Drafts page before pushing to approval).
+ *   2. canApprove → write directly to Transaction.
+ *   3. needsApproval → enqueue PendingApproval.
  *
- * Returns { applied: true, transaction } when written to the canonical table,
- * or { applied: false, pending } when queued.
+ * Returns one of:
+ *   { applied: true, transaction }
+ *   { applied: false, pending }
+ *   { applied: false, draft, isDraft: true }
  */
 export async function submitCreate(opts: {
   data: TxProposed;
@@ -28,6 +33,35 @@ export async function submitCreate(opts: {
   perms: Permissions;
 }) {
   const { data, userId, perms } = opts;
+
+  // draftFirst takes priority — these users see all their entries on
+  // My Drafts before anything reaches the approval queue.
+  if (perms.draftFirst) {
+    const draft = await prisma.transactionDraft.create({
+      data: {
+        submittedById: userId,
+        date: new Date(data.date),
+        month: data.month,
+        type: data.type,
+        category: data.category,
+        subItem: data.subItem,
+        description: data.description ?? null,
+        paymentMode: data.paymentMode,
+        amount: data.amount,
+        flow: data.flow,
+        partyId: data.partyId ?? null,
+      },
+    });
+    await recordAudit({
+      entityType: "TransactionDraft",
+      entityId: draft.id,
+      action: "DRAFT_CREATE",
+      userId,
+      changes: { ...data },
+    });
+    return { applied: false as const, draft, isDraft: true as const };
+  }
+
   if (canApprove(perms)) {
     const created = await prisma.transaction.create({
       data: {
@@ -69,6 +103,137 @@ export async function submitCreate(opts: {
     action: "SUBMIT_CREATE",
     userId,
     changes: { ...data },
+  });
+  return { applied: false as const, pending };
+}
+
+/** Edit an existing draft. Only the owner can edit. */
+export async function updateDraft(opts: {
+  draftId: string;
+  userId: string;
+  data: TxProposed;
+}) {
+  const { draftId, userId, data } = opts;
+  const draft = await prisma.transactionDraft.findUnique({ where: { id: draftId } });
+  if (!draft) return { error: "not_found" as const };
+  if (draft.submittedById !== userId) return { error: "forbidden" as const };
+  const updated = await prisma.transactionDraft.update({
+    where: { id: draftId },
+    data: {
+      date: new Date(data.date),
+      month: data.month,
+      type: data.type,
+      category: data.category,
+      subItem: data.subItem,
+      description: data.description ?? null,
+      paymentMode: data.paymentMode,
+      amount: data.amount,
+      flow: data.flow,
+      partyId: data.partyId ?? null,
+    },
+  });
+  await recordAudit({
+    entityType: "TransactionDraft",
+    entityId: draftId,
+    action: "DRAFT_UPDATE",
+    userId,
+    changes: { ...data },
+  });
+  return { ok: true as const, draft: updated };
+}
+
+/** Discard a draft without submitting. Only the owner can discard. */
+export async function discardDraft(opts: { draftId: string; userId: string }) {
+  const { draftId, userId } = opts;
+  const draft = await prisma.transactionDraft.findUnique({ where: { id: draftId } });
+  if (!draft) return { error: "not_found" as const };
+  if (draft.submittedById !== userId) return { error: "forbidden" as const };
+  await prisma.transactionDraft.delete({ where: { id: draftId } });
+  await recordAudit({
+    entityType: "TransactionDraft",
+    entityId: draftId,
+    action: "DRAFT_DISCARD",
+    userId,
+    changes: {},
+  });
+  return { ok: true as const };
+}
+
+/** Promote a draft to a PendingApproval (or, if the submitter has
+ *  somehow gained canApprove since, write directly to Transaction).
+ *  Atomic: the draft is deleted in the same transaction that creates
+ *  the downstream row. */
+export async function submitDraftToPending(opts: {
+  draftId: string;
+  userId: string;
+  perms: Permissions;
+}) {
+  const { draftId, userId, perms } = opts;
+  const draft = await prisma.transactionDraft.findUnique({ where: { id: draftId } });
+  if (!draft) return { error: "not_found" as const };
+  if (draft.submittedById !== userId) return { error: "forbidden" as const };
+
+  const proposed: TxProposed = {
+    date: draft.date.toISOString(),
+    month: draft.month,
+    type: draft.type,
+    category: draft.category,
+    subItem: draft.subItem,
+    description: draft.description,
+    paymentMode: draft.paymentMode,
+    amount: Number(draft.amount.toString()),
+    flow: draft.flow,
+    partyId: draft.partyId,
+  };
+
+  if (canApprove(perms)) {
+    const result = await prisma.$transaction(async (tx) => {
+      const created = await tx.transaction.create({
+        data: {
+          date: draft.date,
+          month: draft.month,
+          type: draft.type,
+          category: draft.category,
+          subItem: draft.subItem,
+          description: draft.description,
+          paymentMode: draft.paymentMode,
+          amount: draft.amount,
+          flow: draft.flow,
+          partyId: draft.partyId,
+          createdById: userId,
+        },
+      });
+      await tx.transactionDraft.delete({ where: { id: draftId } });
+      return created;
+    });
+    await recordAudit({
+      entityType: "Transaction",
+      entityId: result.id,
+      action: "CREATE",
+      userId,
+      changes: { ...proposed, fromDraftId: draftId },
+    });
+    return { applied: true as const, transaction: result };
+  }
+
+  const pending = await prisma.$transaction(async (tx) => {
+    const created = await tx.pendingApproval.create({
+      data: {
+        kind: "create",
+        status: "pending",
+        proposed: proposed as unknown as object,
+        submittedById: userId,
+      },
+    });
+    await tx.transactionDraft.delete({ where: { id: draftId } });
+    return created;
+  });
+  await recordAudit({
+    entityType: "PendingApproval",
+    entityId: pending.id,
+    action: "SUBMIT_CREATE",
+    userId,
+    changes: { ...proposed, fromDraftId: draftId },
   });
   return { applied: false as const, pending };
 }

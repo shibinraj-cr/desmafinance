@@ -196,9 +196,11 @@ export function TransactionForm({
     setOk(true);
     setOkMessage(
       data?.applied === false
-        ? mode === "edit"
-          ? "Edit submitted for approval. It will appear on dashboards once a manager approves it."
-          : "Transaction submitted for approval. It will appear on dashboards once a manager approves it."
+        ? data?.isDraft
+          ? "Saved as draft. Review and submit it from My Drafts."
+          : mode === "edit"
+            ? "Edit submitted for approval. It will appear on dashboards once a manager approves it."
+            : "Transaction submitted for approval. It will appear on dashboards once a manager approves it."
         : mode === "edit"
           ? "Transaction updated."
           : "Transaction saved.",

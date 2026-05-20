@@ -122,6 +122,12 @@ export async function POST(req: NextRequest) {
       item: { ...result.transaction, amount: Number(result.transaction.amount.toString()) },
     });
   }
+  if ("isDraft" in result && result.isDraft) {
+    return NextResponse.json(
+      { applied: false, isDraft: true, draftId: result.draft.id },
+      { status: 202 },
+    );
+  }
   return NextResponse.json(
     { applied: false, pendingId: result.pending.id },
     { status: 202 },
