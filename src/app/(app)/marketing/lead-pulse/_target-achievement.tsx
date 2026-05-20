@@ -12,9 +12,15 @@ import { TargetAchievementChart } from "./_charts";
 export function TargetAchievementCard({
   matrix,
   monthLabel,
+  year,
+  month,
 }: {
   matrix: ServiceMatrix;
   monthLabel: string;
+  /** Year + month drive the Download PNG link. Optional so older
+   *  callers still compile while we wire them through. */
+  year?: number;
+  month?: number;
 }) {
   const rows = matrix.bdes
     .map((b) => {
@@ -58,10 +64,28 @@ export function TargetAchievementCard({
       }}
     >
       <div
-        className="px-[20px] pt-[16px] pb-[8px] text-[14px] font-semibold"
-        style={{ color: "var(--lp-on-surface)" }}
+        className="px-[20px] pt-[16px] pb-[8px] flex items-center justify-between"
       >
-        Monthly Target Achievement — {monthLabel}
+        <span className="text-[14px] font-semibold" style={{ color: "var(--lp-on-surface)" }}>
+          Monthly Target Achievement — {monthLabel}
+        </span>
+        {year != null && month != null && (
+          <a
+            href={`/api/marketing/lead-pulse/target-achievement/og?year=${year}&month=${month}`}
+            className="inline-flex items-center gap-[6px] h-[28px] px-[10px] rounded-[8px] text-[11px] font-semibold border"
+            style={{
+              borderColor: "var(--lp-primary)",
+              backgroundColor: "rgba(250, 204, 21, 0.10)",
+              color: "var(--lp-primary)",
+            }}
+            title="Download a mobile-friendly PNG snapshot of this card for WhatsApp"
+          >
+            <span className="material-symbols-outlined" style={{ fontSize: 14 }} aria-hidden>
+              download
+            </span>
+            Download PNG
+          </a>
+        )}
       </div>
       <div className="px-[20px] pb-[16px]">
         {rows.length === 0 ? (

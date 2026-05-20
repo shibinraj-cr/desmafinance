@@ -604,7 +604,7 @@ export default async function LeadPulseHomePage() {
 
 
       {/* Monthly target achievement — shared component, mirrors Monthly Report. */}
-      <TargetAchievementCard matrix={serviceMatrix} monthLabel={monthLabel} />
+      <TargetAchievementCard matrix={serviceMatrix} monthLabel={monthLabel} year={year} month={month} />
 
       <PipelineForecastCard data={pipelineForecast} monthLabel={monthLabel} />
 

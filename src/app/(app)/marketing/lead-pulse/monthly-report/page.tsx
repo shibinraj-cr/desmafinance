@@ -262,7 +262,7 @@ export default async function MonthlyReportPage({
 
       <PerformanceMatrix matrix={matrix} />
 
-      <TargetAchievementCard matrix={serviceMatrix} monthLabel={monthLabel} />
+      <TargetAchievementCard matrix={serviceMatrix} monthLabel={monthLabel} year={year} month={month} />
 
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-[16px]">
         <Card title="Historical Funnel Trends">
