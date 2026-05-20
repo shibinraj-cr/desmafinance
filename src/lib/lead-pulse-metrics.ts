@@ -900,7 +900,10 @@ export type L2YouTubeAllocation = {
   noWinner: boolean;
 };
 
-export async function getL2WeeklyYouTubeConversion(): Promise<{
+/** Source-agnostic helper backing both the YouTube and Meta allocation
+ *  cards. Same shape regardless of source code — pass "youtube" or
+ *  "meta" to drive which LeadPulseSource the weekly totals come from. */
+export async function getL2WeeklySourceConversion(sourceCode: string): Promise<{
   rows: L2YouTubeWeeklyRow[];
   allocation: L2YouTubeAllocation;
 }> {
@@ -914,8 +917,8 @@ export async function getL2WeeklyYouTubeConversion(): Promise<{
   const lastSun = addDays(thisMon, -1);
   const thisSun = addDays(thisMon, 6);
 
-  const ytSource = await prisma.leadPulseSource.findUnique({ where: { code: "youtube" } });
-  if (!ytSource) {
+  const source = await prisma.leadPulseSource.findUnique({ where: { code: sourceCode } });
+  if (!source) {
     return {
       rows: [],
       allocation: { rule: "top-last-week-double", leaders: [], order: [], noWinner: true },
@@ -938,7 +941,7 @@ export async function getL2WeeklyYouTubeConversion(): Promise<{
       prisma.leadPulseDailyEntry.aggregate({
         where: {
           userId: r.userId,
-          sourceId: ytSource.id,
+          sourceId: source.id,
           roleAtEntry: "l2",
           status: "submitted",
           entryDate: { gte: toPrismaDate(thisMon), lte: toPrismaDate(thisSun) },
@@ -948,7 +951,7 @@ export async function getL2WeeklyYouTubeConversion(): Promise<{
       prisma.leadPulseDailyEntry.aggregate({
         where: {
           userId: r.userId,
-          sourceId: ytSource.id,
+          sourceId: source.id,
           roleAtEntry: "l2",
           status: "submitted",
           entryDate: { gte: toPrismaDate(lastMon), lte: toPrismaDate(lastSun) },
@@ -965,29 +968,29 @@ export async function getL2WeeklyYouTubeConversion(): Promise<{
     });
   }
 
-  // Only L2 BDEs who actually closed YouTube leads in either week are
-  // part of the allocation. BDEs with no YouTube activity (e.g. someone
-  // who handles other sources entirely) shouldn't show up in the
-  // round-robin order. Director-level users are also excluded — they
-  // don't pick up incoming leads.
-  const ytActive = partial.filter(
+  // Only L2 BDEs who actually closed leads from this source in either
+  // week are part of the allocation. BDEs with no activity in this
+  // source (e.g. someone who handles other sources entirely) shouldn't
+  // show up in the round-robin order. Director-level users are also
+  // excluded — they don't pick up incoming leads.
+  const sourceActive = partial.filter(
     (p) =>
       p.active &&
       !excludeUserIds.has(p.userId) &&
       (p.lastWeek > 0 || p.thisWeek > 0),
   );
-  const maxLastWeek = ytActive.reduce((m, p) => Math.max(m, p.lastWeek), 0);
+  const maxLastWeek = sourceActive.reduce((m, p) => Math.max(m, p.lastWeek), 0);
   const noWinner = maxLastWeek === 0;
   const leaders: Array<{ userId: string; displayName: string }> = [];
   if (!noWinner) {
-    for (const p of ytActive) {
+    for (const p of sourceActive) {
       if (p.lastWeek === maxLastWeek) {
         leaders.push({ userId: p.userId, displayName: p.displayName });
       }
     }
   }
   const leaderIds = new Set(leaders.map((l) => l.userId));
-  const ytActiveIds = new Set(ytActive.map((p) => p.userId));
+  const sourceActiveIds = new Set(sourceActive.map((p) => p.userId));
 
   // Highest closer on top of both the table and the allocation order:
   // by last-week desc, then this-week desc, then displayName for
@@ -1002,7 +1005,7 @@ export async function getL2WeeklyYouTubeConversion(): Promise<{
     .sort(compareWeekly)
     .map((p) => ({
       ...p,
-      share: !ytActiveIds.has(p.userId)
+      share: !sourceActiveIds.has(p.userId)
         ? 1
         : noWinner
           ? 1
@@ -1010,7 +1013,7 @@ export async function getL2WeeklyYouTubeConversion(): Promise<{
             ? 2
             : 1,
     }));
-  const order: Array<{ userId: string; displayName: string; share: 1 | 2 }> = ytActive
+  const order: Array<{ userId: string; displayName: string; share: 1 | 2 }> = sourceActive
     .slice()
     .sort(compareWeekly)
     .map((p) => ({
@@ -1023,6 +1026,16 @@ export async function getL2WeeklyYouTubeConversion(): Promise<{
     rows,
     allocation: { rule: "top-last-week-double", leaders, order, noWinner },
   };
+}
+
+/** Backwards-compat alias kept for clarity at call sites. */
+export async function getL2WeeklyYouTubeConversion() {
+  return getL2WeeklySourceConversion("youtube");
+}
+
+/** Mirror of the YouTube allocation cycle, driven by Meta conversions. */
+export async function getL2WeeklyMetaConversion() {
+  return getL2WeeklySourceConversion("meta");
 }
 
 /**

@@ -14,6 +14,7 @@ import {
   getMonthlyConversionBySource,
   getSourceDisqualifiedAnalysis,
   getL2WeeklyYouTubeConversion,
+  getL2WeeklyMetaConversion,
   getL2SourceLabels,
   getServiceConversionMatrix,
   monthBounds,
@@ -111,6 +112,7 @@ export default async function LeadPulseHomePage() {
     sourceLeadCountAvg3Mo,
     convCompare,
     youtubeWeekly,
+    metaWeekly,
     sourceLabels,
     todays,
     alerts,
@@ -132,6 +134,7 @@ export default async function LeadPulseHomePage() {
     getSourceLeadCountAvgMonthly(year, month, 3, ["2026-02-28", "2026-03-27"]),
     getMonthlyConversionBySource(year, month),
     getL2WeeklyYouTubeConversion(),
+    getL2WeeklyMetaConversion(),
     getL2SourceLabels(year, month),
     getTodaysEntryStatus({ date: lastWorkingDay, activeOnly: true }),
     getPriorityAlerts(),
@@ -537,129 +540,16 @@ export default async function LeadPulseHomePage() {
           </div>
         </Card>
 
-        <Card title="L2 YouTube — last 2 weeks">
-          {youtubeWeekly.rows.length === 0 ? (
-            <p className="text-[12px]" style={{ color: "var(--lp-on-surface-variant)" }}>
-              No active L2 BDEs.
-            </p>
-          ) : (
-            <>
-              <table className="w-full text-[13px] tabular-nums">
-                <thead>
-                  <tr style={{ backgroundColor: "var(--lp-surface-container-low)" }}>
-                    <Th>BDE</Th>
-                    <Th align="right">Last wk</Th>
-                    <Th align="right">This wk</Th>
-                    <Th align="right">Δ</Th>
-                    <Th align="right">Next share</Th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {youtubeWeekly.rows
-                    .filter((b) => b.thisWeek > 0 || b.lastWeek > 0)
-                    .map((b) => {
-                      const delta = b.thisWeek - b.lastWeek;
-                      const isLeader = b.share === 2 && b.active;
-                      return (
-                        <tr
-                          key={b.userId}
-                          className="border-t"
-                          style={{ borderColor: "var(--lp-outline-variant)" }}
-                        >
-                          <td className="px-[16px] py-[6px] font-semibold">
-                            {b.displayName}
-                            {!b.active && (
-                              <span
-                                className="ml-[6px] text-[10px] uppercase tracking-widest"
-                                style={{ color: "var(--lp-on-surface-variant)" }}
-                              >
-                                inactive
-                              </span>
-                            )}
-                          </td>
-                          <td className="px-[16px] py-[6px] text-right">{b.lastWeek}</td>
-                          <td className="px-[16px] py-[6px] text-right">{b.thisWeek}</td>
-                          <td
-                            className="px-[16px] py-[6px] text-right font-semibold"
-                            style={{ color: delta >= 0 ? "var(--lp-cyan)" : "var(--lp-error)" }}
-                          >
-                            {delta >= 0 ? "+" : ""}
-                            {delta}
-                          </td>
-                          <td className="px-[16px] py-[6px] text-right">
-                            {!b.active ? (
-                              <span style={{ color: "var(--lp-on-surface-variant)", opacity: 0.6 }}>—</span>
-                            ) : isLeader ? (
-                              <span
-                                className="inline-flex items-center gap-[4px] font-semibold"
-                                style={{ color: "var(--lp-primary)" }}
-                                title="Top performer last week — gets 2 leads per allocation cycle"
-                              >
-                                <span aria-hidden>👑</span>
-                                <span>2 leads</span>
-                              </span>
-                            ) : (
-                              <span style={{ color: "var(--lp-on-surface-variant)" }}>1 lead</span>
-                            )}
-                          </td>
-                        </tr>
-                      );
-                    })}
-                  {youtubeWeekly.rows.every((b) => b.thisWeek === 0 && b.lastWeek === 0) && (
-                    <tr>
-                      <td
-                        colSpan={5}
-                        className="px-[16px] py-[16px] text-center"
-                        style={{ color: "var(--lp-on-surface-variant)" }}
-                      >
-                        No YouTube closes either week.
-                      </td>
-                    </tr>
-                  )}
-                </tbody>
-              </table>
-              <div
-                className="mt-[12px] rounded-[10px] border p-[12px]"
-                style={{
-                  backgroundColor: "var(--lp-surface-container-low)",
-                  borderColor: "var(--lp-outline-variant)",
-                }}
-              >
-                <p
-                  className="text-[10px] uppercase tracking-widest font-semibold mb-[4px]"
-                  style={{ color: "var(--lp-primary)" }}
-                >
-                  Next allocation cycle
-                </p>
-                {youtubeWeekly.allocation.order.length === 0 ? (
-                  <p className="text-[12px]" style={{ color: "var(--lp-on-surface-variant)" }}>
-                    No active L2 BDEs to allocate to.
-                  </p>
-                ) : youtubeWeekly.allocation.noWinner ? (
-                  <p className="text-[12px]" style={{ color: "var(--lp-on-surface-variant)" }}>
-                    No closes last week — round-robin with equal shares of 1 lead each:{" "}
-                    <span style={{ color: "var(--lp-on-surface)" }}>
-                      {youtubeWeekly.allocation.order.map((o) => o.displayName).join(" → ")}
-                    </span>
-                    .
-                  </p>
-                ) : (
-                  <p className="text-[12px]" style={{ color: "var(--lp-on-surface-variant)" }}>
-                    Top performer
-                    {youtubeWeekly.allocation.leaders.length > 1 ? "s" : ""} last week → 2 leads/cycle.
-                    Others → 1 lead/cycle. Round-robin order:{" "}
-                    <span style={{ color: "var(--lp-on-surface)" }}>
-                      {youtubeWeekly.allocation.order
-                        .map((o) => (o.share === 2 ? `${o.displayName} ×2` : o.displayName))
-                        .join(" → ")}
-                    </span>
-                    .
-                  </p>
-                )}
-              </div>
-            </>
-          )}
-        </Card>
+        <L2WeeklySourceCard
+          title="L2 YouTube — last 2 weeks"
+          sourceLabel="YouTube"
+          weekly={youtubeWeekly}
+        />
+        <L2WeeklySourceCard
+          title="L2 Meta — last 2 weeks"
+          sourceLabel="Meta"
+          weekly={metaWeekly}
+        />
 
         <Card title="L2 Source Champions (this month)">
           {sourceLabels.length === 0 ? (
@@ -882,6 +772,160 @@ function Card({ title, children, wide }: { title: string; children: React.ReactN
       <h2 className="text-[14px] font-semibold mb-[12px]">{title}</h2>
       {children}
     </div>
+  );
+}
+
+/** Shared card body for the per-source weekly allocation views. Used
+ *  for "L2 YouTube — last 2 weeks" and "L2 Meta — last 2 weeks", both
+ *  fed by getL2WeeklySourceConversion under the hood. */
+function L2WeeklySourceCard({
+  title,
+  sourceLabel,
+  weekly,
+}: {
+  title: string;
+  sourceLabel: string;
+  weekly: {
+    rows: Array<{
+      userId: string;
+      displayName: string;
+      lastWeek: number;
+      thisWeek: number;
+      active: boolean;
+      share: 1 | 2;
+    }>;
+    allocation: {
+      rule: "top-last-week-double";
+      leaders: Array<{ userId: string; displayName: string }>;
+      order: Array<{ userId: string; displayName: string; share: 1 | 2 }>;
+      noWinner: boolean;
+    };
+  };
+}) {
+  return (
+    <Card title={title}>
+      {weekly.rows.length === 0 ? (
+        <p className="text-[12px]" style={{ color: "var(--lp-on-surface-variant)" }}>
+          No active L2 BDEs.
+        </p>
+      ) : (
+        <>
+          <table className="w-full text-[13px] tabular-nums">
+            <thead>
+              <tr style={{ backgroundColor: "var(--lp-surface-container-low)" }}>
+                <Th>BDE</Th>
+                <Th align="right">Last wk</Th>
+                <Th align="right">This wk</Th>
+                <Th align="right">Δ</Th>
+                <Th align="right">Next share</Th>
+              </tr>
+            </thead>
+            <tbody>
+              {weekly.rows
+                .filter((b) => b.thisWeek > 0 || b.lastWeek > 0)
+                .map((b) => {
+                  const delta = b.thisWeek - b.lastWeek;
+                  const isLeader = b.share === 2 && b.active;
+                  return (
+                    <tr
+                      key={b.userId}
+                      className="border-t"
+                      style={{ borderColor: "var(--lp-outline-variant)" }}
+                    >
+                      <td className="px-[16px] py-[6px] font-semibold">
+                        {b.displayName}
+                        {!b.active && (
+                          <span
+                            className="ml-[6px] text-[10px] uppercase tracking-widest"
+                            style={{ color: "var(--lp-on-surface-variant)" }}
+                          >
+                            inactive
+                          </span>
+                        )}
+                      </td>
+                      <td className="px-[16px] py-[6px] text-right">{b.lastWeek}</td>
+                      <td className="px-[16px] py-[6px] text-right">{b.thisWeek}</td>
+                      <td
+                        className="px-[16px] py-[6px] text-right font-semibold"
+                        style={{ color: delta >= 0 ? "var(--lp-cyan)" : "var(--lp-error)" }}
+                      >
+                        {delta >= 0 ? "+" : ""}
+                        {delta}
+                      </td>
+                      <td className="px-[16px] py-[6px] text-right">
+                        {!b.active ? (
+                          <span style={{ color: "var(--lp-on-surface-variant)", opacity: 0.6 }}>—</span>
+                        ) : isLeader ? (
+                          <span
+                            className="inline-flex items-center gap-[4px] font-semibold"
+                            style={{ color: "var(--lp-primary)" }}
+                            title="Top performer last week — gets 2 leads per allocation cycle"
+                          >
+                            <span aria-hidden>👑</span>
+                            <span>2 leads</span>
+                          </span>
+                        ) : (
+                          <span style={{ color: "var(--lp-on-surface-variant)" }}>1 lead</span>
+                        )}
+                      </td>
+                    </tr>
+                  );
+                })}
+              {weekly.rows.every((b) => b.thisWeek === 0 && b.lastWeek === 0) && (
+                <tr>
+                  <td
+                    colSpan={5}
+                    className="px-[16px] py-[16px] text-center"
+                    style={{ color: "var(--lp-on-surface-variant)" }}
+                  >
+                    No {sourceLabel} closes either week.
+                  </td>
+                </tr>
+              )}
+            </tbody>
+          </table>
+          <div
+            className="mt-[12px] rounded-[10px] border p-[12px]"
+            style={{
+              backgroundColor: "var(--lp-surface-container-low)",
+              borderColor: "var(--lp-outline-variant)",
+            }}
+          >
+            <p
+              className="text-[10px] uppercase tracking-widest font-semibold mb-[4px]"
+              style={{ color: "var(--lp-primary)" }}
+            >
+              Next allocation cycle
+            </p>
+            {weekly.allocation.order.length === 0 ? (
+              <p className="text-[12px]" style={{ color: "var(--lp-on-surface-variant)" }}>
+                No active L2 BDEs to allocate to.
+              </p>
+            ) : weekly.allocation.noWinner ? (
+              <p className="text-[12px]" style={{ color: "var(--lp-on-surface-variant)" }}>
+                No closes last week — round-robin with equal shares of 1 lead each:{" "}
+                <span style={{ color: "var(--lp-on-surface)" }}>
+                  {weekly.allocation.order.map((o) => o.displayName).join(" → ")}
+                </span>
+                .
+              </p>
+            ) : (
+              <p className="text-[12px]" style={{ color: "var(--lp-on-surface-variant)" }}>
+                Top performer
+                {weekly.allocation.leaders.length > 1 ? "s" : ""} last week → 2 leads/cycle.
+                Others → 1 lead/cycle. Round-robin order:{" "}
+                <span style={{ color: "var(--lp-on-surface)" }}>
+                  {weekly.allocation.order
+                    .map((o) => (o.share === 2 ? `${o.displayName} ×2` : o.displayName))
+                    .join(" → ")}
+                </span>
+                .
+              </p>
+            )}
+          </div>
+        </>
+      )}
+    </Card>
   );
 }
 
