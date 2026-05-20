@@ -17,6 +17,7 @@ import {
   getL2WeeklyMetaConversion,
   getL2SourceLabels,
   getServiceConversionMatrix,
+  getPipelineForecast,
   monthBounds,
 } from "@/lib/lead-pulse-metrics";
 import { todayIst } from "@/lib/lead-pulse-dates";
@@ -121,6 +122,7 @@ export default async function LeadPulseHomePage() {
     l2Count,
     metaDisqAnalysis,
     serviceMatrix,
+    pipelineForecast,
   ] = await Promise.all([
     getFunnelTotals({ start: monthStart, end: monthEnd }),
     getFunnelTotals({ start: prev.start, end: prev.end }),
@@ -143,6 +145,7 @@ export default async function LeadPulseHomePage() {
     prisma.leadPulseRole.count({ where: { active: true, role: "l2" } }),
     getSourceDisqualifiedAnalysis("meta", year, month, 6),
     getServiceConversionMatrix(year, month),
+    getPipelineForecast(year, month),
   ]);
   void convCompare;
 
@@ -603,6 +606,8 @@ export default async function LeadPulseHomePage() {
       {/* Monthly target achievement — shared component, mirrors Monthly Report. */}
       <TargetAchievementCard matrix={serviceMatrix} monthLabel={monthLabel} />
 
+      <PipelineForecastCard data={pipelineForecast} monthLabel={monthLabel} />
+
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-[16px]">
         <div className="lg:col-span-2">
           <Card title={`Recent Submissions (anchor: ${lastWorkingDay})`}>
@@ -1038,5 +1043,99 @@ function QuickActions() {
         Team roster
       </Link>
     </div>
+  );
+}
+
+function PipelineForecastCard({
+  data,
+  monthLabel,
+}: {
+  data: Awaited<ReturnType<typeof getPipelineForecast>>;
+  monthLabel: string;
+}) {
+  if (data.byBde.length === 0) return null;
+  // Bypass the existing summary aggregation if no L2 has anything moving.
+  const totalOpen = data.byBde.reduce((a, b) => a + b.totals.openCount, 0);
+  const totalActual = data.byBde.reduce((a, b) => a + b.totals.actualCount, 0);
+  const totalForecast = data.byBde.reduce((a, b) => a + b.totals.forecastCount, 0);
+  const expectedRevenue = data.byBde.reduce((a, b) => a + b.totals.expectedRevenue, 0);
+  const actualRevenue = data.byBde.reduce((a, b) => a + b.totals.actualRevenue, 0);
+  const onTrack = data.byBde.filter(
+    (b) => b.totals.targetCount > 0 && b.totals.forecastCount >= b.totals.targetCount,
+  ).length;
+  const behind = data.byBde.filter(
+    (b) => b.totals.targetCount > 0 && b.totals.forecastCount < b.totals.targetCount,
+  ).length;
+  const inr = (n: number) => "₹" + n.toLocaleString("en-IN", { maximumFractionDigits: 0 });
+
+  if (totalOpen === 0 && totalActual === 0) {
+    // Suppress the card entirely if nothing in flight + nothing closed,
+    // to keep the dashboard quiet for new months.
+    return null;
+  }
+
+  return (
+    <Card title={`Pipeline Forecast — ${monthLabel}`}>
+      <div className="flex flex-wrap items-baseline gap-x-[18px] gap-y-[4px] mb-[10px]">
+        <span className="text-[22px] font-bold tabular-nums" style={{ color: "var(--lp-primary)" }}>
+          {inr(expectedRevenue)}
+        </span>
+        <span className="text-[12px]" style={{ color: "var(--lp-on-surface-variant)" }}>
+          expected revenue from {totalOpen} open deals · {inr(actualRevenue)} already closed
+        </span>
+        <span className="text-[12px] ml-auto" style={{ color: "var(--lp-on-surface-variant)" }}>
+          {totalForecast} closes forecast ({onTrack} on track · {behind} behind)
+        </span>
+      </div>
+      <table className="w-full text-[13px]">
+        <thead style={{ backgroundColor: "var(--lp-surface-container-low)" }}>
+          <tr>
+            <Th>BDE</Th>
+            <Th align="right">Actual</Th>
+            <Th align="right">Open</Th>
+            <Th align="right">Forecast</Th>
+            <Th align="right">Target</Th>
+            <Th align="right">₹ Open</Th>
+            <Th>Verdict</Th>
+          </tr>
+        </thead>
+        <tbody>
+          {data.byBde
+            .filter((b) => b.totals.actualCount + b.totals.openCount > 0 || b.totals.targetCount > 0)
+            .map((b) => {
+              const verdict =
+                b.totals.targetCount === 0
+                  ? null
+                  : b.totals.forecastCount >= b.totals.targetCount
+                    ? { label: "On track", color: "var(--lp-cyan)" }
+                    : { label: `Behind ${b.totals.targetCount - b.totals.forecastCount}`, color: "var(--lp-orange)" };
+              return (
+                <tr key={b.userId} className="border-t" style={{ borderColor: "var(--lp-outline-variant)" }}>
+                  <td className="px-[12px] py-[6px] font-semibold">{b.displayName}</td>
+                  <td className="px-[12px] py-[6px] text-right tabular-nums">{b.totals.actualCount}</td>
+                  <td className="px-[12px] py-[6px] text-right tabular-nums">{b.totals.openCount}</td>
+                  <td className="px-[12px] py-[6px] text-right tabular-nums font-semibold">{b.totals.forecastCount}</td>
+                  <td className="px-[12px] py-[6px] text-right tabular-nums" style={{ color: "var(--lp-on-surface-variant)" }}>
+                    {b.totals.targetCount || "—"}
+                  </td>
+                  <td className="px-[12px] py-[6px] text-right tabular-nums">{inr(b.totals.expectedRevenue)}</td>
+                  <td className="px-[12px] py-[6px]">
+                    {verdict ? (
+                      <span className="text-[11px] font-semibold" style={{ color: verdict.color }}>
+                        {verdict.label}
+                      </span>
+                    ) : (
+                      <span className="text-[11px]" style={{ color: "var(--lp-on-surface-variant)" }}>—</span>
+                    )}
+                  </td>
+                </tr>
+              );
+            })}
+        </tbody>
+      </table>
+      <div className="mt-[10px] text-[11px]" style={{ color: "var(--lp-on-surface-variant)" }}>
+        <Link href="/marketing/lead-pulse/pipeline" className="underline">Open Pipeline →</Link>
+      </div>
+    </Card>
   );
 }
