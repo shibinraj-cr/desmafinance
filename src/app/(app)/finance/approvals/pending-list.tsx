@@ -1,8 +1,13 @@
 "use client";
 
-import { useMemo, useState, useTransition } from "react";
+import { useEffect, useMemo, useRef, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import { inrFull } from "@/lib/format";
+
+/** localStorage key for in-progress approve/reject decisions. Kept
+ *  scoped to this page so other surfaces (daily tracker drafts etc.)
+ *  don't collide. Bumped if RowState shape changes. */
+const DRAFT_STORAGE_KEY = "finance-approvals-draft-v1";
 
 /** Format a YYYY-MM-DD (or ISO) string as DD-MM-YY for display. */
 function fmtDDMMYY(s: string): string {
@@ -43,12 +48,79 @@ export function PendingList({
   partyById: PartyLookup;
 }) {
   const router = useRouter();
-  const [state, setState] = useState<Record<string, RowState>>(() =>
-    Object.fromEntries(rows.map((r) => [r.id, { decision: null, remarks: "" }])),
-  );
+  // Hydrate from localStorage on first paint so refreshes / nav-aways
+  // don't lose a half-finished review. We only restore entries whose
+  // id is still in the current `rows` (so processed items don't ghost
+  // back in if they were already cleared by another reviewer).
+  const [state, setState] = useState<Record<string, RowState>>(() => {
+    const fresh: Record<string, RowState> = Object.fromEntries(
+      rows.map((r) => [r.id, { decision: null, remarks: "" }]),
+    );
+    if (typeof window === "undefined") return fresh;
+    try {
+      const raw = window.localStorage.getItem(DRAFT_STORAGE_KEY);
+      if (!raw) return fresh;
+      const saved = JSON.parse(raw) as Record<string, RowState>;
+      const validIds = new Set(rows.map((r) => r.id));
+      for (const [id, rs] of Object.entries(saved)) {
+        if (validIds.has(id) && rs && typeof rs === "object") {
+          fresh[id] = {
+            decision:
+              rs.decision === "approve" || rs.decision === "reject"
+                ? rs.decision
+                : null,
+            remarks: typeof rs.remarks === "string" ? rs.remarks : "",
+          };
+        }
+      }
+    } catch {
+      // Corrupt storage — ignore and fall back to a clean slate.
+    }
+    return fresh;
+  });
   const [serverError, setServerError] = useState<string | null>(null);
   const [toast, setToast] = useState<string | null>(null);
   const [busy, startTransition] = useTransition();
+  const justHydrated = useRef(true);
+
+  // Reconcile the draft when the pending list changes (router.refresh
+  // after processing, or another reviewer clearing items): drop entries
+  // whose row vanished and add defaults for newly-pending rows.
+  useEffect(() => {
+    setState((prev) => {
+      const next: Record<string, RowState> = {};
+      for (const r of rows) {
+        next[r.id] = prev[r.id] ?? { decision: null, remarks: "" };
+      }
+      return next;
+    });
+  }, [rows]);
+
+  // Persist any non-empty draft entries back to localStorage. We strip
+  // out clean rows so the stored object stays small and the next
+  // hydrate is fast.
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    if (justHydrated.current) {
+      justHydrated.current = false;
+      return;
+    }
+    const dirty: Record<string, RowState> = {};
+    for (const [id, rs] of Object.entries(state)) {
+      if (rs.decision !== null || rs.remarks.trim().length > 0) {
+        dirty[id] = rs;
+      }
+    }
+    try {
+      if (Object.keys(dirty).length === 0) {
+        window.localStorage.removeItem(DRAFT_STORAGE_KEY);
+      } else {
+        window.localStorage.setItem(DRAFT_STORAGE_KEY, JSON.stringify(dirty));
+      }
+    } catch {
+      // Quota or privacy-mode — silently ignore; draft just won't persist.
+    }
+  }, [state]);
 
   function setDecision(id: string, decision: Decision) {
     setState((prev) => ({
