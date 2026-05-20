@@ -2,7 +2,11 @@ import { NextRequest } from "next/server";
 import { ImageResponse } from "next/og";
 import { getCurrentUserAndPermissions } from "@/lib/permissions";
 import { getLeadPulseAccess } from "@/lib/lead-pulse-rbac";
-import { getServiceConversionMatrix } from "@/lib/lead-pulse-metrics";
+import {
+  getServiceConversionMatrix,
+  getPipelineForecast,
+} from "@/lib/lead-pulse-metrics";
+import { prisma } from "@/lib/prisma";
 import { todayIst } from "@/lib/lead-pulse-dates";
 
 export const runtime = "nodejs";
@@ -45,7 +49,14 @@ export async function GET(req: NextRequest) {
   const year = Number(url.searchParams.get("year")) || Number(today.slice(0, 4));
   const month = Number(url.searchParams.get("month")) || Number(today.slice(5, 7));
 
-  const matrix = await getServiceConversionMatrix(year, month);
+  const [matrix, forecast, bdeInsights] = await Promise.all([
+    getServiceConversionMatrix(year, month),
+    getPipelineForecast(year, month),
+    prisma.leadPulseBdeInsight.findMany({
+      where: { year, month, status: "answered" },
+      select: { userId: true, answers: true },
+    }),
+  ]);
 
   const rows = matrix.bdes
     .map((b) => {
@@ -58,6 +69,7 @@ export async function GET(req: NextRequest) {
         target += c.target;
       }
       return {
+        userId: b.userId,
         name: b.displayName,
         actual: Math.round(actual * 10) / 10,
         target,
@@ -69,6 +81,99 @@ export async function GET(req: NextRequest) {
   const teamActual = rows.reduce((a, r) => a + r.actual, 0);
   const teamTarget = rows.reduce((a, r) => a + r.target, 0);
   const teamPct = teamTarget > 0 ? Math.round((teamActual / teamTarget) * 1000) / 10 : null;
+
+  // Build the AI Insights bullets in priority order. Cap to ~6 so the
+  // PNG stays scannable on a phone.
+  type Bullet = { icon: string; tone: "warn" | "info" | "good"; text: string };
+  const bullets: Bullet[] = [];
+
+  // Pipeline-driven team headline
+  const totalExpectedRev = forecast.byBde.reduce((a, b) => a + b.totals.expectedRevenue, 0);
+  const totalActualRev = forecast.byBde.reduce((a, b) => a + b.totals.actualRevenue, 0);
+  const totalOpen = forecast.byBde.reduce((a, b) => a + b.totals.openCount, 0);
+  if (totalOpen > 0 || totalExpectedRev > 0) {
+    bullets.push({
+      icon: "•",
+      tone: "info",
+      text: `${totalOpen} open deal${totalOpen === 1 ? "" : "s"} in pipeline · ₹${totalExpectedRev.toLocaleString("en-IN")} expected revenue (₹${totalActualRev.toLocaleString("en-IN")} already closed).`,
+    });
+  }
+
+  // Behind-target BDEs (>= 30% gap) get a warn bullet
+  const behind = rows
+    .filter((r) => r.pct != null && r.pct < 70 && r.target > 0)
+    .sort((a, b) => (a.pct ?? 0) - (b.pct ?? 0));
+  for (const r of behind.slice(0, 3)) {
+    const gap = Math.max(1, Math.ceil(r.target - r.actual));
+    bullets.push({
+      icon: "▼",
+      tone: "warn",
+      text: `${r.name} is behind by ${gap} close${gap === 1 ? "" : "s"} (${r.pct!.toFixed(0)}% of target).`,
+    });
+  }
+
+  // Thin pipeline relative to target
+  for (const b of forecast.byBde) {
+    if (b.totals.targetCount === 0) continue;
+    const desired = Math.max(b.totals.targetCount * 2, 6);
+    if (b.totals.openCount < desired) {
+      bullets.push({
+        icon: "△",
+        tone: "warn",
+        text: `${b.displayName}'s pipeline is thin — ${b.totals.openCount} open vs ~${desired} typically needed to hit ${b.totals.targetCount}.`,
+      });
+    }
+    if (bullets.length >= 6) break;
+  }
+
+  // BDE answer signals — only when a BDE's behind. Scan their answers
+  // for known blockers and surface the alarming ones.
+  const insightByUserId = new Map<string, string>();
+  for (const ins of bdeInsights) {
+    if (!ins.answers) continue;
+    const text = Object.values(ins.answers as Record<string, string>).join(" ");
+    insightByUserId.set(ins.userId, text);
+  }
+  for (const r of rows) {
+    if (bullets.length >= 6) break;
+    const text = (insightByUserId.get(r.userId) ?? "").toLowerCase();
+    if (!text) continue;
+    if (/budget|cost|expensive|cannot afford|can'?t afford|emi|fees?/i.test(text)) {
+      bullets.push({
+        icon: "!",
+        tone: "warn",
+        text: `${r.name} flagged BUDGET as blocker in answers — review EMI / split-payment offers.`,
+      });
+    } else if (/document|paperwork|attestation|passport|certificate/i.test(text)) {
+      bullets.push({
+        icon: "!",
+        tone: "warn",
+        text: `${r.name} flagged DOCUMENT delays in answers — send checklists today.`,
+      });
+    } else if (/follow.?up|callback|no answer|not picking|did not respond|did not answer/i.test(text)) {
+      bullets.push({
+        icon: "!",
+        tone: "warn",
+        text: `${r.name} flagged FOLLOW-UP gaps — schedule a call-bank slot tomorrow.`,
+      });
+    }
+  }
+
+  // Closing positive note if team is hitting target
+  if (teamPct != null && teamPct >= 100 && bullets.length < 6) {
+    bullets.push({
+      icon: "★",
+      tone: "good",
+      text: `Team has cleared the ${teamTarget}-deal target this month. Keep pipeline filling for next month.`,
+    });
+  }
+  if (bullets.length === 0) {
+    bullets.push({
+      icon: "•",
+      tone: "info",
+      text: `Nothing alarming surfaced from this month's numbers. Keep momentum on open pipeline.`,
+    });
+  }
   const monthLabel = new Date(Date.UTC(year, month - 1, 1)).toLocaleString("en-US", {
     month: "long",
     year: "numeric",
@@ -134,7 +239,7 @@ export async function GET(req: NextRequest) {
             backgroundColor: SURFACE,
             borderRadius: 16,
             padding: 18,
-            flex: 1,
+            marginBottom: 14,
           }}
         >
           <div
@@ -282,6 +387,103 @@ export async function GET(req: NextRequest) {
               </div>
             </div>
           )}
+        </div>
+
+        {/* AI Insights — pipeline analysis + alarming answer signals */}
+        <div
+          style={{
+            display: "flex",
+            flexDirection: "column",
+            backgroundColor: SURFACE,
+            borderRadius: 16,
+            padding: 18,
+            flex: 1,
+          }}
+        >
+          <div
+            style={{
+              display: "flex",
+              alignItems: "center",
+              gap: 8,
+              marginBottom: 10,
+            }}
+          >
+            <span
+              style={{
+                display: "flex",
+                width: 22,
+                height: 22,
+                borderRadius: 11,
+                backgroundColor: GOLD,
+                color: BG,
+                alignItems: "center",
+                justifyContent: "center",
+                fontSize: 14,
+                fontWeight: 800,
+              }}
+            >
+              ✦
+            </span>
+            <span
+              style={{
+                display: "flex",
+                fontSize: 13,
+                color: GOLD,
+                textTransform: "uppercase",
+                letterSpacing: 2,
+                fontWeight: 700,
+              }}
+            >
+              AI Insights
+            </span>
+          </div>
+          <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+            {bullets.slice(0, 6).map((b, i) => (
+              <div
+                key={i}
+                style={{
+                  display: "flex",
+                  alignItems: "flex-start",
+                  gap: 10,
+                  fontSize: 17,
+                  lineHeight: 1.35,
+                }}
+              >
+                <span
+                  style={{
+                    display: "flex",
+                    width: 22,
+                    minWidth: 22,
+                    height: 22,
+                    borderRadius: 6,
+                    alignItems: "center",
+                    justifyContent: "center",
+                    fontSize: 14,
+                    fontWeight: 800,
+                    backgroundColor:
+                      b.tone === "warn"
+                        ? "rgba(255, 182, 171, 0.18)"
+                        : b.tone === "good"
+                          ? "rgba(51, 228, 255, 0.18)"
+                          : "rgba(250, 204, 21, 0.18)",
+                    color:
+                      b.tone === "warn" ? RED : b.tone === "good" ? CYAN : GOLD,
+                  }}
+                >
+                  {b.icon}
+                </span>
+                <span
+                  style={{
+                    display: "flex",
+                    flex: 1,
+                    color: TEXT,
+                  }}
+                >
+                  {b.text}
+                </span>
+              </div>
+            ))}
+          </div>
         </div>
 
         {/* Footer */}
