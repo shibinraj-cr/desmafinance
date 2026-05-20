@@ -9,6 +9,7 @@ import { getCurrentUserAndPermissions } from "@/lib/permissions";
 import { ApprovalActions } from "../actions";
 import { ResubmitEditor } from "../resubmit-editor";
 import { PendingList, type PendingRow, type PartyLookup } from "../pending-list";
+import { Tabs } from "../_tabs";
 
 export const dynamic = "force-dynamic";
 
@@ -27,6 +28,9 @@ type ProposedTx = {
 
 type TabKey = "pending" | "approved" | "rejected";
 type TypeFilter = "all" | "Revenue" | "Expense";
+
+// Drafts only matter for users with the draftFirst flag (currently Ganga).
+// Reviewers never see the tab.
 
 /** YYYY-MM-DD (or ISO) → DD-MM-YY for display. */
 function fmtDDMMYY(s: string): string {
@@ -60,7 +64,7 @@ export default async function ApprovalsPage({
   // see only their own submissions. The status filter narrows to the tab.
   const ownershipWhere = reviewer ? {} : { submittedById: userId ?? "__none__" };
 
-  const [items, counts, masters] = await Promise.all([
+  const [items, counts, masters, draftsCount] = await Promise.all([
     prisma.pendingApproval.findMany({
       where: { ...ownershipWhere, status: tab },
       include: {
@@ -104,6 +108,16 @@ export default async function ApprovalsPage({
         select: { id: true, name: true, group: true, txTypes: true, isActive: true },
       }),
     ]),
+    // Draft tab counts:
+    //   - draftFirst users: count of their own drafts
+    //   - admins (without draftFirst): count of every draft in the
+    //     system, since they oversee the queue
+    //   - everyone else: hidden (count of 0 doesn't matter, tab not rendered)
+    perms?.draftFirst && userId
+      ? prisma.transactionDraft.count({ where: { submittedById: userId } })
+      : perms?.isAdmin
+        ? prisma.transactionDraft.count()
+        : Promise.resolve(0),
   ]);
 
   const [pendingCount, approvedCount, rejectedCount] = counts;
@@ -184,6 +198,9 @@ export default async function ApprovalsPage({
         <Tabs
           active={tab}
           counts={{ pending: pendingCount, approved: approvedCount, rejected: rejectedCount }}
+          myDrafts={
+            perms?.draftFirst || perms?.isAdmin ? { count: draftsCount } : undefined
+          }
         />
 
         <TypeTabs tab={tab} active={typeFilter} counts={typeCounts} />
@@ -314,61 +331,6 @@ export default async function ApprovalsPage({
         )}
       </div>
     </>
-  );
-}
-
-function Tabs({
-  active,
-  counts,
-}: {
-  active: TabKey;
-  counts: { pending: number; approved: number; rejected: number };
-}) {
-  const tabs: Array<{
-    key: TabKey;
-    label: string;
-    count: number;
-    countTone: "amber" | "green" | "red";
-  }> = [
-    { key: "pending", label: "Pending", count: counts.pending, countTone: "amber" },
-    { key: "approved", label: "Approved", count: counts.approved, countTone: "green" },
-    { key: "rejected", label: "Rejected", count: counts.rejected, countTone: "red" },
-  ];
-  return (
-    <div className="flex flex-wrap items-center gap-xs border-b border-outline-variant">
-      {tabs.map((t) => {
-        const activeStyles =
-          active === t.key
-            ? "text-on-surface font-semibold border-primary"
-            : "text-on-surface-variant border-transparent hover:text-on-surface";
-        const countStyles =
-          t.countTone === "amber"
-            ? "bg-amber-50 text-amber-800"
-            : t.countTone === "green"
-              ? "bg-green-50 text-green-700"
-              : "bg-red-50 text-red-700";
-        return (
-          <Link
-            key={t.key}
-            href={`/finance/approvals/${t.key}`}
-            scroll={false}
-            className={
-              "inline-flex items-center gap-xs h-10 px-md border-b-2 transition " + activeStyles
-            }
-          >
-            <span>{t.label}</span>
-            <span
-              className={
-                "text-[11px] font-bold px-xs py-[1px] rounded-full min-w-[20px] text-center " +
-                countStyles
-              }
-            >
-              {t.count}
-            </span>
-          </Link>
-        );
-      })}
-    </div>
   );
 }
 

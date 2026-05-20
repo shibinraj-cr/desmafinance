@@ -459,6 +459,64 @@ export async function POST() {
       `CREATE UNIQUE INDEX IF NOT EXISTS "VoxbayCall_signature_key" ON "VoxbayCall"("signature")`,
     );
 
+    // User.draftFirst + TransactionDraft for Ganga's review-before-submit flow.
+    await step(
+      "User.draftFirst column",
+      `ALTER TABLE "User" ADD COLUMN IF NOT EXISTS "draftFirst" BOOLEAN NOT NULL DEFAULT false`,
+    );
+    await step(
+      "User.draftFirst — flip for ganga",
+      `UPDATE "User" SET "draftFirst" = true WHERE LOWER(username) = 'ganga'`,
+    );
+    await step(
+      "TransactionDraft table",
+      `CREATE TABLE IF NOT EXISTS "TransactionDraft" (
+         "id" TEXT NOT NULL,
+         "submittedById" TEXT NOT NULL,
+         "date" TIMESTAMP(3) NOT NULL,
+         "month" TEXT NOT NULL,
+         "type" TEXT NOT NULL,
+         "category" TEXT NOT NULL,
+         "subItem" TEXT NOT NULL,
+         "description" TEXT,
+         "paymentMode" TEXT NOT NULL,
+         "amount" DECIMAL(14, 2) NOT NULL,
+         "flow" TEXT NOT NULL,
+         "partyId" TEXT,
+         "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+         "updatedAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+         CONSTRAINT "TransactionDraft_pkey" PRIMARY KEY ("id")
+       )`,
+    );
+    await step(
+      "TransactionDraft submittedById index",
+      `CREATE INDEX IF NOT EXISTS "TransactionDraft_submittedById_idx" ON "TransactionDraft"("submittedById")`,
+    );
+    await step(
+      "TransactionDraft createdAt index",
+      `CREATE INDEX IF NOT EXISTS "TransactionDraft_createdAt_idx" ON "TransactionDraft"("createdAt")`,
+    );
+    await step(
+      "TransactionDraft.submittedById foreign key",
+      `DO $$ BEGIN
+         IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'TransactionDraft_submittedById_fkey') THEN
+           ALTER TABLE "TransactionDraft"
+             ADD CONSTRAINT "TransactionDraft_submittedById_fkey"
+             FOREIGN KEY ("submittedById") REFERENCES "User"("id") ON DELETE CASCADE;
+         END IF;
+       END $$`,
+    );
+    await step(
+      "TransactionDraft.partyId foreign key",
+      `DO $$ BEGIN
+         IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'TransactionDraft_partyId_fkey') THEN
+           ALTER TABLE "TransactionDraft"
+             ADD CONSTRAINT "TransactionDraft_partyId_fkey"
+             FOREIGN KEY ("partyId") REFERENCES "Party"("id") ON DELETE SET NULL;
+         END IF;
+       END $$`,
+    );
+
     // 5b. Holiday table for the marketing module's holiday calendar.
     await step(
       "Holiday table",

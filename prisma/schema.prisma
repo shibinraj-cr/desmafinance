@@ -40,6 +40,12 @@ model User {
   holidaysUpdated     Holiday[]             @relation("HolidaysUpdated")
   // Voxbay CSV uploads
   voxbayUploads       VoxbayUpload[]        @relation("VoxbayUploads")
+  // Per-user "draft first" workflow flag — when true, new transactions
+  // created by this user are stored as TransactionDraft rows for them
+  // to review/edit before pushing into the regular approval queue.
+  // Used for Ganga's review-before-submit flow.
+  draftFirst          Boolean               @default(false)
+  transactionDrafts   TransactionDraft[]
 
   @@index([roleId])
 }
@@ -451,6 +457,7 @@ model Party {
   updatedAt DateTime @updatedAt
 
   transactions  Transaction[]
+  transactionDrafts TransactionDraft[]
   // Legacy implicit M:M kept for backwards compatibility — new UI uses
   // partyServices (with totalAmount). Will be removed once
   // migrate-party-services has been run everywhere.
@@ -497,6 +504,34 @@ model PendingApproval {
   @@index([status, createdAt])
   @@index([submittedById])
   @@index([targetTxId])
+}
+
+/// Personal "draft" transactions for users with User.draftFirst=true.
+/// They never enter the approval queue until the user explicitly
+/// submits them from the My Drafts page — at which point a normal
+/// PendingApproval row is created and the draft is deleted.
+model TransactionDraft {
+  id            String   @id @default(cuid())
+  submittedById String
+  submittedBy   User     @relation(fields: [submittedById], references: [id], onDelete: Cascade)
+  // Same fields as the canonical Transaction shape so the My Drafts
+  // table can render and edit them in place.
+  date          DateTime
+  month         String
+  type          String
+  category      String
+  subItem       String
+  description   String?
+  paymentMode   String
+  amount        Decimal  @db.Decimal(14, 2)
+  flow          String
+  partyId       String?
+  party         Party?   @relation(fields: [partyId], references: [id], onDelete: SetNull)
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  @@index([submittedById])
+  @@index([createdAt])
 }
 
 /// Metadata about each Voxbay CSV upload. The actual call rows live

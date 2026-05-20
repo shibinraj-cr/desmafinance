@@ -6,6 +6,10 @@ export type Permissions = {
   isAdmin: boolean;
   canApprove: boolean;
   needsApproval: boolean;
+  /** When true, new transactions land as personal drafts (visible only
+   *  on /finance/approvals/my-drafts) instead of going straight into
+   *  the approval queue. Used for Ganga's review-before-submit flow. */
+  draftFirst: boolean;
   pages: string[];
   /** The display name of the role (e.g. "Admin", "Manager", custom name). */
   roleName: string;
@@ -28,6 +32,7 @@ export function fromLegacyString(role?: string | null): Permissions {
       isAdmin: true,
       canApprove: true,
       needsApproval: false,
+      draftFirst: false,
       pages: [...FINANCE_PAGES, "/users", "/roles"],
       roleName: "Admin",
     };
@@ -37,6 +42,7 @@ export function fromLegacyString(role?: string | null): Permissions {
       isAdmin: false,
       canApprove: true,
       needsApproval: false,
+      draftFirst: false,
       pages: FINANCE_PAGES,
       roleName: "Manager",
     };
@@ -45,6 +51,7 @@ export function fromLegacyString(role?: string | null): Permissions {
     isAdmin: false,
     canApprove: false,
     needsApproval: true,
+    draftFirst: false,
     pages: FINANCE_PAGES,
     roleName: r === "executive" ? "Executive" : "User",
   };
