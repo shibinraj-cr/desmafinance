@@ -305,46 +305,56 @@ export function PipelineClient(props: {
             <p className="text-[11px] uppercase tracking-widest mb-[8px]" style={{ color: "var(--lp-on-surface-variant)" }}>
               Add candidate to pipeline
             </p>
-            <div className="grid grid-cols-1 sm:grid-cols-6 gap-[8px]">
-              <input
-                value={draft.candidateName}
-                onChange={(e) => setDraft({ ...draft, candidateName: e.target.value })}
-                placeholder="Candidate name"
-                className="h-[34px] px-[8px] rounded-[6px] text-[13px] sm:col-span-2"
-              />
-              <select
-                value={draft.serviceId}
-                onChange={(e) => setDraft({ ...draft, serviceId: e.target.value })}
-                className="h-[34px] px-[8px] rounded-[6px] text-[13px]"
-              >
-                {props.services.map((s) => (
-                  <option key={s.id} value={s.id}>{s.name}</option>
-                ))}
-              </select>
-              <select
-                value={draft.sourceId}
-                onChange={(e) => setDraft({ ...draft, sourceId: e.target.value })}
-                className="h-[34px] px-[8px] rounded-[6px] text-[13px]"
-              >
-                {props.sources.map((s) => (
-                  <option key={s.id} value={s.id}>{s.label}</option>
-                ))}
-              </select>
-              <input
-                type="date"
-                value={draft.expectedCloseDate}
-                onChange={(e) => setDraft({ ...draft, expectedCloseDate: e.target.value })}
-                className="h-[34px] px-[8px] rounded-[6px] text-[13px]"
-              />
-              <input
-                type="number"
-                min={0}
-                step={1000}
-                value={draft.expectedFirstInstallment}
-                onChange={(e) => setDraft({ ...draft, expectedFirstInstallment: Number(e.target.value) || 0 })}
-                placeholder="₹ First installment"
-                className="h-[34px] px-[8px] rounded-[6px] text-[13px] text-right"
-              />
+            <div className="grid grid-cols-1 sm:grid-cols-6 gap-[10px]">
+              <FieldLabel className="sm:col-span-2" text="Candidate name">
+                <input
+                  value={draft.candidateName}
+                  onChange={(e) => setDraft({ ...draft, candidateName: e.target.value })}
+                  placeholder="e.g. Reshma K"
+                  className="w-full h-[34px] px-[8px] rounded-[6px] text-[13px]"
+                />
+              </FieldLabel>
+              <FieldLabel text="Service">
+                <select
+                  value={draft.serviceId}
+                  onChange={(e) => setDraft({ ...draft, serviceId: e.target.value })}
+                  className="w-full h-[34px] px-[8px] rounded-[6px] text-[13px]"
+                >
+                  {props.services.map((s) => (
+                    <option key={s.id} value={s.id}>{s.name}</option>
+                  ))}
+                </select>
+              </FieldLabel>
+              <FieldLabel text="Lead source">
+                <select
+                  value={draft.sourceId}
+                  onChange={(e) => setDraft({ ...draft, sourceId: e.target.value })}
+                  className="w-full h-[34px] px-[8px] rounded-[6px] text-[13px]"
+                >
+                  {props.sources.map((s) => (
+                    <option key={s.id} value={s.id}>{s.label}</option>
+                  ))}
+                </select>
+              </FieldLabel>
+              <FieldLabel text="Expected close date">
+                <input
+                  type="date"
+                  value={draft.expectedCloseDate}
+                  onChange={(e) => setDraft({ ...draft, expectedCloseDate: e.target.value })}
+                  className="w-full h-[34px] px-[8px] rounded-[6px] text-[13px]"
+                />
+              </FieldLabel>
+              <FieldLabel text="Expected 1st installment (₹)">
+                <input
+                  type="number"
+                  min={0}
+                  step={1000}
+                  value={draft.expectedFirstInstallment}
+                  onChange={(e) => setDraft({ ...draft, expectedFirstInstallment: Number(e.target.value) || 0 })}
+                  placeholder="0"
+                  className="w-full h-[34px] px-[8px] rounded-[6px] text-[13px] text-right"
+                />
+              </FieldLabel>
             </div>
             {props.canSupervise && (
               <div className="mt-[8px] flex items-center gap-[8px]">
@@ -451,6 +461,28 @@ function TabLink({ href, active, children }: { href: string; active: boolean; ch
     >
       {children}
     </Link>
+  );
+}
+
+function FieldLabel({
+  text,
+  className,
+  children,
+}: {
+  text: string;
+  className?: string;
+  children: React.ReactNode;
+}) {
+  return (
+    <label className={"flex flex-col gap-[4px] " + (className ?? "")}>
+      <span
+        className="text-[10px] uppercase tracking-widest font-semibold"
+        style={{ color: "var(--lp-on-surface-variant)" }}
+      >
+        {text}
+      </span>
+      {children}
+    </label>
   );
 }
 
