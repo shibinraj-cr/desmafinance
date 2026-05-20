@@ -187,7 +187,16 @@ export default async function BdePerformanceDetail({
             <span>· @{target.username}</span>
           </div>
         </div>
-        <RangeTabs current={range} userId={userId} pickYear={pickYear} pickMonth={pickMonth} />
+        <div className="flex flex-wrap items-center gap-[8px]">
+          <DownloadSnapshotLink
+            userId={userId}
+            range={range}
+            pickYear={pickYear}
+            pickMonth={pickMonth}
+            displayName={target.leadPulseRole.displayName}
+          />
+          <RangeTabs current={range} userId={userId} pickYear={pickYear} pickMonth={pickMonth} />
+        </div>
       </header>
 
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-[16px]">
@@ -435,6 +444,51 @@ function StatusPill({ status, locked }: { status: string; locked: boolean }) {
     <span className="text-[11px] px-[8px] py-[2px] rounded-full font-semibold" style={{ backgroundColor: "rgba(255, 182, 147, 0.18)", color: "var(--lp-orange)" }}>
       Draft
     </span>
+  );
+}
+
+/**
+ * Anchor styled as a button that links to the OG-image PNG route.
+ * Browser downloads via the route's Content-Disposition header — no
+ * client-side canvas / html2canvas dep. The link carries the same
+ * range params the page is on so the snapshot matches what Suhaina is
+ * looking at.
+ */
+function DownloadSnapshotLink({
+  userId,
+  range,
+  pickYear,
+  pickMonth,
+  displayName,
+}: {
+  userId: string;
+  range: RangeKey;
+  pickYear: number;
+  pickMonth: number;
+  displayName: string;
+}) {
+  const params = new URLSearchParams();
+  params.set("range", range);
+  if (range === "month") {
+    params.set("year", String(pickYear));
+    params.set("month", String(pickMonth));
+  }
+  return (
+    <a
+      href={`/api/marketing/lead-pulse/bde-performance/${userId}/og?${params.toString()}`}
+      className="inline-flex items-center gap-[6px] h-[32px] px-[12px] rounded-[8px] text-[12px] font-semibold border"
+      style={{
+        borderColor: "var(--lp-primary)",
+        backgroundColor: "rgba(250, 204, 21, 0.10)",
+        color: "var(--lp-primary)",
+      }}
+      title={`Download ${displayName}'s snapshot as PNG (mobile-friendly, share on WhatsApp)`}
+    >
+      <span className="material-symbols-outlined" style={{ fontSize: 16 }} aria-hidden>
+        download
+      </span>
+      Download PNG
+    </a>
   );
 }
 
