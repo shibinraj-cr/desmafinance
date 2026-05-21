@@ -11,6 +11,7 @@ const MONTH_RX = /^\d{4}-\d{2}$/;
 
 const CreateSchema = z.object({
   candidateName: z.string().trim().min(1).max(160),
+  candidatePhone: z.string().trim().max(40).optional().nullable(),
   serviceId: z.string().min(1),
   sourceId: z.string().min(1),
   expectedCloseDate: z.string().regex(DATE_RX),
@@ -133,6 +134,7 @@ export async function POST(req: NextRequest) {
     data: {
       userId: ownerId,
       candidateName: d.candidateName,
+      candidatePhone: d.candidatePhone?.trim() || null,
       serviceId: d.serviceId,
       sourceId: d.sourceId,
       expectedCloseDate: new Date(`${d.expectedCloseDate}T00:00:00.000Z`),

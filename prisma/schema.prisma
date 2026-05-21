@@ -338,6 +338,10 @@ model LeadPulsePipeline {
   user                     User     @relation("LeadPulsePipeline", fields: [userId], references: [id], onDelete: Cascade)
 
   candidateName            String
+  /// Free-text phone number captured at pipeline entry — kept as a
+  /// string so country codes / hyphens / WhatsApp prefixes survive
+  /// round-trips. No format validation; supervisor checks the value.
+  candidatePhone           String?
   partyId                  String?
   party                    Party?   @relation("PartyPipeline", fields: [partyId], references: [id], onDelete: SetNull)
 

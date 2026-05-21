@@ -10,6 +10,7 @@ const DATE_RX = /^\d{4}-\d{2}-\d{2}$/;
 
 const PatchSchema = z.object({
   candidateName: z.string().trim().min(1).max(160).optional(),
+  candidatePhone: z.string().trim().max(40).nullable().optional(),
   serviceId: z.string().min(1).optional(),
   sourceId: z.string().min(1).optional(),
   expectedCloseDate: z.string().regex(DATE_RX).optional(),
@@ -51,6 +52,7 @@ export async function PATCH(req: NextRequest, { params }: { params: { id: string
 
   const data: Record<string, unknown> = {};
   if (d.candidateName !== undefined) data.candidateName = d.candidateName;
+  if (d.candidatePhone !== undefined) data.candidatePhone = d.candidatePhone?.trim() || null;
   if (d.serviceId !== undefined) data.serviceId = d.serviceId;
   if (d.sourceId !== undefined) data.sourceId = d.sourceId;
   if (d.expectedCloseDate !== undefined) {

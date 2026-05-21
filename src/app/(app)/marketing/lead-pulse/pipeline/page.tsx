@@ -102,6 +102,7 @@ export default async function PipelinePage({
         userId: r.userId,
         userName: r.user.username,
         candidateName: r.candidateName,
+        candidatePhone: r.candidatePhone,
         partyId: r.partyId,
         serviceId: r.serviceId,
         serviceName: r.service.name,

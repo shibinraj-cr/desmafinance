@@ -13,6 +13,7 @@ export type PipelineRow = {
   userId: string;
   userName: string;
   candidateName: string;
+  candidatePhone: string | null;
   partyId: string | null;
   serviceId: string;
   serviceName: string;
@@ -80,6 +81,7 @@ export function PipelineClient(props: {
   // Inline-create form state
   const [draft, setDraft] = useState({
     candidateName: "",
+    candidatePhone: "",
     serviceId: props.services[0]?.id ?? "",
     sourceId: props.sources[0]?.id ?? "",
     expectedCloseDate: props.today,
@@ -111,6 +113,7 @@ export function PipelineClient(props: {
         headers: { "content-type": "application/json" },
         body: JSON.stringify({
           candidateName: draft.candidateName.trim(),
+          candidatePhone: draft.candidatePhone.trim() || null,
           serviceId: draft.serviceId,
           sourceId: draft.sourceId,
           expectedCloseDate: draft.expectedCloseDate,
@@ -123,7 +126,7 @@ export function PipelineClient(props: {
         setError((d as { error?: string }).error ?? "Could not create.");
         return;
       }
-      setDraft({ ...draft, candidateName: "", expectedFirstInstallment: 0 });
+      setDraft({ ...draft, candidateName: "", candidatePhone: "", expectedFirstInstallment: 0 });
       refresh();
     });
   }
@@ -177,6 +180,9 @@ export function PipelineClient(props: {
           </td>
         )}
         <td className="px-[12px] py-[8px] font-semibold">{r.candidateName}</td>
+        <td className="px-[12px] py-[8px] font-mono tabular-nums" style={{ color: "var(--lp-on-surface-variant)" }}>
+          {r.candidatePhone || "—"}
+        </td>
         <td className="px-[12px] py-[8px]">{r.serviceName}</td>
         <td className="px-[12px] py-[8px]">{r.sourceLabel}</td>
         <td className="px-[12px] py-[8px] tabular-nums font-mono">{r.expectedCloseDate}</td>
@@ -305,12 +311,22 @@ export function PipelineClient(props: {
             <p className="text-[11px] uppercase tracking-widest mb-[8px]" style={{ color: "var(--lp-on-surface-variant)" }}>
               Add candidate to pipeline
             </p>
-            <div className="grid grid-cols-1 sm:grid-cols-6 gap-[10px]">
+            <div className="grid grid-cols-1 sm:grid-cols-7 gap-[10px]">
               <FieldLabel className="sm:col-span-2" text="Candidate name">
                 <input
                   value={draft.candidateName}
                   onChange={(e) => setDraft({ ...draft, candidateName: e.target.value })}
                   placeholder="e.g. Reshma K"
+                  className="w-full h-[34px] px-[8px] rounded-[6px] text-[13px]"
+                />
+              </FieldLabel>
+              <FieldLabel text="Phone">
+                <input
+                  type="tel"
+                  inputMode="tel"
+                  value={draft.candidatePhone}
+                  onChange={(e) => setDraft({ ...draft, candidatePhone: e.target.value })}
+                  placeholder="+91 …"
                   className="w-full h-[34px] px-[8px] rounded-[6px] text-[13px]"
                 />
               </FieldLabel>
@@ -394,6 +410,7 @@ export function PipelineClient(props: {
                 <tr className="text-left">
                   {props.canSupervise && <Th>BDE</Th>}
                   <Th>Candidate</Th>
+                  <Th>Phone</Th>
                   <Th>Service</Th>
                   <Th>Source</Th>
                   <Th>Expected close</Th>
@@ -409,7 +426,7 @@ export function PipelineClient(props: {
                 {lost.map(renderRow)}
                 {props.rows.length === 0 && (
                   <tr>
-                    <td colSpan={props.canSupervise ? 9 : 8} className="text-center py-[24px]" style={{ color: "var(--lp-on-surface-variant)" }}>
+                    <td colSpan={props.canSupervise ? 10 : 9} className="text-center py-[24px]" style={{ color: "var(--lp-on-surface-variant)" }}>
                       No pipeline rows yet — add one above.
                     </td>
                   </tr>

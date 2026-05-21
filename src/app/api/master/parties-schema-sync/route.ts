@@ -657,6 +657,12 @@ export async function POST() {
        END $$`,
     );
 
+    // Additive: candidatePhone column on LeadPulsePipeline.
+    await step(
+      "LeadPulsePipeline.candidatePhone column",
+      `ALTER TABLE "LeadPulsePipeline" ADD COLUMN IF NOT EXISTS "candidatePhone" TEXT`,
+    );
+
     // 7. LeadPulseBdeInsight — monthly AI-style coaching loop per BDE
     await step(
       "LeadPulseBdeInsight table",
