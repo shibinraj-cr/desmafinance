@@ -59,7 +59,10 @@ function NavList({
   onNavigate?: () => void;
 }) {
   return (
-    <nav className="flex-1 mt-base space-y-xs">
+    // `min-h-0` is required so this flex child can shrink past its
+    // content height — otherwise the long nav list pushes the user
+    // footer off-screen instead of scrolling internally.
+    <nav className="flex-1 min-h-0 mt-base space-y-xs overflow-y-auto pr-xs scrollbar-thin">
       {items.map((n) => {
         const active = pathname === n.href || pathname.startsWith(n.href + "/");
         return (
