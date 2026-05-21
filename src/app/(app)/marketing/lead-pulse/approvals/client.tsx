@@ -97,6 +97,33 @@ export function ApprovalsClient({
     });
   }
 
+  async function unlockForEdit(item: QueueItem) {
+    setRowError((m) => ({ ...m, [item.key]: "" }));
+    if (!confirm(
+      `Unlock ${item.displayName}'s entry for ${item.date} so they can edit it?\n\n` +
+        `Their daily-entry form will become editable again. You'll need to re-approve after they re-submit.`,
+    )) {
+      return;
+    }
+    startTransition(async () => {
+      const res = await fetch("/api/marketing/lead-pulse/lock-override", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ userId: item.userId, date: item.date }),
+      });
+      if (!res.ok) {
+        const d = await res.json().catch(() => ({}));
+        setRowError((m) => ({
+          ...m,
+          [item.key]: (d as { error?: string }).error ?? "Unlock failed.",
+        }));
+        return;
+      }
+      setToast(`Unlocked ${item.displayName} — ${fmtDDMMYY(item.date)}. They can edit + re-submit now.`);
+      router.refresh();
+    });
+  }
+
   return (
     <div className="px-[24px] py-[24px] space-y-[16px]">
       <header className="flex flex-wrap items-end justify-between gap-[16px]">
@@ -249,6 +276,29 @@ export function ApprovalsClient({
                         }}
                       >
                         <strong>Previous review note:</strong> {item.reviewNote}
+                      </div>
+                    )}
+                    {status === "approved" && (
+                      <div className="flex flex-wrap items-center gap-[12px]">
+                        <button
+                          onClick={() => unlockForEdit(item)}
+                          disabled={busy}
+                          className="h-[34px] px-[14px] rounded-[8px] text-[12px] font-semibold border"
+                          style={{
+                            borderColor: "var(--lp-primary)",
+                            color: "var(--lp-primary)",
+                            backgroundColor: "rgba(250, 204, 21, 0.10)",
+                            opacity: busy ? 0.6 : 1,
+                          }}
+                          title="Unlock so the BDE can correct + re-submit this entry"
+                        >
+                          Unlock for edit
+                        </button>
+                        {rowError[item.key] && (
+                          <p className="text-[12px]" style={{ color: "var(--lp-error)" }}>
+                            {rowError[item.key]}
+                          </p>
+                        )}
                       </div>
                     )}
                     {status === "submitted" && (
