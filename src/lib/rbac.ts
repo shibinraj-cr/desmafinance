@@ -75,6 +75,9 @@ export function needsApproval(p?: Permissions | null): boolean {
 
 export function canSeePage(p: Permissions, href: string): boolean {
   if (!href.startsWith("/")) return false;
+  // Admins see every page — keeps newly added admin-only routes visible
+  // without forcing a Role.pages migration each time.
+  if (p.isAdmin) return true;
   // Exact match or prefix match (e.g. allowing /daily-tracker permits
   // /daily-tracker/[id]/edit too).
   return p.pages.some((pg) => href === pg || href.startsWith(pg + "/"));

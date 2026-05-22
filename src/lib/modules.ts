@@ -26,6 +26,22 @@ export type AppModule = {
 
 export const MODULES: AppModule[] = [
   {
+    id: "executive",
+    name: "Executive",
+    icon: "leaderboard",
+    basePath: "/executive",
+    status: "active",
+    adminOnly: true,
+    pages: [
+      {
+        href: "/executive/dashboard",
+        label: "CEO Dashboard",
+        icon: "insights",
+        adminOnly: true,
+      },
+    ],
+  },
+  {
     id: "finance",
     name: "Finance",
     icon: "account_balance",
