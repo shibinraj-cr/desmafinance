@@ -30,7 +30,6 @@ export function NewPlanForm({
   // user has to make a conscious pick, unless an initialPartyId was
   // supplied via the deep-link query param.
   const [partyId, setPartyId] = useState<string>(initialPartyId ?? "");
-  const [label, setLabel] = useState<string>("Collection Plan");
   const [notes, setNotes] = useState<string>("");
   const [installments, setInstallments] = useState<Installment[]>([
     { expectedDate: todayIso(), amount: "", description: "" },
@@ -59,8 +58,7 @@ export function NewPlanForm({
   async function onSubmit(e: React.FormEvent) {
     e.preventDefault();
     setError(null);
-    if (!partyId) return setError("Pick a candidate");
-    if (!label.trim()) return setError("Plan label is required");
+    if (!partyId) return setError("Pick a candidate or vendor");
     if (installments.length === 0) return setError("Add at least one installment");
     for (const [idx, inst] of installments.entries()) {
       if (!inst.expectedDate) return setError(`Installment ${idx + 1}: missing date`);
@@ -77,7 +75,6 @@ export function NewPlanForm({
         headers: { "content-type": "application/json" },
         body: JSON.stringify({
           partyId,
-          label,
           notes: notes || null,
           installments: installments.map((i) => ({
             expectedDate: i.expectedDate,
@@ -117,15 +114,6 @@ export function NewPlanForm({
                 </option>
               ))}
             </select>
-          </Field>
-          <Field label="Plan label" required>
-            <input
-              value={label}
-              onChange={(e) => setLabel(e.target.value)}
-              className={inputCls}
-              placeholder="e.g. AHPRA package — Sarath"
-              required
-            />
           </Field>
           <Field label="Notes">
             <input

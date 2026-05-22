@@ -20,7 +20,9 @@ const InstallmentInput = z.object({
 const PlanInput = z.object({
   partyId: z.string().min(1),
   serviceId: z.string().min(1).optional().nullable(),
-  label: z.string().min(1).max(160),
+  // Label is no longer shown in the UI — when the client omits it
+  // we synthesise "Collection Plan — <party name>" server-side.
+  label: z.string().min(1).max(160).optional().nullable(),
   // Category / sub-item / payment-mode / EXP-DOM are captured at the
   // per-installment "Submit to Daily Tracker" step, not at plan-create,
   // so they're optional here.
@@ -82,7 +84,7 @@ export async function POST(req: NextRequest) {
 
   const party = await prisma.party.findUnique({
     where: { id: data.partyId },
-    select: { id: true, isActive: true, txTypes: true },
+    select: { id: true, name: true, isActive: true, txTypes: true },
   });
   if (!party || !party.isActive) {
     return NextResponse.json({ error: "party_not_found" }, { status: 400 });
@@ -103,11 +105,16 @@ export async function POST(req: NextRequest) {
     if (!svc) return NextResponse.json({ error: "service_not_found" }, { status: 400 });
   }
 
+  // Auto-synthesise a label when the client doesn't pass one (the UI
+  // no longer collects it). Keeps the human-readable plan title useful
+  // in the list view and on the candidate detail page.
+  const finalLabel = data.label?.trim() || `Collection Plan — ${party.name}`;
+
   const plan = await prisma.collectionPlan.create({
     data: {
       partyId: data.partyId,
       serviceId: data.serviceId ?? null,
-      label: data.label,
+      label: finalLabel,
       category: data.category ?? null,
       subItem: data.subItem ?? null,
       paymentMode: data.paymentMode ?? null,
@@ -133,7 +140,7 @@ export async function POST(req: NextRequest) {
     userId,
     changes: {
       partyId: data.partyId,
-      label: data.label,
+      label: finalLabel,
       installmentCount: data.installments.length,
       totalAmount: data.installments.reduce((s, i) => s + i.amount, 0),
     },
