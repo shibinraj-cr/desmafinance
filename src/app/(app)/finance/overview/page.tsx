@@ -17,6 +17,7 @@ import { parsePeriod, periodLabel, rangeFor } from "@/lib/period";
 import { DateFilter } from "@/components/DateFilter";
 import { pace } from "@/lib/pace";
 import { PaceTracker } from "@/components/PaceTracker";
+import { UpcomingCollections } from "@/components/UpcomingCollections";
 
 export const dynamic = "force-dynamic";
 
@@ -254,6 +255,8 @@ export default async function OverviewPage({
             </Section>
           </div>
         </section>
+
+        <UpcomingCollections />
 
         <Section title="Revenue vs Expenses">
           <MonthlyRevenueExpenseBars data={series} />

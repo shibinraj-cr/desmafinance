@@ -4,6 +4,7 @@ import { getCurrentUserAndPermissions } from "@/lib/permissions";
 import { loadPartyDetail } from "@/lib/party-data";
 import { TopBar } from "@/components/TopBar";
 import { PartyProfile } from "./client";
+import { PartyCollectionPlans } from "@/components/PartyCollectionPlans";
 
 export const dynamic = "force-dynamic";
 
@@ -86,7 +87,10 @@ export default async function PartyDetailPage({
         title={party.name}
         subtitle={`${party.group} · ${party.txTypes} · ${party.isActive ? "Active" : "Inactive"}`}
       />
-      <div className="p-margin">
+      <div className="p-margin space-y-lg">
+        {party.group === "Candidate" ? (
+          <PartyCollectionPlans partyId={party.id} />
+        ) : null}
         <PartyProfile
           party={{
             id: party.id,
