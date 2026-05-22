@@ -13,6 +13,7 @@
     "db:push": "prisma db push",
     "db:seed": "tsx prisma/seed.ts",
     "db:seed-roles": "tsx prisma/seed-roles.ts",
+    "db:seed-hr": "tsx prisma/seed-hr.ts",
     "db:seed-masters": "tsx prisma/seed-masters.ts",
     "db:migrate-services": "tsx prisma/migrate-services.ts",
     "db:migrate-expense-master": "tsx prisma/migrate-expense-master.ts",

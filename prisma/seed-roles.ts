@@ -6,9 +6,12 @@
  *   npm run db:seed-roles
  */
 import { PrismaClient } from "@prisma/client";
-import { ALL_PAGE_HREFS, DEFAULT_NON_ADMIN_PAGES } from "../src/lib/modules";
+import { ALL_PAGE_HREFS, DEFAULT_NON_ADMIN_PAGES, MODULES } from "../src/lib/modules";
 
 const prisma = new PrismaClient();
+
+const HR_PAGES = MODULES.find((m) => m.id === "hr")?.pages.map((p) => p.href) ?? [];
+const ME_PAGES = MODULES.find((m) => m.id === "me")?.pages.map((p) => p.href) ?? [];
 
 // System roles seed shape. The name is the *initial* name on first run; admins
 // can rename in the UI later (e.g. "Manager" → "Finance Manager"). On re-run,
@@ -28,11 +31,11 @@ const SYSTEM_ROLES = [
   {
     name: "Finance Manager",
     aliases: ["Finance Manager", "Manager"],
-    description: "Approves pending changes; own creates/edits go in directly.",
+    description: "Approves pending changes; own creates/edits go in directly. Can download approved Axis Bank salary file.",
     isAdmin: false,
     canApprove: true,
     needsApproval: false,
-    pages: DEFAULT_NON_ADMIN_PAGES,
+    pages: [...DEFAULT_NON_ADMIN_PAGES, "/hr/salary"],
     isSystem: true,
   },
   {
@@ -43,6 +46,36 @@ const SYSTEM_ROLES = [
     canApprove: false,
     needsApproval: true,
     pages: DEFAULT_NON_ADMIN_PAGES,
+    isSystem: true,
+  },
+  {
+    name: "HR Manager",
+    aliases: ["HR Manager"],
+    description: "Manages employees, attendance, leave, salary runs, policies and trainings.",
+    isAdmin: false,
+    canApprove: true,
+    needsApproval: false,
+    pages: [...HR_PAGES, ...ME_PAGES],
+    isSystem: true,
+  },
+  {
+    name: "HR Executive",
+    aliases: ["HR Executive"],
+    description: "Day-to-day HR ops; salary run approval still requires HR Manager.",
+    isAdmin: false,
+    canApprove: false,
+    needsApproval: true,
+    pages: [...HR_PAGES, ...ME_PAGES],
+    isSystem: true,
+  },
+  {
+    name: "Employee",
+    aliases: ["Employee"],
+    description: "Self-service only: leave application, policy ack, training, payslips.",
+    isAdmin: false,
+    canApprove: false,
+    needsApproval: true,
+    pages: ME_PAGES,
     isSystem: true,
   },
 ];
