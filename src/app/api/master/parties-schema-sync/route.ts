@@ -874,6 +874,22 @@ export async function POST() {
          END IF;
        END $$`,
     );
+
+    // Plan-level category/subItem/paymentMode now captured at submit
+    // time, so the columns are nullable. ALTER ... DROP NOT NULL is a
+    // no-op on already-nullable columns in Postgres ≥ 12.
+    await step(
+      "CollectionPlan.category drop NOT NULL",
+      `ALTER TABLE "CollectionPlan" ALTER COLUMN "category" DROP NOT NULL`,
+    );
+    await step(
+      "CollectionPlan.subItem drop NOT NULL",
+      `ALTER TABLE "CollectionPlan" ALTER COLUMN "subItem" DROP NOT NULL`,
+    );
+    await step(
+      "CollectionPlan.paymentMode drop NOT NULL",
+      `ALTER TABLE "CollectionPlan" ALTER COLUMN "paymentMode" DROP NOT NULL`,
+    );
   } catch (e) {
     return NextResponse.json(
       { error: "ddl_failed", log, message: e instanceof Error ? e.message : String(e) },
