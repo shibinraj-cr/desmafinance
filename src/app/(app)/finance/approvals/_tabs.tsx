@@ -6,13 +6,27 @@ export function Tabs({
   active,
   counts,
   myDrafts,
+  preserve,
 }: {
   active: TabKey;
   counts: { pending: number; approved: number; rejected: number };
   /** Pass an object to render the "My Drafts" tab. Omit to hide it
    *  (e.g. for reviewers without the draftFirst flag). */
   myDrafts?: { count: number };
+  /** Filters to keep in the URL when switching tabs (type / date /
+   *  party). Omitting them resets the filter view per tab. */
+  preserve?: { type?: string; from?: string; to?: string; party?: string };
 }) {
+  const preservedQs = (() => {
+    if (!preserve) return "";
+    const qs = new URLSearchParams();
+    if (preserve.type && preserve.type !== "all") qs.set("type", preserve.type);
+    if (preserve.from) qs.set("from", preserve.from);
+    if (preserve.to) qs.set("to", preserve.to);
+    if (preserve.party) qs.set("party", preserve.party);
+    const q = qs.toString();
+    return q ? `?${q}` : "";
+  })();
   const tabs: Array<{
     key: TabKey;
     label: string;
@@ -49,7 +63,13 @@ export function Tabs({
         return (
           <Link
             key={t.key}
-            href={`/finance/approvals/${t.key}`}
+            // My-drafts tab uses its own scope (only the author's
+            // drafts) so the cross-tab filters don't apply there.
+            href={
+              t.key === "my-drafts"
+                ? `/finance/approvals/my-drafts`
+                : `/finance/approvals/${t.key}${preservedQs}`
+            }
             scroll={false}
             className={
               "inline-flex items-center gap-xs h-10 px-md border-b-2 transition " + activeStyles

@@ -41,12 +41,21 @@ function fmtDDMMYY(s: string): string {
   return `${dd}-${mm}-${y.slice(2)}`;
 }
 
+const DATE_RX = /^\d{4}-\d{2}-\d{2}$/;
+
 export default async function ApprovalsPage({
   params,
   searchParams,
 }: {
   params: { tab: string };
-  searchParams: { type?: string };
+  searchParams: {
+    type?: string;
+    /** Event-date range filter — applied client-side to the JSON-stored proposed date. */
+    from?: string;
+    to?: string;
+    /** Party id filter. */
+    party?: string;
+  };
 }) {
   const { perms, userId } = await getCurrentUserAndPermissions();
   const reviewer = canApprove(perms);
@@ -59,6 +68,9 @@ export default async function ApprovalsPage({
     searchParams.type === "Revenue" || searchParams.type === "Expense"
       ? (searchParams.type as TypeFilter)
       : "all";
+  const fromDate = searchParams.from && DATE_RX.test(searchParams.from) ? searchParams.from : "";
+  const toDate = searchParams.to && DATE_RX.test(searchParams.to) ? searchParams.to : "";
+  const partyFilter = searchParams.party && searchParams.party.length > 0 ? searchParams.party : "";
 
   // Visibility: reviewers (manager/admin) see everyone's items, executives
   // see only their own submissions. The status filter narrows to the tab.
@@ -135,13 +147,40 @@ export default async function ApprovalsPage({
     if (p.kind === "delete") return p.targetTx?.type ?? "";
     return proposed?.type ?? p.targetTx?.type ?? "";
   }
+  /** YYYY-MM-DD event date from either proposed or targetTx. */
+  function effectiveDate(p: (typeof items)[number]): string {
+    const proposed = p.proposed as unknown as ProposedTx | null;
+    if (p.kind === "delete") return p.targetTx?.date.toISOString().slice(0, 10) ?? "";
+    return (
+      (typeof proposed?.date === "string" ? proposed.date.slice(0, 10) : null) ??
+      p.targetTx?.date.toISOString().slice(0, 10) ??
+      ""
+    );
+  }
+  /** Party id from either proposed or targetTx. */
+  function effectivePartyId(p: (typeof items)[number]): string | null {
+    const proposed = p.proposed as unknown as ProposedTx | null;
+    if (p.kind === "delete") return p.targetTx?.partyId ?? null;
+    return proposed?.partyId ?? p.targetTx?.partyId ?? null;
+  }
   const typeCounts = {
     all: items.length,
     Revenue: items.filter((p) => effectiveType(p) === "Revenue").length,
     Expense: items.filter((p) => effectiveType(p) === "Expense").length,
   };
-  const filteredItems =
-    typeFilter === "all" ? items : items.filter((p) => effectiveType(p) === typeFilter);
+  // Type filter applies first (drives the chip counts), then the
+  // From / To / Party filters narrow the visible rows.
+  const filteredItems = items
+    .filter((p) => (typeFilter === "all" ? true : effectiveType(p) === typeFilter))
+    .filter((p) => {
+      if (!fromDate && !toDate) return true;
+      const d = effectiveDate(p);
+      if (!d) return false;
+      if (fromDate && d < fromDate) return false;
+      if (toDate && d > toDate) return false;
+      return true;
+    })
+    .filter((p) => (partyFilter ? effectivePartyId(p) === partyFilter : true));
 
   const isReviewerPending = tab === "pending" && reviewer;
   const pendingRows: PendingRow[] = isReviewerPending
@@ -201,9 +240,31 @@ export default async function ApprovalsPage({
           myDrafts={
             perms?.draftFirst || perms?.isAdmin ? { count: draftsCount } : undefined
           }
+          preserve={{
+            type: typeFilter,
+            from: fromDate,
+            to: toDate,
+            party: partyFilter,
+          }}
         />
 
-        <TypeTabs tab={tab} active={typeFilter} counts={typeCounts} />
+        <TypeTabs
+          tab={tab}
+          active={typeFilter}
+          counts={typeCounts}
+          fromDate={fromDate}
+          toDate={toDate}
+          partyFilter={partyFilter}
+        />
+
+        <DateAndPartyFilter
+          tab={tab}
+          typeFilter={typeFilter}
+          fromDate={fromDate}
+          toDate={toDate}
+          partyFilter={partyFilter}
+          parties={parties}
+        />
 
         {isReviewerPending ? (
           <PendingList rows={pendingRows} partyById={partyLookup} />
@@ -335,20 +396,120 @@ export default async function ApprovalsPage({
 }
 
 /** Secondary filter row inside each tab — All / Revenue / Expense. */
+/** Inline form with From / To date inputs + Party dropdown. Submits
+ *  GET to the same /finance/approvals/[tab] route — hidden inputs
+ *  carry the active type filter so the user's tab state is preserved
+ *  through the Apply click. Per the date+party filters being applied
+ *  in JS, swapping them is a pure URL change; no server route
+ *  changes needed. */
+function DateAndPartyFilter({
+  tab,
+  typeFilter,
+  fromDate,
+  toDate,
+  partyFilter,
+  parties,
+}: {
+  tab: TabKey;
+  typeFilter: TypeFilter;
+  fromDate: string;
+  toDate: string;
+  partyFilter: string;
+  parties: Array<{ id: string; name: string; group: string; isActive: boolean }>;
+}) {
+  const hasAnyFilter = !!fromDate || !!toDate || !!partyFilter;
+  const clearHref =
+    typeFilter === "all" ? `/finance/approvals/${tab}` : `/finance/approvals/${tab}?type=${typeFilter}`;
+  return (
+    <form
+      action={`/finance/approvals/${tab}`}
+      method="get"
+      className="flex flex-wrap items-end gap-sm rounded-xl border border-outline-variant bg-surface-container-lowest px-md py-sm"
+    >
+      {typeFilter !== "all" && <input type="hidden" name="type" value={typeFilter} />}
+      <label className="flex flex-col gap-[2px] text-caption text-on-surface-variant">
+        <span className="uppercase tracking-wider font-semibold">From</span>
+        <input
+          type="date"
+          name="from"
+          defaultValue={fromDate}
+          className="h-9 px-sm rounded-md border border-outline-variant bg-surface-container-lowest text-on-surface text-body-md"
+        />
+      </label>
+      <label className="flex flex-col gap-[2px] text-caption text-on-surface-variant">
+        <span className="uppercase tracking-wider font-semibold">To</span>
+        <input
+          type="date"
+          name="to"
+          defaultValue={toDate}
+          className="h-9 px-sm rounded-md border border-outline-variant bg-surface-container-lowest text-on-surface text-body-md"
+        />
+      </label>
+      <label className="flex flex-col gap-[2px] text-caption text-on-surface-variant">
+        <span className="uppercase tracking-wider font-semibold">Party</span>
+        <select
+          name="party"
+          defaultValue={partyFilter}
+          className="h-9 px-sm rounded-md border border-outline-variant bg-surface-container-lowest text-on-surface text-body-md min-w-[200px]"
+        >
+          <option value="">All parties</option>
+          {parties.map((p) => (
+            <option key={p.id} value={p.id}>
+              {p.name} ({p.group}){p.isActive ? "" : " — inactive"}
+            </option>
+          ))}
+        </select>
+      </label>
+      <div className="flex items-center gap-xs ml-auto">
+        <button
+          type="submit"
+          className="h-9 px-md rounded-md bg-primary text-on-primary text-label-sm font-semibold hover:opacity-90 transition"
+        >
+          Apply
+        </button>
+        {hasAnyFilter && (
+          <Link
+            href={clearHref}
+            className="h-9 inline-flex items-center px-md rounded-md border border-outline-variant text-label-sm font-semibold text-on-surface-variant hover:text-on-surface transition"
+            scroll={false}
+          >
+            Clear
+          </Link>
+        )}
+      </div>
+    </form>
+  );
+}
+
 function TypeTabs({
   tab,
   active,
   counts,
+  fromDate,
+  toDate,
+  partyFilter,
 }: {
   tab: TabKey;
   active: TypeFilter;
   counts: { all: number; Revenue: number; Expense: number };
+  fromDate: string;
+  toDate: string;
+  partyFilter: string;
 }) {
   const items: Array<{ key: TypeFilter; label: string; count: number }> = [
     { key: "all", label: "All", count: counts.all },
     { key: "Revenue", label: "Revenue", count: counts.Revenue },
     { key: "Expense", label: "Expense", count: counts.Expense },
   ];
+  function buildHref(key: TypeFilter): string {
+    const qs = new URLSearchParams();
+    if (key !== "all") qs.set("type", key);
+    if (fromDate) qs.set("from", fromDate);
+    if (toDate) qs.set("to", toDate);
+    if (partyFilter) qs.set("party", partyFilter);
+    const q = qs.toString();
+    return q ? `/finance/approvals/${tab}?${q}` : `/finance/approvals/${tab}`;
+  }
   return (
     <div className="flex flex-wrap items-center gap-xs">
       <span className="text-caption text-on-surface-variant mr-xs uppercase tracking-wider font-semibold">
@@ -356,10 +517,7 @@ function TypeTabs({
       </span>
       {items.map((t) => {
         const isActive = active === t.key;
-        const href =
-          t.key === "all"
-            ? `/finance/approvals/${tab}`
-            : `/finance/approvals/${tab}?type=${t.key}`;
+        const href = buildHref(t.key);
         return (
           <Link
             key={t.key}
