@@ -50,6 +50,7 @@ model User {
   leadPulsePipeline   LeadPulsePipeline[]   @relation("LeadPulsePipeline")
   // Monthly AI-style insight + Q&A loop on the BDE performance page
   leadPulseBdeInsights LeadPulseBdeInsight[] @relation("BdeInsights")
+  collectionPlansCreated CollectionPlan[]   @relation("CollectionPlanCreatedBy")
 
   @@index([roleId])
 }
@@ -97,6 +98,7 @@ model Transaction {
   updatedAt   DateTime  @updatedAt
 
   pendingApprovals PendingApproval[] @relation("targetTransaction")
+  collectionInstallment CollectionPlanInstallment? @relation("InstallmentTransaction")
 
   @@index([date])
   @@index([month])
@@ -171,6 +173,7 @@ model Service {
   leadPulseTargets LeadPulseTarget[]
   leadPulseCloses LeadPulseDailyClose[]
   leadPulsePipeline LeadPulsePipeline[]
+  collectionPlans CollectionPlan[]
 
   @@index([isActive])
   @@index([groupId])
@@ -524,6 +527,7 @@ model Party {
   services      Service[]
   partyServices PartyService[]
   pipelineRows  LeadPulsePipeline[] @relation("PartyPipeline")
+  collectionPlans CollectionPlan[]
 
   @@index([group])
   @@index([isActive])
@@ -561,6 +565,12 @@ model PendingApproval {
   reviewedAt    DateTime?
   createdAt     DateTime     @default(now())
   updatedAt     DateTime     @updatedAt
+
+  /// Back-link: when an installment is submitted to the approval queue
+  /// the resulting PendingApproval row carries this FK so approve/reject
+  /// can flip the installment status without scanning the queue.
+  collectionInstallmentId String? @unique
+  collectionInstallment   CollectionPlanInstallment? @relation("InstallmentPending", fields: [collectionInstallmentId], references: [id], onDelete: SetNull)
 
   @@index([status, createdAt])
   @@index([submittedById])
@@ -688,4 +698,75 @@ model LeadPulseBdeInsight {
   @@unique([userId, year, month])
   @@index([userId])
   @@index([year, month])
+}
+
+/// A collection plan: N expected installments (CollectionPlanInstallment)
+/// against a candidate (Party). Created by a Finance Executive on the
+/// /finance/collection-plan page so receivables can be staged ahead of
+/// time. Each installment can be submitted to the Daily Tracker for
+/// approval, at which point a normal Transaction (or PendingApproval)
+/// is created and linked back to the installment via the installment's
+/// pendingApprovalId / transactionId fields.
+model CollectionPlan {
+  id          String   @id @default(cuid())
+  partyId     String
+  party       Party    @relation(fields: [partyId], references: [id], onDelete: Cascade)
+  /// Optional service this plan corresponds to (e.g. AHPRA, PR).
+  serviceId   String?
+  service     Service? @relation(fields: [serviceId], references: [id], onDelete: SetNull)
+  label       String
+  /// Default category / sub-item / payment-mode the installments inherit
+  /// when none is explicitly set on the installment row.
+  category    String
+  subItem     String
+  paymentMode String
+  /// EXP / DOM tag for Revenue rows. Defaults to "DOM" for new plans.
+  expDom      String?  @default("DOM")
+  notes       String?
+  status      String   @default("active") // 'active' | 'closed' | 'cancelled'
+  createdById String?
+  createdBy   User?    @relation("CollectionPlanCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  installments CollectionPlanInstallment[]
+
+  @@index([partyId])
+  @@index([serviceId])
+  @@index([status])
+  @@index([createdById])
+}
+
+/// One expected installment line on a CollectionPlan.
+model CollectionPlanInstallment {
+  id          String   @id @default(cuid())
+  planId      String
+  plan        CollectionPlan @relation(fields: [planId], references: [id], onDelete: Cascade)
+  /// 1-based ordering inside the plan. Unique per plan.
+  seq         Int
+  expectedDate DateTime @db.Date
+  amount      Decimal  @db.Decimal(14, 2)
+  /// Optional per-installment overrides; fall back to plan defaults when null.
+  category    String?
+  subItem     String?
+  paymentMode String?
+  description String?
+  /// 'pending'    — staged, not yet pushed to daily tracker.
+  /// 'submitted'  — waiting on supervisor in the approval queue.
+  /// 'received'   — approved + transaction row exists.
+  /// 'cancelled'  — installment scrapped (no transaction).
+  status      String   @default("pending")
+  /// FK back to the active PendingApproval row (if status='submitted').
+  pendingApprovalId String? @unique
+  pending     PendingApproval? @relation("InstallmentPending")
+  /// FK to the canonical Transaction (if status='received').
+  transactionId String? @unique
+  transaction   Transaction? @relation("InstallmentTransaction", fields: [transactionId], references: [id], onDelete: SetNull)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@unique([planId, seq])
+  @@index([planId])
+  @@index([status])
+  @@index([expectedDate])
 }

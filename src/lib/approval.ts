@@ -437,6 +437,18 @@ export async function approvePending(opts: {
         targetTxId: tx.id,
       },
     });
+    // If this pending was raised from a Collection Plan installment,
+    // flip the installment to 'received' + link to the new transaction.
+    if (p.collectionInstallmentId) {
+      await prisma.collectionPlanInstallment.update({
+        where: { id: p.collectionInstallmentId },
+        data: {
+          status: "received",
+          transactionId: tx.id,
+          pendingApprovalId: null,
+        },
+      });
+    }
     await recordAudit({
       entityType: "Transaction",
       entityId: tx.id,
@@ -542,6 +554,14 @@ export async function rejectPending(opts: {
       reviewedAt: new Date(),
     },
   });
+  // Revert any linked installment back to 'pending' so the executive
+  // can edit + resubmit it from the Collection Plan detail page.
+  if (p.collectionInstallmentId) {
+    await prisma.collectionPlanInstallment.update({
+      where: { id: p.collectionInstallmentId },
+      data: { status: "pending", pendingApprovalId: null },
+    });
+  }
   await recordAudit({
     entityType: "PendingApproval",
     entityId: pendingId,
