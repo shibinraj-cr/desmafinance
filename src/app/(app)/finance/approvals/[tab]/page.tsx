@@ -182,6 +182,30 @@ export default async function ApprovalsPage({
     })
     .filter((p) => (partyFilter ? effectivePartyId(p) === partyFilter : true));
 
+  /** Effective amount per pending row — `proposed.amount` for
+   *  create/update, `targetTx.amount` for delete. */
+  function effectiveAmount(p: (typeof items)[number]): number {
+    const proposed = p.proposed as unknown as ProposedTx | null;
+    if (p.kind === "delete") return p.targetTx ? Number(p.targetTx.amount.toString()) : 0;
+    return typeof proposed?.amount === "number"
+      ? proposed.amount
+      : Number(proposed?.amount ?? 0);
+  }
+  // Filtered totals shown in the indicator chip — split by Revenue
+  // and Expense so reviewers see the ₹ impact in each direction.
+  let filteredRevenue = 0;
+  let filteredExpense = 0;
+  for (const p of filteredItems) {
+    const amt = effectiveAmount(p);
+    if (!Number.isFinite(amt)) continue;
+    const t = effectiveType(p);
+    if (t === "Revenue") filteredRevenue += amt;
+    else if (t === "Expense") filteredExpense += amt;
+  }
+  const filteredCount = filteredItems.length;
+  const filteredNet = filteredRevenue - filteredExpense;
+  const hasActiveFilters = !!fromDate || !!toDate || !!partyFilter || typeFilter !== "all";
+
   const isReviewerPending = tab === "pending" && reviewer;
   const pendingRows: PendingRow[] = isReviewerPending
     ? filteredItems.map((p) => {
@@ -264,6 +288,14 @@ export default async function ApprovalsPage({
           toDate={toDate}
           partyFilter={partyFilter}
           parties={parties}
+        />
+
+        <FilteredTotals
+          count={filteredCount}
+          revenue={filteredRevenue}
+          expense={filteredExpense}
+          net={filteredNet}
+          showAll={!hasActiveFilters}
         />
 
         {isReviewerPending ? (
@@ -396,6 +428,66 @@ export default async function ApprovalsPage({
 }
 
 /** Secondary filter row inside each tab — All / Revenue / Expense. */
+/** Slim stat strip showing ₹ totals for whatever the active filters
+ *  show. Sits between the filter form and the queue list so reviewers
+ *  see the financial impact of the current view at a glance. */
+function FilteredTotals({
+  count,
+  revenue,
+  expense,
+  net,
+  showAll,
+}: {
+  count: number;
+  revenue: number;
+  expense: number;
+  net: number;
+  /** When no filters are active, the label reads "All items" so the
+   *  reviewer doesn't think the totals exclude anything. */
+  showAll: boolean;
+}) {
+  return (
+    <div className="rounded-xl border border-outline-variant bg-surface-container-lowest px-md py-sm flex flex-wrap items-center gap-md text-body-md">
+      <span className="text-caption uppercase tracking-wider font-semibold text-on-surface-variant">
+        {showAll ? "All items" : "Filtered"}
+      </span>
+      <span className="text-body-md">
+        <strong className="text-on-surface">{count}</strong>{" "}
+        <span className="text-on-surface-variant text-caption">
+          {count === 1 ? "item" : "items"}
+        </span>
+      </span>
+      <Stat label="Revenue" value={revenue} tone="positive" />
+      <Stat label="Expense" value={expense} tone="negative" />
+      <Stat label="Net" value={net} tone={net >= 0 ? "positive" : "negative"} bold />
+    </div>
+  );
+}
+
+function Stat({
+  label,
+  value,
+  tone,
+  bold,
+}: {
+  label: string;
+  value: number;
+  tone: "positive" | "negative";
+  bold?: boolean;
+}) {
+  const color = tone === "positive" ? "text-green-700" : "text-red-700";
+  return (
+    <span className="inline-flex items-baseline gap-xs">
+      <span className="text-caption uppercase tracking-wider text-on-surface-variant">
+        {label}
+      </span>
+      <span className={`font-mono ${color} ${bold ? "font-bold" : "font-semibold"} tabular-nums`}>
+        {(value < 0 ? "−" : "") + inrFull(Math.abs(value)).replace(/^[₹]/, "₹")}
+      </span>
+    </span>
+  );
+}
+
 /** Inline form with From / To date inputs + Party dropdown. Submits
  *  GET to the same /finance/approvals/[tab] route — hidden inputs
  *  carry the active type filter so the user's tab state is preserved
