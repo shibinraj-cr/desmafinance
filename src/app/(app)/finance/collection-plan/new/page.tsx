@@ -1,5 +1,4 @@
 import { redirect } from "next/navigation";
-import { prisma } from "@/lib/prisma";
 import { getCurrentUserAndPermissions } from "@/lib/permissions";
 import { getTransactionFormMasters } from "@/lib/master-data";
 import { TopBar } from "@/components/TopBar";
@@ -15,18 +14,12 @@ export default async function NewCollectionPlanPage({
   const { perms } = await getCurrentUserAndPermissions();
   if (!perms) redirect("/login");
 
-  const [masters, services] = await Promise.all([
-    getTransactionFormMasters(),
-    prisma.service.findMany({
-      where: { isActive: true },
-      orderBy: { name: "asc" },
-      select: { id: true, name: true },
-    }),
-  ]);
+  const masters = await getTransactionFormMasters();
 
-  // Restrict the party dropdown to Candidates that accept Revenue tx.
+  // Include any party (Candidate or Vendor) that accepts Revenue tx —
+  // the dropdown label is "Candidate/Vendors" so both groups belong.
   const candidates = masters.parties.filter(
-    (p) => p.group === "Candidate" && (p.txTypes === "Revenue" || p.txTypes === "Both"),
+    (p) => p.txTypes === "Revenue" || p.txTypes === "Both",
   );
 
   return (
@@ -35,7 +28,6 @@ export default async function NewCollectionPlanPage({
       <div className="p-margin max-w-4xl">
         <NewPlanForm
           parties={candidates}
-          services={services}
           initialPartyId={searchParams.partyId ?? null}
         />
       </div>

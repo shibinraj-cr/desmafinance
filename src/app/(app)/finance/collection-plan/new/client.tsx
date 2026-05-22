@@ -7,7 +7,6 @@ const inputCls =
   "w-full h-10 px-md rounded-lg border border-outline-variant bg-surface-container-lowest focus:border-primary focus:ring-2 focus:ring-primary/20 outline-none transition text-body-md";
 
 type Party = { id: string; name: string };
-type Service = { id: string; name: string };
 
 type Installment = {
   expectedDate: string;
@@ -21,16 +20,16 @@ function todayIso(): string {
 
 export function NewPlanForm({
   parties,
-  services,
   initialPartyId,
 }: {
   parties: Party[];
-  services: Service[];
   initialPartyId: string | null;
 }) {
   const router = useRouter();
-  const [partyId, setPartyId] = useState<string>(initialPartyId ?? parties[0]?.id ?? "");
-  const [serviceId, setServiceId] = useState<string>("");
+  // Default to the placeholder ("— Select Candidate / Vendors —") so the
+  // user has to make a conscious pick, unless an initialPartyId was
+  // supplied via the deep-link query param.
+  const [partyId, setPartyId] = useState<string>(initialPartyId ?? "");
   const [label, setLabel] = useState<string>("Collection Plan");
   const [notes, setNotes] = useState<string>("");
   const [installments, setInstallments] = useState<Installment[]>([
@@ -78,7 +77,6 @@ export function NewPlanForm({
         headers: { "content-type": "application/json" },
         body: JSON.stringify({
           partyId,
-          serviceId: serviceId || null,
           label,
           notes: notes || null,
           installments: installments.map((i) => ({
@@ -105,31 +103,17 @@ export function NewPlanForm({
     <form onSubmit={onSubmit} className="space-y-lg">
       <div className="bg-surface-container-lowest border border-outline-variant rounded-xl p-lg space-y-md">
         <div className="grid grid-cols-1 md:grid-cols-2 gap-md">
-          <Field label="Candidate" required>
+          <Field label="Candidate / Vendors" required>
             <select
               value={partyId}
               onChange={(e) => setPartyId(e.target.value)}
               className={inputCls}
               required
             >
-              <option value="">— Select candidate —</option>
+              <option value="">— Select Candidate / Vendors —</option>
               {parties.map((p) => (
                 <option key={p.id} value={p.id}>
                   {p.name}
-                </option>
-              ))}
-            </select>
-          </Field>
-          <Field label="Service (optional)">
-            <select
-              value={serviceId}
-              onChange={(e) => setServiceId(e.target.value)}
-              className={inputCls}
-            >
-              <option value="">—</option>
-              {services.map((s) => (
-                <option key={s.id} value={s.id}>
-                  {s.name}
                 </option>
               ))}
             </select>
