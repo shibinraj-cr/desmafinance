@@ -716,12 +716,14 @@ model CollectionPlan {
   service     Service? @relation(fields: [serviceId], references: [id], onDelete: SetNull)
   label       String
   /// Default category / sub-item / payment-mode the installments inherit
-  /// when none is explicitly set on the installment row.
-  category    String
-  subItem     String
-  paymentMode String
-  /// EXP / DOM tag for Revenue rows. Defaults to "DOM" for new plans.
-  expDom      String?  @default("DOM")
+  /// when none is explicitly set on the installment row. Captured at
+  /// submit-to-Daily-Tracker time rather than plan-create time, so all
+  /// four are nullable until an installment is actually pushed through.
+  category    String?
+  subItem     String?
+  paymentMode String?
+  /// EXP / DOM tag for Revenue rows. Picked at submit time too.
+  expDom      String?
   notes       String?
   status      String   @default("active") // 'active' | 'closed' | 'cancelled'
   createdById String?

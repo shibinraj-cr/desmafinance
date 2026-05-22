@@ -1,7 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
+import { z } from "zod";
 import { prisma } from "@/lib/prisma";
 import { getCurrentUserAndPermissions } from "@/lib/permissions";
-import { MONTHS, flowFor } from "@/lib/catalog";
+import { MONTHS, PAYMENT_MODES, flowFor } from "@/lib/catalog";
 import { verifyCategorySubItem } from "@/lib/master-data";
 import { canApprove } from "@/lib/rbac";
 import { recordAudit } from "@/lib/audit";
@@ -15,6 +16,18 @@ function monthFromDate(d: Date): string {
   const code = `${MONTH_CODES[d.getUTCMonth()]}-${String(d.getUTCFullYear()).slice(-2)}`;
   return (MONTHS as readonly string[]).includes(code) ? code : MONTHS[0];
 }
+
+/** Optional body: lets the caller supply category/sub-item/payment-mode/
+ *  EXP-DOM at submit time when the plan doesn't have defaults. */
+const BodySchema = z
+  .object({
+    category: z.string().min(1).max(120).optional().nullable(),
+    subItem: z.string().min(1).max(160).optional().nullable(),
+    paymentMode: z.enum(PAYMENT_MODES).optional().nullable(),
+    expDom: z.enum(["EXP", "DOM"]).optional().nullable(),
+  })
+  .optional()
+  .nullable();
 
 /**
  * Submit an installment to the Daily Tracker for approval. Routing
@@ -34,13 +47,22 @@ function monthFromDate(d: Date): string {
  * the draft is discarded — see TODO below.
  */
 export async function POST(
-  _req: NextRequest,
+  req: NextRequest,
   { params }: { params: { id: string; installmentId: string } },
 ) {
   const { perms, userId } = await getCurrentUserAndPermissions();
   if (!perms || !userId) {
     return NextResponse.json({ error: "unauthorized" }, { status: 401 });
   }
+
+  // Body is optional; only required if the plan/installment don't
+  // already carry the missing fields.
+  const rawBody = await req.json().catch(() => null);
+  const parsedBody = BodySchema.safeParse(rawBody);
+  if (!parsedBody.success) {
+    return NextResponse.json({ error: "validation_failed" }, { status: 400 });
+  }
+  const body = parsedBody.data ?? {};
 
   const installment = await prisma.collectionPlanInstallment.findUnique({
     where: { id: params.installmentId },
@@ -63,11 +85,56 @@ export async function POST(
     return NextResponse.json({ error: "party_inactive" }, { status: 400 });
   }
 
-  const category = installment.category ?? plan.category;
-  const subItem = installment.subItem ?? plan.subItem;
-  const paymentMode = installment.paymentMode ?? plan.paymentMode;
+  // Resolution order: per-submit body → installment override → plan default.
+  const category = body?.category ?? installment.category ?? plan.category ?? null;
+  const subItem = body?.subItem ?? installment.subItem ?? plan.subItem ?? null;
+  const paymentMode =
+    body?.paymentMode ?? installment.paymentMode ?? plan.paymentMode ?? null;
+  const expDom = body?.expDom ?? plan.expDom ?? null;
+  if (!category || !subItem || !paymentMode || !expDom) {
+    return NextResponse.json(
+      {
+        error: "submit_fields_required",
+        missing: {
+          category: !category,
+          subItem: !subItem,
+          paymentMode: !paymentMode,
+          expDom: !expDom,
+        },
+      },
+      { status: 400 },
+    );
+  }
   const verr = await verifyCategorySubItem(category, subItem, "Revenue");
   if (verr) return NextResponse.json({ error: verr }, { status: 400 });
+
+  // Persist the user's picks back onto plan + installment so the next
+  // submit doesn't re-prompt for the same answers.
+  await prisma.$transaction([
+    prisma.collectionPlan.update({
+      where: { id: plan.id },
+      data: {
+        ...(plan.category ? {} : { category }),
+        ...(plan.subItem ? {} : { subItem }),
+        ...(plan.paymentMode ? {} : { paymentMode }),
+        ...(plan.expDom ? {} : { expDom }),
+      },
+    }),
+    prisma.collectionPlanInstallment.update({
+      where: { id: installment.id },
+      data: {
+        // Only write per-installment override when caller asked for
+        // something different from the (now-saved) plan default.
+        ...(body?.category && body.category !== plan.category
+          ? { category: body.category }
+          : {}),
+        ...(body?.subItem && body.subItem !== plan.subItem ? { subItem: body.subItem } : {}),
+        ...(body?.paymentMode && body.paymentMode !== plan.paymentMode
+          ? { paymentMode: body.paymentMode }
+          : {}),
+      },
+    }),
+  ]);
 
   const amountNum = Number(installment.amount.toString());
   const expectedDate = installment.expectedDate;
@@ -82,7 +149,7 @@ export async function POST(
     amount: amountNum,
     flow: flowFor("Revenue"),
     partyId: plan.partyId,
-    expDom: plan.expDom ?? "DOM",
+    expDom,
   };
 
   // Route per role. We don't use submitCreate() directly because we

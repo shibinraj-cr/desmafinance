@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useState } from "react";
 import { useRouter } from "next/navigation";
 
 const inputCls =
@@ -8,14 +8,6 @@ const inputCls =
 
 type Party = { id: string; name: string };
 type Service = { id: string; name: string };
-type SubItem = { id: string; name: string; isActive: boolean };
-type Category = {
-  id: string;
-  name: string;
-  type: "Revenue" | "Expense" | "Both";
-  isActive: boolean;
-  subItems: SubItem[];
-};
 
 type Installment = {
   expectedDate: string;
@@ -30,35 +22,16 @@ function todayIso(): string {
 export function NewPlanForm({
   parties,
   services,
-  categories,
-  paymentModes,
   initialPartyId,
 }: {
   parties: Party[];
   services: Service[];
-  categories: Category[];
-  paymentModes: string[];
   initialPartyId: string | null;
 }) {
   const router = useRouter();
   const [partyId, setPartyId] = useState<string>(initialPartyId ?? parties[0]?.id ?? "");
   const [serviceId, setServiceId] = useState<string>("");
   const [label, setLabel] = useState<string>("Collection Plan");
-  const [categoryName, setCategoryName] = useState<string>(categories[0]?.name ?? "");
-  const subItems = useMemo(() => {
-    const c = categories.find((x) => x.name === categoryName);
-    return c ? c.subItems.filter((s) => s.isActive) : [];
-  }, [categories, categoryName]);
-  const [subItem, setSubItem] = useState<string>(subItems[0]?.name ?? "");
-  // Keep subItem in sync when category changes.
-  useMemo(() => {
-    if (subItems.length && !subItems.some((s) => s.name === subItem)) {
-      setSubItem(subItems[0].name);
-    }
-  }, [subItems, subItem]);
-
-  const [paymentMode, setPaymentMode] = useState<string>(paymentModes[0] ?? "");
-  const [expDom, setExpDom] = useState<"EXP" | "DOM">("DOM");
   const [notes, setNotes] = useState<string>("");
   const [installments, setInstallments] = useState<Installment[]>([
     { expectedDate: todayIso(), amount: "", description: "" },
@@ -89,8 +62,6 @@ export function NewPlanForm({
     setError(null);
     if (!partyId) return setError("Pick a candidate");
     if (!label.trim()) return setError("Plan label is required");
-    if (!categoryName || !subItem) return setError("Pick category + sub-item");
-    if (!paymentMode) return setError("Pick a payment mode");
     if (installments.length === 0) return setError("Add at least one installment");
     for (const [idx, inst] of installments.entries()) {
       if (!inst.expectedDate) return setError(`Installment ${idx + 1}: missing date`);
@@ -109,10 +80,6 @@ export function NewPlanForm({
           partyId,
           serviceId: serviceId || null,
           label,
-          category: categoryName,
-          subItem,
-          paymentMode,
-          expDom,
           notes: notes || null,
           installments: installments.map((i) => ({
             expectedDate: i.expectedDate,
@@ -176,58 +143,6 @@ export function NewPlanForm({
               required
             />
           </Field>
-          <Field label="EXP / DOM" required>
-            <select
-              value={expDom}
-              onChange={(e) => setExpDom(e.target.value as "EXP" | "DOM")}
-              className={inputCls}
-            >
-              <option value="DOM">DOM (Domestic)</option>
-              <option value="EXP">EXP (Export)</option>
-            </select>
-          </Field>
-          <Field label="Category" required>
-            <select
-              value={categoryName}
-              onChange={(e) => setCategoryName(e.target.value)}
-              className={inputCls}
-              required
-            >
-              {categories.map((c) => (
-                <option key={c.id} value={c.name}>
-                  {c.name}
-                </option>
-              ))}
-            </select>
-          </Field>
-          <Field label="Sub-item" required>
-            <select
-              value={subItem}
-              onChange={(e) => setSubItem(e.target.value)}
-              className={inputCls}
-              required
-            >
-              {subItems.map((s) => (
-                <option key={s.id} value={s.name}>
-                  {s.name}
-                </option>
-              ))}
-            </select>
-          </Field>
-          <Field label="Default payment mode" required>
-            <select
-              value={paymentMode}
-              onChange={(e) => setPaymentMode(e.target.value)}
-              className={inputCls}
-              required
-            >
-              {paymentModes.map((m) => (
-                <option key={m} value={m}>
-                  {m}
-                </option>
-              ))}
-            </select>
-          </Field>
           <Field label="Notes">
             <input
               value={notes}
@@ -237,6 +152,10 @@ export function NewPlanForm({
             />
           </Field>
         </div>
+        <p className="text-caption text-on-surface-variant">
+          Category, sub-item, payment mode and EXP/DOM are captured later
+          when an installment is submitted to the Daily Tracker.
+        </p>
       </div>
 
       <div className="bg-surface-container-lowest border border-outline-variant rounded-xl p-lg space-y-md">

@@ -28,9 +28,9 @@ type Plan = {
   partyName: string;
   serviceId: string | null;
   serviceName: string | null;
-  category: string;
-  subItem: string;
-  paymentMode: string;
+  category: string | null;
+  subItem: string | null;
+  paymentMode: string | null;
   expDom: "EXP" | "DOM" | null;
   notes: string | null;
   status: "active" | "closed" | "cancelled";
@@ -80,6 +80,8 @@ export function PlanDetailClient({
   const [editingId, setEditingId] = useState<string | null>(null);
   const [adding, setAdding] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  /** ID of the installment whose submit-to-tracker dialog is open. */
+  const [submitFor, setSubmitFor] = useState<string | null>(null);
 
   const totals = useMemo(() => {
     const t = { total: 0, received: 0, submitted: 0, pending: 0 };
@@ -92,22 +94,26 @@ export function PlanDetailClient({
     return t;
   }, [installments]);
 
-  async function submitInstallment(id: string) {
+  async function submitInstallment(
+    id: string,
+    body: { category: string; subItem: string; paymentMode: string; expDom: "EXP" | "DOM" },
+  ) {
     setError(null);
-    const ok = window.confirm(
-      "Push this installment into the Daily Tracker for approval? A pending transaction will be created against the candidate.",
-    );
-    if (!ok) return;
     const res = await fetch(
       `/api/finance/collection-plans/${plan.id}/installments/${id}/submit`,
-      { method: "POST" },
+      {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(body),
+      },
     );
     if (!res.ok) {
       const data = await res.json().catch(() => ({}));
       setError(data.error ?? `Submission failed (${res.status})`);
-      return;
+      return false;
     }
     router.refresh();
+    return true;
   }
 
   async function deleteInstallment(id: string) {
@@ -136,10 +142,12 @@ export function PlanDetailClient({
             </Link>
           </Meta>
           <Meta label="Service">{plan.serviceName ?? "—"}</Meta>
-          <Meta label="Category">{plan.category}</Meta>
-          <Meta label="Sub-item">{plan.subItem}</Meta>
-          <Meta label="Default payment">{plan.paymentMode}</Meta>
-          <Meta label="EXP / DOM">{plan.expDom ?? "—"}</Meta>
+          {plan.category ? <Meta label="Category">{plan.category}</Meta> : null}
+          {plan.subItem ? <Meta label="Sub-item">{plan.subItem}</Meta> : null}
+          {plan.paymentMode ? (
+            <Meta label="Default payment">{plan.paymentMode}</Meta>
+          ) : null}
+          {plan.expDom ? <Meta label="EXP / DOM">{plan.expDom}</Meta> : null}
           <Meta label="Status">
             <span className="px-xs py-0.5 rounded-md text-xs font-medium bg-surface-container">
               {plan.status}
@@ -247,7 +255,7 @@ export function PlanDetailClient({
                           </button>
                           <button
                             type="button"
-                            onClick={() => submitInstallment(inst.id)}
+                            onClick={() => setSubmitFor(inst.id)}
                             className="text-green-700 hover:underline"
                           >
                             Submit to Daily Tracker
@@ -304,7 +312,183 @@ export function PlanDetailClient({
           </table>
         </div>
       </div>
+
+      {submitFor ? (
+        <SubmitDialog
+          installment={installments.find((i) => i.id === submitFor)!}
+          plan={plan}
+          categories={categories}
+          paymentModes={paymentModes}
+          onClose={() => setSubmitFor(null)}
+          onSubmit={async (body) => {
+            const ok = await submitInstallment(submitFor, body);
+            if (ok) setSubmitFor(null);
+          }}
+        />
+      ) : null}
     </div>
+  );
+}
+
+function SubmitDialog({
+  installment,
+  plan,
+  categories,
+  paymentModes,
+  onClose,
+  onSubmit,
+}: {
+  installment: Installment;
+  plan: Plan;
+  categories: Category[];
+  paymentModes: string[];
+  onClose: () => void;
+  onSubmit: (body: {
+    category: string;
+    subItem: string;
+    paymentMode: string;
+    expDom: "EXP" | "DOM";
+  }) => Promise<void>;
+}) {
+  // Resolution order: installment override → plan default → first option.
+  const initialCategory =
+    installment.category ?? plan.category ?? categories[0]?.name ?? "";
+  const [category, setCategory] = useState<string>(initialCategory);
+  const subItems = useMemo(() => {
+    const c = categories.find((x) => x.name === category);
+    return c ? c.subItems.filter((s) => s.isActive) : [];
+  }, [categories, category]);
+  const [subItem, setSubItem] = useState<string>(
+    installment.subItem ?? plan.subItem ?? subItems[0]?.name ?? "",
+  );
+  const [paymentMode, setPaymentMode] = useState<string>(
+    installment.paymentMode ?? plan.paymentMode ?? paymentModes[0] ?? "",
+  );
+  const [expDom, setExpDom] = useState<"EXP" | "DOM">(plan.expDom ?? "DOM");
+  const [busy, setBusy] = useState(false);
+
+  function pickCategory(name: string) {
+    setCategory(name);
+    const next = categories.find((x) => x.name === name)?.subItems.filter((s) => s.isActive) ?? [];
+    if (next.length && !next.some((s) => s.name === subItem)) {
+      setSubItem(next[0].name);
+    }
+  }
+
+  async function handleSubmit() {
+    if (!category || !subItem || !paymentMode || !expDom) return;
+    setBusy(true);
+    await onSubmit({ category, subItem, paymentMode, expDom });
+    setBusy(false);
+  }
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-md">
+      <div className="bg-surface-container-lowest rounded-xl border border-outline-variant w-full max-w-lg p-lg space-y-md shadow-xl">
+        <div>
+          <h3 className="text-h3 font-bold">Submit to Daily Tracker</h3>
+          <p className="text-body-md text-on-surface-variant mt-xs">
+            Installment #{installment.seq} · ₹
+            {installment.amount.toLocaleString("en-IN")} expected on{" "}
+            {(() => {
+              const [y, m, d] = installment.expectedDate.split("-");
+              return `${d}-${m}-${y.slice(-2)}`;
+            })()}
+          </p>
+        </div>
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-md">
+          <Field label="Category" required>
+            <select
+              value={category}
+              onChange={(e) => pickCategory(e.target.value)}
+              className={inputCls}
+            >
+              <option value="">— Select —</option>
+              {categories.map((c) => (
+                <option key={c.id} value={c.name}>
+                  {c.name}
+                </option>
+              ))}
+            </select>
+          </Field>
+          <Field label="Sub-item" required>
+            <select
+              value={subItem}
+              onChange={(e) => setSubItem(e.target.value)}
+              className={inputCls}
+              disabled={!category}
+            >
+              <option value="">— Select —</option>
+              {subItems.map((s) => (
+                <option key={s.id} value={s.name}>
+                  {s.name}
+                </option>
+              ))}
+            </select>
+          </Field>
+          <Field label="Payment mode" required>
+            <select
+              value={paymentMode}
+              onChange={(e) => setPaymentMode(e.target.value)}
+              className={inputCls}
+            >
+              {paymentModes.map((m) => (
+                <option key={m} value={m}>
+                  {m}
+                </option>
+              ))}
+            </select>
+          </Field>
+          <Field label="EXP / DOM" required>
+            <select
+              value={expDom}
+              onChange={(e) => setExpDom(e.target.value as "EXP" | "DOM")}
+              className={inputCls}
+            >
+              <option value="DOM">DOM (Domestic)</option>
+              <option value="EXP">EXP (Export)</option>
+            </select>
+          </Field>
+        </div>
+        <div className="flex items-center justify-end gap-md pt-sm">
+          <button
+            type="button"
+            onClick={onClose}
+            className="px-md py-sm text-on-surface-variant hover:underline"
+          >
+            Cancel
+          </button>
+          <button
+            type="button"
+            onClick={handleSubmit}
+            disabled={busy || !category || !subItem || !paymentMode}
+            className="px-lg py-sm bg-primary text-on-primary rounded-md font-semibold disabled:opacity-50"
+          >
+            {busy ? "Submitting…" : "Submit to Daily Tracker"}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function Field({
+  label,
+  required,
+  children,
+}: {
+  label: string;
+  required?: boolean;
+  children: React.ReactNode;
+}) {
+  return (
+    <label className="block">
+      <span className="block text-caption text-on-surface-variant uppercase tracking-wide mb-xs">
+        {label}
+        {required ? <span className="text-error"> *</span> : null}
+      </span>
+      {children}
+    </label>
   );
 }
 

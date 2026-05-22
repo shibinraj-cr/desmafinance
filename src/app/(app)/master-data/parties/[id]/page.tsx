@@ -88,9 +88,6 @@ export default async function PartyDetailPage({
         subtitle={`${party.group} · ${party.txTypes} · ${party.isActive ? "Active" : "Inactive"}`}
       />
       <div className="p-margin space-y-lg">
-        {party.group === "Candidate" ? (
-          <PartyCollectionPlans partyId={party.id} />
-        ) : null}
         <PartyProfile
           party={{
             id: party.id,
@@ -134,6 +131,9 @@ export default async function PartyDetailPage({
             amount: Number(t.amount.toString()),
           }))}
         />
+        {party.group === "Candidate" ? (
+          <PartyCollectionPlans partyId={party.id} />
+        ) : null}
       </div>
     </>
   );

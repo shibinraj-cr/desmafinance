@@ -21,9 +21,12 @@ const PlanInput = z.object({
   partyId: z.string().min(1),
   serviceId: z.string().min(1).optional().nullable(),
   label: z.string().min(1).max(160),
-  category: z.string().min(1).max(120),
-  subItem: z.string().min(1).max(160),
-  paymentMode: z.enum(PAYMENT_MODES),
+  // Category / sub-item / payment-mode / EXP-DOM are captured at the
+  // per-installment "Submit to Daily Tracker" step, not at plan-create,
+  // so they're optional here.
+  category: z.string().min(1).max(120).optional().nullable(),
+  subItem: z.string().min(1).max(160).optional().nullable(),
+  paymentMode: z.enum(PAYMENT_MODES).optional().nullable(),
   expDom: z.enum(["EXP", "DOM"]).optional().nullable(),
   notes: z.string().max(1000).optional().nullable(),
   installments: z.array(InstallmentInput).min(1).max(60),
@@ -88,8 +91,12 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: "party_tx_type_mismatch" }, { status: 400 });
   }
 
-  const verr = await verifyCategorySubItem(data.category, data.subItem, "Revenue");
-  if (verr) return NextResponse.json({ error: verr }, { status: 400 });
+  // Only validate the category/sub-item pair if the user actually
+  // supplied them (otherwise they'll be picked at submit time).
+  if (data.category && data.subItem) {
+    const verr = await verifyCategorySubItem(data.category, data.subItem, "Revenue");
+    if (verr) return NextResponse.json({ error: verr }, { status: 400 });
+  }
 
   if (data.serviceId) {
     const svc = await prisma.service.findUnique({ where: { id: data.serviceId } });
@@ -101,10 +108,10 @@ export async function POST(req: NextRequest) {
       partyId: data.partyId,
       serviceId: data.serviceId ?? null,
       label: data.label,
-      category: data.category,
-      subItem: data.subItem,
-      paymentMode: data.paymentMode,
-      expDom: data.expDom ?? "DOM",
+      category: data.category ?? null,
+      subItem: data.subItem ?? null,
+      paymentMode: data.paymentMode ?? null,
+      expDom: data.expDom ?? null,
       notes: data.notes ?? null,
       createdById: userId,
       installments: {

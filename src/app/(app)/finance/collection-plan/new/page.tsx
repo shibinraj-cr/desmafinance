@@ -4,7 +4,6 @@ import { getCurrentUserAndPermissions } from "@/lib/permissions";
 import { getTransactionFormMasters } from "@/lib/master-data";
 import { TopBar } from "@/components/TopBar";
 import { NewPlanForm } from "./client";
-import { PAYMENT_MODES } from "@/lib/catalog";
 
 export const dynamic = "force-dynamic";
 
@@ -29,9 +28,6 @@ export default async function NewCollectionPlanPage({
   const candidates = masters.parties.filter(
     (p) => p.group === "Candidate" && (p.txTypes === "Revenue" || p.txTypes === "Both"),
   );
-  const revenueCategories = masters.categories.filter(
-    (c) => c.isActive && (c.type === "Revenue" || c.type === "Both"),
-  );
 
   return (
     <>
@@ -40,8 +36,6 @@ export default async function NewCollectionPlanPage({
         <NewPlanForm
           parties={candidates}
           services={services}
-          categories={revenueCategories}
-          paymentModes={[...PAYMENT_MODES]}
           initialPartyId={searchParams.partyId ?? null}
         />
       </div>
