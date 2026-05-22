@@ -264,9 +264,16 @@ export default async function DailyTrackerPage({
         />
 
         <div className="bg-surface-container-lowest border border-outline-variant rounded-xl shadow-sm overflow-hidden">
-          <div className="overflow-x-auto scrollbar-thin">
+          {/*
+            Frozen header: the wrapper handles both axes, the inner
+            table's thead sticks to its top inside this scroll context
+            so column titles stay visible while the body scrolls. Cap
+            the vertical height so the table itself takes the scroll
+            (otherwise the page would scroll and the thead would drift).
+          */}
+          <div className="overflow-auto scrollbar-thin max-h-[calc(100vh-220px)]">
             <table className="w-full text-body-md">
-              <thead className="bg-surface-container-low text-on-surface-variant">
+              <thead className="bg-surface-container-low text-on-surface-variant sticky top-0 z-10 shadow-[0_1px_0_0_var(--lp-outline-variant)]">
                 <tr className="text-left">
                   <Th>Date</Th>
                   <Th>Month</Th>

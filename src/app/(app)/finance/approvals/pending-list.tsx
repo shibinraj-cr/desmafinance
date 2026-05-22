@@ -266,9 +266,9 @@ export function PendingList({
         </div>
       )}
 
-      <div className="overflow-x-auto rounded-xl border border-outline-variant">
+      <div className="overflow-auto rounded-xl border border-outline-variant max-h-[calc(100vh-260px)]">
         <table className="w-full text-body-md min-w-[1400px]">
-          <thead className="bg-surface-container-low text-on-surface-variant sticky top-0 z-10">
+          <thead className="bg-surface-container-low text-on-surface-variant sticky top-0 z-10 shadow-[0_1px_0_0_var(--lp-outline-variant)]">
             <tr className="text-left">
               <Th>Date</Th>
               <Th>Type</Th>
