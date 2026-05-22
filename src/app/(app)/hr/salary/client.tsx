@@ -92,7 +92,7 @@ export function SalaryRunsClient({
             {error && <span className="text-red-700 text-label-sm">{error}</span>}
           </div>
           <p className="text-caption text-on-surface-variant mt-sm">
-            Compute pulls active employees' attendance for the month + their salary structure and
+            Compute pulls active employees&apos; attendance for the month + their salary structure and
             re-builds the line items in draft. Idempotent. You must approve the run before Finance
             can download the Axis file.
           </p>

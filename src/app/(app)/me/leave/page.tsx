@@ -19,7 +19,7 @@ export default async function MyLeavePage() {
         <div className="p-margin">
           <Section title="">
             <p className="py-lg text-center text-on-surface-variant">
-              Your login isn't linked to an employee record yet. Ask HR to link your account from
+              Your login isn&apos;t linked to an employee record yet. Ask HR to link your account from
               the Employees page.
             </p>
           </Section>

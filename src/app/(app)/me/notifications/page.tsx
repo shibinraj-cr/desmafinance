@@ -19,7 +19,7 @@ export default async function MeNotificationsPage() {
         <div className="p-margin">
           <Section title="">
             <p className="py-lg text-center text-on-surface-variant">
-              Your login isn't linked to an employee record yet.
+              Your login isn&apos;t linked to an employee record yet.
             </p>
           </Section>
         </div>

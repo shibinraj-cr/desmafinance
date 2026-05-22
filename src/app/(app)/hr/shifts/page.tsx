@@ -18,7 +18,7 @@ export default async function ShiftsPage() {
         <div className="p-margin">
           <Section title="">
             <div className="py-lg text-center text-on-surface-variant">
-              You don't have access to the HR module.
+              You don&apos;t have access to the HR module.
             </div>
           </Section>
         </div>
