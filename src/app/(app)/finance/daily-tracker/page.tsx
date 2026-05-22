@@ -9,6 +9,14 @@ import { DeleteRowButton } from "./delete-button";
 
 export const dynamic = "force-dynamic";
 
+/** Format a JS Date as DD-MM-YY (Indian-finance convention). */
+function fmtDDMMYY(d: Date): string {
+  const dd = String(d.getUTCDate()).padStart(2, "0");
+  const mm = String(d.getUTCMonth() + 1).padStart(2, "0");
+  const yy = String(d.getUTCFullYear()).slice(-2);
+  return `${dd}-${mm}-${yy}`;
+}
+
 export default async function DailyTrackerPage({
   searchParams,
 }: {
@@ -324,7 +332,7 @@ export default async function DailyTrackerPage({
                         rowTint
                       }
                     >
-                      <Td>{t.date.toISOString().slice(0, 10)}</Td>
+                      <Td>{fmtDDMMYY(t.date)}</Td>
                       <Td>{t.month}</Td>
                       <Td>
                         <span
