@@ -332,7 +332,7 @@ export default async function DailyTrackerPage({
                         rowTint
                       }
                     >
-                      <Td>{fmtDDMMYY(t.date)}</Td>
+                      <Td className="whitespace-nowrap tabular-nums">{fmtDDMMYY(t.date)}</Td>
                       <Td>{t.month}</Td>
                       <Td>
                         <span
