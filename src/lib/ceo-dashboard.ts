@@ -52,6 +52,20 @@ export type CeoHeadline = {
   pendingApprovalsCount: number;
 };
 
+/** Run a Prisma query and degrade gracefully on failure: log the cause to
+ *  the server console (visible in Vercel function logs) and return the
+ *  caller-supplied fallback. The CEO Dashboard reaches into Marketing /
+ *  Finance / HR tables — if one is missing/misconfigured we don't want
+ *  the whole page to crash. */
+async function safe<T>(label: string, fn: () => Promise<T>, fallback: T): Promise<T> {
+  try {
+    return await fn();
+  } catch (err) {
+    console.error(`[ceo-dashboard] ${label} failed`, err);
+    return fallback;
+  }
+}
+
 export async function ceoHeadline(): Promise<CeoHeadline> {
   const now = new Date();
   const currentMonthStart = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1));
@@ -59,33 +73,63 @@ export async function ceoHeadline(): Promise<CeoHeadline> {
   const prevMonthStart = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() - 1, 1));
 
   const [cur, prev, plans, pipeline, approvals] = await Promise.all([
-    prisma.transaction.aggregate({
-      where: {
-        deletedAt: null,
-        type: "Revenue",
-        date: { gte: currentMonthStart, lt: nextMonthStart },
+    safe(
+      "transaction.aggregate(currentMonthRevenue)",
+      () =>
+        prisma.transaction.aggregate({
+          where: {
+            deletedAt: null,
+            type: "Revenue",
+            date: { gte: currentMonthStart, lt: nextMonthStart },
+          },
+          _sum: { amount: true },
+        }),
+      { _sum: { amount: null as null | { toString(): string } } },
+    ),
+    safe(
+      "transaction.aggregate(previousMonthRevenue)",
+      () =>
+        prisma.transaction.aggregate({
+          where: {
+            deletedAt: null,
+            type: "Revenue",
+            date: { gte: prevMonthStart, lt: currentMonthStart },
+          },
+          _sum: { amount: true },
+        }),
+      { _sum: { amount: null as null | { toString(): string } } },
+    ),
+    safe(
+      "collectionPlanInstallment.aggregate(expectedCollections)",
+      () =>
+        prisma.collectionPlanInstallment.aggregate({
+          where: { status: { in: ["pending", "submitted"] } },
+          _sum: { amount: true },
+          _count: { _all: true },
+        }),
+      {
+        _sum: { amount: null as null | { toString(): string } },
+        _count: { _all: 0 },
       },
-      _sum: { amount: true },
-    }),
-    prisma.transaction.aggregate({
-      where: {
-        deletedAt: null,
-        type: "Revenue",
-        date: { gte: prevMonthStart, lt: currentMonthStart },
+    ),
+    safe(
+      "leadPulsePipeline.aggregate(pipelineValue)",
+      () =>
+        prisma.leadPulsePipeline.aggregate({
+          where: { status: "open" },
+          _sum: { expectedFirstInstallment: true },
+          _count: { _all: true },
+        }),
+      {
+        _sum: { expectedFirstInstallment: null as null | { toString(): string } },
+        _count: { _all: 0 },
       },
-      _sum: { amount: true },
-    }),
-    prisma.collectionPlanInstallment.aggregate({
-      where: { status: { in: ["pending", "submitted"] } },
-      _sum: { amount: true },
-      _count: { _all: true },
-    }),
-    prisma.leadPulsePipeline.aggregate({
-      where: { status: "open" },
-      _sum: { expectedFirstInstallment: true },
-      _count: { _all: true },
-    }),
-    prisma.pendingApproval.count({ where: { status: "pending" } }),
+    ),
+    safe(
+      "pendingApproval.count",
+      () => prisma.pendingApproval.count({ where: { status: "pending" } }),
+      0,
+    ),
   ]);
 
   const currentMonthRevenue = num(cur._sum.amount);
@@ -143,20 +187,30 @@ export async function fyMonthlySeries(): Promise<MonthlyRow[]> {
   }
 
   const [txRows, closeRows] = await Promise.all([
-    prisma.transaction.groupBy({
-      by: ["month", "type"],
-      where: {
-        deletedAt: null,
-        date: { gte: FY_START, lt: FY_END },
-      },
-      _sum: { amount: true },
-    }),
-    prisma.leadPulseDailyClose.findMany({
-      where: {
-        entry: { entryDate: { gte: FY_START, lt: FY_END } },
-      },
-      select: { entry: { select: { entryDate: true } } },
-    }),
+    safe(
+      "transaction.groupBy(monthly)",
+      () =>
+        prisma.transaction.groupBy({
+          by: ["month", "type"],
+          where: {
+            deletedAt: null,
+            date: { gte: FY_START, lt: FY_END },
+          },
+          _sum: { amount: true },
+        }),
+      [] as Array<{ month: string; type: string; _sum: { amount: { toString(): string } | null } }>,
+    ),
+    safe(
+      "leadPulseDailyClose.findMany(enrollments)",
+      () =>
+        prisma.leadPulseDailyClose.findMany({
+          where: {
+            entry: { entryDate: { gte: FY_START, lt: FY_END } },
+          },
+          select: { entry: { select: { entryDate: true } } },
+        }),
+      [] as Array<{ entry: { entryDate: Date } }>,
+    ),
   ]);
 
   const byMonth = new Map(buckets.map((b) => [b.month, b]));
@@ -270,6 +324,7 @@ export async function orgHealth(series: MonthlyRow[]): Promise<OrgHealth> {
   const nextMonthStart = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() + 1, 1));
   const prevMonthStart = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() - 1, 1));
 
+  const emptyAgg = { _sum: { amount: null as null | { toString(): string } } };
   const [
     headcount,
     marketingHeadcount,
@@ -280,66 +335,107 @@ export async function orgHealth(series: MonthlyRow[]): Promise<OrgHealth> {
     funnelL1,
     funnelL2,
   ] = await Promise.all([
-    prisma.user.count(),
-    prisma.leadPulseRole.count({ where: { active: true } }),
-    prisma.transaction.aggregate({
-      where: {
-        deletedAt: null,
-        type: "Expense",
-        category: "Salary",
-        date: { gte: currentMonthStart, lt: nextMonthStart },
-      },
-      _sum: { amount: true },
-    }),
-    prisma.transaction.aggregate({
-      where: {
-        deletedAt: null,
-        type: "Expense",
-        category: "Salary",
-        date: { gte: prevMonthStart, lt: currentMonthStart },
-      },
-      _sum: { amount: true },
-    }),
-    prisma.transaction.aggregate({
-      where: {
-        deletedAt: null,
-        type: "Expense",
-        category: "Salary",
-        date: { gte: FY_START, lt: FY_END },
-      },
-      _sum: { amount: true },
-    }),
-    prisma.transaction
-      .groupBy({
-        by: ["category"],
-        where: {
-          deletedAt: null,
-          type: "Expense",
-          date: { gte: FY_START, lt: FY_END },
+    safe("user.count", () => prisma.user.count(), 0),
+    safe(
+      "leadPulseRole.count(active)",
+      () => prisma.leadPulseRole.count({ where: { active: true } }),
+      0,
+    ),
+    safe(
+      "transaction.aggregate(currentMonthPayroll)",
+      () =>
+        prisma.transaction.aggregate({
+          where: {
+            deletedAt: null,
+            type: "Expense",
+            category: "Salary",
+            date: { gte: currentMonthStart, lt: nextMonthStart },
+          },
+          _sum: { amount: true },
+        }),
+      emptyAgg,
+    ),
+    safe(
+      "transaction.aggregate(previousMonthPayroll)",
+      () =>
+        prisma.transaction.aggregate({
+          where: {
+            deletedAt: null,
+            type: "Expense",
+            category: "Salary",
+            date: { gte: prevMonthStart, lt: currentMonthStart },
+          },
+          _sum: { amount: true },
+        }),
+      emptyAgg,
+    ),
+    safe(
+      "transaction.aggregate(ytdPayroll)",
+      () =>
+        prisma.transaction.aggregate({
+          where: {
+            deletedAt: null,
+            type: "Expense",
+            category: "Salary",
+            date: { gte: FY_START, lt: FY_END },
+          },
+          _sum: { amount: true },
+        }),
+      emptyAgg,
+    ),
+    safe(
+      "transaction.groupBy(topExpense)",
+      () =>
+        prisma.transaction
+          .groupBy({
+            by: ["category"],
+            where: {
+              deletedAt: null,
+              type: "Expense",
+              date: { gte: FY_START, lt: FY_END },
+            },
+            _sum: { amount: true },
+          })
+          .then(
+            (rows) =>
+              rows
+                .map((r) => ({ name: r.category, value: num(r._sum.amount) }))
+                .sort((a, b) => b.value - a.value)[0] ?? null,
+          ),
+      null as { name: string; value: number } | null,
+    ),
+    safe(
+      "leadPulseDailyEntry.aggregate(funnelL1)",
+      () =>
+        prisma.leadPulseDailyEntry.aggregate({
+          where: {
+            roleAtEntry: "l1",
+            entryDate: { gte: FY_START, lt: FY_END },
+            status: "submitted",
+          },
+          _sum: { leadsReceived: true },
+        }),
+      { _sum: { leadsReceived: null as number | null } },
+    ),
+    safe(
+      "leadPulseDailyEntry.aggregate(funnelL2)",
+      () =>
+        prisma.leadPulseDailyEntry.aggregate({
+          where: {
+            roleAtEntry: "l2",
+            entryDate: { gte: FY_START, lt: FY_END },
+            status: "submitted",
+          },
+          _sum: { closedWon: true, receivedFromL1: true, directLeads: true },
+        }),
+      {
+        _sum: {
+          closedWon: null as number | null,
+          receivedFromL1: null as number | null,
+          directLeads: null as number | null,
         },
-        _sum: { amount: true },
-      })
-      .then((rows) =>
-        rows
-          .map((r) => ({ name: r.category, value: num(r._sum.amount) }))
-          .sort((a, b) => b.value - a.value)[0] ?? null,
-      ),
-    prisma.leadPulseDailyEntry.aggregate({
-      where: {
-        roleAtEntry: "l1",
-        entryDate: { gte: FY_START, lt: FY_END },
-        status: "submitted",
       },
-      _sum: { leadsReceived: true },
-    }),
-    prisma.leadPulseDailyEntry.aggregate({
-      where: {
-        roleAtEntry: "l2",
-        entryDate: { gte: FY_START, lt: FY_END },
-        status: "submitted",
-      },
-      _sum: { closedWon: true, receivedFromL1: true, directLeads: true },
-    }),
+    ),
   ]);
 
   const l1Leads = funnelL1._sum.leadsReceived ?? 0;
