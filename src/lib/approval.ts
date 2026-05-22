@@ -13,6 +13,8 @@ export type TxProposed = {
   amount: number;
   flow: string;
   partyId?: string | null;
+  /** "EXP" / "DOM" — required when type=Revenue, null on Expense. */
+  expDom?: string | null;
 };
 
 /**
@@ -50,6 +52,7 @@ export async function submitCreate(opts: {
         amount: data.amount,
         flow: data.flow,
         partyId: data.partyId ?? null,
+        expDom: data.type === "Revenue" ? (data.expDom ?? null) : null,
       },
     });
     await recordAudit({
@@ -75,6 +78,7 @@ export async function submitCreate(opts: {
         amount: data.amount,
         flow: data.flow,
         partyId: data.partyId ?? null,
+        expDom: data.type === "Revenue" ? (data.expDom ?? null) : null,
         createdById: userId,
       },
     });
@@ -132,6 +136,7 @@ export async function updateDraft(opts: {
       amount: data.amount,
       flow: data.flow,
       partyId: data.partyId ?? null,
+      expDom: data.type === "Revenue" ? (data.expDom ?? null) : null,
     },
   });
   await recordAudit({
@@ -274,6 +279,7 @@ export async function submitUpdate(opts: {
         amount: data.amount,
         flow: data.flow,
         partyId: data.partyId ?? null,
+        expDom: data.type === "Revenue" ? (data.expDom ?? null) : null,
       },
     });
     await recordAudit({
@@ -417,6 +423,7 @@ export async function approvePending(opts: {
         amount: data.amount,
         flow: data.flow,
         partyId: data.partyId ?? null,
+        expDom: data.type === "Revenue" ? (data.expDom ?? null) : null,
         createdById: p.submittedById,
       },
     });
@@ -457,6 +464,7 @@ export async function approvePending(opts: {
         amount: data.amount,
         flow: data.flow,
         partyId: data.partyId ?? null,
+        expDom: data.type === "Revenue" ? (data.expDom ?? null) : null,
       },
     });
     await prisma.pendingApproval.update({

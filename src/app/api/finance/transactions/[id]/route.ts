@@ -24,6 +24,8 @@ const TxPatchSchema = z.object({
   amount: z.coerce.number().positive().max(1_000_000_000),
   flow: z.enum(FLOWS).optional(),
   partyId: z.string().min(1).optional().nullable(),
+  /** EXP / DOM tag — required for Revenue rows (drives GST liability). */
+  expDom: z.enum(["EXP", "DOM"]).optional().nullable(),
 });
 
 export async function PATCH(req: NextRequest, { params }: { params: { id: string } }) {
@@ -52,6 +54,10 @@ export async function PATCH(req: NextRequest, { params }: { params: { id: string
   const verr = await verifyCategorySubItem(data.category, data.subItem, data.type);
   if (verr) return NextResponse.json({ error: verr }, { status: 400 });
 
+  if (data.type === "Revenue" && data.expDom !== "EXP" && data.expDom !== "DOM") {
+    return NextResponse.json({ error: "expDom_required" }, { status: 400 });
+  }
+
   if (data.partyId) {
     const party = await prisma.party.findUnique({
       where: { id: data.partyId },
@@ -76,6 +82,7 @@ export async function PATCH(req: NextRequest, { params }: { params: { id: string
     amount: data.amount,
     flow: data.flow ?? flowFor(data.type),
     partyId: data.partyId ?? null,
+    expDom: data.type === "Revenue" ? (data.expDom ?? null) : null,
   };
 
   const result = await submitUpdate({ txId: params.id, data: proposed, userId, perms });

@@ -15,6 +15,8 @@ export type TransactionFormValues = {
   amount: string;
   description: string;
   partyId: string | null;
+  /** "EXP" | "DOM" — only set when type=Revenue. */
+  expDom: "EXP" | "DOM" | null;
 };
 
 export type MasterCategory = {
@@ -107,6 +109,11 @@ export function TransactionForm({
   const [amount, setAmount] = useState<string>(initial?.amount ?? "");
   const [description, setDescription] = useState<string>(initial?.description ?? "");
   const [partyId, setPartyId] = useState<string | null>(initial?.partyId ?? null);
+  // Revenue-only EXP/DOM tag. Defaults to "DOM" on new Revenue rows
+  // since domestic is the team's overwhelming default.
+  const [expDom, setExpDom] = useState<"EXP" | "DOM">(
+    initial?.expDom === "EXP" ? "EXP" : "DOM",
+  );
   const [partiesState, setPartiesState] = useState<MasterParty[]>(parties);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -178,6 +185,7 @@ export function TransactionForm({
         paymentMode,
         amount,
         partyId: partyId || null,
+        expDom: type === "Revenue" ? expDom : null,
       }),
     });
     setBusy(false);
@@ -252,6 +260,37 @@ export function TransactionForm({
             </button>
           ))}
         </div>
+        {/* EXP/DOM toggle — only meaningful for Revenue. Drives the
+            GST liability calc on the Revenue Analysis page (DOM only). */}
+        {type === "Revenue" && (
+          <div className="flex items-center gap-xs ml-base">
+            <span className="text-caption uppercase tracking-wider font-semibold text-on-surface-variant">
+              EXP / DOM
+            </span>
+            <div className="flex rounded-lg border border-outline-variant overflow-hidden">
+              {(["DOM", "EXP"] as const).map((opt) => (
+                <button
+                  type="button"
+                  key={opt}
+                  onClick={() => setExpDom(opt)}
+                  className={
+                    "px-md h-9 text-label-sm font-semibold transition " +
+                    (expDom === opt
+                      ? "bg-primary text-on-primary"
+                      : "bg-surface-container-lowest text-on-surface-variant hover:bg-surface-container-low")
+                  }
+                  title={
+                    opt === "DOM"
+                      ? "Domestic — taxable for GST (counted in monthly liability)"
+                      : "Export — outside GST liability calc"
+                  }
+                >
+                  {opt}
+                </button>
+              ))}
+            </div>
+          </div>
+        )}
       </div>
 
       <div className="grid grid-cols-1 md:grid-cols-2 gap-md">

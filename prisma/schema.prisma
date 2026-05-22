@@ -82,6 +82,11 @@ model Transaction {
   paymentMode String
   amount      Decimal   @db.Decimal(14, 2)
   flow        String
+  /// "EXP" (export) | "DOM" (domestic). Only meaningful for Revenue
+  /// rows — Expense rows leave it null. Drives the GST liability
+  /// calc on the Revenue Analysis page: only DOM revenue carries
+  /// the 18% GST line.
+  expDom      String?
   partyId     String?
   party       Party?    @relation(fields: [partyId], references: [id], onDelete: SetNull)
   createdById String?
@@ -583,6 +588,8 @@ model TransactionDraft {
   flow          String
   partyId       String?
   party         Party?   @relation(fields: [partyId], references: [id], onDelete: SetNull)
+  /// Mirrors Transaction.expDom — required on Revenue drafts.
+  expDom        String?
   createdAt     DateTime @default(now())
   updatedAt     DateTime @updatedAt
 

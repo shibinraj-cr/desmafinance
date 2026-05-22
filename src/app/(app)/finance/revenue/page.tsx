@@ -28,14 +28,11 @@ export default async function RevenuePage({
   const period = parsePeriod(searchParams);
   const range = rangeFor(period);
 
-  // GST liability is always anchored to the *current calendar month*,
-  // independent of the period filter — it mirrors how the return is
-  // filed (monthly). Only revenue that lands in Axis Bank or HDFC
-  // Bank counts as taxable; cash / cheque / other modes are out.
-  const now = new Date();
-  const gstMonthStart = new Date(now.getFullYear(), now.getMonth(), 1);
-  const gstMonthEnd = new Date(now.getFullYear(), now.getMonth() + 1, 1);
-
+  // GST liability now honours the same period filter as the rest of the
+  // page — supervisors can flip to a different month / quarter / FY and
+  // the tile recomputes. Two narrowing rules:
+  //   - paymentMode must be one of GST_TAXABLE_MODES (Axis / HDFC), AND
+  //   - expDom = 'DOM' (Domestic). Exports are GST-exempt for this team.
   const [totals, series, byCat, topRev, gstAgg] = await Promise.all([
     totalsByType(range),
     monthlySeries(range),
@@ -45,8 +42,16 @@ export default async function RevenuePage({
       where: {
         deletedAt: null,
         type: "Revenue",
+        expDom: "DOM",
         paymentMode: { in: [...GST_TAXABLE_MODES] },
-        date: { gte: gstMonthStart, lt: gstMonthEnd },
+        ...(range.from || range.to
+          ? {
+              date: {
+                ...(range.from ? { gte: range.from } : {}),
+                ...(range.to ? { lt: range.to } : {}),
+              },
+            }
+          : {}),
       },
       _sum: { amount: true },
       _count: { _all: true },
@@ -57,7 +62,6 @@ export default async function RevenuePage({
   const gstBase = gstGross / (1 + GST_RATE);
   const gstLiability = gstGross - gstBase;
   const gstCount = gstAgg._count._all;
-  const gstMonthLabel = now.toLocaleString("en-US", { month: "long", year: "numeric" });
   const last = series[series.length - 1];
   const prev = series[series.length - 2];
   const mom = prev?.revenue ? Math.round(((last.revenue - prev.revenue) / prev.revenue) * 100) : 0;
@@ -70,14 +74,14 @@ export default async function RevenuePage({
       <div className="p-margin space-y-lg">
         <section className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-5 gap-gutter">
           <KpiCard
-            label={`GST Liability · ${gstMonthLabel}`}
+            label={`GST Liability · ${periodLabel(period)}`}
             value={gstLiability}
             tone="danger"
             hero
             hint={
               gstCount > 0
-                ? `From ${gstCount} bank-mode revenue receipt${gstCount === 1 ? "" : "s"} totalling ₹${Math.round(gstGross).toLocaleString("en-IN")} (Axis + HDFC, GST-inclusive @ 18%)`
-                : "No taxable revenue in Axis Bank / HDFC Bank this month yet."
+                ? `From ${gstCount} DOM bank-mode receipt${gstCount === 1 ? "" : "s"} totalling ₹${Math.round(gstGross).toLocaleString("en-IN")} (Axis + HDFC, GST-inclusive @ 18%; EXP excluded)`
+                : "No DOM revenue in Axis Bank / HDFC Bank for this period yet."
             }
           />
           <KpiCard label="Total Revenue" value={totals.revenue} tone="primary" hero />

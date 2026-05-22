@@ -28,6 +28,7 @@ export default async function EditTransactionPage({
     amount: t.amount.toString(),
     description: t.description ?? "",
     partyId: t.partyId ?? null,
+    expDom: t.expDom === "EXP" ? "EXP" : t.expDom === "DOM" ? "DOM" : null,
   };
 
   return (

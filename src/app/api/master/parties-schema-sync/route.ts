@@ -663,6 +663,21 @@ export async function POST() {
       `ALTER TABLE "LeadPulsePipeline" ADD COLUMN IF NOT EXISTS "candidatePhone" TEXT`,
     );
 
+    // Additive: Transaction.expDom (EXP / DOM tag for Revenue rows;
+    // drives the GST liability calc on the Revenue Analysis page).
+    await step(
+      "Transaction.expDom column",
+      `ALTER TABLE "Transaction" ADD COLUMN IF NOT EXISTS "expDom" TEXT`,
+    );
+    await step(
+      "Backfill Revenue rows → DOM (only if NULL)",
+      `UPDATE "Transaction" SET "expDom" = 'DOM' WHERE type = 'Revenue' AND "expDom" IS NULL`,
+    );
+    await step(
+      "TransactionDraft.expDom column",
+      `ALTER TABLE "TransactionDraft" ADD COLUMN IF NOT EXISTS "expDom" TEXT`,
+    );
+
     // 7. LeadPulseBdeInsight — monthly AI-style coaching loop per BDE
     await step(
       "LeadPulseBdeInsight table",

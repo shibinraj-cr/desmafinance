@@ -26,6 +26,8 @@ const TxSchema = z.object({
   amount: z.coerce.number().positive().max(1_000_000_000),
   flow: z.enum(FLOWS).optional(),
   partyId: z.string().min(1).optional().nullable(),
+  /** EXP / DOM tag. Required for Revenue (checked below); null on Expense. */
+  expDom: z.enum(["EXP", "DOM"]).optional().nullable(),
 });
 
 const QuerySchema = z.object({
@@ -89,6 +91,12 @@ export async function POST(req: NextRequest) {
   const verr = await verifyCategorySubItem(data.category, data.subItem, data.type);
   if (verr) return NextResponse.json({ error: verr }, { status: 400 });
 
+  // EXP/DOM is mandatory for Revenue rows (drives the GST liability
+  // calculation). Expense rows ignore it.
+  if (data.type === "Revenue" && data.expDom !== "EXP" && data.expDom !== "DOM") {
+    return NextResponse.json({ error: "expDom_required" }, { status: 400 });
+  }
+
   if (data.partyId) {
     const party = await prisma.party.findUnique({
       where: { id: data.partyId },
@@ -113,6 +121,7 @@ export async function POST(req: NextRequest) {
     amount: data.amount,
     flow: data.flow ?? flowFor(data.type),
     partyId: data.partyId ?? null,
+    expDom: data.type === "Revenue" ? (data.expDom ?? null) : null,
   };
 
   const result = await submitCreate({ data: proposed, userId, perms });
