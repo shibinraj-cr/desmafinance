@@ -296,7 +296,7 @@ export function PlanDetailClient({
               {installments.length === 0 && !adding ? (
                 <tr>
                   <td colSpan={6} className="px-md py-lg text-center text-on-surface-variant">
-                    No installments — click "Add installment" to start.
+                    No installments — click &ldquo;Add installment&rdquo; to start.
                   </td>
                 </tr>
               ) : null}
