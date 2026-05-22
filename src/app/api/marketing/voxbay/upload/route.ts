@@ -39,11 +39,18 @@ export async function POST(req: NextRequest) {
 
   // Header → column index map. Voxbay sometimes emits a BOM on the
   // first header cell — strip it.
+  //
+  // Voxbay added a new channel and the export schema shifted: `Sl No.`
+  // and `contact_name` are gone, columns were re-ordered, and four new
+  // ones appeared (`last_tried_user`, `first_tried_user`, `appId`,
+  // `callUniqueId`). The parser is header-keyed already, so column
+  // re-ordering is fine. We only require the fields we actually act
+  // on; the old-format extras (Sl No., contact_name) drop to null when
+  // absent, and the new-format extras are simply ignored unless we
+  // later want to surface them.
   const header = rows[0].map((h) => h.replace(/^﻿/, "").trim());
   const idx = (name: string) => header.indexOf(name);
   const required = [
-    "Sl No.",
-    "contact_name",
     "sourceNumber",
     "didNumber",
     "callStartTime",
