@@ -43,11 +43,25 @@ export default async function DailyTrackerPage({
         }
       : {}),
   };
-  const [items, categories, parties] = await Promise.all([
+  const [items, pendingCreates, pendingMutations, categories, parties] = await Promise.all([
     prisma.transaction.findMany({
       where,
       orderBy: [{ date: "desc" }, { createdAt: "desc" }],
       take: 500,
+    }),
+    // Pending creates aren't in Transaction yet; filter in JS on the
+    // proposed-payload because it's stored as JSON and Prisma can't
+    // query nested keys easily.
+    prisma.pendingApproval.findMany({
+      where: { status: "pending", kind: "create" },
+      orderBy: [{ createdAt: "desc" }],
+      take: 500,
+    }),
+    // Pending edits / deletes of existing transactions — tag each
+    // affected canonical row with a "pending edit/delete" status.
+    prisma.pendingApproval.findMany({
+      where: { status: "pending", kind: { in: ["update", "delete"] }, targetTxId: { not: null } },
+      select: { kind: true, targetTxId: true },
     }),
     prisma.category.findMany({
       orderBy: [{ type: "asc" }, { name: "asc" }],
@@ -59,24 +73,108 @@ export default async function DailyTrackerPage({
       },
     }),
     prisma.party.findMany({
-      where: { isActive: true },
       orderBy: [{ group: "asc" }, { name: "asc" }],
       select: { id: true, name: true, group: true, txTypes: true, isActive: true },
     }),
   ]);
 
-  // Running balance is computed across the full timeline of (currently filtered) rows
-  // in chronological order, then mapped back by id for newest-first display.
-  const chronological = [...items].sort(
-    (a, b) => +a.date - +b.date || +a.createdAt - +b.createdAt,
-  );
-  const balanceMap = new Map<string, number>();
-  let running = 0;
-  for (const t of chronological) {
-    const v = Number(t.amount.toString());
-    running += t.type === "Revenue" ? v : -v;
-    balanceMap.set(t.id, running);
+  // Party id → name lookup used by both Transaction rows and pending
+  // creates (whose partyId lives inside the JSON proposed payload).
+  const partyById = new Map(parties.map((p) => [p.id, p]));
+
+  // Map: txId → kind of pending mutation (update | delete) on it.
+  const pendingByTx = new Map<string, "update" | "delete">();
+  for (const p of pendingMutations) {
+    if (p.targetTxId) pendingByTx.set(p.targetTxId, p.kind as "update" | "delete");
   }
+
+  // Build a unified row list: approved Transaction rows + still-pending
+  // PendingApproval(kind=create) rows. Each row carries `_status` so the
+  // table can colour-code accordingly.
+  type ProposedTx = {
+    date?: string;
+    month?: string;
+    type?: string;
+    category?: string;
+    subItem?: string;
+    description?: string | null;
+    paymentMode?: string;
+    amount?: number | string;
+    flow?: string;
+    partyId?: string | null;
+  };
+  type UnifiedRow = {
+    id: string;
+    isPending: boolean;
+    pendingKind?: "create" | "update" | "delete";
+    date: Date;
+    month: string;
+    type: string;
+    category: string;
+    subItem: string;
+    description: string | null;
+    paymentMode: string;
+    amount: number;
+    flow: string;
+    partyId: string | null;
+  };
+
+  const approvedRows: UnifiedRow[] = items.map((t) => ({
+    id: t.id,
+    isPending: false,
+    pendingKind: pendingByTx.get(t.id),
+    date: t.date,
+    month: t.month,
+    type: t.type,
+    category: t.category,
+    subItem: t.subItem,
+    description: t.description,
+    paymentMode: t.paymentMode,
+    amount: Number(t.amount.toString()),
+    flow: t.flow,
+    partyId: t.partyId,
+  }));
+
+  // Apply the same filter set to pending creates by reading the JSON
+  // proposed payload. Keeps the unified view consistent with whatever
+  // the user has filtered to.
+  const pendingRows: UnifiedRow[] = pendingCreates
+    .map((p): UnifiedRow | null => {
+      const d = (p.proposed as unknown as ProposedTx | null) ?? {};
+      const dateRaw = typeof d.date === "string" ? new Date(d.date) : null;
+      if (!dateRaw || isNaN(+dateRaw)) return null;
+      return {
+        id: `pending:${p.id}`,
+        isPending: true,
+        pendingKind: "create",
+        date: dateRaw,
+        month: d.month ?? "",
+        type: d.type ?? "",
+        category: d.category ?? "",
+        subItem: d.subItem ?? "",
+        description: d.description ?? null,
+        paymentMode: d.paymentMode ?? "",
+        amount: Number(d.amount ?? 0),
+        flow: d.flow ?? "",
+        partyId: d.partyId ?? null,
+      };
+    })
+    .filter((r): r is UnifiedRow => r !== null)
+    .filter((r) => {
+      if (searchParams.type && r.type !== searchParams.type) return false;
+      if (searchParams.category && r.category !== searchParams.category) return false;
+      if (searchParams.sub && r.subItem !== searchParams.sub) return false;
+      if (searchParams.party && r.partyId !== searchParams.party) return false;
+      if (searchParams.mode && r.paymentMode !== searchParams.mode) return false;
+      if (searchParams.flow && r.flow !== searchParams.flow) return false;
+      if (range.from && r.date < range.from) return false;
+      if (range.to && r.date >= range.to) return false;
+      return true;
+    });
+
+  const unified = [...approvedRows, ...pendingRows].sort(
+    (a, b) => +b.date - +a.date || a.id.localeCompare(b.id),
+  );
 
   const filterQs = (extra: Record<string, string | undefined>) => {
     const qs = new URLSearchParams();
@@ -167,25 +265,57 @@ export default async function DailyTrackerPage({
                   <Th>Type</Th>
                   <Th>Category</Th>
                   <Th>Sub-Item</Th>
+                  <Th>Party</Th>
                   <Th>Description</Th>
                   <Th>Mode</Th>
                   <Th className="text-right">Amount</Th>
-                  <Th className="text-right">Running</Th>
+                  <Th>Status</Th>
                   <Th />
                 </tr>
               </thead>
               <tbody>
-                {items.length === 0 && (
+                {unified.length === 0 && (
                   <tr>
-                    <td colSpan={10} className="p-lg text-center text-on-surface-variant">
+                    <td colSpan={11} className="p-lg text-center text-on-surface-variant">
                       No transactions match this filter. Click <strong>New</strong> to add one.
                     </td>
                   </tr>
                 )}
-                {items.map((t) => {
-                  const v = Number(t.amount.toString());
+                {unified.map((t) => {
                   const inflow = t.type === "Revenue";
-                  const rowTint = inflow ? "bg-green-50/30" : "bg-red-50/30";
+                  // Status drives the row tint:
+                  //   pending create   → amber
+                  //   pending update   → blue (info)
+                  //   pending delete   → red (alarming)
+                  //   approved+inflow  → soft green
+                  //   approved+outflow → soft red
+                  const rowTint =
+                    t.pendingKind === "create"
+                      ? "bg-amber-50/50"
+                      : t.pendingKind === "update"
+                        ? "bg-blue-50/50"
+                        : t.pendingKind === "delete"
+                          ? "bg-red-100/50"
+                          : inflow
+                            ? "bg-green-50/30"
+                            : "bg-red-50/30";
+                  const statusLabel =
+                    t.pendingKind === "create"
+                      ? "Pending approval"
+                      : t.pendingKind === "update"
+                        ? "Pending edit"
+                        : t.pendingKind === "delete"
+                          ? "Pending delete"
+                          : "Approved";
+                  const statusPill =
+                    t.pendingKind === "create"
+                      ? "bg-amber-100 text-amber-800 border border-amber-300"
+                      : t.pendingKind === "update"
+                        ? "bg-blue-100 text-blue-800 border border-blue-300"
+                        : t.pendingKind === "delete"
+                          ? "bg-red-100 text-red-800 border border-red-300"
+                          : "bg-green-100 text-green-800 border border-green-300";
+                  const party = t.partyId ? partyById.get(t.partyId) : null;
                   return (
                     <tr
                       key={t.id}
@@ -208,25 +338,58 @@ export default async function DailyTrackerPage({
                       </Td>
                       <Td>{t.category}</Td>
                       <Td>{t.subItem}</Td>
-                      <Td className="max-w-[260px] truncate">{t.description ?? "—"}</Td>
+                      <Td className="max-w-[200px] truncate">
+                        {party ? (
+                          <span>
+                            {party.name}
+                            <span className="text-on-surface-variant text-[11px] ml-[4px]">
+                              ({party.group})
+                            </span>
+                          </span>
+                        ) : (
+                          <span className="text-on-surface-variant">—</span>
+                        )}
+                      </Td>
+                      <Td className="max-w-[220px] truncate">{t.description ?? "—"}</Td>
                       <Td>{t.paymentMode}</Td>
                       <Td className={"text-right font-mono " + (inflow ? "text-green-700" : "text-red-700")}>
-                        {(inflow ? "+" : "−") + inrFull(v).slice(1)}
+                        {(inflow ? "+" : "−") + inrFull(t.amount).slice(1)}
                       </Td>
-                      <Td className="text-right font-mono text-on-surface">
-                        {inrFull(balanceMap.get(t.id) ?? 0)}
+                      <Td>
+                        <span
+                          className={
+                            "px-xs py-[2px] rounded-full text-[10px] font-bold uppercase tracking-wider whitespace-nowrap " +
+                            statusPill
+                          }
+                        >
+                          {statusLabel}
+                        </span>
                       </Td>
                       <Td className="text-right whitespace-nowrap">
-                        <Link
-                          href={`/finance/daily-tracker/${t.id}/edit`}
-                          title="Edit"
-                          className="inline-flex p-xs text-on-surface-variant hover:text-accent transition"
-                        >
-                          <span className="material-symbols-outlined" style={{ fontSize: 18 }}>
-                            edit
-                          </span>
-                        </Link>
-                        <DeleteRowButton id={t.id} />
+                        {t.isPending ? (
+                          <Link
+                            href="/finance/approvals/pending"
+                            title="Open Approvals queue"
+                            className="inline-flex p-xs text-on-surface-variant hover:text-accent transition"
+                          >
+                            <span className="material-symbols-outlined" style={{ fontSize: 18 }}>
+                              rule
+                            </span>
+                          </Link>
+                        ) : (
+                          <>
+                            <Link
+                              href={`/finance/daily-tracker/${t.id}/edit`}
+                              title="Edit"
+                              className="inline-flex p-xs text-on-surface-variant hover:text-accent transition"
+                            >
+                              <span className="material-symbols-outlined" style={{ fontSize: 18 }}>
+                                edit
+                              </span>
+                            </Link>
+                            <DeleteRowButton id={t.id} />
+                          </>
+                        )}
                       </Td>
                     </tr>
                   );
