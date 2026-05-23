@@ -301,13 +301,16 @@ export async function POST(req: NextRequest) {
 
   // Verify nothing in this date is locked. Rejected entries are
   // explicitly editable so the BDE can correct supervisor flags and
-  // re-submit, regardless of the locked flag. Approved entries are
-  // off-limits without a supervisor override.
+  // re-submit. Approved entries are normally off-limits — but a
+  // supervisor unlock (LeadPulseUnlock row) lifts the lock + the
+  // approved-status block so the BDE can edit. The re-submit then
+  // pushes the entry back to status="submitted", which puts it back
+  // in Suhaina's approval queue.
   const existingMeta = await prisma.leadPulseDailyMeta.findUnique({
     where: { userId_entryDate: { userId: actorId, entryDate: dateValue } },
     select: { locked: true, status: true },
   });
-  const lockBypass = existingMeta?.status === "rejected";
+  const lockBypass = existingMeta?.status === "rejected" || !!unlockRow;
   if (!lockBypass) {
     const existingLocked = await prisma.leadPulseDailyEntry.findFirst({
       where: { userId: actorId, entryDate: dateValue, locked: true },
@@ -417,7 +420,17 @@ export async function POST(req: NextRequest) {
         referredToAbroad: meta.referredToAbroad,
         notes: meta.notes,
         ...(action === "submit"
-          ? { status: "submitted", submittedAt: new Date() }
+          ? {
+              status: "submitted",
+              submittedAt: new Date(),
+              // Clear prior approval/rejection metadata so a resubmit
+              // (e.g. after a supervisor unlock) lands in the queue as
+              // a clean pending item rather than re-displaying the
+              // earlier reviewer's note.
+              reviewedById: null,
+              reviewedAt: null,
+              reviewNote: null,
+            }
           : {}),
       },
     });
