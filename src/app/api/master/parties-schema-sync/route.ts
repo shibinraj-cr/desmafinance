@@ -517,6 +517,52 @@ export async function POST() {
        END $$`,
     );
 
+    // LeadPulseUnlock — supervisor-granted edit access for the daily
+    // entry's backdate window. One row per (BDE, date).
+    await step(
+      "LeadPulseUnlock table",
+      `CREATE TABLE IF NOT EXISTS "LeadPulseUnlock" (
+         "id" TEXT NOT NULL,
+         "userId" TEXT NOT NULL,
+         "entryDate" DATE NOT NULL,
+         "unlockedAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+         "unlockedById" TEXT,
+         CONSTRAINT "LeadPulseUnlock_pkey" PRIMARY KEY ("id")
+       )`,
+    );
+    await step(
+      "LeadPulseUnlock unique (userId, entryDate)",
+      `CREATE UNIQUE INDEX IF NOT EXISTS "LeadPulseUnlock_userId_entryDate_key" ON "LeadPulseUnlock"("userId", "entryDate")`,
+    );
+    await step(
+      "LeadPulseUnlock userId index",
+      `CREATE INDEX IF NOT EXISTS "LeadPulseUnlock_userId_idx" ON "LeadPulseUnlock"("userId")`,
+    );
+    await step(
+      "LeadPulseUnlock entryDate index",
+      `CREATE INDEX IF NOT EXISTS "LeadPulseUnlock_entryDate_idx" ON "LeadPulseUnlock"("entryDate")`,
+    );
+    await step(
+      "LeadPulseUnlock.userId foreign key",
+      `DO $$ BEGIN
+         IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'LeadPulseUnlock_userId_fkey') THEN
+           ALTER TABLE "LeadPulseUnlock"
+             ADD CONSTRAINT "LeadPulseUnlock_userId_fkey"
+             FOREIGN KEY ("userId") REFERENCES "User"("id") ON DELETE CASCADE;
+         END IF;
+       END $$`,
+    );
+    await step(
+      "LeadPulseUnlock.unlockedById foreign key",
+      `DO $$ BEGIN
+         IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'LeadPulseUnlock_unlockedById_fkey') THEN
+           ALTER TABLE "LeadPulseUnlock"
+             ADD CONSTRAINT "LeadPulseUnlock_unlockedById_fkey"
+             FOREIGN KEY ("unlockedById") REFERENCES "User"("id") ON DELETE SET NULL;
+         END IF;
+       END $$`,
+    );
+
     // 5b. Holiday table for the marketing module's holiday calendar.
     await step(
       "Holiday table",

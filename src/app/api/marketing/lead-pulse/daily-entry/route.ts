@@ -67,16 +67,30 @@ export async function GET(req: NextRequest) {
   const meta = await prisma.leadPulseDailyMeta.findUnique({
     where: { userId_entryDate: { userId: targetUserId, entryDate: toPrismaDate(dateParse.data) } },
   });
+  // Supervisor unlock (if any) overrides the 3-day backdate window.
+  // The per-row `locked` flag is still respected — both gates must
+  // pass for the entry to be editable.
+  const unlock = await prisma.leadPulseUnlock.findUnique({
+    where: {
+      userId_entryDate: {
+        userId: targetUserId,
+        entryDate: toPrismaDate(dateParse.data),
+      },
+    },
+  });
 
   const today = todayIst();
-  const editable = isWithinBackdateWindow(dateParse.data, today) && (
-    !entries.some((e) => e.locked) && !(meta?.locked)
-  );
+  const withinWindow = isWithinBackdateWindow(dateParse.data, today);
+  const supervisorUnlocked = !!unlock;
+  const anyLocked = entries.some((e) => e.locked) || !!meta?.locked;
+  const editable = (withinWindow || supervisorUnlocked) && !anyLocked;
 
   return NextResponse.json({
     date: dateParse.data,
     today,
     editable,
+    supervisorUnlocked,
+    unlockedAt: unlock?.unlockedAt?.toISOString() ?? null,
     role: (targetRole?.role ?? null) as LeadPulseRoleSlug | null,
     displayName: targetRole?.displayName ?? null,
     sources: sources.map((s) => ({
@@ -193,7 +207,15 @@ export async function POST(req: NextRequest) {
   }
   const { date, action, rows, meta } = parsed.data;
 
-  if (!isWithinBackdateWindow(date)) {
+  // Outside the 3-day backdate window, a supervisor must have granted
+  // an explicit LeadPulseUnlock for this (user, date). The unlock is
+  // cleared further down on a successful submit so the next edit
+  // requires a fresh grant.
+  const dateValueEarly = toPrismaDate(date);
+  const unlockRow = await prisma.leadPulseUnlock.findUnique({
+    where: { userId_entryDate: { userId: actorId, entryDate: dateValueEarly } },
+  });
+  if (!isWithinBackdateWindow(date) && !unlockRow) {
     return NextResponse.json({ error: "outside_backdate_window" }, { status: 403 });
   }
 
@@ -279,13 +301,16 @@ export async function POST(req: NextRequest) {
 
   // Verify nothing in this date is locked. Rejected entries are
   // explicitly editable so the BDE can correct supervisor flags and
-  // re-submit, regardless of the locked flag. Approved entries are
-  // off-limits without a supervisor override.
+  // re-submit. Approved entries are normally off-limits — but a
+  // supervisor unlock (LeadPulseUnlock row) lifts the lock + the
+  // approved-status block so the BDE can edit. The re-submit then
+  // pushes the entry back to status="submitted", which puts it back
+  // in Suhaina's approval queue.
   const existingMeta = await prisma.leadPulseDailyMeta.findUnique({
     where: { userId_entryDate: { userId: actorId, entryDate: dateValue } },
     select: { locked: true, status: true },
   });
-  const lockBypass = existingMeta?.status === "rejected";
+  const lockBypass = existingMeta?.status === "rejected" || !!unlockRow;
   if (!lockBypass) {
     const existingLocked = await prisma.leadPulseDailyEntry.findFirst({
       where: { userId: actorId, entryDate: dateValue, locked: true },
@@ -395,7 +420,17 @@ export async function POST(req: NextRequest) {
         referredToAbroad: meta.referredToAbroad,
         notes: meta.notes,
         ...(action === "submit"
-          ? { status: "submitted", submittedAt: new Date() }
+          ? {
+              status: "submitted",
+              submittedAt: new Date(),
+              // Clear prior approval/rejection metadata so a resubmit
+              // (e.g. after a supervisor unlock) lands in the queue as
+              // a clean pending item rather than re-displaying the
+              // earlier reviewer's note.
+              reviewedById: null,
+              reviewedAt: null,
+              reviewNote: null,
+            }
           : {}),
       },
     });
@@ -409,6 +444,11 @@ export async function POST(req: NextRequest) {
           metadata: { date, role, rowCount: rows.length },
         },
       });
+      // A successful re-submit on a supervisor-unlocked day consumes
+      // the grant — the next edit will need a fresh unlock.
+      if (unlockRow) {
+        await tx.leadPulseUnlock.delete({ where: { id: unlockRow.id } });
+      }
     }
   });
 
