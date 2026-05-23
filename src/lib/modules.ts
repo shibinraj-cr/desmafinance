@@ -147,6 +147,7 @@ export const MODULES: AppModule[] = [
       { href: "/hr/leave", label: "Leave Requests", icon: "event_busy" },
       { href: "/hr/leave-balances", label: "Leave Balances", icon: "savings" },
       { href: "/hr/holidays", label: "Holiday Calendar", icon: "event" },
+      { href: "/hr/salary-structures", label: "Salary Structures", icon: "calculate" },
       { href: "/hr/salary", label: "Salary Runs", icon: "payments" },
       { href: "/hr/policies", label: "Policies & Manuals", icon: "menu_book" },
       { href: "/hr/trainings", label: "Trainings", icon: "school" },

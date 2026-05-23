@@ -2,28 +2,55 @@ import { prisma } from "./prisma";
 import { parseMonthKey, structureForMonth } from "./hr-data";
 
 /**
- * Salary calculation engine. Mirrors the formulas observed in the
- * reference Jan–Apr 2026 spreadsheets:
+ * Salary calculation engine.
  *
- *   Daily basis         = Monthly / workingDaysBase                  (30 by default)
- *   Basic               = Monthly × basicPct%
- *   Basic after LOP     = Basic × (attended / workingDaysBase)
- *   Salary before ESI   = Monthly − (Daily basis × totalLeaveForLop)
- *   ESI employee 0.75%  · employer 3.25%  (on Salary before ESI; only if esiApplicable)
- *   PF employee 12%     · employer 12%    (on Basic after LOP; only if pfApplicable)
- *   Professional Tax    = flat
- *   Net                 = Salary before ESI − ESI(E) − PF(E) − PT + adjustments
+ * Inputs (from HrSalaryStructure):
+ *   basic, hraPct, conveyancePct, medicalPct, specialPct
+ *
+ * Derived components (live):
+ *   hra        = basic × hraPct%
+ *   conveyance = basic × conveyancePct%
+ *   medical    = basic × medicalPct%
+ *   special    = basic × specialPct%
+ *   gross      = basic + hra + conveyance + medical + special
+ *                (with default 50/25/35/40 → gross = basic × 2.5)
+ *
+ * Payroll month math (mirrors the reference Jan–Apr 2026 calc files):
+ *   workingDaysBase = 30  (calendar default; editable per run)
+ *   dailyBasis      = gross / workingDaysBase
+ *   basicAfterLop   = basic × (daysAttended / workingDaysBase)
+ *   salaryBeforeEsi = gross − (dailyBasis × totalLeaveForLop)
+ *   ESI employee 0.75% · employer 3.25% on salaryBeforeEsi (if esiApplicable)
+ *   PF  employee 12%   · employer 12%   on basicAfterLop   (if pfApplicable)
+ *   PT  = professionalTax (flat, set by Kerala slab)
+ *   net = salaryBeforeEsi − ESI(E) − PF(E) − PT
  */
 
-export type SalaryCalc = {
+export const DEFAULT_ALLOWANCE_PCTS = {
+  hra: 50,
+  conveyance: 25,
+  medical: 35,
+  special: 40,
+} as const;
+
+export type SalaryBreakdown = {
+  basic: number;
+  hra: number;
+  conveyance: number;
+  medical: number;
+  special: number;
+  gross: number;
+};
+
+export type SalaryCalc = SalaryBreakdown & {
   totalWorkingDays: number;
   daysAttended: number;
   paidLeave: number;
   unpaidLeave: number;
   halfDayLeave: number;
   totalLeaveForLop: number;
-  monthlySalary: number;
-  basicSalary: number;
+  monthlySalary: number; // alias for gross — kept for HrSalaryRunLine column
+  basicSalary: number; // alias for basic — kept for HrSalaryRunLine column
   basicAfterLop: number;
   dailyBasis: number;
   salaryBeforeEsi: number;
@@ -40,10 +67,52 @@ export type SalaryCalc = {
 const round = (n: number) => Math.round(n);
 const round2 = (n: number) => Math.round(n * 100) / 100;
 
+/** Derive gross + allowance breakdown from basic + percentages. */
+export function deriveBreakdown(
+  basic: number,
+  pcts: { hraPct?: number; conveyancePct?: number; medicalPct?: number; specialPct?: number } = {},
+): SalaryBreakdown {
+  const hraPct = pcts.hraPct ?? DEFAULT_ALLOWANCE_PCTS.hra;
+  const conveyancePct = pcts.conveyancePct ?? DEFAULT_ALLOWANCE_PCTS.conveyance;
+  const medicalPct = pcts.medicalPct ?? DEFAULT_ALLOWANCE_PCTS.medical;
+  const specialPct = pcts.specialPct ?? DEFAULT_ALLOWANCE_PCTS.special;
+  const hra = round2((basic * hraPct) / 100);
+  const conveyance = round2((basic * conveyancePct) / 100);
+  const medical = round2((basic * medicalPct) / 100);
+  const special = round2((basic * specialPct) / 100);
+  const gross = round2(basic + hra + conveyance + medical + special);
+  return { basic, hra, conveyance, medical, special, gross };
+}
+
+/**
+ * Kerala Professional Tax slab (half-yearly). The amount shown is per-
+ * month (slab total / 6). Source: the user's reference Salary Corrections
+ * sheet:
+ *   half-yearly 75k–99,999  → ₹750 ÷ 6 = ₹125/mo
+ *   half-yearly 100k–124,999 → ₹1000 ÷ 6 ≈ ₹167/mo
+ *   half-yearly ≥ 125k       → ₹1250 ÷ 6 ≈ ₹208/mo
+ * Below 75k/half-year (i.e. gross < 12,500/mo) we still default to ₹125;
+ * HR can override per employee.
+ */
+export function suggestProfessionalTax(grossMonthly: number): number {
+  const halfYear = grossMonthly * 6;
+  if (halfYear >= 125_000) return 208;
+  if (halfYear >= 100_000) return 167;
+  return 125;
+}
+
+/** ESI applies when gross ≤ ₹21,000/month. */
+export function isEsiApplicable(grossMonthly: number): boolean {
+  return grossMonthly <= 21000;
+}
+
 export function calcLine(args: {
   workingDaysBase: number;
-  monthlySalary: number;
-  basicPct: number;
+  basic: number;
+  hraPct?: number;
+  conveyancePct?: number;
+  medicalPct?: number;
+  specialPct?: number;
   esiApplicable: boolean;
   pfApplicable: boolean;
   professionalTax: number;
@@ -54,17 +123,17 @@ export function calcLine(args: {
   carriedBalanceBefore: number;
 }): SalaryCalc {
   const wd = args.workingDaysBase;
-  const monthly = args.monthlySalary;
-  const basic = round2((monthly * args.basicPct) / 100);
-  const dailyBasis = round2(monthly / wd);
+  const breakdown = deriveBreakdown(args.basic, args);
+  const gross = breakdown.gross;
+  const dailyBasis = round2(gross / wd);
 
   const paidCovered = Math.min(args.daysPaidLeave, Math.max(0, args.carriedBalanceBefore));
   const paidUncovered = Math.max(0, args.daysPaidLeave - paidCovered);
 
   const daysAttended = round2(args.daysPresent + paidCovered + args.daysHalfDay * 0.5);
   const totalLeaveForLop = round2(args.daysAbsent + paidUncovered + args.daysHalfDay * 0.5);
-  const basicAfterLop = round2((basic * daysAttended) / wd);
-  const salaryBeforeEsi = round2(monthly - dailyBasis * totalLeaveForLop);
+  const basicAfterLop = round2((args.basic * daysAttended) / wd);
+  const salaryBeforeEsi = round2(gross - dailyBasis * totalLeaveForLop);
 
   const esiEmployee = args.esiApplicable ? round(salaryBeforeEsi * 0.0075) : 0;
   const esiEmployer = args.esiApplicable ? round(salaryBeforeEsi * 0.0325) : 0;
@@ -75,14 +144,15 @@ export function calcLine(args: {
   const netSalary = round(salaryBeforeEsi - esiEmployee - pfEmployee - pt);
 
   return {
+    ...breakdown,
     totalWorkingDays: wd,
     daysAttended,
     paidLeave: round2(args.daysPaidLeave),
     unpaidLeave: round2(args.daysAbsent + paidUncovered),
     halfDayLeave: round2(args.daysHalfDay),
     totalLeaveForLop,
-    monthlySalary: monthly,
-    basicSalary: basic,
+    monthlySalary: gross,
+    basicSalary: breakdown.basic,
     basicAfterLop,
     dailyBasis,
     salaryBeforeEsi,
@@ -127,7 +197,7 @@ export async function computeSalaryRun(monthKey: string, userId: string | null):
   warnings: string[];
 }> {
   if (!/^\d{4}-\d{2}$/.test(monthKey)) throw new Error("invalid monthKey");
-  const { year, month, start, end } = parseMonthKey(monthKey);
+  const { year, start, end } = parseMonthKey(monthKey);
   const workingDaysBase = 30;
 
   const run = await prisma.hrSalaryRun.upsert({
@@ -170,8 +240,11 @@ export async function computeSalaryRun(monthKey: string, userId: string | null):
 
     const calc = calcLine({
       workingDaysBase,
-      monthlySalary: Number(structure.monthlySalary),
-      basicPct: Number(structure.basicPct),
+      basic: Number(structure.basic),
+      hraPct: Number(structure.hraPct),
+      conveyancePct: Number(structure.conveyancePct),
+      medicalPct: Number(structure.medicalPct),
+      specialPct: Number(structure.specialPct),
       esiApplicable: structure.esiApplicable,
       pfApplicable: structure.pfApplicable,
       professionalTax: Number(structure.professionalTax),
