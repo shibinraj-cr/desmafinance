@@ -2,111 +2,223 @@ import { NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { getCurrentUserAndPermissions } from "@/lib/permissions";
 import { canApproveHr } from "@/lib/hr-rbac";
-import { parseAttendanceWorkbook } from "@/lib/hr-attendance-parser";
-import { normaliseAttendanceStatus, parseMonthKey } from "@/lib/hr-data";
+import { parseAttendanceWorkbook, type ParsedDay } from "@/lib/hr-attendance-parser";
 
+/**
+ * Upload a biometric attendance .xls / .xlsx (any format supported by
+ * `parseAttendanceWorkbook`). The file may span multiple months — we
+ * create one HrAttendanceUpload per month covered and insert the
+ * matching day rows under it.
+ *
+ * Employees are matched by name (case-insensitive, first-token / token-
+ * overlap). The biometric system uses its own empCodes that may not
+ * align with our master, so name is the reliable key.
+ */
 export async function POST(req: Request) {
   const { perms, userId } = await getCurrentUserAndPermissions();
   if (!canApproveHr(perms)) return NextResponse.json({ error: "forbidden" }, { status: 403 });
 
   const form = await req.formData();
   const file = form.get("file");
-  const monthKey = String(form.get("monthKey") ?? "");
-  if (!(file instanceof Blob) || !/^\d{4}-\d{2}$/.test(monthKey)) {
-    return NextResponse.json({ error: "invalid file or monthKey" }, { status: 400 });
+  if (!(file instanceof Blob)) {
+    return NextResponse.json({ error: "no file" }, { status: 400 });
   }
-  const filename = (file as unknown as { name?: string }).name;
+  const filename = (file as unknown as { name?: string }).name ?? null;
 
   const buf = Buffer.from(await file.arrayBuffer());
   const parsed = parseAttendanceWorkbook(buf);
 
   if (parsed.rows.length === 0) {
     return NextResponse.json(
-      { error: "no employee blocks detected in workbook", warnings: parsed.warnings },
+      { error: "no day rows detected in workbook", warnings: parsed.warnings },
       { status: 400 },
     );
   }
 
-  const { year, month } = parseMonthKey(monthKey);
-
-  const allEmployees = await prisma.employee.findMany({ select: { id: true, empCode: true } });
-  const byCode = new Map(allEmployees.map((e) => [e.empCode, e.id]));
-
-  const upload = await prisma.hrAttendanceUpload.create({
-    data: {
-      filename: filename ?? null,
-      monthKey,
-      rowCount: parsed.rows.length,
-      uploadedById: userId ?? null,
-    },
+  const employees = await prisma.employee.findMany({
+    select: { id: true, empCode: true, name: true },
   });
+  const byCode = new Map(employees.map((e) => [e.empCode, e]));
 
-  const start = new Date(Date.UTC(year, month - 1, 1));
-  const end = new Date(Date.UTC(year, month, 0, 23, 59, 59));
-  await prisma.hrAttendanceDay.deleteMany({
-    where: { date: { gte: start, lte: end } },
-  });
-
-  let inserted = 0;
-  let unmatched = 0;
-  const unmatchedRows: { empCode: string; rawName: string }[] = [];
-
-  for (const r of parsed.rows) {
-    let employeeId = byCode.get(r.empCode);
-    if (!employeeId) {
-      const padded = r.empCode.padStart(4, "0");
-      employeeId = byCode.get(padded);
+  function fuzzyMatchEmployee(empCode: string, rawName: string): string | null {
+    // 1. Exact empCode match.
+    const exact = byCode.get(empCode) ?? byCode.get(empCode.padStart(4, "0"));
+    if (exact) return exact.id;
+    // 2. Name match — first-token exact / prefix, then token overlap.
+    const aTokens = nameTokens(rawName);
+    if (aTokens.length === 0) return null;
+    const aFirst = aTokens[0];
+    let best: { id: string; score: number } | null = null;
+    for (const e of employees) {
+      const bTokens = nameTokens(e.name);
+      if (bTokens.length === 0) continue;
+      const bFirst = bTokens[0];
+      let score = 0;
+      if (aFirst === bFirst) score = 1;
+      else if (aFirst.length >= 4 && bFirst.length >= 4 && (bFirst.startsWith(aFirst) || aFirst.startsWith(bFirst)))
+        score = 0.9;
+      else {
+        const aSet = new Set(aTokens);
+        const bSet = new Set(bTokens);
+        let overlap = 0;
+        for (const t of aSet) if (bSet.has(t)) overlap++;
+        if (overlap > 0) score = overlap / Math.min(aSet.size, bSet.size);
+      }
+      if (score >= 0.5 && (!best || score > best.score)) {
+        best = { id: e.id, score };
+      }
     }
-    if (!employeeId) {
-      unmatched++;
-      unmatchedRows.push({ empCode: r.empCode, rawName: r.rawName });
-      continue;
-    }
-
-    const records = r.days.map((d) => ({
-      uploadId: upload.id,
-      employeeId: employeeId!,
-      date: new Date(Date.UTC(year, month - 1, d.day)),
-      inTime: d.inTime,
-      outTime: d.outTime,
-      workMinutes: d.workMinutes,
-      breakMinutes: d.breakMinutes,
-      otMinutes: d.otMinutes,
-      status: normaliseAttendanceStatus(d.status),
-      rawName: null,
-    }));
-
-    if (records.length === 0) continue;
-    await prisma.hrAttendanceDay.createMany({ data: records, skipDuplicates: true });
-    inserted += records.length;
+    return best?.id ?? null;
   }
 
+  // Bucket rows by month.
+  const byMonth = new Map<string, ParsedDay[]>();
+  for (const r of parsed.rows) {
+    const y = r.date.getUTCFullYear();
+    const m = String(r.date.getUTCMonth() + 1).padStart(2, "0");
+    const key = `${y}-${m}`;
+    if (!byMonth.has(key)) byMonth.set(key, []);
+    byMonth.get(key)!.push(r);
+  }
+
+  const monthSummaries: {
+    monthKey: string;
+    uploadId: string;
+    inserted: number;
+    unmatched: number;
+    unmatchedNames: string[];
+  }[] = [];
+  const allUnmatchedNames = new Set<string>();
+
+  for (const [monthKey, rowsForMonth] of byMonth) {
+    const [yStr, mStr] = monthKey.split("-");
+    const year = +yStr;
+    const month = +mStr;
+
+    const start = new Date(Date.UTC(year, month - 1, 1));
+    const end = new Date(Date.UTC(year, month, 0, 23, 59, 59));
+
+    // Replace any prior attendance days for this month (idempotent re-import).
+    await prisma.hrAttendanceDay.deleteMany({
+      where: { date: { gte: start, lte: end } },
+    });
+
+    const upload = await prisma.hrAttendanceUpload.create({
+      data: {
+        filename,
+        monthKey,
+        rowCount: rowsForMonth.length,
+        uploadedById: userId ?? null,
+      },
+    });
+
+    // Resolve employee ids per unique (empCode, name) once.
+    const resolveCache = new Map<string, string | null>();
+    let inserted = 0;
+    let unmatched = 0;
+    const unmatchedNames = new Set<string>();
+
+    const dayRecords: {
+      uploadId: string;
+      employeeId: string;
+      date: Date;
+      shiftCode: string | null;
+      inTime: string | null;
+      outTime: string | null;
+      workMinutes: number;
+      otMinutes: number;
+      lateMinutes: number;
+      earlyOutMinutes: number;
+      status: string;
+      remark: string | null;
+      rawName: string;
+    }[] = [];
+
+    for (const r of rowsForMonth) {
+      const cacheKey = `${r.empCode}|${r.rawName}`;
+      let empId = resolveCache.get(cacheKey);
+      if (empId === undefined) {
+        empId = fuzzyMatchEmployee(r.empCode, r.rawName);
+        resolveCache.set(cacheKey, empId);
+      }
+      if (!empId) {
+        unmatched++;
+        unmatchedNames.add(r.rawName || r.empCode);
+        allUnmatchedNames.add(r.rawName || r.empCode);
+        continue;
+      }
+      dayRecords.push({
+        uploadId: upload.id,
+        employeeId: empId,
+        date: r.date,
+        shiftCode: r.shiftCode,
+        inTime: r.inTime,
+        outTime: r.outTime,
+        workMinutes: r.workMinutes,
+        otMinutes: r.otMinutes,
+        lateMinutes: r.lateMinutes,
+        earlyOutMinutes: r.earlyOutMinutes,
+        status: r.status,
+        remark: r.remark,
+        rawName: r.rawName,
+      });
+      inserted++;
+    }
+
+    if (dayRecords.length > 0) {
+      await prisma.hrAttendanceDay.createMany({ data: dayRecords, skipDuplicates: true });
+    }
+
+    monthSummaries.push({
+      monthKey,
+      uploadId: upload.id,
+      inserted,
+      unmatched,
+      unmatchedNames: [...unmatchedNames],
+    });
+  }
+
+  // Audit log.
   await prisma.hrAuditLog.create({
     data: {
       actorUserId: userId ?? null,
       eventType: "attendance_imported",
-      entityType: "HrAttendanceUpload",
-      entityId: upload.id,
       metadata: {
-        monthKey,
-        rowCount: parsed.rows.length,
-        inserted,
-        unmatched,
-        unmatchedRows: unmatchedRows.slice(0, 50),
+        filename,
+        rangeStart: parsed.rangeStart?.toISOString() ?? null,
+        rangeEnd: parsed.rangeEnd?.toISOString() ?? null,
+        months: monthSummaries.map((m) => ({
+          monthKey: m.monthKey,
+          inserted: m.inserted,
+          unmatched: m.unmatched,
+        })),
+        unmatchedNames: [...allUnmatchedNames],
         warnings: parsed.warnings.slice(0, 50),
       },
     },
   });
 
-  await accrueMonth(year, month);
+  // Refresh leave balance accrual for every month covered.
+  for (const m of monthSummaries) {
+    const [yStr, mStr] = m.monthKey.split("-");
+    await accrueMonth(+yStr, +mStr);
+  }
 
   return NextResponse.json({
-    uploadId: upload.id,
-    inserted,
-    unmatched,
-    unmatchedRows,
+    months: monthSummaries,
+    rangeStart: parsed.rangeStart?.toISOString().slice(0, 10) ?? null,
+    rangeEnd: parsed.rangeEnd?.toISOString().slice(0, 10) ?? null,
+    unmatchedNames: [...allUnmatchedNames],
     warnings: parsed.warnings,
   });
+}
+
+function nameTokens(s: string): string[] {
+  return String(s ?? "")
+    .toLowerCase()
+    .replace(/[.,()]/g, "")
+    .split(/\s+/)
+    .filter(Boolean);
 }
 
 async function accrueMonth(year: number, month: number) {

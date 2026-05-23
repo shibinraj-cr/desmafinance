@@ -56,11 +56,35 @@ export default async function HrAttendancePage({
 
   const daysInMonth = new Date(Date.UTC(year, month, 0)).getUTCDate();
 
-  const grid: Record<string, Record<number, { status: string; in: string | null; out: string | null }>> = {};
+  const grid: Record<
+    string,
+    Record<
+      number,
+      {
+        status: string;
+        in: string | null;
+        out: string | null;
+        work: number | null;
+        ot: number | null;
+        remark: string | null;
+      }
+    >
+  > = {};
+  const summary: Record<string, { P: number; HD: number; A: number; WO: number; HL: number; LV: number }> = {};
   for (const d of days) {
     const day = d.date.getUTCDate();
     grid[d.employeeId] ??= {};
-    grid[d.employeeId][day] = { status: d.status, in: d.inTime, out: d.outTime };
+    grid[d.employeeId][day] = {
+      status: d.status,
+      in: d.inTime,
+      out: d.outTime,
+      work: d.workMinutes,
+      ot: d.otMinutes,
+      remark: d.remark,
+    };
+    summary[d.employeeId] ??= { P: 0, HD: 0, A: 0, WO: 0, HL: 0, LV: 0 };
+    const key = d.status as keyof (typeof summary)[string];
+    if (key in summary[d.employeeId]) summary[d.employeeId][key]++;
   }
 
   return (
@@ -80,6 +104,7 @@ export default async function HrAttendancePage({
           }))}
           employees={employees}
           grid={grid}
+          summary={summary}
         />
       </div>
     </>
