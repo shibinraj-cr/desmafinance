@@ -23,11 +23,12 @@ const prisma = new PrismaClient();
 const CORRECTIONS_XLSX = "/Volumes/DESMA/AntiGravity/DESMA FINANCE/hr/Salary/Salary Corrections.xlsx";
 const SHEET_NAME = "Copy of Employee List";
 
-/// Effective-from for the seeded structures. Use the start of the
-/// current month so they apply to "this month onwards" payroll runs.
+/// Effective-from for the seeded structures. Use Jan 1 of the current
+/// year so the seeded structures cover historical payroll runs (Jan…
+/// onwards) as well as the current month.
 function effectiveFrom(): Date {
   const now = new Date();
-  return new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1));
+  return new Date(Date.UTC(now.getUTCFullYear(), 0, 1));
 }
 
 function suggestPT(grossMonthly: number): number {

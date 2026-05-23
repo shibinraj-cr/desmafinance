@@ -80,9 +80,19 @@ export async function structureForMonth(employeeId: string, monthKey: string) {
   const year = +yStr;
   const month = +mStr;
   const monthEnd = new Date(Date.UTC(year, month, 0));
-  return prisma.hrSalaryStructure.findFirst({
+  // 1. Newest structure that takes effect on or before the month end.
+  const historic = await prisma.hrSalaryStructure.findFirst({
     where: { employeeId, effectiveFrom: { lte: monthEnd } },
     orderBy: { effectiveFrom: "desc" },
+  });
+  if (historic) return historic;
+  // 2. Fallback for back-running payroll: use the earliest structure
+  //    on file even if its effectiveFrom is later than the run month.
+  //    This lets HR run March/April payroll after entering current
+  //    structures, without first having to backdate every row.
+  return prisma.hrSalaryStructure.findFirst({
+    where: { employeeId },
+    orderBy: { effectiveFrom: "asc" },
   });
 }
 
