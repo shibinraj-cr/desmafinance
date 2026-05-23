@@ -988,12 +988,20 @@ model HrAttendanceDay {
   employeeId   String
   employee     Employee @relation(fields: [employeeId], references: [id], onDelete: Cascade)
   date         DateTime @db.Date
+  shiftCode    String?  // "G", "X", "C" etc from biometric report
   inTime       String?
   outTime      String?
+  /// Minutes worked excluding OT (i.e. Work+OT - OT in the source file).
   workMinutes  Int?
   breakMinutes Int?
   otMinutes    Int?
+  lateMinutes  Int?
+  earlyOutMinutes Int?
+  /// Normalised status: P | A | WO | HL | LV | HD. HD is derived when
+  /// status=P but workMinutes is < ~4h (per the half-day rule).
   status       String
+  /// Free-text remark from the biometric report (e.g. "LT-EO", "MIS-LT-OT").
+  remark       String?
   rawName      String?
 
   @@unique([employeeId, date])

@@ -1,49 +1,60 @@
 import * as XLSX from "xlsx";
 
 /**
- * Biometric attendance export parser. Reference file is the "essl"-style
- * monthly report. The sheet is laid out in repeating ~10-row blocks, one
- * per employee:
+ * Biometric attendance "Weekly Periodic Report" / date-wise report
+ * parser. Reference file: `periodicdatewise23052026102316.xls`.
  *
- *   header block:  Empcode | … | <code> | … | Name | <name> | Present | N | WO | N | HL | N | LV | N | Absent | N
- *   day-num row:   1 2 3 … 30
- *   weekday row:   Wed Thu Fri …
- *   IN / OUT / WORK / Break / OT / Status rows
+ * Sheet layout (one large sheet, repeating per employee):
  *
- * The parser scans for an "Empcode" cell to anchor each block, then walks
- * downward for the known row labels until it hits the next block.
+ *   R1   Weekly Periodic Report   ...   01/03/2026 To 30/04/2026
+ *   R2   DESMA International Pvt Ltd
+ *   R3   Dept. Name | · | Default
+ *   R4   Empcode | 0001 | · | Name | Vishnu Raj C R | · | · | Total Work+OT | … | Total OT | …
+ *   R5   Date | Shift | INTime | Late In | Erl Out | OUTTime | Work+OT | Over Time | Status | Remark
+ *   R6+  01/03/2026 | X | --:-- | 00:00 | 00:00 | --:-- | 00:00 | 00:00 | WO | --
+ *   …    (one row per date for the employee, then next Empcode block)
+ *
+ * We walk the sheet, anchor on every Empcode row, then consume the
+ * subsequent data rows (which start with a DD/MM/YYYY date) until the
+ * next Empcode anchor (or EOF). Each consumed row produces one
+ * ParsedDay.
+ *
+ * Status is normalised + a half-day rule applied:
+ *   if status == "P" and (work + ot) < 240 minutes (4h) → "HD".
+ * This compensates for the source format only emitting P/A/WO and lets
+ * the salary engine treat short days as half-days without HR having to
+ * mark them manually.
  */
 
-export type ParsedRow = {
+export type ParsedDay = {
   empCode: string;
   rawName: string;
-  daysCovered: number;
-  summary: { present?: number; wo?: number; hl?: number; lv?: number; absent?: number };
-  days: ParsedDay[];
-};
-
-export type ParsedDay = {
-  day: number;
-  status: string;
+  date: Date;
+  shiftCode: string | null;
   inTime: string | null;
   outTime: string | null;
-  workMinutes: number | null;
-  breakMinutes: number | null;
-  otMinutes: number | null;
+  workMinutes: number;
+  otMinutes: number;
+  lateMinutes: number;
+  earlyOutMinutes: number;
+  status: string;
+  remark: string | null;
 };
 
 export type ParseResult = {
-  monthKey: string | null;
-  rows: ParsedRow[];
+  /** ISO date range covered. */
+  rangeStart: Date | null;
+  rangeEnd: Date | null;
+  rows: ParsedDay[];
   warnings: string[];
 };
 
-function toMinutes(hhmm: string | undefined | null): number | null {
-  if (!hhmm) return null;
+function toMinutes(hhmm: string | undefined | null): number {
+  if (!hhmm) return 0;
   const s = String(hhmm).trim();
   if (!s || s === "--:--" || s === "0" || s === "0:00" || s === "00:00") return 0;
   const m = s.match(/^(\d+):(\d{2})$/);
-  if (!m) return null;
+  if (!m) return 0;
   return +m[1] * 60 + +m[2];
 }
 
@@ -51,30 +62,25 @@ function cleanTime(v: unknown): string | null {
   const s = String(v ?? "").trim();
   if (!s || s === "--:--") return null;
   if (/^\d{1,2}:\d{2}/.test(s)) return s.slice(0, 5);
-  const n = Number(s);
-  if (!Number.isNaN(n) && n >= 0 && n < 1) {
-    const total = Math.round(n * 24 * 60);
-    return `${String(Math.floor(total / 60)).padStart(2, "0")}:${String(total % 60).padStart(2, "0")}`;
-  }
   return null;
 }
 
-function findKeyCell(row: unknown[]): { label: string; idx: number } | null {
-  for (let i = 0; i < row.length; i++) {
-    const cell = String(row[i] ?? "").trim().toLowerCase();
-    if (!cell) continue;
-    if (["in", "out", "work", "break", "ot", "status"].includes(cell)) {
-      return { label: cell, idx: i };
-    }
-  }
-  return null;
+function parseDdMmYyyy(s: string): Date | null {
+  const m = s.match(/^(\d{2})\/(\d{2})\/(\d{4})$/);
+  if (!m) return null;
+  const dd = +m[1];
+  const mm = +m[2] - 1;
+  const yy = +m[3];
+  const d = new Date(Date.UTC(yy, mm, dd));
+  if (isNaN(d.getTime())) return null;
+  return d;
 }
 
-function findEmpHeader(row: unknown[]): { empCode: string; name: string; summary: ParsedRow["summary"] } | null {
+function findEmpHeader(row: unknown[]): { empCode: string; name: string } | null {
+  // Look for "Empcode" cell, value in next non-empty, then "Name" cell, value after.
   let codeIdx = -1;
   for (let i = 0; i < row.length; i++) {
-    const cell = String(row[i] ?? "").trim().toLowerCase();
-    if (cell === "empcode" || cell === "emp code" || cell === "employee code") {
+    if (String(row[i] ?? "").trim().toLowerCase() === "empcode") {
       codeIdx = i;
       break;
     }
@@ -90,7 +96,6 @@ function findEmpHeader(row: unknown[]): { empCode: string; name: string; summary
   }
   if (!empCode) return null;
 
-  let name = "";
   let nameLabelIdx = -1;
   for (let i = codeIdx + 1; i < row.length; i++) {
     if (String(row[i] ?? "").trim().toLowerCase() === "name") {
@@ -98,6 +103,7 @@ function findEmpHeader(row: unknown[]): { empCode: string; name: string; summary
       break;
     }
   }
+  let name = "";
   if (nameLabelIdx >= 0) {
     for (let i = nameLabelIdx + 1; i < row.length; i++) {
       const v = String(row[i] ?? "").trim();
@@ -107,135 +113,90 @@ function findEmpHeader(row: unknown[]): { empCode: string; name: string; summary
       }
     }
   }
-
-  const summary: ParsedRow["summary"] = {};
-  const pickNumberAfter = (label: string): number | undefined => {
-    for (let i = 0; i < row.length; i++) {
-      if (String(row[i] ?? "").trim().toLowerCase() === label.toLowerCase()) {
-        for (let j = i + 1; j < row.length; j++) {
-          const v = String(row[j] ?? "").trim();
-          if (!v) continue;
-          const n = Number(v);
-          if (Number.isFinite(n)) return n;
-          break;
-        }
-      }
-    }
-    return undefined;
-  };
-  summary.present = pickNumberAfter("Present");
-  summary.wo = pickNumberAfter("WO");
-  summary.hl = pickNumberAfter("HL");
-  summary.lv = pickNumberAfter("LV");
-  summary.absent = pickNumberAfter("Absent");
-
-  return { empCode, name, summary };
+  return { empCode, name };
 }
 
-function detectDayRow(row: unknown[]): { dayCols: number[]; days: number[] } | null {
-  const dayCols: number[] = [];
-  const days: number[] = [];
-  for (let i = 0; i < row.length; i++) {
-    const v = String(row[i] ?? "").trim();
-    if (!v) continue;
-    const n = Number(v);
-    if (Number.isFinite(n) && n >= 1 && n <= 31) {
-      dayCols.push(i);
-      days.push(n);
-    }
+/** Normalised attendance status used downstream by the salary engine. */
+function normaliseStatus(raw: string, workMinutes: number, otMinutes: number): string {
+  const s = String(raw ?? "").trim().toUpperCase();
+  if (!s || s === "--") return "A";
+  if (s === "WO" || s === "W") return "WO";
+  if (s === "HL" || s === "HOL" || s === "H") return "HL";
+  if (s === "LV" || s === "L" || s === "CL" || s === "SL" || s === "PL") return "LV";
+  if (s === "A" || s === "AB") return "A";
+  if (s === "HD" || s === "H/D") return "HD";
+  if (s === "P" || s === "PR") {
+    // Heuristic: P with very short workday → half day.
+    if (workMinutes + otMinutes > 0 && workMinutes + otMinutes < 240) return "HD";
+    return "P";
   }
-  if (days.length < 15) return null;
-  let monotonic = true;
-  for (let i = 1; i < days.length; i++) {
-    if (days[i] <= days[i - 1]) {
-      monotonic = false;
-      break;
-    }
-  }
-  if (!monotonic) return null;
-  return { dayCols, days };
+  return s;
 }
 
 export function parseAttendanceWorkbook(buffer: Buffer | ArrayBuffer): ParseResult {
   const wb = XLSX.read(buffer, { cellDates: true });
-  const sheet = wb.SheetNames[0];
-  const ws = wb.Sheets[sheet];
+  const ws = wb.Sheets[wb.SheetNames[0]];
   const rows: unknown[][] = XLSX.utils.sheet_to_json(ws, { header: 1, raw: false, defval: "" });
 
-  const out: ParsedRow[] = [];
+  const out: ParsedDay[] = [];
   const warnings: string[] = [];
+  let rangeStart: Date | null = null;
+  let rangeEnd: Date | null = null;
 
-  let i = 0;
-  const monthKey: string | null = null;
-  while (i < rows.length) {
-    const row = rows[i];
-    const emp = findEmpHeader(row);
-    if (!emp) {
-      i++;
+  let current: { empCode: string; name: string } | null = null;
+
+  for (let i = 0; i < rows.length; i++) {
+    const r = rows[i];
+    const hdr = findEmpHeader(r);
+    if (hdr) {
+      current = hdr;
       continue;
     }
-    let dayMeta: ReturnType<typeof detectDayRow> | null = null;
-    let dayRowIdx = -1;
-    for (let j = i + 1; j < Math.min(i + 6, rows.length); j++) {
-      const d = detectDayRow(rows[j]);
-      if (d) {
-        dayMeta = d;
-        dayRowIdx = j;
-        break;
-      }
-    }
-    if (!dayMeta || dayRowIdx < 0) {
-      warnings.push(`No day-number row found for empCode=${emp.empCode}`);
-      i++;
+    // Skip column-header row: "Date | Shift | INTime | ..."
+    if (String(r[0] ?? "").trim().toLowerCase() === "date") continue;
+    // Day row: first cell is DD/MM/YYYY
+    const c0 = String(r[0] ?? "").trim();
+    const date = parseDdMmYyyy(c0);
+    if (!date) continue;
+    if (!current) {
+      warnings.push(`Row ${i + 1}: date ${c0} found before any Empcode block — skipped`);
       continue;
     }
-    const labelRows: Record<string, unknown[]> = {};
-    let scanTo = rows.length;
-    for (let j = dayRowIdx + 1; j < rows.length; j++) {
-      if (findEmpHeader(rows[j])) {
-        scanTo = j;
-        break;
-      }
-    }
-    for (let j = dayRowIdx + 1; j < scanTo; j++) {
-      const k = findKeyCell(rows[j]);
-      if (k) labelRows[k.label] = rows[j];
-    }
 
-    const statusRow = labelRows.status;
-    const inRow = labelRows.in;
-    const outRow = labelRows.out;
-    const workRow = labelRows.work;
-    const breakRow = labelRows.break;
-    const otRow = labelRows.ot;
-
-    const days: ParsedDay[] = [];
-    for (let d = 0; d < dayMeta.dayCols.length; d++) {
-      const col = dayMeta.dayCols[d];
-      const dayN = dayMeta.days[d];
-      const statusRaw = String(statusRow?.[col] ?? "").trim().toUpperCase();
-      if (!statusRaw) continue;
-      days.push({
-        day: dayN,
-        status: statusRaw,
-        inTime: cleanTime(inRow?.[col]),
-        outTime: cleanTime(outRow?.[col]),
-        workMinutes: toMinutes(String(workRow?.[col] ?? "")),
-        breakMinutes: toMinutes(String(breakRow?.[col] ?? "")),
-        otMinutes: toMinutes(String(otRow?.[col] ?? "")),
-      });
-    }
+    const shiftCode = (() => {
+      const v = String(r[1] ?? "").trim();
+      return v && v !== "--" ? v : null;
+    })();
+    const inTime = cleanTime(r[2]);
+    const lateMinutes = toMinutes(String(r[3] ?? ""));
+    const earlyOutMinutes = toMinutes(String(r[4] ?? ""));
+    const outTime = cleanTime(r[5]);
+    const workPlusOt = toMinutes(String(r[6] ?? ""));
+    const otMinutes = toMinutes(String(r[7] ?? ""));
+    const workMinutes = Math.max(0, workPlusOt - otMinutes);
+    const statusRaw = String(r[8] ?? "").trim();
+    const remarkRaw = String(r[9] ?? "").trim();
+    const remark = !remarkRaw || remarkRaw === "--" ? null : remarkRaw;
+    const status = normaliseStatus(statusRaw, workMinutes, otMinutes);
 
     out.push({
-      empCode: emp.empCode,
-      rawName: emp.name,
-      daysCovered: dayMeta.days.length,
-      summary: emp.summary,
-      days,
+      empCode: current.empCode,
+      rawName: current.name,
+      date,
+      shiftCode,
+      inTime,
+      outTime,
+      workMinutes,
+      otMinutes,
+      lateMinutes,
+      earlyOutMinutes,
+      status,
+      remark,
     });
 
-    i = scanTo;
+    if (!rangeStart || date < rangeStart) rangeStart = date;
+    if (!rangeEnd || date > rangeEnd) rangeEnd = date;
   }
 
-  return { monthKey, rows: out, warnings };
+  return { rangeStart, rangeEnd, rows: out, warnings };
 }
