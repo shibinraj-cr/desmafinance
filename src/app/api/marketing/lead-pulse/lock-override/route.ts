@@ -34,6 +34,15 @@ export async function POST(req: NextRequest) {
   }
   const dateValue = toPrismaDate(parsed.data.date);
 
+  // Three writes:
+  //   1. Clear the `locked` flag on any locked entry/meta for this
+  //      (user, date) — addresses the explicit-locked path.
+  //   2. Upsert a LeadPulseUnlock row — addresses the backdate-window
+  //      block, which is the real reason "unlock didn't work" for
+  //      Shency-style cases where the entry was outside the 3-day
+  //      window. The save endpoint reads this row to bypass the
+  //      backdate gate.
+  //   3. Audit log entry for provenance.
   const [entries, meta] = await Promise.all([
     prisma.leadPulseDailyEntry.updateMany({
       where: { userId: parsed.data.userId, entryDate: dateValue, locked: true },
@@ -44,6 +53,18 @@ export async function POST(req: NextRequest) {
       data: { locked: false },
     }),
   ]);
+
+  await prisma.leadPulseUnlock.upsert({
+    where: {
+      userId_entryDate: { userId: parsed.data.userId, entryDate: dateValue },
+    },
+    create: {
+      userId: parsed.data.userId,
+      entryDate: dateValue,
+      unlockedById: actorId,
+    },
+    update: { unlockedAt: new Date(), unlockedById: actorId },
+  });
 
   await prisma.leadPulseAuditLog.create({
     data: {
@@ -58,5 +79,9 @@ export async function POST(req: NextRequest) {
     },
   });
 
-  return NextResponse.json({ ok: true, entriesUnlocked: entries.count });
+  return NextResponse.json({
+    ok: true,
+    entriesUnlocked: entries.count,
+    backdateBypassGranted: true,
+  });
 }

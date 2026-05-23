@@ -48,6 +48,9 @@ model User {
   transactionDrafts   TransactionDraft[]
   // L2 BDE pipeline (in-flight expected closes)
   leadPulsePipeline   LeadPulsePipeline[]   @relation("LeadPulsePipeline")
+  // Supervisor-granted unlocks for the daily-entry backdate window
+  leadPulseUnlocks       LeadPulseUnlock[] @relation("LeadPulseUnlockTarget")
+  leadPulseUnlocksGiven  LeadPulseUnlock[] @relation("LeadPulseUnlockActor")
   // Monthly AI-style insight + Q&A loop on the BDE performance page
   leadPulseBdeInsights LeadPulseBdeInsight[] @relation("BdeInsights")
   collectionPlansCreated CollectionPlan[]   @relation("CollectionPlanCreatedBy")
@@ -417,6 +420,26 @@ model LeadPulseDailyMeta {
   @@index([entryDate])
   @@index([status])
   @@index([reviewedById])
+}
+
+/// One row per (BDE, date) when a supervisor grants edit access to an
+/// entry that would otherwise be blocked by the 3-day backdate window.
+/// Lets the BDE save edits for older days; cleared automatically when
+/// the BDE re-submits a row for that date. Independent from the
+/// per-entry `locked` flag, which gates edits to *already-submitted*
+/// entries — both gates need to pass.
+model LeadPulseUnlock {
+  id           String   @id @default(cuid())
+  userId       String
+  user         User     @relation(name: "LeadPulseUnlockTarget", fields: [userId], references: [id], onDelete: Cascade)
+  entryDate    DateTime @db.Date
+  unlockedAt   DateTime @default(now())
+  unlockedById String?
+  unlockedBy   User?    @relation(name: "LeadPulseUnlockActor", fields: [unlockedById], references: [id], onDelete: SetNull)
+
+  @@unique([userId, entryDate])
+  @@index([userId])
+  @@index([entryDate])
 }
 
 model LeadPulseAuditLog {
