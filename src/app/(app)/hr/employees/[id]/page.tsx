@@ -87,8 +87,11 @@ export default async function EmployeeDetailPage({ params }: { params: { id: str
           structures={employee.salaryStructures.map((s) => ({
             id: s.id,
             effectiveFrom: s.effectiveFrom.toISOString().slice(0, 10),
-            monthlySalary: Number(s.monthlySalary),
-            basicPct: Number(s.basicPct),
+            basic: Number(s.basic),
+            hraPct: Number(s.hraPct),
+            conveyancePct: Number(s.conveyancePct),
+            medicalPct: Number(s.medicalPct),
+            specialPct: Number(s.specialPct),
             esiApplicable: s.esiApplicable,
             pfApplicable: s.pfApplicable,
             professionalTax: Number(s.professionalTax),

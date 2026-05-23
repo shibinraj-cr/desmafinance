@@ -875,19 +875,30 @@ model Employee {
   @@index([department])
 }
 
+/// Per-employee salary structure. Basic is the primary input; HRA /
+/// Conveyance / Medical / Special are stored as % of Basic and default
+/// to the company-wide template (50 / 25 / 35 / 40). Gross is therefore
+/// always derivable as Basic × (1 + sum(pcts)/100) — by default 2.5×.
+/// PT defaults to the Kerala slab for the gross at insert-time; HR can
+/// override.
 model HrSalaryStructure {
-  id            String   @id @default(cuid())
-  employeeId    String
-  employee      Employee @relation(fields: [employeeId], references: [id], onDelete: Cascade)
-  effectiveFrom DateTime @db.Date
-  monthlySalary Decimal  @db.Decimal(12, 2)
-  basicPct      Decimal  @db.Decimal(5, 2) @default(50)
-  esiApplicable Boolean  @default(true)
-  pfApplicable  Boolean  @default(true)
-  professionalTax Decimal @db.Decimal(8, 2) @default(125)
-  notes         String?
-  createdAt     DateTime @default(now())
-  updatedAt     DateTime @updatedAt
+  id              String   @id @default(cuid())
+  employeeId      String
+  employee        Employee @relation(fields: [employeeId], references: [id], onDelete: Cascade)
+  effectiveFrom   DateTime @db.Date
+  /// Basic salary (₹ / month) — primary input. Everything else derives.
+  basic           Decimal  @db.Decimal(12, 2)
+  hraPct          Decimal  @db.Decimal(5, 2) @default(50)
+  conveyancePct   Decimal  @db.Decimal(5, 2) @default(25)
+  medicalPct      Decimal  @db.Decimal(5, 2) @default(35)
+  specialPct      Decimal  @db.Decimal(5, 2) @default(40)
+  esiApplicable   Boolean  @default(true)
+  pfApplicable    Boolean  @default(true)
+  /// Override Kerala PT slab if needed. Default 125 (₹125/mo slab).
+  professionalTax Decimal  @db.Decimal(8, 2) @default(125)
+  notes           String?
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
 
   @@unique([employeeId, effectiveFrom])
   @@index([employeeId])

@@ -3,14 +3,18 @@ import { z } from "zod";
 import { prisma } from "@/lib/prisma";
 import { getCurrentUserAndPermissions } from "@/lib/permissions";
 import { canApproveHr, isHrUser } from "@/lib/hr-rbac";
+import { DEFAULT_ALLOWANCE_PCTS, suggestProfessionalTax, deriveBreakdown } from "@/lib/hr-salary-engine";
 
 const Schema = z.object({
   effectiveFrom: z.string().min(7),
-  monthlySalary: z.number().nonnegative(),
-  basicPct: z.number().min(0).max(100).default(50),
-  esiApplicable: z.boolean().default(true),
+  basic: z.number().positive(),
+  hraPct: z.number().min(0).max(200).default(DEFAULT_ALLOWANCE_PCTS.hra),
+  conveyancePct: z.number().min(0).max(200).default(DEFAULT_ALLOWANCE_PCTS.conveyance),
+  medicalPct: z.number().min(0).max(200).default(DEFAULT_ALLOWANCE_PCTS.medical),
+  specialPct: z.number().min(0).max(200).default(DEFAULT_ALLOWANCE_PCTS.special),
+  esiApplicable: z.boolean().optional(),
   pfApplicable: z.boolean().default(true),
-  professionalTax: z.number().nonnegative().default(125),
+  professionalTax: z.number().nonnegative().optional(),
   notes: z.string().nullable().optional(),
 });
 
@@ -38,24 +42,36 @@ export async function POST(req: Request, { params }: { params: { id: string } })
   }
   const d = parsed.data;
   const effectiveFrom = toDate(d.effectiveFrom);
+
+  // Auto-derive ESI applicability and PT if not provided.
+  const breakdown = deriveBreakdown(d.basic, d);
+  const esiApplicable = d.esiApplicable ?? breakdown.gross <= 21000;
+  const professionalTax = d.professionalTax ?? suggestProfessionalTax(breakdown.gross);
+
   const row = await prisma.hrSalaryStructure.upsert({
     where: { employeeId_effectiveFrom: { employeeId: params.id, effectiveFrom } },
     update: {
-      monthlySalary: d.monthlySalary,
-      basicPct: d.basicPct,
-      esiApplicable: d.esiApplicable,
+      basic: d.basic,
+      hraPct: d.hraPct,
+      conveyancePct: d.conveyancePct,
+      medicalPct: d.medicalPct,
+      specialPct: d.specialPct,
+      esiApplicable,
       pfApplicable: d.pfApplicable,
-      professionalTax: d.professionalTax,
+      professionalTax,
       notes: d.notes ?? null,
     },
     create: {
       employeeId: params.id,
       effectiveFrom,
-      monthlySalary: d.monthlySalary,
-      basicPct: d.basicPct,
-      esiApplicable: d.esiApplicable,
+      basic: d.basic,
+      hraPct: d.hraPct,
+      conveyancePct: d.conveyancePct,
+      medicalPct: d.medicalPct,
+      specialPct: d.specialPct,
+      esiApplicable,
       pfApplicable: d.pfApplicable,
-      professionalTax: d.professionalTax,
+      professionalTax,
       notes: d.notes ?? null,
     },
   });
