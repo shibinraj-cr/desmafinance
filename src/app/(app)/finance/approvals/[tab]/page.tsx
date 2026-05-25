@@ -56,6 +56,10 @@ export default async function ApprovalsPage({
     to?: string;
     /** Party id filter. */
     party?: string;
+    /** Category name filter (matches the proposed/targetTx `category` string). */
+    category?: string;
+    /** Payment mode filter (matches the proposed/targetTx `paymentMode` string). */
+    payment?: string;
   };
 }) {
   const { perms, userId } = await getCurrentUserAndPermissions();
@@ -72,6 +76,8 @@ export default async function ApprovalsPage({
   const fromDate = searchParams.from && DATE_RX.test(searchParams.from) ? searchParams.from : "";
   const toDate = searchParams.to && DATE_RX.test(searchParams.to) ? searchParams.to : "";
   const partyFilter = searchParams.party && searchParams.party.length > 0 ? searchParams.party : "";
+  const categoryFilter = searchParams.category && searchParams.category.length > 0 ? searchParams.category : "";
+  const paymentFilter = searchParams.payment && searchParams.payment.length > 0 ? searchParams.payment : "";
 
   // Visibility: reviewers (manager/admin) see everyone's items, executives
   // see only their own submissions. The status filter narrows to the tab.
@@ -164,13 +170,26 @@ export default async function ApprovalsPage({
     if (p.kind === "delete") return p.targetTx?.partyId ?? null;
     return proposed?.partyId ?? p.targetTx?.partyId ?? null;
   }
+  /** Category name from either proposed or targetTx. */
+  function effectiveCategory(p: (typeof items)[number]): string {
+    const proposed = p.proposed as unknown as ProposedTx | null;
+    if (p.kind === "delete") return p.targetTx?.category ?? "";
+    return proposed?.category ?? p.targetTx?.category ?? "";
+  }
+  /** Payment mode from either proposed or targetTx. */
+  function effectivePaymentMode(p: (typeof items)[number]): string {
+    const proposed = p.proposed as unknown as ProposedTx | null;
+    if (p.kind === "delete") return p.targetTx?.paymentMode ?? "";
+    return proposed?.paymentMode ?? p.targetTx?.paymentMode ?? "";
+  }
   const typeCounts = {
     all: items.length,
     Revenue: items.filter((p) => effectiveType(p) === "Revenue").length,
     Expense: items.filter((p) => effectiveType(p) === "Expense").length,
   };
   // Type filter applies first (drives the chip counts), then the
-  // From / To / Party filters narrow the visible rows.
+  // From / To / Party / Category / Payment filters narrow the visible
+  // rows.
   const filteredItems = items
     .filter((p) => (typeFilter === "all" ? true : effectiveType(p) === typeFilter))
     .filter((p) => {
@@ -181,7 +200,22 @@ export default async function ApprovalsPage({
       if (toDate && d > toDate) return false;
       return true;
     })
-    .filter((p) => (partyFilter ? effectivePartyId(p) === partyFilter : true));
+    .filter((p) => (partyFilter ? effectivePartyId(p) === partyFilter : true))
+    .filter((p) => (categoryFilter ? effectiveCategory(p) === categoryFilter : true))
+    .filter((p) => (paymentFilter ? effectivePaymentMode(p) === paymentFilter : true));
+
+  // Dropdown options for the Category / Payment selects — distinct
+  // values seen in the current tab's items, narrowed by the active
+  // type filter so reviewers only see relevant choices.
+  const typeScoped = items.filter(
+    (p) => typeFilter === "all" || effectiveType(p) === typeFilter,
+  );
+  const categoryOptions = Array.from(
+    new Set(typeScoped.map((p) => effectiveCategory(p)).filter((s) => s.length > 0)),
+  ).sort((a, b) => a.localeCompare(b));
+  const paymentOptions = Array.from(
+    new Set(typeScoped.map((p) => effectivePaymentMode(p)).filter((s) => s.length > 0)),
+  ).sort((a, b) => a.localeCompare(b));
 
   /** Effective amount per pending row — `proposed.amount` for
    *  create/update, `targetTx.amount` for delete. */
@@ -205,7 +239,13 @@ export default async function ApprovalsPage({
   }
   const filteredCount = filteredItems.length;
   const filteredNet = filteredRevenue - filteredExpense;
-  const hasActiveFilters = !!fromDate || !!toDate || !!partyFilter || typeFilter !== "all";
+  const hasActiveFilters =
+    !!fromDate ||
+    !!toDate ||
+    !!partyFilter ||
+    !!categoryFilter ||
+    !!paymentFilter ||
+    typeFilter !== "all";
 
   const isReviewerPending = tab === "pending" && reviewer;
   const pendingRows: PendingRow[] = isReviewerPending
@@ -272,6 +312,8 @@ export default async function ApprovalsPage({
             from: fromDate,
             to: toDate,
             party: partyFilter,
+            category: categoryFilter,
+            payment: paymentFilter,
           }}
         />
 
@@ -282,6 +324,8 @@ export default async function ApprovalsPage({
           fromDate={fromDate}
           toDate={toDate}
           partyFilter={partyFilter}
+          categoryFilter={categoryFilter}
+          paymentFilter={paymentFilter}
         />
 
         <DateAndPartyFilter
@@ -290,7 +334,11 @@ export default async function ApprovalsPage({
           fromDate={fromDate}
           toDate={toDate}
           partyFilter={partyFilter}
+          categoryFilter={categoryFilter}
+          paymentFilter={paymentFilter}
           parties={parties}
+          categoryOptions={categoryOptions}
+          paymentOptions={paymentOptions}
         />
 
         <FilteredTotals
@@ -504,18 +552,38 @@ function DateAndPartyFilter({
   fromDate,
   toDate,
   partyFilter,
+  categoryFilter,
+  paymentFilter,
   parties,
+  categoryOptions,
+  paymentOptions,
 }: {
   tab: TabKey;
   typeFilter: TypeFilter;
   fromDate: string;
   toDate: string;
   partyFilter: string;
+  categoryFilter: string;
+  paymentFilter: string;
   parties: Array<{ id: string; name: string; group: string; isActive: boolean }>;
+  categoryOptions: string[];
+  paymentOptions: string[];
 }) {
-  const hasAnyFilter = !!fromDate || !!toDate || !!partyFilter;
+  const hasAnyFilter =
+    !!fromDate || !!toDate || !!partyFilter || !!categoryFilter || !!paymentFilter;
   const clearHref =
     typeFilter === "all" ? `/finance/approvals/${tab}` : `/finance/approvals/${tab}?type=${typeFilter}`;
+  // If a selected category/payment isn't in the (type-scoped) options
+  // list, append it so the user can still see + clear their stale
+  // pick — otherwise it would be silently filtering invisibly.
+  const categoryChoices =
+    categoryFilter && !categoryOptions.includes(categoryFilter)
+      ? [...categoryOptions, categoryFilter]
+      : categoryOptions;
+  const paymentChoices =
+    paymentFilter && !paymentOptions.includes(paymentFilter)
+      ? [...paymentOptions, paymentFilter]
+      : paymentOptions;
   return (
     <form
       action={`/finance/approvals/${tab}`}
@@ -556,6 +624,36 @@ function DateAndPartyFilter({
           ))}
         </select>
       </label>
+      <label className="flex flex-col gap-[2px] text-caption text-on-surface-variant">
+        <span className="uppercase tracking-wider font-semibold">Category</span>
+        <select
+          name="category"
+          defaultValue={categoryFilter}
+          className="h-9 px-sm rounded-md border border-outline-variant bg-surface-container-lowest text-on-surface text-body-md min-w-[180px]"
+        >
+          <option value="">All categories</option>
+          {categoryChoices.map((c) => (
+            <option key={c} value={c}>
+              {c}
+            </option>
+          ))}
+        </select>
+      </label>
+      <label className="flex flex-col gap-[2px] text-caption text-on-surface-variant">
+        <span className="uppercase tracking-wider font-semibold">Payment</span>
+        <select
+          name="payment"
+          defaultValue={paymentFilter}
+          className="h-9 px-sm rounded-md border border-outline-variant bg-surface-container-lowest text-on-surface text-body-md min-w-[160px]"
+        >
+          <option value="">All modes</option>
+          {paymentChoices.map((m) => (
+            <option key={m} value={m}>
+              {m}
+            </option>
+          ))}
+        </select>
+      </label>
       <div className="flex items-center gap-xs ml-auto">
         <button
           type="submit"
@@ -584,6 +682,8 @@ function TypeTabs({
   fromDate,
   toDate,
   partyFilter,
+  categoryFilter,
+  paymentFilter,
 }: {
   tab: TabKey;
   active: TypeFilter;
@@ -591,6 +691,8 @@ function TypeTabs({
   fromDate: string;
   toDate: string;
   partyFilter: string;
+  categoryFilter: string;
+  paymentFilter: string;
 }) {
   const items: Array<{ key: TypeFilter; label: string; count: number }> = [
     { key: "all", label: "All", count: counts.all },
@@ -603,6 +705,14 @@ function TypeTabs({
     if (fromDate) qs.set("from", fromDate);
     if (toDate) qs.set("to", toDate);
     if (partyFilter) qs.set("party", partyFilter);
+    // Type changes can invalidate category/payment options (e.g. a
+    // Revenue-only category selected, then Expense chosen) so we drop
+    // those filters when the user switches type. Keep them when the
+    // chosen type matches the current one (no-op click).
+    if (key === active) {
+      if (categoryFilter) qs.set("category", categoryFilter);
+      if (paymentFilter) qs.set("payment", paymentFilter);
+    }
     const q = qs.toString();
     return q ? `/finance/approvals/${tab}?${q}` : `/finance/approvals/${tab}`;
   }
