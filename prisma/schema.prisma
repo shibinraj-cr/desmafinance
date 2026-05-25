@@ -65,6 +65,7 @@ model User {
   hrTrainingsCreated     HrTraining[]           @relation("HrTrainingCreator")
   hrNotificationsCreated HrNotification[]       @relation("HrNotificationCreator")
   hrAuditLogs            HrAuditLog[]           @relation("HrAuditActor")
+  hrLeaveDecisions       HrAttendanceDay[]      @relation("HrLeaveDecider")
 
   @@index([roleId])
 }
@@ -511,11 +512,18 @@ model LeadPulseTarget {
 
 // Marketing holiday calendar. Sundays are implicit and never stored.
 // One row per date, supervisor-editable.
+/// Shared holiday calendar — used by both the Marketing holiday-calendar
+/// page (skips entries when computing working days for Lead Pulse) and
+/// the HR side (treated as paid holiday in attendance + salary). Both
+/// modules read and write this table, gated by their own role checks.
 model Holiday {
   id          String   @id @default(cuid())
   date        DateTime @db.Date
   label       String
   notes       String?
+  /// Whether the holiday is paid (default true). Currently every entry
+  /// is paid; the flag exists for future "unpaid optional holiday" use.
+  paid        Boolean  @default(true)
   createdById String?
   createdBy   User?    @relation(name: "HolidaysCreated", fields: [createdById], references: [id], onDelete: SetNull)
   updatedById String?
@@ -954,17 +962,8 @@ model HrLeaveRequest {
   @@index([status])
 }
 
-model HrHoliday {
-  id        String   @id @default(cuid())
-  date      DateTime @db.Date
-  label     String
-  paid      Boolean  @default(true)
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
-
-  @@unique([date])
-  @@index([date])
-}
+// (HrHoliday was unified into the shared `Holiday` model — both Marketing
+//  and HR now read/write the same table.)
 
 model HrAttendanceUpload {
   id          String   @id @default(cuid())
@@ -999,10 +998,22 @@ model HrAttendanceDay {
   earlyOutMinutes Int?
   /// Normalised status: P | A | WO | HL | LV | HD. HD is derived when
   /// status=P but workMinutes is < ~4h (per the half-day rule).
+  /// HR can later override A → LV (paid CL) or LV → A (LOP) from the
+  /// /hr/leave-review page; the original biometric value is preserved
+  /// in `rawStatus` for audit.
   status       String
   /// Free-text remark from the biometric report (e.g. "LT-EO", "MIS-LT-OT").
   remark       String?
   rawName      String?
+  /// Original status from the biometric upload, before any HR override.
+  /// Null on rows imported before this column existed (treat as same as
+  /// `status` in that case).
+  rawStatus    String?
+  /// HR's classification note when overriding the leave decision.
+  decisionNote String?
+  decidedById  String?
+  decidedBy    User?    @relation("HrLeaveDecider", fields: [decidedById], references: [id], onDelete: SetNull)
+  decidedAt    DateTime?
 
   @@unique([employeeId, date])
   @@index([date])

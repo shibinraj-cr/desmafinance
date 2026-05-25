@@ -124,6 +124,7 @@ export async function POST(req: Request) {
       lateMinutes: number;
       earlyOutMinutes: number;
       status: string;
+      rawStatus: string;
       remark: string | null;
       rawName: string;
     }[] = [];
@@ -153,6 +154,7 @@ export async function POST(req: Request) {
         lateMinutes: r.lateMinutes,
         earlyOutMinutes: r.earlyOutMinutes,
         status: r.status,
+        rawStatus: r.status,
         remark: r.remark,
         rawName: r.rawName,
       });
