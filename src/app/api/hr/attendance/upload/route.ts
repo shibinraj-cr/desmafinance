@@ -3,6 +3,7 @@ import { prisma } from "@/lib/prisma";
 import { getCurrentUserAndPermissions } from "@/lib/permissions";
 import { canApproveHr } from "@/lib/hr-rbac";
 import { parseAttendanceWorkbook, type ParsedDay } from "@/lib/hr-attendance-parser";
+import { cycleMonthForDate, cycleWindowForMonth } from "@/lib/hr-data";
 
 /**
  * Upload a biometric attendance .xls / .xlsx (any format supported by
@@ -71,12 +72,10 @@ export async function POST(req: Request) {
     return best?.id ?? null;
   }
 
-  // Bucket rows by month.
+  // Bucket rows by salary cycle month (26th prev → 25th current).
   const byMonth = new Map<string, ParsedDay[]>();
   for (const r of parsed.rows) {
-    const y = r.date.getUTCFullYear();
-    const m = String(r.date.getUTCMonth() + 1).padStart(2, "0");
-    const key = `${y}-${m}`;
+    const key = cycleMonthForDate(r.date);
     if (!byMonth.has(key)) byMonth.set(key, []);
     byMonth.get(key)!.push(r);
   }
@@ -91,14 +90,9 @@ export async function POST(req: Request) {
   const allUnmatchedNames = new Set<string>();
 
   for (const [monthKey, rowsForMonth] of byMonth) {
-    const [yStr, mStr] = monthKey.split("-");
-    const year = +yStr;
-    const month = +mStr;
+    const { start, end } = cycleWindowForMonth(monthKey);
 
-    const start = new Date(Date.UTC(year, month - 1, 1));
-    const end = new Date(Date.UTC(year, month, 0, 23, 59, 59));
-
-    // Replace any prior attendance days for this month (idempotent re-import).
+    // Replace any prior attendance days for this cycle window (idempotent re-import).
     await prisma.hrAttendanceDay.deleteMany({
       where: { date: { gte: start, lte: end } },
     });

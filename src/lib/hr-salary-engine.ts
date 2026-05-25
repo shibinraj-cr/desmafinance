@@ -1,5 +1,5 @@
 import { prisma } from "./prisma";
-import { parseMonthKey, structureForMonth } from "./hr-data";
+import { cycleWindowForMonth, structureForMonth } from "./hr-data";
 
 /**
  * Salary calculation engine.
@@ -197,7 +197,8 @@ export async function computeSalaryRun(monthKey: string, userId: string | null):
   warnings: string[];
 }> {
   if (!/^\d{4}-\d{2}$/.test(monthKey)) throw new Error("invalid monthKey");
-  const { year, start, end } = parseMonthKey(monthKey);
+  // Salary cycle = 26th prev month → 25th current month.
+  const { year, start, end } = cycleWindowForMonth(monthKey);
   const workingDaysBase = 30;
 
   const run = await prisma.hrSalaryRun.upsert({

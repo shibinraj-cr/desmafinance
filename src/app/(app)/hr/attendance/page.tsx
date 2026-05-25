@@ -4,7 +4,7 @@ import { getCurrentUserAndPermissions } from "@/lib/permissions";
 import { isHrUser, canApproveHr } from "@/lib/hr-rbac";
 import { TopBar } from "@/components/TopBar";
 import { Section } from "@/components/Cards";
-import { monthKeyFromDate, parseMonthKey } from "@/lib/hr-data";
+import { cycleWindowForMonth, cycleDates, monthKeyFromDate, cycleMonthForDate } from "@/lib/hr-data";
 import { AttendanceClient } from "./client";
 
 export const dynamic = "force-dynamic";
@@ -30,10 +30,12 @@ export default async function HrAttendancePage({
   }
 
   const today = new Date();
-  const requested = searchParams?.month && /^\d{4}-\d{2}$/.test(searchParams.month)
-    ? searchParams.month
-    : monthKeyFromDate(today);
-  const { year, month, start, end } = parseMonthKey(requested);
+  const requested =
+    searchParams?.month && /^\d{4}-\d{2}$/.test(searchParams.month)
+      ? searchParams.month
+      : cycleMonthForDate(today);
+  const { start, end } = cycleWindowForMonth(requested);
+  const dates = cycleDates(requested);
 
   const [uploads, days, employees] = await Promise.all([
     prisma.hrAttendanceUpload.findMany({
@@ -54,12 +56,10 @@ export default async function HrAttendancePage({
     }),
   ]);
 
-  const daysInMonth = new Date(Date.UTC(year, month, 0)).getUTCDate();
-
   const grid: Record<
     string,
     Record<
-      number,
+      string,
       {
         status: string;
         in: string | null;
@@ -72,9 +72,9 @@ export default async function HrAttendancePage({
   > = {};
   const summary: Record<string, { P: number; HD: number; A: number; WO: number; HL: number; LV: number }> = {};
   for (const d of days) {
-    const day = d.date.getUTCDate();
+    const key = d.date.toISOString().slice(0, 10);
     grid[d.employeeId] ??= {};
-    grid[d.employeeId][day] = {
+    grid[d.employeeId][key] = {
       status: d.status,
       in: d.inTime,
       out: d.outTime,
@@ -83,17 +83,40 @@ export default async function HrAttendancePage({
       remark: d.remark,
     };
     summary[d.employeeId] ??= { P: 0, HD: 0, A: 0, WO: 0, HL: 0, LV: 0 };
-    const key = d.status as keyof (typeof summary)[string];
-    if (key in summary[d.employeeId]) summary[d.employeeId][key]++;
+    const k = d.status as keyof (typeof summary)[string];
+    if (k in summary[d.employeeId]) summary[d.employeeId][k]++;
   }
+
+  const dateCells = dates.map((d) => ({
+    iso: d.toISOString().slice(0, 10),
+    day: d.getUTCDate(),
+    month: d.getUTCMonth() + 1,
+    weekday: ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"][d.getUTCDay()],
+  }));
+
+  // Use timeZone: UTC so display matches the stored date (the end date
+  // is stored as 25 23:59:59 UTC; without UTC formatting, IST would
+  // show it as the 26th).
+  const cycleLabel = `${start.toLocaleDateString("en-IN", { day: "2-digit", month: "short", timeZone: "UTC" })} → ${end.toLocaleDateString("en-IN", { day: "2-digit", month: "short", year: "numeric", timeZone: "UTC" })}`;
+
+  // Compute prev / next cycle for navigation
+  const [yStr, mStr] = requested.split("-").map(Number);
+  const prevMonth = mStr === 1 ? `${yStr - 1}-12` : `${yStr}-${String(mStr - 1).padStart(2, "0")}`;
+  const nextMonth = mStr === 12 ? `${yStr + 1}-01` : `${yStr}-${String(mStr + 1).padStart(2, "0")}`;
 
   return (
     <>
-      <TopBar title="Attendance" subtitle={`${requested} · ${daysInMonth} days`} />
+      <TopBar
+        title="Attendance"
+        subtitle={`Cycle ${requested} · ${cycleLabel} · ${dates.length} days`}
+      />
       <div className="p-margin space-y-lg">
         <AttendanceClient
           monthKey={requested}
-          daysInMonth={daysInMonth}
+          prevMonth={prevMonth}
+          nextMonth={nextMonth}
+          cycleLabel={cycleLabel}
+          dateCells={dateCells}
           canUpload={canApproveHr(perms)}
           uploads={uploads.map((u) => ({
             id: u.id,
