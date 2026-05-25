@@ -4,18 +4,24 @@ import { useState, useTransition, useRef } from "react";
 import { useRouter } from "next/navigation";
 import { Section } from "@/components/Cards";
 
-type EmployeeLite = { id: string; empCode: string; name: string };
+type EmployeeLite = { id: string; empCode: string; name: string; lateEligible: boolean };
+type LateTag = "LCE" | "AL" | null;
 type GridCell = {
   status: string;
   in: string | null;
   out: string | null;
   work: number | null;
   ot: number | null;
+  late: number | null;
   remark: string | null;
+  lateTag: LateTag;
 };
 /// Keys are ISO date strings (YYYY-MM-DD)
 type Grid = Record<string, Record<string, GridCell>>;
-type Summary = Record<string, { P: number; HD: number; A: number; WO: number; HL: number; LV: number }>;
+type Summary = Record<
+  string,
+  { P: number; HD: number; A: number; WO: number; HL: number; LV: number; LCE: number; AL: number }
+>;
 
 type Upload = {
   id: string;
@@ -68,6 +74,8 @@ export function AttendanceClient({
   employees,
   grid,
   summary,
+  lceGraceDays,
+  lceGraceMinutes,
 }: {
   monthKey: string;
   prevMonth: string;
@@ -79,6 +87,8 @@ export function AttendanceClient({
   employees: EmployeeLite[];
   grid: Grid;
   summary: Summary;
+  lceGraceDays: number;
+  lceGraceMinutes: number;
 }) {
   const router = useRouter();
   const [pending, start] = useTransition();
@@ -301,12 +311,20 @@ export function AttendanceClient({
                             c.in && c.out ? `${c.in} → ${c.out}` : null,
                             c.work ? `work ${hhmm(c.work)}` : null,
                             c.ot ? `OT ${hhmm(c.ot)}` : null,
+                            c.late ? `late ${hhmm(c.late)}` : null,
+                            c.lateTag ? `tag ${c.lateTag}` : null,
                             c.remark ? `(${c.remark})` : null,
                           ]
                             .filter(Boolean)
                             .join(" · ")
                         : `${d.iso} — no record`;
                       const hasPunch = c && (c.in || c.out);
+                      const tagTone =
+                        c?.lateTag === "LCE"
+                          ? "bg-amber-200 text-amber-900"
+                          : c?.lateTag === "AL"
+                            ? "bg-red-200 text-red-900"
+                            : "";
                       return (
                         <td
                           key={d.iso}
@@ -337,6 +355,21 @@ export function AttendanceClient({
                                 <br />&nbsp;
                               </span>
                             )}
+                            {c?.lateTag && (
+                              <span
+                                className={
+                                  "text-[8px] font-extrabold text-center py-[1px] border-t border-current/10 " +
+                                  tagTone
+                                }
+                                title={
+                                  c.lateTag === "LCE"
+                                    ? `LCE — within 30-min grace (Late-Coming Eligibility)`
+                                    : `AL — Arrived Late beyond grace or quota`
+                                }
+                              >
+                                {c.lateTag}
+                              </span>
+                            )}
                           </div>
                         </td>
                       );
@@ -358,6 +391,29 @@ export function AttendanceClient({
                         {" · "}
                         Unpaid <span className="text-red-700 font-bold">{(s.A + s.HD * 0.5).toFixed(1)}</span>
                       </div>
+                      {/* Late-coming summary */}
+                      {(s.LCE > 0 || s.AL > 0 || e.lateEligible) && (
+                        <div
+                          className="text-on-surface-variant"
+                          title={
+                            e.lateEligible
+                              ? `Late-Coming Eligible: ${lceGraceMinutes}-min grace × ${lceGraceDays} days/cycle`
+                              : "Not eligible for LCE — every late day counts as AL"
+                          }
+                        >
+                          {e.lateEligible ? (
+                            <>
+                              LCE <span className="text-amber-700 font-bold">{s.LCE}/{lceGraceDays}</span>
+                              {" · "}
+                              AL <span className="text-red-700 font-bold">{s.AL}</span>
+                            </>
+                          ) : (
+                            <>
+                              AL <span className="text-red-700 font-bold">{s.AL}</span>
+                            </>
+                          )}
+                        </div>
+                      )}
                     </td>
                   </tr>
                 );
@@ -380,9 +436,13 @@ export function AttendanceClient({
           <span className="font-bold text-red-700">A</span> Absent (unpaid) ·{" "}
           <span className="font-bold text-on-surface-variant">WO</span> Week-off ·{" "}
           <span className="font-bold text-blue-700">HL</span> Holiday ·{" "}
-          <span className="font-bold text-purple-700">LV</span> Paid leave. The Summary column
-          shows day counts on top and the Paid / Unpaid totals below — Unpaid = A days + HD × 0.5,
-          Paid = LV.
+          <span className="font-bold text-purple-700">LV</span> Paid leave.
+          {" "}<span className="font-bold text-amber-700">LCE</span> Late-Coming Eligibility used
+          (≤30 min late, within 3 days/cycle).
+          {" "}<span className="font-bold text-red-700">AL</span> Arrived Late beyond grace or
+          quota.
+          The Summary column shows day counts on top, Paid / Unpaid totals next, and the
+          Late-Coming usage at the bottom for employees with that eligibility enabled.
         </p>
       </Section>
     </>

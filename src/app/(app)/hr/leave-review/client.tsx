@@ -27,7 +27,7 @@ type Group = {
   empCode: string;
   name: string;
   lateEligible: boolean;
-  late: { withinGrace: number; overGrace: number; daysCount: number };
+  late: { lceUsed: number; alCount: number };
   lateGraceMinutes: number;
   lateGraceDays: number;
   balance: { opening: number; accrued: number; used: number; balance: number } | null;
@@ -206,38 +206,32 @@ export function LeaveReviewClient({
 
       {groups.map((g) => {
         const visibleRows = g.rows.filter((r) => (filter === "all" ? true : !r.decidedBy));
-        const hasLateConcern = g.late.daysCount > 0;
+        const hasLateConcern = g.late.lceUsed > 0 || g.late.alCount > 0;
         // Render section if there's something HR should look at: visible
         // A/HD/LV rows OR late-coming activity for this employee.
         if (visibleRows.length === 0 && !hasLateConcern) return null;
-        // Late-coming concession status (cycle-scoped):
-        //   eligible employees get 30 min × 3 days/cycle.
-        const graceUsed = Math.min(g.late.withinGrace, g.lateGraceDays);
-        const graceLeft = Math.max(0, g.lateGraceDays - graceUsed);
-        const lateOverPolicy =
-          g.late.overGrace +
-          Math.max(0, g.late.withinGrace - g.lateGraceDays); // beyond 3 days
+        // LCE/AL chip — uses the shared helper's quota-aware counts.
         const lateChip = g.lateEligible ? (
           <span
             className={
               "text-caption px-xs py-[2px] rounded " +
-              (lateOverPolicy > 0
+              (g.late.alCount > 0
                 ? "bg-red-50 text-red-700 font-bold"
-                : graceUsed > 0
-                  ? "bg-yellow-50 text-yellow-800"
+                : g.late.lceUsed > 0
+                  ? "bg-amber-50 text-amber-800"
                   : "bg-green-50 text-green-700")
             }
-            title={`Eligible: 30 min × ${g.lateGraceDays} days/cycle. Used ${graceUsed}/${g.lateGraceDays}.`}
+            title={`Eligible: ${g.lateGraceMinutes} min × ${g.lateGraceDays} days/cycle. LCE used ${g.late.lceUsed}/${g.lateGraceDays}.`}
           >
-            Late {graceUsed}/{g.lateGraceDays}
-            {lateOverPolicy > 0 ? ` · ${lateOverPolicy} over` : ""}
+            LCE {g.late.lceUsed}/{g.lateGraceDays}
+            {g.late.alCount > 0 ? ` · AL ${g.late.alCount}` : ""}
           </span>
-        ) : g.late.daysCount > 0 ? (
+        ) : g.late.alCount > 0 ? (
           <span
             className="text-caption px-xs py-[2px] rounded bg-red-50 text-red-700"
-            title="Late-coming eligibility is OFF for this employee. Each late day is a violation."
+            title="Late-Coming Eligibility is OFF — every late arrival counts as AL."
           >
-            Late {g.late.daysCount}d {g.late.overGrace > 0 ? `(${g.late.overGrace} over 30m)` : ""}
+            AL {g.late.alCount}
           </span>
         ) : null;
         return (

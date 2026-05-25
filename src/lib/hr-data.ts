@@ -172,6 +172,62 @@ export function cycleDates(monthKey: string): Date[] {
   return dates;
 }
 
+/**
+ * Late-Coming Eligibility (LCE) policy:
+ *   eligible employees can arrive up to GRACE_MINUTES late on up to
+ *   GRACE_DAYS days per salary cycle (26th → 25th).
+ * Days within the grace are tagged "LCE"; everything else with late > 0
+ * is tagged "AL" (Arrived Late).
+ */
+export const LCE_GRACE_MINUTES = 30;
+export const LCE_GRACE_DAYS = 3;
+
+export type LateTag = "LCE" | "AL" | null;
+
+/**
+ * Compute LCE / AL tags for one employee's days within a cycle.
+ * Walks days in chronological order, consumes the LCE quota greedily.
+ *
+ * - status WO / HL / A / LV → no tag (didn't work that day)
+ * - status P / HD + late ≤ 0 → no tag
+ * - eligible + late ≤ 30m + quota left → "LCE" (consume one)
+ * - everything else with late > 0 → "AL"
+ */
+export function computeLateTags(
+  days: { id: string; date: Date; lateMinutes: number | null; status: string }[],
+  eligible: boolean,
+): {
+  tags: Map<string, LateTag>;
+  lceUsed: number;
+  alCount: number;
+} {
+  const tags = new Map<string, LateTag>();
+  let lceUsed = 0;
+  let alCount = 0;
+  const sorted = [...days].sort((a, b) => a.date.getTime() - b.date.getTime());
+  for (const d of sorted) {
+    const late = d.lateMinutes ?? 0;
+    if (late <= 0) {
+      tags.set(d.id, null);
+      continue;
+    }
+    // Only late-from-work days count — being late while absent / on leave / off
+    // is not a concept.
+    if (d.status !== "P" && d.status !== "HD") {
+      tags.set(d.id, null);
+      continue;
+    }
+    if (eligible && late <= LCE_GRACE_MINUTES && lceUsed < LCE_GRACE_DAYS) {
+      tags.set(d.id, "LCE");
+      lceUsed++;
+    } else {
+      tags.set(d.id, "AL");
+      alCount++;
+    }
+  }
+  return { tags, lceUsed, alCount };
+}
+
 export const ATT_STATUS = {
   PRESENT: "P",
   ABSENT: "A",
