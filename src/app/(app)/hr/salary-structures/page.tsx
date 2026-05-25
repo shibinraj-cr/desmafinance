@@ -56,6 +56,7 @@ export default async function SalaryStructuresPage() {
         esiEmployer: 0,
         pfEmployer: 0,
         netTakeHome: 0,
+        ctc: 0,
         hasStructure: false,
       };
     }
@@ -92,19 +93,21 @@ export default async function SalaryStructuresPage() {
       esiEmployer,
       pfEmployer,
       netTakeHome: breakdown.gross - esiEmp - pfEmp - Number(cur.professionalTax),
+      ctc: breakdown.gross + pfEmployer + esiEmployer,
       hasStructure: true,
     };
   });
 
   const totalGross = rows.reduce((s, r) => s + r.gross, 0);
   const totalNet = rows.reduce((s, r) => s + r.netTakeHome, 0);
+  const totalCtc = rows.reduce((s, r) => s + r.ctc, 0);
   const missing = rows.filter((r) => !r.hasStructure).length;
 
   return (
     <>
       <TopBar
         title="Salary Structures"
-        subtitle={`${rows.length} active employees · Total gross ₹${Math.round(totalGross).toLocaleString("en-IN")} · Net ₹${Math.round(totalNet).toLocaleString("en-IN")}${missing ? ` · ${missing} missing` : ""}`}
+        subtitle={`${rows.length} active employees · Gross ₹${Math.round(totalGross).toLocaleString("en-IN")} · Net ₹${Math.round(totalNet).toLocaleString("en-IN")} · CTC ₹${Math.round(totalCtc).toLocaleString("en-IN")}${missing ? ` · ${missing} missing` : ""}`}
       />
       <div className="p-margin">
         <SalaryStructuresClient rows={rows} canEdit={canApproveHr(perms)} />
