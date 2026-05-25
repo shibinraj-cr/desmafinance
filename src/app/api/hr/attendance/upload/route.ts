@@ -39,13 +39,21 @@ export async function POST(req: Request) {
   const employees = await prisma.employee.findMany({
     select: { id: true, empCode: true, name: true },
   });
-  const byCode = new Map(employees.map((e) => [e.empCode, e]));
 
-  function fuzzyMatchEmployee(empCode: string, rawName: string): string | null {
-    // 1. Exact empCode match.
-    const exact = byCode.get(empCode) ?? byCode.get(empCode.padStart(4, "0"));
-    if (exact) return exact.id;
-    // 2. Name match — first-token exact / prefix, then token overlap.
+  /**
+   * Match a biometric row to an HR master employee. The biometric system
+   * uses ITS OWN empCodes which don't align with our master (the file
+   * has Vishnu at 0001 while our master has Greeshma at 0001). So we
+   * MUST match by name, never by empCode — even an exact empCode hit
+   * would corrupt data.
+   *
+   * Strategy:
+   *   1. first-token exact match  → score 1.0
+   *   2. first-token prefix match (≥4 chars) → 0.9
+   *   3. any-token overlap → overlap / min(tokenCount)
+   *   threshold ≥ 0.5
+   */
+  function fuzzyMatchEmployee(_empCode: string, rawName: string): string | null {
     const aTokens = nameTokens(rawName);
     if (aTokens.length === 0) return null;
     const aFirst = aTokens[0];
