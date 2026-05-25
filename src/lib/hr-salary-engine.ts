@@ -40,6 +40,10 @@ export const DEFAULT_ALLOWANCE_PCTS = {
 export const ESI_EMPLOYEE_RATE = 0.0075;
 export const ESI_EMPLOYER_RATE = 0.0375;
 export const PF_RATE = 0.12;
+/// Statutory PF wage ceiling: ₹15,000 of Basic. PF contribution from
+/// each side is therefore capped at ₹1,800 / month.
+export const PF_WAGE_CEILING = 15000;
+export const PF_CONTRIBUTION_CAP = PF_WAGE_CEILING * PF_RATE; // 1800
 
 export type SalaryBreakdown = {
   basic: number;
@@ -145,8 +149,11 @@ export function calcLine(args: {
 
   const esiEmployee = args.esiApplicable ? round(salaryBeforeEsi * ESI_EMPLOYEE_RATE) : 0;
   const esiEmployer = args.esiApplicable ? round(salaryBeforeEsi * ESI_EMPLOYER_RATE) : 0;
-  const pfEmployee = args.pfApplicable ? round(basicAfterLop * PF_RATE) : 0;
-  const pfEmployer = args.pfApplicable ? round(basicAfterLop * PF_RATE) : 0;
+  // PF: 12% of basicAfterLop, capped at the statutory ₹15,000 wage
+  // ceiling (so each side maxes out at ₹1,800/month).
+  const pfBase = Math.min(basicAfterLop, PF_WAGE_CEILING);
+  const pfEmployee = args.pfApplicable ? round(pfBase * PF_RATE) : 0;
+  const pfEmployer = args.pfApplicable ? round(pfBase * PF_RATE) : 0;
   const pt = args.professionalTax;
 
   const netSalary = round(salaryBeforeEsi - esiEmployee - pfEmployee - pt);

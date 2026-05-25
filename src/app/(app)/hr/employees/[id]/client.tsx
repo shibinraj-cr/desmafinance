@@ -396,7 +396,8 @@ function SalaryStructureTab({
   const ptToUse = draft.autoPT ? ptSlab : draft.professionalTax;
   const esiEligible = gross > 0 && gross <= 21000 && draft.esiApplicable;
   const esiEmp = esiEligible ? Math.round(gross * 0.0075) : 0;
-  const pfEmp = draft.pfApplicable ? Math.round(basic * 0.12) : 0;
+  // PF capped at ₹15,000 wage ceiling → max ₹1,800.
+  const pfEmp = draft.pfApplicable ? Math.round(Math.min(basic, 15000) * 0.12) : 0;
   const netTakeHome = gross - esiEmp - pfEmp - ptToUse;
 
   async function save() {
@@ -551,7 +552,14 @@ function SalaryStructureTab({
             <div className="grid grid-cols-2 md:grid-cols-4 gap-sm text-label-sm mt-md">
               <Stat label="Gross (CTC monthly)" value={`₹${gross.toLocaleString("en-IN")}`} hero />
               <Stat label="ESI (E) 0.75%" value={`₹${esiEmp.toLocaleString("en-IN")}`} />
-              <Stat label="PF (E) 12% of Basic" value={`₹${pfEmp.toLocaleString("en-IN")}`} />
+              <Stat
+                label={
+                  basic > 15000
+                    ? "PF (E) capped at ₹1,800"
+                    : "PF (E) 12% of Basic"
+                }
+                value={`₹${pfEmp.toLocaleString("en-IN")}`}
+              />
               <Stat label="Professional Tax" value={`₹${ptToUse}`} />
             </div>
             <div className="grid grid-cols-1 md:grid-cols-2 gap-sm text-label-sm mt-md">
