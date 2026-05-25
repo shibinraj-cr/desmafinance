@@ -97,6 +97,14 @@ export async function POST(req: Request) {
       where: { date: { gte: start, lte: end } },
     });
 
+    // Pull holidays in this window so we can reclassify shift=X / no-punch
+    // rows that fall on a known holiday → HL instead of A or WO.
+    const holidayRows = await prisma.holiday.findMany({
+      where: { date: { gte: start, lte: end } },
+      select: { date: true },
+    });
+    const holidaySet = new Set(holidayRows.map((h) => h.date.toISOString().slice(0, 10)));
+
     const upload = await prisma.hrAttendanceUpload.create({
       data: {
         filename,
@@ -142,6 +150,21 @@ export async function POST(req: Request) {
         allUnmatchedNames.add(r.rawName || r.empCode);
         continue;
       }
+      // Smart-fix: some biometric exports tag Sundays / holidays as
+      // status="A" because the off-day shift wasn't configured per
+      // employee. If we see shift=X with no punch and zero work, the
+      // employee couldn't possibly have been "absent" in the LOP sense
+      // — reclassify as HL (if a published holiday) or WO (Sunday).
+      // Genuine missed punches stay as A.
+      let finalStatus = r.status;
+      const isoDate = r.date.toISOString().slice(0, 10);
+      const isNonWorkShift = r.shiftCode === "X" || r.shiftCode === null;
+      const noPunch = !r.inTime && !r.outTime && r.workMinutes === 0;
+      if (r.status === "A" && isNonWorkShift && noPunch) {
+        if (holidaySet.has(isoDate)) finalStatus = "HL";
+        else if (r.date.getUTCDay() === 0) finalStatus = "WO";
+      }
+
       dayRecords.push({
         uploadId: upload.id,
         employeeId: empId,
@@ -153,7 +176,7 @@ export async function POST(req: Request) {
         otMinutes: r.otMinutes,
         lateMinutes: r.lateMinutes,
         earlyOutMinutes: r.earlyOutMinutes,
-        status: r.status,
+        status: finalStatus,
         rawStatus: r.status,
         remark: r.remark,
         rawName: r.rawName,

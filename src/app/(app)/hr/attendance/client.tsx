@@ -258,7 +258,7 @@ export function AttendanceClient({
                     <th
                       key={d.iso}
                       className={
-                        "px-xs py-xs text-on-surface-variant w-7 text-center " +
+                        "px-xs py-xs text-on-surface-variant w-12 text-center " +
                         (isBoundary ? "border-l-2 border-l-primary/60" : "")
                       }
                       title={d.iso}
@@ -266,7 +266,7 @@ export function AttendanceClient({
                       <div className="text-[9px] font-normal text-on-surface-variant">
                         {d.day === 26 || d.day === 1 ? MONTH_LABEL[d.month] : ""}
                       </div>
-                      <div>{d.day}</div>
+                      <div className="text-[12px] font-semibold text-on-surface">{d.day}</div>
                       <div className="text-[9px] font-normal text-on-surface-variant">
                         {d.weekday[0]}
                       </div>
@@ -306,23 +306,38 @@ export function AttendanceClient({
                             .filter(Boolean)
                             .join(" · ")
                         : `${d.iso} — no record`;
+                      const hasPunch = c && (c.in || c.out);
                       return (
                         <td
                           key={d.iso}
                           className={
-                            "px-[1px] py-[1px] text-center " +
+                            "px-[1px] py-[1px] align-top " +
                             (isBoundary ? "border-l-2 border-l-primary/40" : "")
                           }
                         >
-                          <span
+                          <div
                             title={tip}
                             className={
-                              "inline-flex items-center justify-center w-6 h-6 rounded text-[10px] font-bold " +
+                              "flex flex-col items-stretch justify-start rounded text-[9px] font-bold leading-tight w-11 mx-auto " +
                               tone
                             }
                           >
-                            {code || "·"}
-                          </span>
+                            <span className="text-center text-[10px] py-[1px] border-b border-current/10">
+                              {code || "·"}
+                            </span>
+                            {hasPunch ? (
+                              <span className="font-normal text-[9px] text-center py-[1px] tabular-nums">
+                                {c?.in ?? "—"}
+                                <br />
+                                {c?.out ?? "—"}
+                              </span>
+                            ) : (
+                              <span className="font-normal text-[9px] text-center py-[1px] opacity-50">
+                                &nbsp;
+                                <br />&nbsp;
+                              </span>
+                            )}
+                          </div>
                         </td>
                       );
                     })}
