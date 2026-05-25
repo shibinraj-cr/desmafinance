@@ -65,6 +65,7 @@ model User {
   hrTrainingsCreated     HrTraining[]           @relation("HrTrainingCreator")
   hrNotificationsCreated HrNotification[]       @relation("HrNotificationCreator")
   hrAuditLogs            HrAuditLog[]           @relation("HrAuditActor")
+  hrLeaveDecisions       HrAttendanceDay[]      @relation("HrLeaveDecider")
 
   @@index([roleId])
 }
@@ -999,10 +1000,22 @@ model HrAttendanceDay {
   earlyOutMinutes Int?
   /// Normalised status: P | A | WO | HL | LV | HD. HD is derived when
   /// status=P but workMinutes is < ~4h (per the half-day rule).
+  /// HR can later override A → LV (paid CL) or LV → A (LOP) from the
+  /// /hr/leave-review page; the original biometric value is preserved
+  /// in `rawStatus` for audit.
   status       String
   /// Free-text remark from the biometric report (e.g. "LT-EO", "MIS-LT-OT").
   remark       String?
   rawName      String?
+  /// Original status from the biometric upload, before any HR override.
+  /// Null on rows imported before this column existed (treat as same as
+  /// `status` in that case).
+  rawStatus    String?
+  /// HR's classification note when overriding the leave decision.
+  decisionNote String?
+  decidedById  String?
+  decidedBy    User?    @relation("HrLeaveDecider", fields: [decidedById], references: [id], onDelete: SetNull)
+  decidedAt    DateTime?
 
   @@unique([employeeId, date])
   @@index([date])

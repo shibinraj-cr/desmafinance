@@ -144,6 +144,7 @@ export const MODULES: AppModule[] = [
       { href: "/hr/employees", label: "Employees", icon: "groups" },
       { href: "/hr/shifts", label: "Shifts", icon: "schedule" },
       { href: "/hr/attendance", label: "Attendance", icon: "fact_check" },
+      { href: "/hr/leave-review", label: "Leave Review", icon: "rule" },
       { href: "/hr/leave", label: "Leave Requests", icon: "event_busy" },
       { href: "/hr/leave-balances", label: "Leave Balances", icon: "savings" },
       { href: "/hr/holidays", label: "Holiday Calendar", icon: "event" },
