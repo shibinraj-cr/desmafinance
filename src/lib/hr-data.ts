@@ -129,7 +129,10 @@ export function cycleWindowForMonth(monthKey: string): {
   const startYear = m === 1 ? y - 1 : y;
   const startMonth = m === 1 ? 12 : m - 1;
   const start = new Date(Date.UTC(startYear, startMonth - 1, 26));
-  const end = new Date(Date.UTC(y, m - 1, 25, 23, 59, 59));
+  // End at the start of the 25th UTC — attendance rows are stored as
+  // midnight UTC (date-only), so an inclusive 25 UTC == 25 UTC query
+  // works and avoids any TZ-driven "rollover to the 26th" display bug.
+  const end = new Date(Date.UTC(y, m - 1, 25));
   return { year: y, month: m, start, end };
 }
 

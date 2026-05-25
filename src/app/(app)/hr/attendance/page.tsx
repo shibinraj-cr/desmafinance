@@ -94,7 +94,10 @@ export default async function HrAttendancePage({
     weekday: ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"][d.getUTCDay()],
   }));
 
-  const cycleLabel = `${start.toLocaleDateString("en-IN", { day: "2-digit", month: "short" })} → ${end.toLocaleDateString("en-IN", { day: "2-digit", month: "short", year: "numeric" })}`;
+  // Use timeZone: UTC so display matches the stored date (the end date
+  // is stored as 25 23:59:59 UTC; without UTC formatting, IST would
+  // show it as the 26th).
+  const cycleLabel = `${start.toLocaleDateString("en-IN", { day: "2-digit", month: "short", timeZone: "UTC" })} → ${end.toLocaleDateString("en-IN", { day: "2-digit", month: "short", year: "numeric", timeZone: "UTC" })}`;
 
   // Compute prev / next cycle for navigation
   const [yStr, mStr] = requested.split("-").map(Number);
