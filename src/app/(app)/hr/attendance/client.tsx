@@ -277,7 +277,7 @@ export function AttendanceClient({
                   rowSpan={2}
                   className="px-sm py-xs text-on-surface-variant text-right whitespace-nowrap"
                 >
-                  P · HD · A
+                  Summary
                 </th>
               </tr>
             </thead>
@@ -341,12 +341,23 @@ export function AttendanceClient({
                         </td>
                       );
                     })}
-                    <td className="px-sm py-xs text-right whitespace-nowrap text-label-sm">
-                      <span className="text-green-700 font-bold">{s.P}</span>
-                      <span className="text-on-surface-variant"> · </span>
-                      <span className="text-yellow-700 font-bold">{s.HD}</span>
-                      <span className="text-on-surface-variant"> · </span>
-                      <span className="text-red-700 font-bold">{s.A}</span>
+                    <td className="px-sm py-xs text-right whitespace-nowrap text-[11px] leading-tight">
+                      {/* Day counts (one row per biometric/HR-classified day) */}
+                      <div>
+                        <span className="text-green-700 font-bold">P {s.P}</span>
+                        <span className="text-on-surface-variant"> · </span>
+                        <span className="text-yellow-700 font-bold">HD {(s.HD * 0.5).toFixed(1)}</span>
+                        <span className="text-on-surface-variant"> · </span>
+                        <span className="text-purple-700 font-bold">LV {s.LV}</span>
+                        <span className="text-on-surface-variant"> · </span>
+                        <span className="text-red-700 font-bold">A {s.A}</span>
+                      </div>
+                      {/* Net Paid vs Unpaid (HD's 0.5 counts as unpaid; LV is paid) */}
+                      <div className="text-on-surface-variant">
+                        Paid <span className="text-purple-700 font-bold">{s.LV}</span>
+                        {" · "}
+                        Unpaid <span className="text-red-700 font-bold">{(s.A + s.HD * 0.5).toFixed(1)}</span>
+                      </div>
                     </td>
                   </tr>
                 );
@@ -365,12 +376,13 @@ export function AttendanceClient({
           Cycle starts {dateCells[0]?.iso} · ends {dateCells[dateCells.length - 1]?.iso}. A
           highlighted column boundary marks the calendar-month rollover. Legend:{" "}
           <span className="font-bold text-green-700">P</span> Present ·{" "}
-          <span className="font-bold text-yellow-700">HD</span> Half-day ·{" "}
-          <span className="font-bold text-red-700">A</span> Absent ·{" "}
+          <span className="font-bold text-yellow-700">HD</span> Half-day (×0.5) ·{" "}
+          <span className="font-bold text-red-700">A</span> Absent (unpaid) ·{" "}
           <span className="font-bold text-on-surface-variant">WO</span> Week-off ·{" "}
           <span className="font-bold text-blue-700">HL</span> Holiday ·{" "}
-          <span className="font-bold text-purple-700">LV</span> Leave. Hover any cell for IN/OUT,
-          work hours, OT, and biometric remark.
+          <span className="font-bold text-purple-700">LV</span> Paid leave. The Summary column
+          shows day counts on top and the Paid / Unpaid totals below — Unpaid = A days + HD × 0.5,
+          Paid = LV.
         </p>
       </Section>
     </>
