@@ -2,7 +2,7 @@ import { redirect } from "next/navigation";
 import { getCurrentUserAndPermissions } from "@/lib/permissions";
 import { getLeadPulseAccess } from "@/lib/lead-pulse-rbac";
 import { prisma } from "@/lib/prisma";
-import { todayIst, fromPrismaDate, toPrismaDate } from "@/lib/lead-pulse-dates";
+import { todayIst, fromPrismaDate, toPrismaDate, isWithinBackdateWindow } from "@/lib/lead-pulse-dates";
 import { DailyEntryForm, AdminDailyEntryPreview } from "./client";
 
 export const dynamic = "force-dynamic";
@@ -126,7 +126,7 @@ export default async function DailyEntryPage({
 
   // Server-render the initial payload so the form has correct values
   // before hydration. The client will refetch on date change.
-  const [sources, entries, meta, serviceOptions] = await Promise.all([
+  const [sources, entries, meta, serviceOptions, unlock] = await Promise.all([
     prisma.leadPulseSource.findMany({
       where: { active: true },
       orderBy: [{ displayOrder: "asc" }, { label: "asc" }],
@@ -150,18 +150,31 @@ export default async function DailyEntryPage({
       orderBy: { name: "asc" },
       select: { id: true, name: true },
     }),
+    // Supervisor unlock grant (if any) for this (user, date). Lifts both
+    // the 3-day backdate restriction and the "approved" status block.
+    prisma.leadPulseUnlock.findUnique({
+      where: { userId_entryDate: { userId, entryDate: toPrismaDate(date) } },
+    }),
   ]);
 
-  // Rejected entries get a hard re-edit pass: the lock and any
-  // `entry.locked` flags are overridden so the BDE can fix the
-  // supervisor's flagged issues. Approved entries are read-only.
+  // Editability rules (aligned with the API's save-time check):
+  //   - Rejected entries are always editable so the BDE can fix flags
+  //     and resubmit.
+  //   - A supervisor unlock (LeadPulseUnlock row) lifts both the
+  //     3-day backdate restriction and the "approved" status block.
+  //   - Otherwise, must be within the 3-day backdate window, status
+  //     not "approved", and no row carries a hard `locked` flag.
   const anyLocked = entries.some((e) => e.locked) || (meta?.locked ?? false);
+  const withinWindow = isWithinBackdateWindow(date, today);
+  const supervisorUnlocked = !!unlock;
   const editable =
     meta?.status === "rejected"
       ? true
-      : meta?.status === "approved"
-        ? false
-        : !anyLocked;
+      : supervisorUnlocked
+        ? !anyLocked
+        : meta?.status === "approved"
+          ? false
+          : withinWindow && !anyLocked;
   const rejection =
     meta?.status === "rejected"
       ? {
