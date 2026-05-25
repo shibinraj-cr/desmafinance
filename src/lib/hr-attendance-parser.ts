@@ -14,17 +14,31 @@ import * as XLSX from "xlsx";
  *   R6+  01/03/2026 | X | --:-- | 00:00 | 00:00 | --:-- | 00:00 | 00:00 | WO | --
  *   …    (one row per date for the employee, then next Empcode block)
  *
- * We walk the sheet, anchor on every Empcode row, then consume the
- * subsequent data rows (which start with a DD/MM/YYYY date) until the
- * next Empcode anchor (or EOF). Each consumed row produces one
- * ParsedDay.
+ * Half-day inference (the source format only emits P/A/WO, so we infer):
+ *   - Weekday (Mon–Fri) P-day with (work + OT) <   6h  (360 min) → HD
+ *   - Saturday          P-day with (work + OT) < 3.5h  (210 min) → HD
  *
- * Status is normalised + a half-day rule applied:
- *   if status == "P" and (work + ot) < 240 minutes (4h) → "HD".
- * This compensates for the source format only emitting P/A/WO and lets
- * the salary engine treat short days as half-days without HR having to
- * mark them manually.
+ * Saturday timing (no Shift A/B distinction — common for everyone):
+ *   - On / after 2026-04-25: 09:00 → 16:00
+ *   - Before     2026-04-25: 09:00 → 17:00
+ *   Saturday late + early-out are RECOMPUTED against this standard
+ *   because the biometric system computes them against the employee's
+ *   weekday Shift A/B end-time, which is wrong for Saturdays.
  */
+
+const WEEKDAY_HD_THRESHOLD_MIN = 360;  // 6 h
+const SATURDAY_HD_THRESHOLD_MIN = 210; // 3.5 h
+const SATURDAY_START_MIN = 9 * 60;     // 09:00
+const SATURDAY_END_MIN_LEGACY = 17 * 60;  // 17:00 — Saturdays before 2026-04-25
+const SATURDAY_END_MIN_CURRENT = 16 * 60; // 16:00 — Saturdays on/after 2026-04-25
+/// Saturday end-time switched from 17:00 → 16:00 from this date.
+const SATURDAY_NEW_END_FROM = Date.UTC(2026, 3, 25); // 25 April 2026 UTC ms
+
+function saturdayEndMin(date: Date): number {
+  return date.getTime() >= SATURDAY_NEW_END_FROM
+    ? SATURDAY_END_MIN_CURRENT
+    : SATURDAY_END_MIN_LEGACY;
+}
 
 export type ParsedDay = {
   empCode: string;
@@ -117,7 +131,7 @@ function findEmpHeader(row: unknown[]): { empCode: string; name: string } | null
 }
 
 /** Normalised attendance status used downstream by the salary engine. */
-function normaliseStatus(raw: string, workMinutes: number, otMinutes: number): string {
+function normaliseStatus(raw: string, workMinutes: number, otMinutes: number, date: Date): string {
   const s = String(raw ?? "").trim().toUpperCase();
   if (!s || s === "--") return "A";
   if (s === "WO" || s === "W") return "WO";
@@ -126,8 +140,12 @@ function normaliseStatus(raw: string, workMinutes: number, otMinutes: number): s
   if (s === "A" || s === "AB") return "A";
   if (s === "HD" || s === "H/D") return "HD";
   if (s === "P" || s === "PR") {
-    // Heuristic: P with very short workday → half day.
-    if (workMinutes + otMinutes > 0 && workMinutes + otMinutes < 240) return "HD";
+    const total = workMinutes + otMinutes;
+    if (total > 0) {
+      const isSaturday = date.getUTCDay() === 6;
+      const threshold = isSaturday ? SATURDAY_HD_THRESHOLD_MIN : WEEKDAY_HD_THRESHOLD_MIN;
+      if (total < threshold) return "HD";
+    }
     return "P";
   }
   return s;
@@ -168,8 +186,8 @@ export function parseAttendanceWorkbook(buffer: Buffer | ArrayBuffer): ParseResu
       return v && v !== "--" ? v : null;
     })();
     const inTime = cleanTime(r[2]);
-    const lateMinutes = toMinutes(String(r[3] ?? ""));
-    const earlyOutMinutes = toMinutes(String(r[4] ?? ""));
+    let lateMinutes = toMinutes(String(r[3] ?? ""));
+    let earlyOutMinutes = toMinutes(String(r[4] ?? ""));
     const outTime = cleanTime(r[5]);
     const workPlusOt = toMinutes(String(r[6] ?? ""));
     const otMinutes = toMinutes(String(r[7] ?? ""));
@@ -177,7 +195,26 @@ export function parseAttendanceWorkbook(buffer: Buffer | ArrayBuffer): ParseResu
     const statusRaw = String(r[8] ?? "").trim();
     const remarkRaw = String(r[9] ?? "").trim();
     const remark = !remarkRaw || remarkRaw === "--" ? null : remarkRaw;
-    const status = normaliseStatus(statusRaw, workMinutes, otMinutes);
+    const status = normaliseStatus(statusRaw, workMinutes, otMinutes, date);
+
+    // Saturday: the biometric system computes late + early-out against
+    // the employee's assigned weekday shift (A=09:00–17:30 / B=09:30–18:00),
+    // which doesn't apply on Saturday. Recompute against Saturday's
+    // common standard:  09:00 → 17:00 (pre 2026-04-25) | 09:00 → 16:00 (current).
+    if (date.getUTCDay() === 6) {
+      if (inTime) {
+        const inMin = toMinutes(inTime);
+        lateMinutes = Math.max(0, inMin - SATURDAY_START_MIN);
+      } else {
+        lateMinutes = 0;
+      }
+      if (outTime) {
+        const outMin = toMinutes(outTime);
+        earlyOutMinutes = Math.max(0, saturdayEndMin(date) - outMin);
+      } else {
+        earlyOutMinutes = 0;
+      }
+    }
 
     out.push({
       empCode: current.empCode,
