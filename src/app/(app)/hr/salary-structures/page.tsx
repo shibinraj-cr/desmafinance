@@ -43,16 +43,18 @@ export default async function SalaryStructuresPage() {
         designation: e.designation,
         effectiveFrom: null as string | null,
         basic: 0,
-        hraPct: 50,
-        conveyancePct: 25,
-        medicalPct: 35,
-        specialPct: 40,
+        hraPct: 40,
+        conveyancePct: 20,
+        medicalPct: 25,
+        specialPct: 15,
         gross: 0,
         esiApplicable: true,
         pfApplicable: true,
         professionalTax: 125,
         esiEmployee: 0,
         pfEmployee: 0,
+        esiEmployer: 0,
+        pfEmployer: 0,
         netTakeHome: 0,
         hasStructure: false,
       };
@@ -65,7 +67,11 @@ export default async function SalaryStructuresPage() {
       specialPct: Number(cur.specialPct),
     });
     const esiEmp = cur.esiApplicable ? Math.round(breakdown.gross * 0.0075) : 0;
-    const pfEmp = cur.pfApplicable ? Math.round(basic * 0.12) : 0;
+    // PF capped at ₹15,000 wage ceiling → max ₹1,800.
+    const pfEmp = cur.pfApplicable ? Math.round(Math.min(basic, 15000) * 0.12) : 0;
+    // Employer-side contributions
+    const esiEmployer = cur.esiApplicable ? Math.round(breakdown.gross * 0.0375) : 0;
+    const pfEmployer = cur.pfApplicable ? Math.round(Math.min(basic, 15000) * 0.12) : 0;
     return {
       id: e.id,
       empCode: e.empCode,
@@ -83,6 +89,8 @@ export default async function SalaryStructuresPage() {
       professionalTax: Number(cur.professionalTax),
       esiEmployee: esiEmp,
       pfEmployee: pfEmp,
+      esiEmployer,
+      pfEmployer,
       netTakeHome: breakdown.gross - esiEmp - pfEmp - Number(cur.professionalTax),
       hasStructure: true,
     };

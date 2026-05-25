@@ -22,6 +22,8 @@ type Row = {
   professionalTax: number;
   esiEmployee: number;
   pfEmployee: number;
+  esiEmployer: number;
+  pfEmployer: number;
   netTakeHome: number;
   hasStructure: boolean;
 };
@@ -111,9 +113,35 @@ export function SalaryStructuresClient({
       <div className="overflow-x-auto">
         <table className="w-full text-label-sm">
           <thead className="text-left text-on-surface-variant border-b border-outline-variant">
+            {/* Top header — column groupings */}
+            <tr className="text-[10px] uppercase tracking-wider">
+              <th className="py-xs pr-md" rowSpan={2}>Employee</th>
+              <th className="py-xs pr-md" rowSpan={2}>Effective</th>
+              <th
+                colSpan={6}
+                className="py-xs px-sm text-center text-blue-700 border-b border-blue-200 bg-blue-50/40"
+              >
+                Salary Structure
+              </th>
+              <th
+                colSpan={3}
+                className="py-xs px-sm text-center text-red-700 border-b border-red-200 bg-red-50/40"
+              >
+                Standard Deductions
+              </th>
+              <th className="py-xs pr-md text-right text-green-700" rowSpan={2}>
+                Net Take-home
+              </th>
+              <th
+                colSpan={2}
+                className="py-xs px-sm text-center text-amber-700 border-b border-amber-200 bg-amber-50/40"
+              >
+                Employer Contributions
+              </th>
+              {canEdit && <th rowSpan={2} />}
+            </tr>
+            {/* Sub-headers under each group */}
             <tr>
-              <th className="py-sm pr-md">Employee</th>
-              <th className="py-sm pr-md">Effective</th>
               <th className="py-sm pr-md text-right">Basic</th>
               <th className="py-sm pr-md text-right">HRA</th>
               <th className="py-sm pr-md text-right">Conv</th>
@@ -123,8 +151,8 @@ export function SalaryStructuresClient({
               <th className="py-sm pr-md text-right">PF(E)</th>
               <th className="py-sm pr-md text-right">ESI(E)</th>
               <th className="py-sm pr-md text-right">PT</th>
-              <th className="py-sm pr-md text-right">Net Take-home</th>
-              {canEdit && <th />}
+              <th className="py-sm pr-md text-right">PF(Emp)</th>
+              <th className="py-sm pr-md text-right">ESI(Emp)</th>
             </tr>
           </thead>
           <tbody>
@@ -189,8 +217,14 @@ export function SalaryStructuresClient({
                   <td className="py-sm pr-md text-right">
                     {r.hasStructure ? inr(r.professionalTax) : "—"}
                   </td>
-                  <td className="py-sm pr-md text-right font-bold">
+                  <td className="py-sm pr-md text-right font-bold text-green-700">
                     {r.hasStructure ? inr(r.netTakeHome) : "—"}
+                  </td>
+                  <td className="py-sm pr-md text-right">
+                    {r.hasStructure ? inr(r.pfEmployer) : "—"}
+                  </td>
+                  <td className="py-sm pr-md text-right">
+                    {r.hasStructure ? inr(r.esiEmployer) : "—"}
                   </td>
                   {canEdit && (
                     <td className="py-sm pr-md text-right">
@@ -231,7 +265,7 @@ export function SalaryStructuresClient({
             })}
             {filtered.length === 0 && (
               <tr>
-                <td colSpan={canEdit ? 13 : 12} className="py-lg text-center text-on-surface-variant">
+                <td colSpan={canEdit ? 15 : 14} className="py-lg text-center text-on-surface-variant">
                   No employees match.
                 </td>
               </tr>

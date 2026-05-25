@@ -184,6 +184,28 @@ export default async function DailyTrackerPage({
     (a, b) => +b.date - +a.date || a.id.localeCompare(b.id),
   );
 
+  // Totals reflect whatever is currently visible (approved + pending,
+  // narrowed by every active filter). Pending creates / edits are
+  // included so reviewers see the full ₹ impact of the filter slice.
+  let totalRevenue = 0;
+  let totalExpense = 0;
+  for (const r of unified) {
+    if (!Number.isFinite(r.amount)) continue;
+    if (r.type === "Revenue") totalRevenue += r.amount;
+    else if (r.type === "Expense") totalExpense += r.amount;
+  }
+  const totalNet = totalRevenue - totalExpense;
+  const hasActiveFilters =
+    !!searchParams.type ||
+    !!searchParams.category ||
+    !!searchParams.sub ||
+    !!searchParams.party ||
+    !!searchParams.mode ||
+    !!searchParams.flow ||
+    !!searchParams.period ||
+    !!searchParams.from ||
+    !!searchParams.to;
+
   const filterQs = (extra: Record<string, string | undefined>) => {
     const qs = new URLSearchParams();
     if (searchParams.period) qs.set("period", searchParams.period);
@@ -261,6 +283,14 @@ export default async function DailyTrackerPage({
             isActive: p.isActive,
           }))}
           type={searchParams.type}
+        />
+
+        <TotalsStrip
+          count={unified.length}
+          revenue={totalRevenue}
+          expense={totalExpense}
+          net={totalNet}
+          showAll={!hasActiveFilters}
         />
 
         <div className="bg-surface-container-lowest border border-outline-variant rounded-xl shadow-sm overflow-hidden">
@@ -424,6 +454,64 @@ function Th({ children, className = "" }: { children?: React.ReactNode; classNam
 function Td({ children, className = "" }: { children?: React.ReactNode; className?: string }) {
   return <td className={"px-md py-sm align-middle " + className}>{children}</td>;
 }
+function TotalsStrip({
+  count,
+  revenue,
+  expense,
+  net,
+  showAll,
+}: {
+  count: number;
+  revenue: number;
+  expense: number;
+  net: number;
+  /** When no filters are set we still want to show totals, but the
+   *  label flips to "All transactions" so the reader doesn't think a
+   *  hidden filter is in play. */
+  showAll: boolean;
+}) {
+  return (
+    <div className="rounded-xl border border-outline-variant bg-surface-container-lowest px-md py-sm flex flex-wrap items-center gap-md text-body-md">
+      <span className="text-caption uppercase tracking-wider font-semibold text-on-surface-variant">
+        {showAll ? "All transactions" : "Filtered"}
+      </span>
+      <span className="text-body-md">
+        <strong className="text-on-surface">{count}</strong>{" "}
+        <span className="text-on-surface-variant text-caption">
+          {count === 1 ? "row" : "rows"}
+        </span>
+      </span>
+      <TotalStat label="Inflow" value={revenue} tone="positive" />
+      <TotalStat label="Outflow" value={expense} tone="negative" />
+      <TotalStat label="Net" value={net} tone={net >= 0 ? "positive" : "negative"} bold />
+    </div>
+  );
+}
+
+function TotalStat({
+  label,
+  value,
+  tone,
+  bold,
+}: {
+  label: string;
+  value: number;
+  tone: "positive" | "negative";
+  bold?: boolean;
+}) {
+  const color = tone === "positive" ? "text-green-700" : "text-red-700";
+  return (
+    <span className="inline-flex items-baseline gap-xs">
+      <span className="text-caption uppercase tracking-wider text-on-surface-variant">
+        {label}
+      </span>
+      <span className={`font-mono ${color} ${bold ? "font-bold" : "font-semibold"} tabular-nums`}>
+        {(value < 0 ? "−" : "") + inrFull(Math.abs(value))}
+      </span>
+    </span>
+  );
+}
+
 function FilterChip({
   href,
   active,
