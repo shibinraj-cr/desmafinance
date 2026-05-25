@@ -14,8 +14,16 @@ export function Tabs({
    *  (e.g. for reviewers without the draftFirst flag). */
   myDrafts?: { count: number };
   /** Filters to keep in the URL when switching tabs (type / date /
-   *  party). Omitting them resets the filter view per tab. */
-  preserve?: { type?: string; from?: string; to?: string; party?: string };
+   *  party / category / payment). Omitting them resets the filter
+   *  view per tab. */
+  preserve?: {
+    type?: string;
+    from?: string;
+    to?: string;
+    party?: string;
+    category?: string;
+    payment?: string;
+  };
 }) {
   const preservedQs = (() => {
     if (!preserve) return "";
@@ -24,6 +32,8 @@ export function Tabs({
     if (preserve.from) qs.set("from", preserve.from);
     if (preserve.to) qs.set("to", preserve.to);
     if (preserve.party) qs.set("party", preserve.party);
+    if (preserve.category) qs.set("category", preserve.category);
+    if (preserve.payment) qs.set("payment", preserve.payment);
     const q = qs.toString();
     return q ? `?${q}` : "";
   })();
