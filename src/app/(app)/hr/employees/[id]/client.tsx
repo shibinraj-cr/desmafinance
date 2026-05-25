@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useTransition } from "react";
+import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { Section } from "@/components/Cards";
 
@@ -33,7 +34,13 @@ type EmpDraft = {
   shiftId: string;
   halfHourConcession: boolean;
   active: boolean;
+  designationId: string;
+  departments: { departmentId: string; isPrimary: boolean }[];
+  roleIds: string[];
 };
+type DesignationLite = { id: string; name: string; level: number };
+type DepartmentLite = { id: string; name: string };
+type RoleLite = { id: string; name: string };
 
 type Structure = {
   id: string;
@@ -70,17 +77,23 @@ export function EmployeeEditor({
   employee,
   shifts,
   structures,
+  designations,
+  departmentsList,
+  rolesList,
   canEdit,
   currentBalance,
 }: {
   employee: EmpDraft;
   shifts: ShiftLite[];
   structures: Structure[];
+  designations: DesignationLite[];
+  departmentsList: DepartmentLite[];
+  rolesList: RoleLite[];
   canEdit: boolean;
   currentBalance: Balance | null;
 }) {
   const router = useRouter();
-  const [tab, setTab] = useState<"profile" | "salary" | "leave">("profile");
+  const [tab, setTab] = useState<"profile" | "org" | "salary" | "leave">("profile");
   const [draft, setDraft] = useState(employee);
   const [pending, start] = useTransition();
   const [error, setError] = useState<string | null>(null);
@@ -111,7 +124,7 @@ export function EmployeeEditor({
   return (
     <>
       <div className="flex gap-sm border-b border-outline-variant mb-md">
-        {(["profile", "salary", "leave"] as const).map((t) => (
+        {(["profile", "org", "salary", "leave"] as const).map((t) => (
           <button
             key={t}
             onClick={() => setTab(t)}
@@ -122,7 +135,13 @@ export function EmployeeEditor({
                 : "border-transparent text-on-surface-variant")
             }
           >
-            {t === "salary" ? "Salary Structure" : t === "leave" ? "Leave" : "Profile"}
+            {t === "salary"
+              ? "Salary Structure"
+              : t === "leave"
+                ? "Leave"
+                : t === "org"
+                  ? "Designation & Departments"
+                  : "Profile"}
           </button>
         ))}
       </div>
@@ -340,6 +359,19 @@ export function EmployeeEditor({
             </div>
           )}
         </Section>
+      )}
+
+      {tab === "org" && (
+        <OrgTab
+          employeeId={employee.id}
+          initialDesignationId={employee.designationId}
+          initialDepartments={employee.departments}
+          initialRoleIds={employee.roleIds}
+          designations={designations}
+          departmentsList={departmentsList}
+          rolesList={rolesList}
+          canEdit={canEdit}
+        />
       )}
 
       {tab === "salary" && (
@@ -653,6 +685,271 @@ function Stat({ label, value, hero = false }: { label: string; value: string; he
     >
       <p className="text-caption text-on-surface-variant uppercase tracking-wider">{label}</p>
       <p className={"font-bold " + (hero ? "text-h3" : "text-label-sm")}>{value}</p>
+    </div>
+  );
+}
+
+function OrgTab({
+  employeeId,
+  initialDesignationId,
+  initialDepartments,
+  initialRoleIds,
+  designations,
+  departmentsList,
+  rolesList,
+  canEdit,
+}: {
+  employeeId: string;
+  initialDesignationId: string;
+  initialDepartments: { departmentId: string; isPrimary: boolean }[];
+  initialRoleIds: string[];
+  designations: DesignationLite[];
+  departmentsList: DepartmentLite[];
+  rolesList: RoleLite[];
+  canEdit: boolean;
+}) {
+  const router = useRouter();
+  const [pending, start] = useTransition();
+  const [designationId, setDesignationId] = useState(initialDesignationId);
+  const [departments, setDepartments] = useState(initialDepartments);
+  const [roleIds, setRoleIds] = useState(initialRoleIds);
+  const [error, setError] = useState<string | null>(null);
+  const [savedFlag, setSavedFlag] = useState<string | null>(null);
+
+  async function saveDesignation() {
+    setError(null);
+    const res = await fetch(`/api/hr/employees/${employeeId}`, {
+      method: "PATCH",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ designationId: designationId || null }),
+    });
+    if (!res.ok) {
+      const j = await res.json().catch(() => ({}));
+      setError(j.error || "save failed");
+      return;
+    }
+    setSavedFlag("designation");
+    start(() => router.refresh());
+  }
+
+  async function saveDepartments() {
+    setError(null);
+    const res = await fetch(`/api/hr/employees/${employeeId}/departments`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ memberships: departments }),
+    });
+    if (!res.ok) {
+      const j = await res.json().catch(() => ({}));
+      setError(j.error || "save failed");
+      return;
+    }
+    setSavedFlag("departments");
+    start(() => router.refresh());
+  }
+
+  async function saveRoles() {
+    setError(null);
+    const res = await fetch(`/api/hr/employees/${employeeId}/roles`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ roleIds }),
+    });
+    if (!res.ok) {
+      const j = await res.json().catch(() => ({}));
+      setError(j.error || "save failed");
+      return;
+    }
+    setSavedFlag("roles");
+    start(() => router.refresh());
+  }
+
+  function toggleDept(id: string) {
+    if (departments.some((d) => d.departmentId === id)) {
+      setDepartments(departments.filter((d) => d.departmentId !== id));
+    } else {
+      setDepartments([
+        ...departments,
+        { departmentId: id, isPrimary: departments.length === 0 },
+      ]);
+    }
+  }
+  function setPrimary(id: string) {
+    setDepartments(departments.map((d) => ({ ...d, isPrimary: d.departmentId === id })));
+  }
+  function toggleRole(id: string) {
+    if (roleIds.includes(id)) setRoleIds(roleIds.filter((r) => r !== id));
+    else setRoleIds([...roleIds, id]);
+  }
+
+  return (
+    <div className="space-y-lg">
+      {error && <p className="text-red-700 text-label-sm">{error}</p>}
+
+      <Section
+        title="Designation"
+        action={
+          canEdit && (
+            <button
+              onClick={saveDesignation}
+              disabled={pending}
+              className="px-md py-sm rounded bg-primary text-on-primary font-bold disabled:opacity-50 text-label-sm"
+            >
+              Save
+            </button>
+          )
+        }
+      >
+        <fieldset disabled={!canEdit}>
+          <select
+            className="w-full md:w-1/2 px-sm py-sm rounded border border-outline-variant bg-surface"
+            value={designationId}
+            onChange={(e) => setDesignationId(e.target.value)}
+          >
+            <option value="">— None —</option>
+            {designations.map((d) => (
+              <option key={d.id} value={d.id}>
+                {d.name} {d.level > 0 ? `· L${d.level}` : ""}
+              </option>
+            ))}
+          </select>
+        </fieldset>
+        {savedFlag === "designation" && (
+          <p className="text-green-700 text-label-sm mt-sm">Saved.</p>
+        )}
+        <p className="text-caption text-on-surface-variant mt-sm">
+          Drives the employee&apos;s tier in the Org Chart. Manage tiers in{" "}
+          <Link href="/hr/masters/designations" className="underline">
+            Masters → Designations
+          </Link>
+          .
+        </p>
+      </Section>
+
+      <Section
+        title="Departments"
+        action={
+          canEdit && (
+            <button
+              onClick={saveDepartments}
+              disabled={pending}
+              className="px-md py-sm rounded bg-primary text-on-primary font-bold disabled:opacity-50 text-label-sm"
+            >
+              Save
+            </button>
+          )
+        }
+      >
+        <p className="text-caption text-on-surface-variant mb-sm">
+          Tick every department this employee belongs to. Mark one as <strong>Primary</strong>{" "}
+          — that&apos;s where they appear in the Org Chart and for any payroll cost-centre work.
+        </p>
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-xs">
+          {departmentsList.map((d) => {
+            const m = departments.find((x) => x.departmentId === d.id);
+            const checked = !!m;
+            return (
+              <label
+                key={d.id}
+                className={
+                  "flex items-center gap-sm px-sm py-xs rounded border " +
+                  (checked
+                    ? "border-primary bg-primary/5"
+                    : "border-outline-variant bg-surface")
+                }
+              >
+                <input
+                  type="checkbox"
+                  disabled={!canEdit}
+                  checked={checked}
+                  onChange={() => toggleDept(d.id)}
+                />
+                <span className="flex-1 text-label-sm">{d.name}</span>
+                {checked && (
+                  <label className="flex items-center gap-xs text-caption">
+                    <input
+                      type="radio"
+                      name="primary-dept"
+                      disabled={!canEdit}
+                      checked={m?.isPrimary ?? false}
+                      onChange={() => setPrimary(d.id)}
+                    />
+                    Primary
+                  </label>
+                )}
+              </label>
+            );
+          })}
+          {departmentsList.length === 0 && (
+            <p className="text-on-surface-variant py-md">
+              No departments yet. Add them in{" "}
+              <Link href="/hr/masters/departments" className="underline">
+                Masters → Departments
+              </Link>
+              .
+            </p>
+          )}
+        </div>
+        {savedFlag === "departments" && (
+          <p className="text-green-700 text-label-sm mt-sm">Saved.</p>
+        )}
+      </Section>
+
+      <Section
+        title="Roles"
+        action={
+          canEdit && (
+            <button
+              onClick={saveRoles}
+              disabled={pending}
+              className="px-md py-sm rounded bg-primary text-on-primary font-bold disabled:opacity-50 text-label-sm"
+            >
+              Save
+            </button>
+          )
+        }
+      >
+        <p className="text-caption text-on-surface-variant mb-sm">
+          Functional roles (e.g. BDE L2, Counsellor, Voxbay Admin). An employee can have any
+          number.
+        </p>
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-xs">
+          {rolesList.map((r) => {
+            const checked = roleIds.includes(r.id);
+            return (
+              <label
+                key={r.id}
+                className={
+                  "flex items-center gap-sm px-sm py-xs rounded border text-label-sm " +
+                  (checked
+                    ? "border-primary bg-primary/5"
+                    : "border-outline-variant bg-surface")
+                }
+              >
+                <input
+                  type="checkbox"
+                  disabled={!canEdit}
+                  checked={checked}
+                  onChange={() => toggleRole(r.id)}
+                />
+                <span className="flex-1">{r.name}</span>
+              </label>
+            );
+          })}
+          {rolesList.length === 0 && (
+            <p className="text-on-surface-variant py-md">
+              No roles yet. Add them in{" "}
+              <Link href="/hr/masters/roles" className="underline">
+                Masters → Roles
+              </Link>
+              .
+            </p>
+          )}
+        </div>
+        {savedFlag === "roles" && (
+          <p className="text-green-700 text-label-sm mt-sm">Saved.</p>
+        )}
+      </Section>
     </div>
   );
 }

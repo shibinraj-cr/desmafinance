@@ -26,16 +26,30 @@ export default async function EmployeeDetailPage({ params }: { params: { id: str
       </>
     );
   }
-  const [employee, shifts] = await Promise.all([
+  const [employee, shifts, designations, departments, roles] = await Promise.all([
     prisma.employee.findUnique({
       where: { id: params.id },
       include: {
         shift: true,
         salaryStructures: { orderBy: { effectiveFrom: "desc" } },
         leaveBalances: { orderBy: { year: "desc" } },
+        departments: { include: { department: true } },
+        roleMemberships: { include: { role: true } },
       },
     }),
     prisma.hrShift.findMany({ orderBy: { code: "asc" } }),
+    prisma.hrDesignation.findMany({
+      where: { active: true },
+      orderBy: [{ level: "desc" }, { name: "asc" }],
+    }),
+    prisma.hrDepartment.findMany({
+      where: { active: true },
+      orderBy: { name: "asc" },
+    }),
+    prisma.hrRole.findMany({
+      where: { active: true },
+      orderBy: { name: "asc" },
+    }),
   ]);
   if (!employee) notFound();
 
@@ -82,7 +96,20 @@ export default async function EmployeeDetailPage({ params }: { params: { id: str
             shiftId: employee.shiftId ?? "",
             halfHourConcession: employee.halfHourConcession,
             active: employee.active,
+            designationId: employee.designationId ?? "",
+            departments: employee.departments.map((d) => ({
+              departmentId: d.departmentId,
+              isPrimary: d.isPrimary,
+            })),
+            roleIds: employee.roleMemberships.map((r) => r.roleId),
           }}
+          designations={designations.map((d) => ({
+            id: d.id,
+            name: d.name,
+            level: d.level,
+          }))}
+          departmentsList={departments.map((d) => ({ id: d.id, name: d.name }))}
+          rolesList={roles.map((r) => ({ id: r.id, name: r.name }))}
           shifts={shifts.map((s) => ({ id: s.id, code: s.code, name: s.name }))}
           structures={employee.salaryStructures.map((s) => ({
             id: s.id,
