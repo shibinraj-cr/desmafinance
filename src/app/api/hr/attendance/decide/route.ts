@@ -29,13 +29,39 @@ export async function POST(req: Request) {
   });
   if (days.length === 0) return NextResponse.json({ error: "no matching days" }, { status: 404 });
 
-  const updates = days.map((d) => {
+  const updates: { id: string; newStatus: string }[] = [];
+  const blocked: string[] = [];
+  for (const d of days) {
     let newStatus: string;
-    if (decision === "paid") newStatus = "LV";
-    else if (decision === "unpaid") newStatus = "A";
-    else newStatus = d.rawStatus ?? d.status;
-    return { id: d.id, newStatus };
-  });
+    if (decision === "paid") {
+      // A → LV (1 day paid). HD → LV (whole day paid as leave; half-day
+      // becomes a paid full day from the leave balance, employee was here
+      // for the other half).
+      newStatus = "LV";
+    } else if (decision === "unpaid") {
+      // A stays A (full LOP — no-op effect; we still update decidedBy).
+      // HD MUST stay HD — converting HD → A would over-deduct by 0.5
+      // since HD already contributes 0.5 LOP. Block it with a clear error.
+      if (d.status === "HD") {
+        blocked.push(d.id);
+        continue;
+      }
+      newStatus = "A";
+    } else {
+      newStatus = d.rawStatus ?? d.status;
+    }
+    updates.push({ id: d.id, newStatus });
+  }
+
+  if (blocked.length > 0 && updates.length === 0) {
+    return NextResponse.json(
+      {
+        error:
+          "Unpaid is not applicable to Half-day rows — HD already has 0.5 day deduction built in. Use Reset to revert, or Paid to convert to a full Paid Leave day.",
+      },
+      { status: 400 },
+    );
+  }
 
   const now = new Date();
   // Run as a single transaction so the audit log + day rows commit
@@ -66,5 +92,5 @@ export async function POST(req: Request) {
     }),
   ]);
 
-  return NextResponse.json({ updated: updates.length, decision });
+  return NextResponse.json({ updated: updates.length, decision, blocked: blocked.length });
 }

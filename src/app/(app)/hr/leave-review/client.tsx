@@ -173,8 +173,9 @@ export function LeaveReviewClient({
               disabled={pending}
               onClick={() => decide("unpaid", allSelectedIds)}
               className="px-sm py-xs rounded bg-red-600 text-white text-label-sm font-bold disabled:opacity-50"
+              title="HD rows in the selection are skipped — their 0.5 LOP is already built in."
             >
-              Mark as Unpaid (LOP)
+              Mark A days as Unpaid (LOP)
             </button>
             <button
               disabled={pending}
@@ -193,9 +194,13 @@ export function LeaveReviewClient({
         )}
         {error && <p className="mt-sm text-red-700 text-label-sm">{error}</p>}
         <p className="text-caption text-on-surface-variant mt-sm">
-          Each Absent / Half-day from biometric needs a decision. Paid Leave deducts from the
-          employee&apos;s balance; Unpaid deducts from salary. Reset reverts to the original
-          biometric value.
+          <strong>A (Absent)</strong>: choose <em>Paid</em> (→ LV, deducts from leave balance) or
+          <em> Unpaid</em> (→ stays A, full-day LOP).{" "}
+          <strong>HD (Half-day)</strong>: half is auto-deducted (0.5 LOP) — no action needed.{" "}
+          <em>Paid</em> on an HD row converts the whole day to paid leave (the missed half is
+          covered from balance). Unpaid is disabled on HD because the half-day deduction is
+          already built in.{" "}
+          <strong>Reset</strong> reverts to the original biometric value.
         </p>
       </Section>
 
@@ -392,16 +397,22 @@ export function LeaveReviewClient({
                                 disabled={pending}
                                 onClick={() => decide("paid", [r.id])}
                                 className="px-xs py-xs rounded bg-purple-600 text-white text-[10px] font-bold disabled:opacity-50"
+                                title={r.status === "HD" ? "Pay the full day from leave balance (the 0.5 missed half becomes paid leave)" : "Mark as Paid Leave (deducts from leave balance)"}
                               >
                                 Paid
                               </button>
-                              <button
-                                disabled={pending}
-                                onClick={() => decide("unpaid", [r.id])}
-                                className="px-xs py-xs rounded bg-red-600 text-white text-[10px] font-bold disabled:opacity-50"
-                              >
-                                Unpaid
-                              </button>
+                              {/* Unpaid is hidden on HD rows — HD already has 0.5 day LOP
+                                  built in. Converting HD → A would over-deduct by 0.5. */}
+                              {r.status !== "HD" && (
+                                <button
+                                  disabled={pending}
+                                  onClick={() => decide("unpaid", [r.id])}
+                                  className="px-xs py-xs rounded bg-red-600 text-white text-[10px] font-bold disabled:opacity-50"
+                                  title="Confirm full-day LOP (deducts a full day from salary)"
+                                >
+                                  Unpaid
+                                </button>
+                              )}
                               {r.decidedBy && (
                                 <button
                                   disabled={pending}
