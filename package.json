@@ -15,6 +15,7 @@
     "db:seed-roles": "tsx prisma/seed-roles.ts",
     "db:seed-hr": "tsx prisma/seed-hr.ts",
     "db:seed-salary-structures": "tsx prisma/seed-salary-structures.ts",
+    "db:seed-salary-structures-v2": "tsx prisma/seed-salary-structures-v2.ts",
     "db:seed-holidays": "tsx prisma/seed-holidays.ts",
     "db:seed-masters": "tsx prisma/seed-masters.ts",
     "db:migrate-services": "tsx prisma/migrate-services.ts",

@@ -26,12 +26,20 @@ import { cycleWindowForMonth, structureForMonth } from "./hr-data";
  *   net = salaryBeforeEsi − ESI(E) − PF(E) − PT
  */
 
+/// Company-wide CTC split (effective May 2026 onwards). Each allowance
+/// is a % of Basic. Total allowances = 100% → Gross = Basic × 2.
 export const DEFAULT_ALLOWANCE_PCTS = {
-  hra: 50,
-  conveyance: 25,
-  medical: 35,
-  special: 40,
+  hra: 40,
+  conveyance: 20,
+  medical: 25,
+  special: 15,
 } as const;
+
+/// Statutory rates. Employer-side ESI was historically 3.25% but DESMA's
+/// payroll uses 3.75% (per the May 2026 salary structure sheet).
+export const ESI_EMPLOYEE_RATE = 0.0075;
+export const ESI_EMPLOYER_RATE = 0.0375;
+export const PF_RATE = 0.12;
 
 export type SalaryBreakdown = {
   basic: number;
@@ -135,10 +143,10 @@ export function calcLine(args: {
   const basicAfterLop = round2((args.basic * daysAttended) / wd);
   const salaryBeforeEsi = round2(gross - dailyBasis * totalLeaveForLop);
 
-  const esiEmployee = args.esiApplicable ? round(salaryBeforeEsi * 0.0075) : 0;
-  const esiEmployer = args.esiApplicable ? round(salaryBeforeEsi * 0.0325) : 0;
-  const pfEmployee = args.pfApplicable ? round(basicAfterLop * 0.12) : 0;
-  const pfEmployer = args.pfApplicable ? round(basicAfterLop * 0.12) : 0;
+  const esiEmployee = args.esiApplicable ? round(salaryBeforeEsi * ESI_EMPLOYEE_RATE) : 0;
+  const esiEmployer = args.esiApplicable ? round(salaryBeforeEsi * ESI_EMPLOYER_RATE) : 0;
+  const pfEmployee = args.pfApplicable ? round(basicAfterLop * PF_RATE) : 0;
+  const pfEmployer = args.pfApplicable ? round(basicAfterLop * PF_RATE) : 0;
   const pt = args.professionalTax;
 
   const netSalary = round(salaryBeforeEsi - esiEmployee - pfEmployee - pt);
