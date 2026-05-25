@@ -49,7 +49,7 @@ type Structure = {
   notes: string | null;
 };
 
-const DEFAULT_PCTS = { hraPct: 50, conveyancePct: 25, medicalPct: 35, specialPct: 40 };
+const DEFAULT_PCTS = { hraPct: 40, conveyancePct: 20, medicalPct: 25, specialPct: 15 };
 
 function suggestPT(gross: number) {
   const halfYear = gross * 6;

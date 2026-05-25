@@ -64,7 +64,7 @@ export default async function SalaryStructuresPage() {
       medicalPct: Number(cur.medicalPct),
       specialPct: Number(cur.specialPct),
     });
-    const esiEmp = cur.esiApplicable && breakdown.gross <= 21000 ? Math.round(breakdown.gross * 0.0075) : 0;
+    const esiEmp = cur.esiApplicable ? Math.round(breakdown.gross * 0.0075) : 0;
     const pfEmp = cur.pfApplicable ? Math.round(basic * 0.12) : 0;
     return {
       id: e.id,
