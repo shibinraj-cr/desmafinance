@@ -246,9 +246,18 @@ export function LeaveReviewClient({
                   Leave bal:{" "}
                   <strong>{g.balance ? g.balance.balance.toFixed(1) : "—"}</strong>
                 </span>
-                <span className="text-caption text-red-700">A:{g.counts.A}</span>
-                <span className="text-caption text-yellow-700">HD:{g.counts.HD}</span>
-                <span className="text-caption text-purple-700">LV:{g.counts.LV}</span>
+                <span className="text-caption text-yellow-700">
+                  HD {(g.counts.HD * 0.5).toFixed(1)}
+                </span>
+                <span className="text-caption text-purple-700">LV {g.counts.LV}</span>
+                <span className="text-caption text-red-700">A {g.counts.A}</span>
+                <span className="text-caption text-on-surface-variant">·</span>
+                <span className="text-caption">
+                  Paid <strong className="text-purple-700">{g.counts.LV}</strong>
+                </span>
+                <span className="text-caption">
+                  Unpaid <strong className="text-red-700">{(g.counts.A + g.counts.HD * 0.5).toFixed(1)}</strong>
+                </span>
                 {g.counts.undecided > 0 && (
                   <span className="text-caption text-yellow-800 font-bold">
                     {g.counts.undecided} undecided
