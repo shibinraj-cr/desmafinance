@@ -512,11 +512,18 @@ model LeadPulseTarget {
 
 // Marketing holiday calendar. Sundays are implicit and never stored.
 // One row per date, supervisor-editable.
+/// Shared holiday calendar — used by both the Marketing holiday-calendar
+/// page (skips entries when computing working days for Lead Pulse) and
+/// the HR side (treated as paid holiday in attendance + salary). Both
+/// modules read and write this table, gated by their own role checks.
 model Holiday {
   id          String   @id @default(cuid())
   date        DateTime @db.Date
   label       String
   notes       String?
+  /// Whether the holiday is paid (default true). Currently every entry
+  /// is paid; the flag exists for future "unpaid optional holiday" use.
+  paid        Boolean  @default(true)
   createdById String?
   createdBy   User?    @relation(name: "HolidaysCreated", fields: [createdById], references: [id], onDelete: SetNull)
   updatedById String?
@@ -955,17 +962,8 @@ model HrLeaveRequest {
   @@index([status])
 }
 
-model HrHoliday {
-  id        String   @id @default(cuid())
-  date      DateTime @db.Date
-  label     String
-  paid      Boolean  @default(true)
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
-
-  @@unique([date])
-  @@index([date])
-}
+// (HrHoliday was unified into the shared `Holiday` model — both Marketing
+//  and HR now read/write the same table.)
 
 model HrAttendanceUpload {
   id          String   @id @default(cuid())

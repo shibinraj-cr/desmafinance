@@ -14,7 +14,7 @@ export async function employeeForUser(userId: string) {
 /** Count business days (Mon–Sat) inclusive between two dates, skipping HR holidays. */
 export async function countBusinessDays(from: Date, to: Date): Promise<number> {
   if (to < from) return 0;
-  const holidays = await prisma.hrHoliday.findMany({
+  const holidays = await prisma.holiday.findMany({
     where: { date: { gte: from, lte: to } },
     select: { date: true },
   });

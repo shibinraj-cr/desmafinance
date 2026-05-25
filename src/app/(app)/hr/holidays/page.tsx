@@ -23,10 +23,13 @@ export default async function HrHolidaysPage() {
       </>
     );
   }
-  const holidays = await prisma.hrHoliday.findMany({ orderBy: { date: "asc" } });
+  const holidays = await prisma.holiday.findMany({ orderBy: { date: "asc" } });
   return (
     <>
-      <TopBar title="Holiday Calendar" subtitle={`${holidays.length} holiday${holidays.length === 1 ? "" : "s"}`} />
+      <TopBar
+        title="Holiday Calendar"
+        subtitle={`${holidays.length} holiday${holidays.length === 1 ? "" : "s"} · shared with Marketing`}
+      />
       <div className="p-margin">
         <HolidaysEditor
           holidays={holidays.map((h) => ({
@@ -34,6 +37,7 @@ export default async function HrHolidaysPage() {
             date: h.date.toISOString().slice(0, 10),
             label: h.label,
             paid: h.paid,
+            notes: h.notes,
           }))}
           canEdit={canApproveHr(perms)}
         />
