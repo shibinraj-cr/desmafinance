@@ -109,6 +109,66 @@ export function parseMonthKey(monthKey: string): { year: number; month: number; 
   return { year: y, month: m, start, end };
 }
 
+/**
+ * Company salary cycle window for a given cycle-month key.
+ *
+ * Salary cycle runs **26th of previous month → 25th of current month**.
+ * Example: monthKey "2026-04" → 2026-03-26 to 2026-04-25.
+ *
+ * This is the canonical attendance + payroll window. Use it everywhere
+ * we'd previously have used `parseMonthKey` for an attendance lookup.
+ */
+export function cycleWindowForMonth(monthKey: string): {
+  year: number;
+  month: number;
+  start: Date;
+  end: Date;
+} {
+  const [y, m] = monthKey.split("-").map(Number);
+  // start = 26th of (m-1). If m=1 (Jan), prev = Dec of (y-1).
+  const startYear = m === 1 ? y - 1 : y;
+  const startMonth = m === 1 ? 12 : m - 1;
+  const start = new Date(Date.UTC(startYear, startMonth - 1, 26));
+  const end = new Date(Date.UTC(y, m - 1, 25, 23, 59, 59));
+  return { year: y, month: m, start, end };
+}
+
+/**
+ * Given a date, return the cycle monthKey that the date belongs to.
+ * Day-of-month ≤ 25 → same calendar month; ≥ 26 → next calendar month.
+ */
+export function cycleMonthForDate(date: Date): string {
+  const day = date.getUTCDate();
+  let y = date.getUTCFullYear();
+  let m = date.getUTCMonth() + 1;
+  if (day >= 26) {
+    m += 1;
+    if (m > 12) {
+      m = 1;
+      y += 1;
+    }
+  }
+  return `${y}-${String(m).padStart(2, "0")}`;
+}
+
+/** Total number of days in a salary cycle (28-31). */
+export function cycleDayCount(monthKey: string): number {
+  const { start, end } = cycleWindowForMonth(monthKey);
+  return Math.round((end.getTime() - start.getTime()) / 86400000) + 1;
+}
+
+/** Returns the array of UTC dates in a cycle (start..end inclusive). */
+export function cycleDates(monthKey: string): Date[] {
+  const { start, end } = cycleWindowForMonth(monthKey);
+  const dates: Date[] = [];
+  const cur = new Date(start);
+  while (cur <= end) {
+    dates.push(new Date(cur));
+    cur.setUTCDate(cur.getUTCDate() + 1);
+  }
+  return dates;
+}
+
 export const ATT_STATUS = {
   PRESENT: "P",
   ABSENT: "A",

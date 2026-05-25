@@ -13,7 +13,8 @@ type GridCell = {
   ot: number | null;
   remark: string | null;
 };
-type Grid = Record<string, Record<number, GridCell>>;
+/// Keys are ISO date strings (YYYY-MM-DD)
+type Grid = Record<string, Record<string, GridCell>>;
 type Summary = Record<string, { P: number; HD: number; A: number; WO: number; HL: number; LV: number }>;
 
 type Upload = {
@@ -32,6 +33,8 @@ type MonthSummary = {
   unmatchedNames: string[];
 };
 
+type DateCell = { iso: string; day: number; month: number; weekday: string };
+
 const STATUS_TONE: Record<string, string> = {
   P: "bg-green-50 text-green-700",
   HD: "bg-yellow-50 text-yellow-700",
@@ -40,6 +43,12 @@ const STATUS_TONE: Record<string, string> = {
   HL: "bg-blue-50 text-blue-700",
   LV: "bg-purple-50 text-purple-700",
 };
+
+const MONTH_LABEL = [
+  "",
+  "Jan", "Feb", "Mar", "Apr", "May", "Jun",
+  "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
+];
 
 function hhmm(min: number | null): string {
   if (!min) return "";
@@ -50,7 +59,10 @@ function hhmm(min: number | null): string {
 
 export function AttendanceClient({
   monthKey,
-  daysInMonth,
+  prevMonth,
+  nextMonth,
+  cycleLabel,
+  dateCells,
   canUpload,
   uploads,
   employees,
@@ -58,7 +70,10 @@ export function AttendanceClient({
   summary,
 }: {
   monthKey: string;
-  daysInMonth: number;
+  prevMonth: string;
+  nextMonth: string;
+  cycleLabel: string;
+  dateCells: DateCell[];
   canUpload: boolean;
   uploads: Upload[];
   employees: EmployeeLite[];
@@ -92,7 +107,7 @@ export function AttendanceClient({
     }
     const totalInserted = (j.months as MonthSummary[]).reduce((s, m) => s + m.inserted, 0);
     setUploadStatus({
-      msg: `Imported ${totalInserted} day rows across ${j.months.length} month(s).`,
+      msg: `Imported ${totalInserted} day rows across ${j.months.length} cycle(s).`,
       tone: "ok",
       months: j.months,
       unmatched: j.unmatchedNames ?? [],
@@ -108,14 +123,22 @@ export function AttendanceClient({
     router.push(`/hr/attendance?month=${m}`);
   }
 
-  const days = Array.from({ length: daysInMonth }, (_, i) => i + 1);
+  // Identify the month boundary within the date strip so we can paint a separator.
+  const firstMonth = dateCells[0]?.month;
 
   return (
     <>
       <Section title="">
         <div className="flex flex-wrap items-center gap-sm">
+          <button
+            onClick={() => gotoMonth(prevMonth)}
+            className="px-sm py-sm rounded border border-outline-variant"
+            title={`Previous cycle (${prevMonth})`}
+          >
+            ←
+          </button>
           <label className="flex items-center gap-xs text-label-sm">
-            <span className="text-on-surface-variant">View month</span>
+            <span className="text-on-surface-variant">Cycle month</span>
             <input
               type="month"
               value={selectedMonth}
@@ -123,13 +146,21 @@ export function AttendanceClient({
               className="px-sm py-sm rounded border border-outline-variant bg-surface"
             />
           </label>
+          <button
+            onClick={() => gotoMonth(nextMonth)}
+            className="px-sm py-sm rounded border border-outline-variant"
+            title={`Next cycle (${nextMonth})`}
+          >
+            →
+          </button>
+          <span className="text-label-sm text-on-surface-variant">{cycleLabel}</span>
           {canUpload && (
             <>
               <button
                 type="button"
                 onClick={() => fileRef.current?.click()}
                 disabled={pending}
-                className="px-md py-sm rounded bg-primary text-on-primary font-bold disabled:opacity-50"
+                className="ml-auto px-md py-sm rounded bg-primary text-on-primary font-bold disabled:opacity-50"
               >
                 Upload biometric report (.xls / .xlsx)
               </button>
@@ -140,12 +171,13 @@ export function AttendanceClient({
                 className="hidden"
                 onChange={onPick}
               />
-              <span className="text-caption text-on-surface-variant">
-                File can span any date range — months are detected automatically.
-              </span>
             </>
           )}
         </div>
+        <p className="text-caption text-on-surface-variant mt-sm">
+          Salary cycle: 26th of previous month → 25th of current month. The file can span any
+          range; rows are bucketed into the matching cycle automatically.
+        </p>
         {uploadStatus && (
           <div
             className={
@@ -167,7 +199,7 @@ export function AttendanceClient({
               <ul className="mt-xs text-caption list-disc ml-md">
                 {uploadStatus.months.map((m) => (
                   <li key={m.monthKey}>
-                    <strong>{m.monthKey}</strong>: {m.inserted} rows inserted
+                    <strong>Cycle {m.monthKey}</strong>: {m.inserted} rows inserted
                     {m.unmatched > 0 ? `, ${m.unmatched} unmatched` : ""}
                   </li>
                 ))}
@@ -183,12 +215,12 @@ export function AttendanceClient({
       </Section>
 
       {uploads.length > 0 && (
-        <Section title="Uploads covering this month">
+        <Section title="Uploads for this cycle">
           <table className="w-full text-label-sm">
             <thead className="text-left text-on-surface-variant border-b border-outline-variant">
               <tr>
                 <th className="py-sm pr-md">Filename</th>
-                <th className="py-sm pr-md">Rows in this month</th>
+                <th className="py-sm pr-md">Rows for this cycle</th>
                 <th className="py-sm pr-md">By</th>
                 <th className="py-sm pr-md">When</th>
               </tr>
@@ -214,15 +246,39 @@ export function AttendanceClient({
           <table className="text-[11px] border-collapse">
             <thead>
               <tr>
-                <th className="sticky left-0 bg-surface-container z-10 px-sm py-xs text-left text-label-sm">
+                <th
+                  rowSpan={2}
+                  className="sticky left-0 bg-surface-container z-10 px-sm py-xs text-left text-label-sm"
+                >
                   Employee
                 </th>
-                {days.map((d) => (
-                  <th key={d} className="px-xs py-xs text-on-surface-variant w-7 text-center">
-                    {d}
-                  </th>
-                ))}
-                <th className="px-sm py-xs text-on-surface-variant text-right whitespace-nowrap">P · HD · A</th>
+                {dateCells.map((d) => {
+                  const isBoundary = d.day === 1; // start of new calendar month within the cycle
+                  return (
+                    <th
+                      key={d.iso}
+                      className={
+                        "px-xs py-xs text-on-surface-variant w-7 text-center " +
+                        (isBoundary ? "border-l-2 border-l-primary/60" : "")
+                      }
+                      title={d.iso}
+                    >
+                      <div className="text-[9px] font-normal text-on-surface-variant">
+                        {d.day === 26 || d.day === 1 ? MONTH_LABEL[d.month] : ""}
+                      </div>
+                      <div>{d.day}</div>
+                      <div className="text-[9px] font-normal text-on-surface-variant">
+                        {d.weekday[0]}
+                      </div>
+                    </th>
+                  );
+                })}
+                <th
+                  rowSpan={2}
+                  className="px-sm py-xs text-on-surface-variant text-right whitespace-nowrap"
+                >
+                  P · HD · A
+                </th>
               </tr>
             </thead>
             <tbody>
@@ -234,13 +290,14 @@ export function AttendanceClient({
                     <td className="sticky left-0 bg-surface z-10 px-sm py-xs whitespace-nowrap text-label-sm font-medium">
                       {e.empCode} · {e.name}
                     </td>
-                    {days.map((d) => {
-                      const c = row[d];
+                    {dateCells.map((d) => {
+                      const c = row[d.iso];
                       const code = c?.status ?? "";
                       const tone = STATUS_TONE[code] ?? "bg-surface-container text-on-surface-variant";
+                      const isBoundary = d.day === 1;
                       const tip = c
                         ? [
-                            `${code}`,
+                            `${d.iso} ${code}`,
                             c.in && c.out ? `${c.in} → ${c.out}` : null,
                             c.work ? `work ${hhmm(c.work)}` : null,
                             c.ot ? `OT ${hhmm(c.ot)}` : null,
@@ -248,9 +305,15 @@ export function AttendanceClient({
                           ]
                             .filter(Boolean)
                             .join(" · ")
-                        : "no record";
+                        : `${d.iso} — no record`;
                       return (
-                        <td key={d} className="px-[1px] py-[1px] text-center">
+                        <td
+                          key={d.iso}
+                          className={
+                            "px-[1px] py-[1px] text-center " +
+                            (isBoundary ? "border-l-2 border-l-primary/40" : "")
+                          }
+                        >
                           <span
                             title={tip}
                             className={
@@ -275,7 +338,7 @@ export function AttendanceClient({
               })}
               {employees.length === 0 && (
                 <tr>
-                  <td colSpan={daysInMonth + 2} className="py-lg text-center text-on-surface-variant">
+                  <td colSpan={dateCells.length + 2} className="py-lg text-center text-on-surface-variant">
                     No active employees on the master.
                   </td>
                 </tr>
@@ -284,13 +347,15 @@ export function AttendanceClient({
           </table>
         </div>
         <p className="text-caption text-on-surface-variant mt-md">
-          Legend: <span className="font-bold text-green-700">P</span> Present ·{" "}
-          <span className="font-bold text-yellow-700">HD</span> Half-day (auto when work &lt; 4h) ·{" "}
+          Cycle starts {dateCells[0]?.iso} · ends {dateCells[dateCells.length - 1]?.iso}. A
+          highlighted column boundary marks the calendar-month rollover. Legend:{" "}
+          <span className="font-bold text-green-700">P</span> Present ·{" "}
+          <span className="font-bold text-yellow-700">HD</span> Half-day ·{" "}
           <span className="font-bold text-red-700">A</span> Absent ·{" "}
           <span className="font-bold text-on-surface-variant">WO</span> Week-off ·{" "}
           <span className="font-bold text-blue-700">HL</span> Holiday ·{" "}
-          <span className="font-bold text-purple-700">LV</span> Leave. Hover a cell for in/out, work
-          hours, OT, and biometric remark.
+          <span className="font-bold text-purple-700">LV</span> Leave. Hover any cell for IN/OUT,
+          work hours, OT, and biometric remark.
         </p>
       </Section>
     </>
