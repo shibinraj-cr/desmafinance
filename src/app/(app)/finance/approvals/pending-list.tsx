@@ -33,6 +33,7 @@ export type PendingRow = {
   paymentMode: string;
   flow: string;
   amount: number;
+  expDom: string | null;
 };
 
 export type PartyLookup = Record<string, { name: string; group: string }>;
@@ -272,6 +273,7 @@ export function PendingList({
             <tr className="text-left">
               <Th>Date</Th>
               <Th>Type</Th>
+              <Th>EXP/DOM</Th>
               <Th>Category</Th>
               <Th>Sub-item</Th>
               <Th>Party</Th>
@@ -303,6 +305,9 @@ export function PendingList({
                 >
                   <td className="px-md py-sm font-mono text-on-surface whitespace-nowrap">{fmtDDMMYY(r.date)}</td>
                   <td className="px-md py-sm">{r.type}</td>
+                  <td className="px-md py-sm">
+                    {r.type === "Revenue" ? <ExpDomBadge value={r.expDom} /> : <span className="text-on-surface-variant">—</span>}
+                  </td>
                   <td className="px-md py-sm">{r.category}</td>
                   <td className="px-md py-sm">{r.subItem}</td>
                   <td className="px-md py-sm">
@@ -373,7 +378,7 @@ export function PendingList({
             {rows.length === 0 && (
               <tr>
                 <td
-                  colSpan={14}
+                  colSpan={15}
                   className="px-md py-lg text-center text-on-surface-variant"
                 >
                   No pending approvals.
@@ -420,6 +425,26 @@ function Stat({
         · <span className="font-mono">{inrFull(total)}</span>
       </span>
     </div>
+  );
+}
+
+function ExpDomBadge({ value }: { value: string | null }) {
+  if (value !== "DOM" && value !== "EXP") {
+    return <span className="text-on-surface-variant">—</span>;
+  }
+  const cls =
+    value === "EXP"
+      ? "bg-indigo-50 text-indigo-700 border-indigo-200"
+      : "bg-emerald-50 text-emerald-700 border-emerald-200";
+  return (
+    <span
+      className={
+        "inline-flex items-center px-sm py-[2px] rounded-full border text-label-sm font-semibold uppercase tracking-wider " +
+        cls
+      }
+    >
+      {value}
+    </span>
   );
 }
 
