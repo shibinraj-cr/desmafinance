@@ -25,6 +25,7 @@ type Row = {
   esiEmployer: number;
   pfEmployer: number;
   netTakeHome: number;
+  ctc: number;
   hasStructure: boolean;
 };
 
@@ -129,7 +130,10 @@ export function SalaryStructuresClient({
               >
                 Standard Deductions
               </th>
-              <th className="py-xs pr-md text-right text-green-700" rowSpan={2}>
+              <th
+                className="py-xs pr-md text-right text-green-700 bg-green-50/40 border-b border-green-200"
+                rowSpan={2}
+              >
                 Net Take-home
               </th>
               <th
@@ -138,21 +142,27 @@ export function SalaryStructuresClient({
               >
                 Employer Contributions
               </th>
+              <th
+                className="py-xs pr-md text-right text-purple-700 bg-purple-50/40 border-b border-purple-200"
+                rowSpan={2}
+              >
+                CTC
+              </th>
               {canEdit && <th rowSpan={2} />}
             </tr>
-            {/* Sub-headers under each group */}
+            {/* Sub-headers under each group (tinted to match) */}
             <tr>
-              <th className="py-sm pr-md text-right">Basic</th>
-              <th className="py-sm pr-md text-right">HRA</th>
-              <th className="py-sm pr-md text-right">Conv</th>
-              <th className="py-sm pr-md text-right">Med</th>
-              <th className="py-sm pr-md text-right">Spl</th>
-              <th className="py-sm pr-md text-right">Gross</th>
-              <th className="py-sm pr-md text-right">PF(E)</th>
-              <th className="py-sm pr-md text-right">ESI(E)</th>
-              <th className="py-sm pr-md text-right">PT</th>
-              <th className="py-sm pr-md text-right">PF(Emp)</th>
-              <th className="py-sm pr-md text-right">ESI(Emp)</th>
+              <th className="py-sm pr-md text-right text-blue-700 bg-blue-50/40">Basic</th>
+              <th className="py-sm pr-md text-right text-blue-700 bg-blue-50/40">HRA</th>
+              <th className="py-sm pr-md text-right text-blue-700 bg-blue-50/40">Conv</th>
+              <th className="py-sm pr-md text-right text-blue-700 bg-blue-50/40">Med</th>
+              <th className="py-sm pr-md text-right text-blue-700 bg-blue-50/40">Spl</th>
+              <th className="py-sm pr-md text-right text-blue-700 bg-blue-50/40">Gross</th>
+              <th className="py-sm pr-md text-right text-red-700 bg-red-50/40">PF(E)</th>
+              <th className="py-sm pr-md text-right text-red-700 bg-red-50/40">ESI(E)</th>
+              <th className="py-sm pr-md text-right text-red-700 bg-red-50/40">PT</th>
+              <th className="py-sm pr-md text-right text-amber-700 bg-amber-50/40">PF(Emp)</th>
+              <th className="py-sm pr-md text-right text-amber-700 bg-amber-50/40">ESI(Emp)</th>
             </tr>
           </thead>
           <tbody>
@@ -181,7 +191,7 @@ export function SalaryStructuresClient({
                   <td className="py-sm pr-md text-on-surface-variant">
                     {r.effectiveFrom ?? <span className="text-red-700">not set</span>}
                   </td>
-                  <td className="py-sm pr-md text-right">
+                  <td className="py-sm pr-md text-right bg-blue-50/30">
                     {isEditing ? (
                       <input
                         autoFocus
@@ -198,33 +208,46 @@ export function SalaryStructuresClient({
                         }}
                       />
                     ) : (
-                      <span className="font-bold">{r.hasStructure ? inr(r.basic) : "—"}</span>
+                      <span className="font-bold text-blue-900">
+                        {r.hasStructure ? inr(r.basic) : "—"}
+                      </span>
                     )}
                   </td>
-                  <td className="py-sm pr-md text-right">{r.hasStructure ? inr(hra) : "—"}</td>
-                  <td className="py-sm pr-md text-right">{r.hasStructure ? inr(conv) : "—"}</td>
-                  <td className="py-sm pr-md text-right">{r.hasStructure ? inr(med) : "—"}</td>
-                  <td className="py-sm pr-md text-right">{r.hasStructure ? inr(spl) : "—"}</td>
-                  <td className="py-sm pr-md text-right font-bold">
+                  <td className="py-sm pr-md text-right bg-blue-50/30 text-blue-900">
+                    {r.hasStructure ? inr(hra) : "—"}
+                  </td>
+                  <td className="py-sm pr-md text-right bg-blue-50/30 text-blue-900">
+                    {r.hasStructure ? inr(conv) : "—"}
+                  </td>
+                  <td className="py-sm pr-md text-right bg-blue-50/30 text-blue-900">
+                    {r.hasStructure ? inr(med) : "—"}
+                  </td>
+                  <td className="py-sm pr-md text-right bg-blue-50/30 text-blue-900">
+                    {r.hasStructure ? inr(spl) : "—"}
+                  </td>
+                  <td className="py-sm pr-md text-right font-bold bg-blue-50/30 text-blue-900">
                     {r.hasStructure ? inr(r.gross) : "—"}
                   </td>
-                  <td className="py-sm pr-md text-right">
+                  <td className="py-sm pr-md text-right bg-red-50/30 text-red-900">
                     {r.hasStructure ? inr(r.pfEmployee) : "—"}
                   </td>
-                  <td className="py-sm pr-md text-right">
+                  <td className="py-sm pr-md text-right bg-red-50/30 text-red-900">
                     {r.hasStructure ? inr(r.esiEmployee) : "—"}
                   </td>
-                  <td className="py-sm pr-md text-right">
+                  <td className="py-sm pr-md text-right bg-red-50/30 text-red-900">
                     {r.hasStructure ? inr(r.professionalTax) : "—"}
                   </td>
-                  <td className="py-sm pr-md text-right font-bold text-green-700">
+                  <td className="py-sm pr-md text-right font-bold text-green-700 bg-green-50/30">
                     {r.hasStructure ? inr(r.netTakeHome) : "—"}
                   </td>
-                  <td className="py-sm pr-md text-right">
+                  <td className="py-sm pr-md text-right bg-amber-50/30 text-amber-900">
                     {r.hasStructure ? inr(r.pfEmployer) : "—"}
                   </td>
-                  <td className="py-sm pr-md text-right">
+                  <td className="py-sm pr-md text-right bg-amber-50/30 text-amber-900">
                     {r.hasStructure ? inr(r.esiEmployer) : "—"}
+                  </td>
+                  <td className="py-sm pr-md text-right font-bold bg-purple-50/40 text-purple-900">
+                    {r.hasStructure ? inr(r.ctc) : "—"}
                   </td>
                   {canEdit && (
                     <td className="py-sm pr-md text-right">
@@ -265,7 +288,7 @@ export function SalaryStructuresClient({
             })}
             {filtered.length === 0 && (
               <tr>
-                <td colSpan={canEdit ? 15 : 14} className="py-lg text-center text-on-surface-variant">
+                <td colSpan={canEdit ? 16 : 15} className="py-lg text-center text-on-surface-variant">
                   No employees match.
                 </td>
               </tr>
