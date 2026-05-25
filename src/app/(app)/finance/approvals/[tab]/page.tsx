@@ -24,6 +24,7 @@ type ProposedTx = {
   amount: number;
   flow: string;
   partyId?: string | null;
+  expDom?: string | null;
 };
 
 type TabKey = "pending" | "approved" | "rejected";
@@ -212,7 +213,7 @@ export default async function ApprovalsPage({
         const proposed = (p.proposed as unknown as ProposedTx | null) ?? null;
         // create/update show the proposed values; delete shows what is
         // about to be removed.
-        const src: Partial<ProposedTx> & { partyId?: string | null } =
+        const src: Partial<ProposedTx> & { partyId?: string | null; expDom?: string | null } =
           p.kind === "delete" && p.targetTx
             ? {
                 date: p.targetTx.date.toISOString().slice(0, 10),
@@ -224,6 +225,7 @@ export default async function ApprovalsPage({
                 paymentMode: p.targetTx.paymentMode,
                 flow: p.targetTx.flow,
                 amount: Number(p.targetTx.amount.toString()),
+                expDom: p.targetTx.expDom ?? null,
               }
             : proposed ?? {};
         return {
@@ -240,6 +242,7 @@ export default async function ApprovalsPage({
           paymentMode: src.paymentMode ?? "",
           flow: src.flow ?? "",
           amount: typeof src.amount === "number" ? src.amount : Number(src.amount ?? 0),
+          expDom: src.expDom ?? null,
         };
       })
     : [];
@@ -331,6 +334,7 @@ export default async function ApprovalsPage({
                   amount: Number(p.targetTx.amount.toString()),
                   flow: p.targetTx.flow,
                   partyId: p.targetTx.partyId,
+                  expDom: p.targetTx.expDom ?? null,
                 }
               : null;
 
@@ -664,6 +668,7 @@ function DiffCard({
     { key: "description", label: "Description" },
     { key: "paymentMode", label: "Payment mode" },
     { key: "flow", label: "Flow" },
+    { key: "expDom", label: "EXP / DOM" },
     { key: "amount", label: "Total amount" },
   ];
   const renderPartyId = (id: unknown) => {
