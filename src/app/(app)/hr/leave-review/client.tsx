@@ -7,12 +7,16 @@ import { Section } from "@/components/Cards";
 type Row = {
   id: string;
   date: string;
+  weekday: string;
+  shiftCode: string | null;
   status: string;
   rawStatus: string | null;
   remark: string | null;
   in: string | null;
   out: string | null;
   workMinutes: number | null;
+  lateMinutes: number | null;
+  earlyOutMinutes: number | null;
   decidedBy: string | null;
   decidedAt: string | null;
   decisionNote: string | null;
@@ -22,6 +26,10 @@ type Group = {
   empId: string;
   empCode: string;
   name: string;
+  lateEligible: boolean;
+  late: { withinGrace: number; overGrace: number; daysCount: number };
+  lateGraceMinutes: number;
+  lateGraceDays: number;
   balance: { opening: number; accrued: number; used: number; balance: number } | null;
   rows: Row[];
   counts: { A: number; HD: number; LV: number; undecided: number };
@@ -193,13 +201,47 @@ export function LeaveReviewClient({
 
       {groups.map((g) => {
         const visibleRows = g.rows.filter((r) => (filter === "all" ? true : !r.decidedBy));
-        if (visibleRows.length === 0) return null;
+        const hasLateConcern = g.late.daysCount > 0;
+        // Render section if there's something HR should look at: visible
+        // A/HD/LV rows OR late-coming activity for this employee.
+        if (visibleRows.length === 0 && !hasLateConcern) return null;
+        // Late-coming concession status (cycle-scoped):
+        //   eligible employees get 30 min × 3 days/cycle.
+        const graceUsed = Math.min(g.late.withinGrace, g.lateGraceDays);
+        const graceLeft = Math.max(0, g.lateGraceDays - graceUsed);
+        const lateOverPolicy =
+          g.late.overGrace +
+          Math.max(0, g.late.withinGrace - g.lateGraceDays); // beyond 3 days
+        const lateChip = g.lateEligible ? (
+          <span
+            className={
+              "text-caption px-xs py-[2px] rounded " +
+              (lateOverPolicy > 0
+                ? "bg-red-50 text-red-700 font-bold"
+                : graceUsed > 0
+                  ? "bg-yellow-50 text-yellow-800"
+                  : "bg-green-50 text-green-700")
+            }
+            title={`Eligible: 30 min × ${g.lateGraceDays} days/cycle. Used ${graceUsed}/${g.lateGraceDays}.`}
+          >
+            Late {graceUsed}/{g.lateGraceDays}
+            {lateOverPolicy > 0 ? ` · ${lateOverPolicy} over` : ""}
+          </span>
+        ) : g.late.daysCount > 0 ? (
+          <span
+            className="text-caption px-xs py-[2px] rounded bg-red-50 text-red-700"
+            title="Late-coming eligibility is OFF for this employee. Each late day is a violation."
+          >
+            Late {g.late.daysCount}d {g.late.overGrace > 0 ? `(${g.late.overGrace} over 30m)` : ""}
+          </span>
+        ) : null;
         return (
           <Section
             key={g.empId}
             title={`${g.empCode} · ${g.name}`}
             action={
-              <div className="flex items-center gap-sm">
+              <div className="flex items-center gap-sm flex-wrap">
+                {lateChip}
                 <span className="text-caption">
                   Leave bal:{" "}
                   <strong>{g.balance ? g.balance.balance.toFixed(1) : "—"}</strong>
@@ -230,10 +272,10 @@ export function LeaveReviewClient({
                     </th>
                   )}
                   <th className="py-sm pr-md">Date</th>
+                  <th className="py-sm pr-md">Shift</th>
                   <th className="py-sm pr-md">Status</th>
-                  <th className="py-sm pr-md">Biometric</th>
-                  <th className="py-sm pr-md">IN / OUT</th>
-                  <th className="py-sm pr-md">Work</th>
+                  <th className="py-sm pr-md">Punch</th>
+                  <th className="py-sm pr-md">Work · Late · EO</th>
                   <th className="py-sm pr-md">Remark</th>
                   <th className="py-sm pr-md">Decision</th>
                   {canDecide && <th className="py-sm pr-md">Action</th>}
@@ -242,6 +284,7 @@ export function LeaveReviewClient({
               <tbody>
                 {visibleRows.map((r) => {
                   const tone = STATUS_TONE[r.status] ?? "bg-surface-container";
+                  const hasPunch = !!(r.in || r.out);
                   return (
                     <tr key={r.id} className="border-b border-outline-variant last:border-0 align-top">
                       {canDecide && (
@@ -253,7 +296,13 @@ export function LeaveReviewClient({
                           />
                         </td>
                       )}
-                      <td className="py-sm pr-md whitespace-nowrap">{r.date}</td>
+                      <td className="py-sm pr-md whitespace-nowrap">
+                        {r.date}
+                        <div className="text-caption text-on-surface-variant">{r.weekday}</div>
+                      </td>
+                      <td className="py-sm pr-md text-on-surface-variant">
+                        {r.shiftCode ?? "—"}
+                      </td>
                       <td className="py-sm pr-md">
                         <span
                           className={
@@ -263,14 +312,42 @@ export function LeaveReviewClient({
                         >
                           {r.status}
                         </span>
+                        {r.rawStatus && r.rawStatus !== r.status && (
+                          <div className="text-caption text-on-surface-variant">
+                            from {r.rawStatus}
+                          </div>
+                        )}
                       </td>
-                      <td className="py-sm pr-md text-on-surface-variant">
-                        {r.rawStatus ?? "—"}
+                      <td className="py-sm pr-md whitespace-nowrap">
+                        {hasPunch ? (
+                          <span className="text-on-surface">
+                            {r.in ?? "—"} → {r.out ?? "—"}
+                          </span>
+                        ) : (
+                          <span className="italic text-on-surface-variant">
+                            no biometric punch
+                          </span>
+                        )}
                       </td>
                       <td className="py-sm pr-md text-on-surface-variant whitespace-nowrap">
-                        {r.in && r.out ? `${r.in} → ${r.out}` : "—"}
+                        {hasPunch ? (
+                          <>
+                            {hhmm(r.workMinutes)}
+                            {r.lateMinutes ? (
+                              <span className="ml-xs text-yellow-700">
+                                · LT {hhmm(r.lateMinutes)}
+                              </span>
+                            ) : null}
+                            {r.earlyOutMinutes ? (
+                              <span className="ml-xs text-yellow-700">
+                                · EO {hhmm(r.earlyOutMinutes)}
+                              </span>
+                            ) : null}
+                          </>
+                        ) : (
+                          "—"
+                        )}
                       </td>
-                      <td className="py-sm pr-md text-on-surface-variant">{hhmm(r.workMinutes)}</td>
                       <td className="py-sm pr-md text-on-surface-variant">{r.remark ?? "—"}</td>
                       <td className="py-sm pr-md text-on-surface-variant">
                         {r.decidedBy ? (

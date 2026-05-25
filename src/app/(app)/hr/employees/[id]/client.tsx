@@ -300,13 +300,21 @@ export function EmployeeEditor({
                 onChange={(e) => setDraft({ ...draft, branch: e.target.value })}
               />
             </Field>
-            <label className="flex items-center gap-xs text-label-sm md:col-span-3">
+            <label className="flex items-start gap-xs text-label-sm md:col-span-3">
               <input
                 type="checkbox"
+                className="mt-[3px]"
                 checked={draft.halfHourConcession}
                 onChange={(e) => setDraft({ ...draft, halfHourConcession: e.target.checked })}
               />
-              Half-hour concession (3×/month)
+              <span>
+                <span className="font-semibold">Late Coming Eligibility</span>
+                <span className="block text-caption text-on-surface-variant">
+                  When enabled, this employee can arrive up to <strong>30 minutes late on
+                  up to 3 days per salary cycle (26th → 25th)</strong> without it being treated
+                  as a late offence. Applies regardless of the assigned shift.
+                </span>
+              </span>
             </label>
             <label className="flex items-center gap-xs text-label-sm md:col-span-3">
               <input

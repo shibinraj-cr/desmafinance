@@ -288,13 +288,19 @@ export function NewEmployeeButton({ shifts }: { shifts: ShiftLite[] }) {
                   onChange={(e) => setDraft({ ...draft, branch: e.target.value })}
                 />
               </Field>
-              <label className="col-span-2 flex items-center gap-xs text-label-sm">
+              <label className="col-span-2 flex items-start gap-xs text-label-sm">
                 <input
                   type="checkbox"
+                  className="mt-[3px]"
                   checked={draft.halfHourConcession}
                   onChange={(e) => setDraft({ ...draft, halfHourConcession: e.target.checked })}
                 />
-                Half-hour concession (3×/month)
+                <span>
+                  <span className="font-semibold">Late Coming Eligibility</span>
+                  <span className="block text-caption text-on-surface-variant">
+                    Allows 30-min late arrival on up to 3 days per cycle.
+                  </span>
+                </span>
               </label>
             </div>
             {error && <p className="text-red-700 text-label-sm mt-sm">{error}</p>}

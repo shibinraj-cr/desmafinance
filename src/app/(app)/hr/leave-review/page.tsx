@@ -39,7 +39,7 @@ export default async function LeaveReviewPage({
       : cycleMonthForDate(today);
   const { start, end } = cycleWindowForMonth(requested);
 
-  const [days, employees, balances] = await Promise.all([
+  const [days, employees, balances, lateDays] = await Promise.all([
     prisma.hrAttendanceDay.findMany({
       where: {
         date: { gte: start, lte: end },
@@ -56,13 +56,41 @@ export default async function LeaveReviewPage({
     prisma.employee.findMany({
       where: { active: true },
       orderBy: { empCode: "asc" },
-      select: { id: true, empCode: true, name: true },
+      select: {
+        id: true,
+        empCode: true,
+        name: true,
+        halfHourConcession: true,
+      },
     }),
     prisma.hrLeaveBalance.findMany({
       where: { year: start.getUTCFullYear() },
       select: { employeeId: true, opening: true, accrued: true, used: true, balance: true },
     }),
+    // Pull P + HD days with late > 0 so we can compute the late-coming
+    // concession usage per employee for this cycle.
+    prisma.hrAttendanceDay.findMany({
+      where: {
+        date: { gte: start, lte: end },
+        status: { in: ["P", "HD"] },
+        lateMinutes: { gt: 0 },
+      },
+      select: { employeeId: true, date: true, lateMinutes: true },
+      orderBy: { date: "asc" },
+    }),
   ]);
+
+  // Late-coming concession: 30 min × 3 days per cycle.
+  const LATE_GRACE_MINUTES = 30;
+  const LATE_GRACE_DAYS = 3;
+  const lateByEmp: Record<string, { withinGrace: number; overGrace: number; daysCount: number }> = {};
+  for (const ld of lateDays) {
+    const lm = ld.lateMinutes ?? 0;
+    lateByEmp[ld.employeeId] ??= { withinGrace: 0, overGrace: 0, daysCount: 0 };
+    lateByEmp[ld.employeeId].daysCount++;
+    if (lm <= LATE_GRACE_MINUTES) lateByEmp[ld.employeeId].withinGrace++;
+    else lateByEmp[ld.employeeId].overGrace++;
+  }
 
   const balanceByEmp = new Map(
     balances.map((b) => [
@@ -83,16 +111,24 @@ export default async function LeaveReviewPage({
       empId: string;
       empCode: string;
       name: string;
+      lateEligible: boolean;
+      late: { withinGrace: number; overGrace: number; daysCount: number };
+      lateGraceMinutes: number;
+      lateGraceDays: number;
       balance: { opening: number; accrued: number; used: number; balance: number } | null;
       rows: {
         id: string;
         date: string;
+        weekday: string;
+        shiftCode: string | null;
         status: string;
         rawStatus: string | null;
         remark: string | null;
         in: string | null;
         out: string | null;
         workMinutes: number | null;
+        lateMinutes: number | null;
+        earlyOutMinutes: number | null;
         decidedBy: string | null;
         decidedAt: string | null;
         decisionNote: string | null;
@@ -101,12 +137,20 @@ export default async function LeaveReviewPage({
     }
   > = {};
 
+  // Build empId → metadata lookup for late-coming eligibility.
+  const empMetaById = new Map(employees.map((e) => [e.id, e]));
+
   for (const d of days) {
     const empId = d.employeeId;
+    const empMeta = empMetaById.get(empId);
     grouped[empId] ??= {
       empId,
       empCode: d.employee.empCode,
       name: d.employee.name,
+      lateEligible: empMeta?.halfHourConcession ?? false,
+      late: lateByEmp[empId] ?? { withinGrace: 0, overGrace: 0, daysCount: 0 },
+      lateGraceMinutes: LATE_GRACE_MINUTES,
+      lateGraceDays: LATE_GRACE_DAYS,
       balance: balanceByEmp.get(empId) ?? null,
       rows: [],
       counts: { A: 0, HD: 0, LV: 0, undecided: 0 },
@@ -114,12 +158,16 @@ export default async function LeaveReviewPage({
     grouped[empId].rows.push({
       id: d.id,
       date: d.date.toISOString().slice(0, 10),
+      weekday: ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"][d.date.getUTCDay()],
+      shiftCode: d.shiftCode,
       status: d.status,
       rawStatus: d.rawStatus,
       remark: d.remark,
       in: d.inTime,
       out: d.outTime,
       workMinutes: d.workMinutes,
+      lateMinutes: d.lateMinutes,
+      earlyOutMinutes: d.earlyOutMinutes,
       decidedBy: d.decidedBy?.username ?? null,
       decidedAt: d.decidedAt ? d.decidedAt.toISOString() : null,
       decisionNote: d.decisionNote,
@@ -130,13 +178,18 @@ export default async function LeaveReviewPage({
     if (!d.decidedById) grouped[empId].counts.undecided++;
   }
 
-  // Include employees with zero A/HD/LV so HR can confirm "all clear".
+  // Include employees with zero A/HD/LV so HR can confirm "all clear" and
+  // can still see their late-coming concession usage.
   for (const e of employees) {
     if (!(e.id in grouped)) {
       grouped[e.id] = {
         empId: e.id,
         empCode: e.empCode,
         name: e.name,
+        lateEligible: e.halfHourConcession,
+        late: lateByEmp[e.id] ?? { withinGrace: 0, overGrace: 0, daysCount: 0 },
+        lateGraceMinutes: LATE_GRACE_MINUTES,
+        lateGraceDays: LATE_GRACE_DAYS,
         balance: balanceByEmp.get(e.id) ?? null,
         rows: [],
         counts: { A: 0, HD: 0, LV: 0, undecided: 0 },
