@@ -221,7 +221,7 @@ export function LeaveReviewClient({
                   ? "bg-amber-50 text-amber-800"
                   : "bg-green-50 text-green-700")
             }
-            title={`Eligible: ${g.lateGraceMinutes} min × ${g.lateGraceDays} days/cycle. LCE used ${g.late.lceUsed}/${g.lateGraceDays}.`}
+            title={`Eligible: 10-${g.lateGraceMinutes} min late window × ${g.lateGraceDays} days/cycle (≤10 min = on-time). LCE used ${g.late.lceUsed}/${g.lateGraceDays}.`}
           >
             LCE {g.late.lceUsed}/{g.lateGraceDays}
             {g.late.alCount > 0 ? ` · AL ${g.late.alCount}` : ""}

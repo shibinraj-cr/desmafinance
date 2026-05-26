@@ -88,6 +88,7 @@ export function EmployeesTable({
               <th className="py-sm pr-md">Bank</th>
               <th className="py-sm pr-md">Salary</th>
               <th className="py-sm pr-md">Status</th>
+              <th className="py-sm pr-md text-right">Action</th>
             </tr>
           </thead>
           <tbody>
@@ -128,11 +129,19 @@ export function EmployeesTable({
                     <span className="text-on-surface-variant">Inactive</span>
                   )}
                 </td>
+                <td className="py-sm pr-md text-right whitespace-nowrap">
+                  <Link
+                    href={`/hr/employees/${e.id}`}
+                    className={canEdit ? "text-blue-700 underline" : "text-on-surface-variant underline"}
+                  >
+                    {canEdit ? "Edit" : "View"}
+                  </Link>
+                </td>
               </tr>
             ))}
             {filtered.length === 0 && (
               <tr>
-                <td colSpan={9} className="py-lg text-center text-on-surface-variant">
+                <td colSpan={10} className="py-lg text-center text-on-surface-variant">
                   No employees match.
                 </td>
               </tr>

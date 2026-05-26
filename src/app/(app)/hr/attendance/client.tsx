@@ -397,8 +397,8 @@ export function AttendanceClient({
                           className="text-on-surface-variant"
                           title={
                             e.lateEligible
-                              ? `Late-Coming Eligible: ${lceGraceMinutes}-min grace × ${lceGraceDays} days/cycle`
-                              : "Not eligible for LCE — every late day counts as AL"
+                              ? `Late-Coming Eligible: 10-${lceGraceMinutes} min window × ${lceGraceDays} days/cycle (≤10 min is on-time)`
+                              : "Not eligible for LCE — late beyond 10 min counts as AL"
                           }
                         >
                           {e.lateEligible ? (

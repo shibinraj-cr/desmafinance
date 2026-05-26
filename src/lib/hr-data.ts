@@ -173,26 +173,28 @@ export function cycleDates(monthKey: string): Date[] {
 }
 
 /**
- * Late-Coming Eligibility (LCE) policy:
- *   eligible employees can arrive up to GRACE_MINUTES late on up to
- *   GRACE_DAYS days per salary cycle (26th → 25th).
- * Days within the grace are tagged "LCE"; everything else with late > 0
- * is tagged "AL" (Arrived Late).
+ * Late-Coming policy (per salary cycle, 26th → 25th):
+ *
+ *   SHIFT_GRACE_MINUTES (10) — universal shift grace. Arriving within
+ *     this many minutes of shift start is on-time (no tag, no quota).
+ *     Shift A (09:00 start): on-time ≤ 09:10. Shift B (09:30): ≤ 09:40.
+ *
+ *   LCE window (SHIFT_GRACE_MINUTES, LCE_LATE_LIMIT_MINUTES] — only
+ *     "Late Coming Eligibility" employees may use this. They get
+ *     LCE_GRACE_DAYS (3) such days per cycle.
+ *     Shift A: 09:11–09:30. Shift B: 09:41–10:00.
+ *
+ *   Beyond LCE_LATE_LIMIT_MINUTES, or LCE quota exhausted, or not
+ *     eligible → "AL" (Arrived Late).
  */
-export const LCE_GRACE_MINUTES = 30;
+export const SHIFT_GRACE_MINUTES = 10;
+export const LCE_LATE_LIMIT_MINUTES = 30;
 export const LCE_GRACE_DAYS = 3;
+// Retained for backwards compatibility with any external imports.
+export const LCE_GRACE_MINUTES = LCE_LATE_LIMIT_MINUTES;
 
 export type LateTag = "LCE" | "AL" | null;
 
-/**
- * Compute LCE / AL tags for one employee's days within a cycle.
- * Walks days in chronological order, consumes the LCE quota greedily.
- *
- * - status WO / HL / A / LV → no tag (didn't work that day)
- * - status P / HD + late ≤ 0 → no tag
- * - eligible + late ≤ 30m + quota left → "LCE" (consume one)
- * - everything else with late > 0 → "AL"
- */
 export function computeLateTags(
   days: { id: string; date: Date; lateMinutes: number | null; status: string }[],
   eligible: boolean,
@@ -207,17 +209,17 @@ export function computeLateTags(
   const sorted = [...days].sort((a, b) => a.date.getTime() - b.date.getTime());
   for (const d of sorted) {
     const late = d.lateMinutes ?? 0;
-    if (late <= 0) {
-      tags.set(d.id, null);
-      continue;
-    }
     // Only late-from-work days count — being late while absent / on leave / off
     // is not a concept.
     if (d.status !== "P" && d.status !== "HD") {
       tags.set(d.id, null);
       continue;
     }
-    if (eligible && late <= LCE_GRACE_MINUTES && lceUsed < LCE_GRACE_DAYS) {
+    if (late <= SHIFT_GRACE_MINUTES) {
+      tags.set(d.id, null);
+      continue;
+    }
+    if (eligible && late <= LCE_LATE_LIMIT_MINUTES && lceUsed < LCE_GRACE_DAYS) {
       tags.set(d.id, "LCE");
       lceUsed++;
     } else {
