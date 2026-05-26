@@ -32,6 +32,7 @@ const Patch = z.object({
   halfHourConcession: z.boolean().optional(),
   active: z.boolean().optional(),
   userId: z.string().nullable().optional(),
+  designationId: z.string().nullable().optional(),
 });
 
 export async function PATCH(req: Request, { params }: { params: { id: string } }) {
@@ -49,7 +50,7 @@ export async function PATCH(req: Request, { params }: { params: { id: string } }
     "email", "officialEmail", "phone", "emergencyContact", "officeNumber",
     "address", "designation", "department", "highestEducation", "maritalStatus",
     "experienceNotes", "yearsOfExperience", "aadhar", "pan", "accountNumber",
-    "ifsc", "bankName", "branch", "shiftId", "userId",
+    "ifsc", "bankName", "branch", "shiftId", "userId", "designationId",
   ]) {
     if (data[k] === "") data[k] = null;
   }

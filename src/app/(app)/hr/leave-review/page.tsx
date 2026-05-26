@@ -7,6 +7,9 @@ import { Section } from "@/components/Cards";
 import {
   cycleWindowForMonth,
   cycleMonthForDate,
+  computeLateTags,
+  LCE_GRACE_DAYS,
+  LCE_GRACE_MINUTES,
 } from "@/lib/hr-data";
 import { LeaveReviewClient } from "./client";
 
@@ -67,29 +70,33 @@ export default async function LeaveReviewPage({
       where: { year: start.getUTCFullYear() },
       select: { employeeId: true, opening: true, accrued: true, used: true, balance: true },
     }),
-    // Pull P + HD days with late > 0 so we can compute the late-coming
-    // concession usage per employee for this cycle.
+    // Pull P + HD days with late > 0 so we can compute LCE/AL per
+    // employee for this cycle.
     prisma.hrAttendanceDay.findMany({
       where: {
         date: { gte: start, lte: end },
         status: { in: ["P", "HD"] },
         lateMinutes: { gt: 0 },
       },
-      select: { employeeId: true, date: true, lateMinutes: true },
+      select: { id: true, employeeId: true, date: true, lateMinutes: true, status: true },
       orderBy: { date: "asc" },
     }),
   ]);
 
-  // Late-coming concession: 30 min × 3 days per cycle.
-  const LATE_GRACE_MINUTES = 30;
-  const LATE_GRACE_DAYS = 3;
-  const lateByEmp: Record<string, { withinGrace: number; overGrace: number; daysCount: number }> = {};
+  // Compute LCE / AL counts per employee using the shared helper.
+  const lateByEmp: Record<string, { lceUsed: number; alCount: number }> = {};
+  const empEligibleById = new Map(employees.map((e) => [e.id, e.halfHourConcession]));
+  const lateByEmpRaw: Record<string, typeof lateDays> = {};
   for (const ld of lateDays) {
-    const lm = ld.lateMinutes ?? 0;
-    lateByEmp[ld.employeeId] ??= { withinGrace: 0, overGrace: 0, daysCount: 0 };
-    lateByEmp[ld.employeeId].daysCount++;
-    if (lm <= LATE_GRACE_MINUTES) lateByEmp[ld.employeeId].withinGrace++;
-    else lateByEmp[ld.employeeId].overGrace++;
+    lateByEmpRaw[ld.employeeId] ??= [];
+    lateByEmpRaw[ld.employeeId].push(ld);
+  }
+  for (const empId of Object.keys(lateByEmpRaw)) {
+    const { lceUsed, alCount } = computeLateTags(
+      lateByEmpRaw[empId],
+      empEligibleById.get(empId) ?? false,
+    );
+    lateByEmp[empId] = { lceUsed, alCount };
   }
 
   const balanceByEmp = new Map(
@@ -112,7 +119,7 @@ export default async function LeaveReviewPage({
       empCode: string;
       name: string;
       lateEligible: boolean;
-      late: { withinGrace: number; overGrace: number; daysCount: number };
+      late: { lceUsed: number; alCount: number };
       lateGraceMinutes: number;
       lateGraceDays: number;
       balance: { opening: number; accrued: number; used: number; balance: number } | null;
@@ -148,9 +155,9 @@ export default async function LeaveReviewPage({
       empCode: d.employee.empCode,
       name: d.employee.name,
       lateEligible: empMeta?.halfHourConcession ?? false,
-      late: lateByEmp[empId] ?? { withinGrace: 0, overGrace: 0, daysCount: 0 },
-      lateGraceMinutes: LATE_GRACE_MINUTES,
-      lateGraceDays: LATE_GRACE_DAYS,
+      late: lateByEmp[empId] ?? { lceUsed: 0, alCount: 0 },
+      lateGraceMinutes: LCE_GRACE_MINUTES,
+      lateGraceDays: LCE_GRACE_DAYS,
       balance: balanceByEmp.get(empId) ?? null,
       rows: [],
       counts: { A: 0, HD: 0, LV: 0, undecided: 0 },
@@ -187,9 +194,9 @@ export default async function LeaveReviewPage({
         empCode: e.empCode,
         name: e.name,
         lateEligible: e.halfHourConcession,
-        late: lateByEmp[e.id] ?? { withinGrace: 0, overGrace: 0, daysCount: 0 },
-        lateGraceMinutes: LATE_GRACE_MINUTES,
-        lateGraceDays: LATE_GRACE_DAYS,
+        late: lateByEmp[e.id] ?? { lceUsed: 0, alCount: 0 },
+        lateGraceMinutes: LCE_GRACE_MINUTES,
+        lateGraceDays: LCE_GRACE_DAYS,
         balance: balanceByEmp.get(e.id) ?? null,
         rows: [],
         counts: { A: 0, HD: 0, LV: 0, undecided: 0 },

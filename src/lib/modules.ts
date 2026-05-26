@@ -142,6 +142,10 @@ export const MODULES: AppModule[] = [
     pages: [
       { href: "/hr/dashboard", label: "Dashboard", icon: "dashboard" },
       { href: "/hr/employees", label: "Employees", icon: "groups" },
+      { href: "/hr/org-chart", label: "Org Chart", icon: "account_tree" },
+      { href: "/hr/masters/designations", label: "Designations", icon: "stairs" },
+      { href: "/hr/masters/departments", label: "Departments", icon: "domain" },
+      { href: "/hr/masters/roles", label: "Roles", icon: "badge" },
       { href: "/hr/shifts", label: "Shifts", icon: "schedule" },
       { href: "/hr/attendance", label: "Attendance", icon: "fact_check" },
       { href: "/hr/leave-review", label: "Leave Review", icon: "rule" },

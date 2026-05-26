@@ -4,7 +4,16 @@ import { getCurrentUserAndPermissions } from "@/lib/permissions";
 import { isHrUser, canApproveHr } from "@/lib/hr-rbac";
 import { TopBar } from "@/components/TopBar";
 import { Section } from "@/components/Cards";
-import { cycleWindowForMonth, cycleDates, monthKeyFromDate, cycleMonthForDate } from "@/lib/hr-data";
+import {
+  cycleWindowForMonth,
+  cycleDates,
+  monthKeyFromDate,
+  cycleMonthForDate,
+  computeLateTags,
+  LCE_GRACE_DAYS,
+  LCE_GRACE_MINUTES,
+  type LateTag,
+} from "@/lib/hr-data";
 import { AttendanceClient } from "./client";
 
 export const dynamic = "force-dynamic";
@@ -52,7 +61,7 @@ export default async function HrAttendancePage({
     prisma.employee.findMany({
       where: { active: true },
       orderBy: { empCode: "asc" },
-      select: { id: true, empCode: true, name: true },
+      select: { id: true, empCode: true, name: true, halfHourConcession: true },
     }),
   ]);
 
@@ -66,13 +75,28 @@ export default async function HrAttendancePage({
         out: string | null;
         work: number | null;
         ot: number | null;
+        late: number | null;
         remark: string | null;
+        lateTag: LateTag;
       }
     >
   > = {};
-  const summary: Record<string, { P: number; HD: number; A: number; WO: number; HL: number; LV: number }> = {};
+  const summary: Record<
+    string,
+    { P: number; HD: number; A: number; WO: number; HL: number; LV: number; LCE: number; AL: number }
+  > = {};
+
+  // Compute LCE/AL tags per employee from the days in this cycle.
+  const tagsByDayId = new Map<string, LateTag>();
+  for (const emp of employees) {
+    const empDays = days.filter((d) => d.employeeId === emp.id);
+    const { tags } = computeLateTags(empDays, emp.halfHourConcession);
+    for (const [dayId, tag] of tags) tagsByDayId.set(dayId, tag);
+  }
+
   for (const d of days) {
     const key = d.date.toISOString().slice(0, 10);
+    const lateTag = tagsByDayId.get(d.id) ?? null;
     grid[d.employeeId] ??= {};
     grid[d.employeeId][key] = {
       status: d.status,
@@ -80,11 +104,19 @@ export default async function HrAttendancePage({
       out: d.outTime,
       work: d.workMinutes,
       ot: d.otMinutes,
+      late: d.lateMinutes,
       remark: d.remark,
+      lateTag,
     };
-    summary[d.employeeId] ??= { P: 0, HD: 0, A: 0, WO: 0, HL: 0, LV: 0 };
+    summary[d.employeeId] ??= { P: 0, HD: 0, A: 0, WO: 0, HL: 0, LV: 0, LCE: 0, AL: 0 };
     const k = d.status as keyof (typeof summary)[string];
-    if (k in summary[d.employeeId]) summary[d.employeeId][k]++;
+    if (k in summary[d.employeeId]) (summary[d.employeeId][k] as number)++;
+    if (lateTag === "LCE") summary[d.employeeId].LCE++;
+    else if (lateTag === "AL") summary[d.employeeId].AL++;
+  }
+  // Ensure every employee has a summary row even if no days
+  for (const emp of employees) {
+    summary[emp.id] ??= { P: 0, HD: 0, A: 0, WO: 0, HL: 0, LV: 0, LCE: 0, AL: 0 };
   }
 
   const dateCells = dates.map((d) => ({
@@ -125,9 +157,16 @@ export default async function HrAttendancePage({
             uploadedAt: u.uploadedAt.toISOString(),
             uploadedBy: u.uploadedBy?.username ?? "—",
           }))}
-          employees={employees}
+          employees={employees.map((e) => ({
+            id: e.id,
+            empCode: e.empCode,
+            name: e.name,
+            lateEligible: e.halfHourConcession,
+          }))}
           grid={grid}
           summary={summary}
+          lceGraceDays={LCE_GRACE_DAYS}
+          lceGraceMinutes={LCE_GRACE_MINUTES}
         />
       </div>
     </>

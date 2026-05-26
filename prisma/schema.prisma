@@ -840,8 +840,17 @@ model Employee {
   empCode             String   @unique
   name                String
   dob                 DateTime? @db.Date
+  /// Free-text legacy designation (preserved during migration). New
+  /// rows should set `designationId` instead, but this column stays
+  /// readable so historical CSV exports keep working.
   designation         String?
+  /// Free-text legacy primary department. Superseded by the
+  /// HrEmployeeDepartment many-to-many (isPrimary=true).
   department          String?
+  /// FK into HrDesignation — defines the employee's tier in the org
+  /// hierarchy.
+  designationId       String?
+  designationRef      HrDesignation? @relation(fields: [designationId], references: [id], onDelete: SetNull)
   email               String?
   officialEmail       String?
   phone               String?
@@ -877,10 +886,96 @@ model Employee {
   policyAcks          HrPolicyAcknowledgement[]
   trainingProgress    HrTrainingProgress[]
   notificationReceipts HrNotificationReceipt[]
+  departments         HrEmployeeDepartment[]
+  roleMemberships     HrEmployeeRole[]
+  /// Departments this employee heads (zero, one, or many).
+  headOfDepartments   HrDepartment[] @relation("HrDepartmentHead")
 
   @@index([active])
   @@index([shiftId])
   @@index([department])
+  @@index([designationId])
+}
+
+/// Designation = seniority tier (e.g. Director, Sr. Manager, Manager,
+/// Asst. Manager, Sr. Executive, Executive, Trainee). `level` is the
+/// numeric rank — higher number = more senior. The Org Chart sorts
+/// employees inside each department by descending level.
+model HrDesignation {
+  id        String   @id @default(cuid())
+  name      String   @unique
+  /// Higher = more senior. Used for tier ordering in the org chart.
+  level     Int      @default(0)
+  active    Boolean  @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  employees Employee[]
+
+  @@index([active])
+  @@index([level])
+}
+
+/// Functional / business department (e.g. Sales, HR, Finance,
+/// Documentation). Each can have a head; employees join via the
+/// HrEmployeeDepartment M:M with one flagged primary.
+model HrDepartment {
+  id              String   @id @default(cuid())
+  name            String   @unique
+  description     String?
+  headEmployeeId  String?
+  headEmployee    Employee? @relation("HrDepartmentHead", fields: [headEmployeeId], references: [id], onDelete: SetNull)
+  active          Boolean  @default(true)
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+  members         HrEmployeeDepartment[]
+
+  @@index([active])
+}
+
+/// M:M join: Employee ↔ Department. Exactly one row per (employee,
+/// department) pair may have isPrimary=true — enforced at the API
+/// layer (Prisma can't express the "exactly-one" constraint).
+model HrEmployeeDepartment {
+  id           String   @id @default(cuid())
+  employeeId   String
+  employee     Employee @relation(fields: [employeeId], references: [id], onDelete: Cascade)
+  departmentId String
+  department   HrDepartment @relation(fields: [departmentId], references: [id], onDelete: Cascade)
+  isPrimary    Boolean  @default(false)
+  createdAt    DateTime @default(now())
+
+  @@unique([employeeId, departmentId])
+  @@index([departmentId])
+  @@index([employeeId])
+  @@index([employeeId, isPrimary])
+}
+
+/// Functional role / specialty (e.g. BDE L1, BDE L2, Counsellor,
+/// Tele Marketing, Voxbay Admin). Free-form — HR adds rows as needed.
+model HrRole {
+  id          String   @id @default(cuid())
+  name        String   @unique
+  description String?
+  active      Boolean  @default(true)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+  members     HrEmployeeRole[]
+
+  @@index([active])
+}
+
+/// M:M join: Employee ↔ Role.
+model HrEmployeeRole {
+  id         String   @id @default(cuid())
+  employeeId String
+  employee   Employee @relation(fields: [employeeId], references: [id], onDelete: Cascade)
+  roleId     String
+  role       HrRole   @relation(fields: [roleId], references: [id], onDelete: Cascade)
+  createdAt  DateTime @default(now())
+
+  @@unique([employeeId, roleId])
+  @@index([employeeId])
+  @@index([roleId])
 }
 
 /// Per-employee salary structure. Basic is the primary input; HRA /
