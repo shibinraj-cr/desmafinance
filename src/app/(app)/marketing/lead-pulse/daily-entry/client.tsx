@@ -914,8 +914,18 @@ function humanError(code: string): string {
       return "One of the rows has invalid totals. Fix the highlighted row and try again.";
     case "locked":
       return "This entry is locked. Ask a supervisor to override before editing.";
+    case "approved_locked":
+      return "This entry was already approved by a supervisor. Ask them to unlock it before re-editing.";
     case "outside_backdate_window":
-      return "This date is outside the 3-day editing window.";
+      return "This date is outside the 3-day editing window. Ask a supervisor to unlock it.";
+    case "service_count_mismatch":
+      return "Pick one service per Closed-Won close before submitting.";
+    case "unknown_source":
+      return "One of the source rows references a source that no longer exists. Refresh and try again.";
+    case "unknown_service":
+      return "One of the closes references a service that no longer exists. Pick another and retry.";
+    case "validation_failed":
+      return "The values entered didn't pass validation. Check the highlighted fields.";
     case "forbidden_no_bde_role":
       return "You don't have a BDE role assigned.";
     case "forbidden_inactive":
