@@ -4,7 +4,7 @@ import { useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { Section } from "@/components/Cards";
-import type { BirthdayRow } from "@/lib/hr-birthdays";
+import type { BirthdayRow, UpcomingBirthday } from "@/lib/hr-birthdays";
 
 const MONTH_NAMES = [
   "Jan", "Feb", "Mar", "Apr", "May", "Jun",
@@ -31,8 +31,8 @@ export function BirthdayCalendarClient({
   monthNum: number;
   monthLabel: string;
   monthly: BirthdayRow[];
-  upcoming: (BirthdayRow & { delta?: number })[];
-  todayList: BirthdayRow[];
+  upcoming: UpcomingBirthday[];
+  todayList: UpcomingBirthday[];
   settings: Settings;
 }) {
   const router = useRouter();
@@ -173,7 +173,7 @@ export function BirthdayCalendarClient({
                 <div className="text-right">
                   <p className="text-h3 font-extrabold tabular-nums">{b.dob.slice(5)}</p>
                   <p className="text-caption text-on-surface-variant">
-                    {(b as { delta?: number }).delta === 0 ? "Today" : `in ${(b as { delta?: number }).delta} days`}
+                    {b.delta === 0 ? "Today" : `in ${b.delta} days`}
                   </p>
                 </div>
               </div>
