@@ -5,8 +5,66 @@ import { getCurrentUserAndPermissions } from "@/lib/permissions";
 import { isHrUser } from "@/lib/hr-rbac";
 import { TopBar } from "@/components/TopBar";
 import { Section } from "@/components/Cards";
+import styles from "./org-chart.module.css";
 
 export const dynamic = "force-dynamic";
+
+type Variant = "root" | "head" | "ic" | "dept-only" | "placeholder";
+
+function Box({
+  variant,
+  empId,
+  title,
+  sub,
+  code,
+  star,
+}: {
+  variant: Variant;
+  empId?: string;
+  title: string;
+  sub?: string | null;
+  code?: string | null;
+  star?: boolean;
+}) {
+  const map: Record<Variant, string> = {
+    root: "bg-blue-900 text-white border-blue-800",
+    head: "bg-blue-700 text-white border-blue-600",
+    ic: "bg-blue-600 text-white border-blue-500",
+    "dept-only": "bg-blue-100 text-blue-900 border-blue-300",
+    placeholder: "bg-surface-container text-on-surface-variant border-outline-variant",
+  };
+  const widths: Record<Variant, string> = {
+    root: "min-w-[220px]",
+    head: "min-w-[200px]",
+    ic: "min-w-[190px]",
+    "dept-only": "min-w-[200px]",
+    placeholder: "min-w-[220px]",
+  };
+  const card = (
+    <div
+      className={
+        "rounded-md border-2 px-md py-sm text-center shadow-sm " +
+        widths[variant] +
+        " " +
+        map[variant] +
+        (empId ? " hover:shadow-md transition cursor-pointer" : "")
+      }
+    >
+      <div className="font-bold text-label-sm leading-tight">
+        {star && <span className="mr-xs">★</span>}
+        {title}
+      </div>
+      {sub && (
+        <div className="text-caption leading-tight opacity-90 mt-[2px]">{sub}</div>
+      )}
+      {code && (
+        <div className="text-[10px] opacity-70 mt-[2px]">#{code}</div>
+      )}
+    </div>
+  );
+  if (empId) return <Link href={`/hr/employees/${empId}`}>{card}</Link>;
+  return card;
+}
 
 export default async function OrgChartPage() {
   const { perms } = await getCurrentUserAndPermissions();
@@ -29,7 +87,14 @@ export default async function OrgChartPage() {
       where: { active: true },
       orderBy: { name: "asc" },
       include: {
-        headEmployee: { select: { id: true, empCode: true, name: true } },
+        headEmployee: {
+          select: {
+            id: true,
+            empCode: true,
+            name: true,
+            designationRef: { select: { name: true, level: true } },
+          },
+        },
       },
     }),
     prisma.employee.findMany({
@@ -37,180 +102,137 @@ export default async function OrgChartPage() {
       include: {
         designationRef: true,
         departments: { include: { department: true } },
-        roleMemberships: { include: { role: true } },
       },
     }),
     prisma.hrDesignation.findMany({ orderBy: { level: "desc" } }),
   ]);
 
-  // Bucket employees by department (using primary department first; fall
-  // back to first available membership).
-  type EmpView = {
-    id: string;
-    empCode: string;
-    name: string;
-    designationName: string | null;
-    designationLevel: number;
-    roles: string[];
-    isHead: boolean;
-  };
+  // Root = highest-level employee. Ties broken by name.
+  const sortedByLevel = [...employees].sort((a, b) => {
+    const la = a.designationRef?.level ?? 0;
+    const lb = b.designationRef?.level ?? 0;
+    if (lb !== la) return lb - la;
+    return a.name.localeCompare(b.name);
+  });
+  const root = sortedByLevel[0] ?? null;
 
-  const empsByDept: Record<string, EmpView[]> = {};
-  const unassigned: EmpView[] = [];
+  const headIds = new Set(
+    departments
+      .map((d) => d.headEmployeeId)
+      .filter((id): id is string => Boolean(id)),
+  );
+
+  // ICs grouped under each department's primary id, excluding root + heads.
+  const icsByDept: Record<string, typeof employees> = {};
   for (const e of employees) {
-    const view: EmpView = {
-      id: e.id,
-      empCode: e.empCode,
-      name: e.name,
-      designationName: e.designationRef?.name ?? null,
-      designationLevel: e.designationRef?.level ?? 0,
-      roles: e.roleMemberships.map((r) => r.role.name),
-      isHead: false,
-    };
-    if (e.departments.length === 0) {
-      unassigned.push(view);
-      continue;
-    }
-    // Show under every department, but mark whether they're the primary
-    // there for visual emphasis.
-    for (const dep of e.departments) {
-      empsByDept[dep.departmentId] ??= [];
-      empsByDept[dep.departmentId].push({ ...view, isHead: false });
-    }
+    if (e.id === root?.id) continue;
+    if (headIds.has(e.id)) continue;
+    const primary = e.departments.find((d) => d.isPrimary) ?? e.departments[0];
+    if (!primary) continue;
+    icsByDept[primary.departmentId] ??= [];
+    icsByDept[primary.departmentId].push(e);
   }
-  // Mark dept heads
-  for (const d of departments) {
-    if (!d.headEmployeeId) continue;
-    const list = empsByDept[d.id];
-    if (!list) continue;
-    const head = list.find((e) => e.id === d.headEmployeeId);
-    if (head) head.isHead = true;
+  for (const arr of Object.values(icsByDept)) {
+    arr.sort((a, b) => {
+      const la = a.designationRef?.level ?? 0;
+      const lb = b.designationRef?.level ?? 0;
+      if (lb !== la) return lb - la;
+      return a.name.localeCompare(b.name);
+    });
   }
 
-  // Sort each dept's employees by designation level desc, name asc.
-  for (const arr of Object.values(empsByDept)) {
-    arr.sort(
-      (a, b) =>
-        b.designationLevel - a.designationLevel ||
-        a.name.localeCompare(b.name),
-    );
-  }
-
-  // Group employees within each department by designation tier for the
-  // visual layout.
-  function tierGroups(emps: EmpView[]) {
-    const tiers: { level: number; designation: string; emps: EmpView[] }[] = [];
-    for (const e of emps) {
-      const last = tiers[tiers.length - 1];
-      if (last && last.level === e.designationLevel && last.designation === (e.designationName ?? "Unassigned")) {
-        last.emps.push(e);
-      } else {
-        tiers.push({
-          level: e.designationLevel,
-          designation: e.designationName ?? "Unassigned",
-          emps: [e],
-        });
-      }
-    }
-    return tiers;
-  }
+  const unassigned = employees.filter(
+    (e) => e.id !== root?.id && !headIds.has(e.id) && e.departments.length === 0,
+  );
 
   return (
     <>
       <TopBar
         title="Organisational Hierarchy"
-        subtitle={`${departments.length} departments · ${employees.length} employees · auto-built from Designations + Departments`}
+        subtitle={`${departments.length} departments · ${employees.length} active employees · auto-built from Designations + Departments`}
       />
       <div className="p-margin space-y-lg">
-        {departments.length === 0 && (
-          <Section title="">
+        <Section title="">
+          {departments.length === 0 && !root ? (
             <p className="py-lg text-center text-on-surface-variant">
-              No departments configured yet. Add them in{" "}
+              No employees or departments configured yet.{" "}
               <Link href="/hr/masters/departments" className="text-blue-700 underline">
-                Masters → Departments
-              </Link>
-              .
+                Add departments
+              </Link>{" "}
+              and assign heads to see the chart.
             </p>
-          </Section>
-        )}
-
-        {departments.map((d) => {
-          const emps = empsByDept[d.id] ?? [];
-          const tiers = tierGroups(emps);
-          return (
-            <Section
-              key={d.id}
-              title={d.name}
-              action={
-                <span className="text-caption text-on-surface-variant">
-                  {emps.length} member{emps.length === 1 ? "" : "s"}
-                </span>
-              }
-            >
-              {d.description && (
-                <p className="text-on-surface-variant text-label-sm mb-md">{d.description}</p>
-              )}
-              {d.headEmployee && (
-                <div className="text-label-sm mb-md">
-                  <span className="text-on-surface-variant">Head: </span>
-                  <Link
-                    href={`/hr/employees/${d.headEmployee.id}`}
-                    className="font-bold text-on-surface hover:underline"
-                  >
-                    {d.headEmployee.empCode} · {d.headEmployee.name}
-                  </Link>
-                </div>
-              )}
-              {tiers.length === 0 ? (
-                <p className="text-on-surface-variant text-label-sm">No employees yet.</p>
-              ) : (
-                <div className="space-y-md">
-                  {tiers.map((tier, ti) => (
-                    <div key={ti}>
-                      <div className="text-caption text-on-surface-variant uppercase tracking-wider mb-xs">
-                        {tier.designation}
-                        {tier.level > 0 && (
-                          <span className="ml-xs text-[10px]">L{tier.level}</span>
-                        )}
-                      </div>
-                      <div className="flex flex-wrap gap-sm">
-                        {tier.emps.map((emp) => (
-                          <Link
-                            key={emp.id}
-                            href={`/hr/employees/${emp.id}`}
-                            className={
-                              "rounded-lg border px-md py-sm hover:shadow-md transition flex flex-col gap-xs min-w-[200px] " +
-                              (emp.isHead
-                                ? "border-primary bg-primary/5"
-                                : "border-outline-variant bg-surface")
-                            }
-                          >
-                            <div className="font-bold text-label-sm">
-                              {emp.isHead && (
-                                <span className="text-primary mr-xs" title="Department head">
-                                  ★
-                                </span>
-                              )}
-                              {emp.name}
-                            </div>
-                            <div className="text-caption text-on-surface-variant">
-                              {emp.empCode}
-                            </div>
-                            {emp.roles.length > 0 && (
-                              <div className="text-caption text-on-surface-variant">
-                                {emp.roles.join(" · ")}
+          ) : (
+            <div className={styles.wrap}>
+              <ul className={styles.tree}>
+                <li>
+                  {root ? (
+                    <Box
+                      variant="root"
+                      empId={root.id}
+                      title={root.name}
+                      sub={root.designationRef?.name ?? "—"}
+                      code={root.empCode}
+                    />
+                  ) : (
+                    <Box
+                      variant="placeholder"
+                      title="DESMA Finance"
+                      sub="No MD / CEO assigned"
+                    />
+                  )}
+                  {departments.length > 0 && (
+                    <ul>
+                      {departments.map((d) => {
+                        const isHeadRoot = d.headEmployeeId === root?.id;
+                        const head = isHeadRoot ? null : d.headEmployee ?? null;
+                        const ics = icsByDept[d.id] ?? [];
+                        return (
+                          <li key={d.id}>
+                            {head ? (
+                              <Box
+                                variant="head"
+                                empId={head.id}
+                                title={head.name}
+                                sub={`${d.name} — ${head.designationRef?.name ?? "Head"}`}
+                                code={head.empCode}
+                                star
+                              />
+                            ) : (
+                              <Box
+                                variant="dept-only"
+                                title={d.name}
+                                sub={
+                                  isHeadRoot
+                                    ? "Reports directly to MD"
+                                    : "No head assigned"
+                                }
+                              />
+                            )}
+                            {ics.length > 0 && (
+                              <div className={styles.icList}>
+                                {ics.map((e) => (
+                                  <div key={e.id} className={styles.icItem}>
+                                    <Box
+                                      variant="ic"
+                                      empId={e.id}
+                                      title={e.name}
+                                      sub={e.designationRef?.name ?? ""}
+                                      code={e.empCode}
+                                    />
+                                  </div>
+                                ))}
                               </div>
                             )}
-                          </Link>
-                        ))}
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              )}
-            </Section>
-          );
-        })}
+                          </li>
+                        );
+                      })}
+                    </ul>
+                  )}
+                </li>
+              </ul>
+            </div>
+          )}
+        </Section>
 
         {unassigned.length > 0 && (
           <Section
@@ -222,14 +244,16 @@ export default async function OrgChartPage() {
             }
           >
             <div className="flex flex-wrap gap-sm">
-              {unassigned.map((emp) => (
+              {unassigned.map((e) => (
                 <Link
-                  key={emp.id}
-                  href={`/hr/employees/${emp.id}`}
+                  key={e.id}
+                  href={`/hr/employees/${e.id}`}
                   className="rounded-lg border border-yellow-300 bg-yellow-50 px-md py-sm hover:shadow-md transition flex flex-col gap-xs min-w-[200px]"
                 >
-                  <div className="font-bold text-label-sm">{emp.name}</div>
-                  <div className="text-caption text-on-surface-variant">{emp.empCode}</div>
+                  <div className="font-bold text-label-sm">{e.name}</div>
+                  <div className="text-caption text-on-surface-variant">
+                    {e.empCode}
+                  </div>
                 </Link>
               ))}
             </div>
@@ -238,7 +262,9 @@ export default async function OrgChartPage() {
 
         <Section title="Designation tiers (company-wide)">
           {designations.length === 0 ? (
-            <p className="text-on-surface-variant text-label-sm">No designations configured.</p>
+            <p className="text-on-surface-variant text-label-sm">
+              No designations configured.
+            </p>
           ) : (
             <table className="w-full text-label-sm">
               <thead className="text-left text-on-surface-variant border-b border-outline-variant">
