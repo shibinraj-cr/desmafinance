@@ -83,7 +83,26 @@ export async function GET(req: NextRequest) {
   const withinWindow = isWithinBackdateWindow(dateParse.data, today);
   const supervisorUnlocked = !!unlock;
   const anyLocked = entries.some((e) => e.locked) || !!meta?.locked;
-  const editable = (withinWindow || supervisorUnlocked) && !anyLocked;
+  // Editability rules — kept in lockstep with the page-server logic in
+  // src/app/(app)/marketing/lead-pulse/daily-entry/page.tsx AND with
+  // the save endpoint's lockBypass below, so the UI never lets the
+  // BDE type into fields that the server will then refuse to persist.
+  //
+  //   - Rejected entries: always editable so the BDE can fix flagged
+  //     issues and resubmit.
+  //   - Supervisor-unlocked: editable as long as no row carries a
+  //     hard `locked` flag (the unlock lifts both the backdate window
+  //     and the approved-status block).
+  //   - Approved without unlock: read-only — Suhaina has signed off.
+  //   - Otherwise: must be within the 3-day window and no row locked.
+  const editable =
+    meta?.status === "rejected"
+      ? true
+      : supervisorUnlocked
+        ? !anyLocked
+        : meta?.status === "approved"
+          ? false
+          : withinWindow && !anyLocked;
 
   return NextResponse.json({
     date: dateParse.data,
