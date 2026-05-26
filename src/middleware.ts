@@ -28,6 +28,6 @@ export const config = {
     // Run on every path except: auth/health endpoints, the login page,
     // Next.js internal asset routes, and any file with an extension
     // (covers /desfin.png, /icon.png, /favicon.ico, fonts, etc.).
-    "/((?!login|api/auth|api/health|api/whoami|_next/static|_next/image|.*\\..*).*)",
+    "/((?!login|api/auth|api/health|api/whoami|psych/test|api/psych/test|_next/static|_next/image|.*\\..*).*)",
   ],
 };

@@ -1,0 +1,50 @@
+/* Print-styled HTML report. Admin opens this page and uses the browser's
+   Print → Save as PDF to produce a PDF copy. The watermark and A4 page
+   sizing only kick in for print; on-screen the layout stays normal. */
+
+.watermark {
+  position: fixed;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  pointer-events: none;
+  z-index: 0;
+}
+
+.watermark span {
+  font-size: 96px;
+  font-weight: 800;
+  letter-spacing: 0.05em;
+  color: #000;
+  opacity: 0;
+  transform: rotate(-30deg);
+  user-select: none;
+  white-space: nowrap;
+}
+
+@media print {
+  @page {
+    size: A4;
+    margin: 16mm;
+  }
+  .watermark span {
+    opacity: 0.06;
+  }
+  .noPrint {
+    display: none !important;
+  }
+  .reportRoot {
+    background: white !important;
+    padding: 0 !important;
+  }
+  .pageBreak {
+    page-break-before: always;
+  }
+}
+
+.reportRoot {
+  position: relative;
+  background: #fff;
+  padding: 32px;
+}

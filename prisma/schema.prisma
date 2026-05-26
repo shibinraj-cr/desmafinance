@@ -9,63 +9,65 @@ datasource db {
 }
 
 model User {
-  id                  String            @id @default(cuid())
-  username            String            @unique
-  email               String?           @unique
-  passwordHash        String
+  id                     String                @id @default(cuid())
+  username               String                @unique
+  email                  String?               @unique
+  passwordHash           String
   // Legacy string role kept for backward compat — capability checks now
   // prefer the `roleRef` relation when present and fall back to this.
-  role                String            @default("executive")
-  roleId              String?
-  roleRef             Role?             @relation(fields: [roleId], references: [id], onDelete: SetNull)
-  createdAt           DateTime          @default(now())
-  updatedAt           DateTime          @updatedAt
-  transactions        Transaction[]
-  auditLogs           AuditLog[]
-  submittedApprovals  PendingApproval[] @relation("submittedApprovals")
-  reviewedApprovals   PendingApproval[] @relation("reviewedApprovals")
+  role                   String                @default("executive")
+  roleId                 String?
+  roleRef                Role?                 @relation(fields: [roleId], references: [id], onDelete: SetNull)
+  createdAt              DateTime              @default(now())
+  updatedAt              DateTime              @updatedAt
+  transactions           Transaction[]
+  auditLogs              AuditLog[]
+  submittedApprovals     PendingApproval[]     @relation("submittedApprovals")
+  reviewedApprovals      PendingApproval[]     @relation("reviewedApprovals")
   // Lead Pulse relations
-  leadPulseRole       LeadPulseRole?
-  leadPulseEntries    LeadPulseDailyEntry[] @relation("LeadPulseEntries")
-  leadPulseMeta       LeadPulseDailyMeta[]  @relation("LeadPulseMeta")
-  leadPulseMetaReviewed LeadPulseDailyMeta[] @relation("LeadPulseMetaReviewed")
-  leadPulseAuditLogs  LeadPulseAuditLog[]   @relation("LeadPulseAudit")
-  leadPulseTargets        LeadPulseTarget[]   @relation("LeadPulseTargets")
-  leadPulseTargetsEdited  LeadPulseTarget[]   @relation("LeadPulseTargetEditors")
+  leadPulseRole          LeadPulseRole?
+  leadPulseEntries       LeadPulseDailyEntry[] @relation("LeadPulseEntries")
+  leadPulseMeta          LeadPulseDailyMeta[]  @relation("LeadPulseMeta")
+  leadPulseMetaReviewed  LeadPulseDailyMeta[]  @relation("LeadPulseMetaReviewed")
+  leadPulseAuditLogs     LeadPulseAuditLog[]   @relation("LeadPulseAudit")
+  leadPulseTargets       LeadPulseTarget[]     @relation("LeadPulseTargets")
+  leadPulseTargetsEdited LeadPulseTarget[]     @relation("LeadPulseTargetEditors")
   // Candidates assigned to this user as their L2 BDE (the BDE who
   // closed the deal). Drives the service-conversion matrix.
-  assignedCandidates  Party[]               @relation("PartyAssignedL2Bde")
+  assignedCandidates     Party[]               @relation("PartyAssignedL2Bde")
   // Marketing holiday calendar edits
-  holidaysCreated     Holiday[]             @relation("HolidaysCreated")
-  holidaysUpdated     Holiday[]             @relation("HolidaysUpdated")
+  holidaysCreated        Holiday[]             @relation("HolidaysCreated")
+  holidaysUpdated        Holiday[]             @relation("HolidaysUpdated")
   // Voxbay CSV uploads
-  voxbayUploads       VoxbayUpload[]        @relation("VoxbayUploads")
+  voxbayUploads          VoxbayUpload[]        @relation("VoxbayUploads")
   // Per-user "draft first" workflow flag — when true, new transactions
   // created by this user are stored as TransactionDraft rows for them
   // to review/edit before pushing into the regular approval queue.
   // Used for Ganga's review-before-submit flow.
-  draftFirst          Boolean               @default(false)
-  transactionDrafts   TransactionDraft[]
+  draftFirst             Boolean               @default(false)
+  transactionDrafts      TransactionDraft[]
   // L2 BDE pipeline (in-flight expected closes)
-  leadPulsePipeline   LeadPulsePipeline[]   @relation("LeadPulsePipeline")
+  leadPulsePipeline      LeadPulsePipeline[]   @relation("LeadPulsePipeline")
   // Supervisor-granted unlocks for the daily-entry backdate window
-  leadPulseUnlocks       LeadPulseUnlock[] @relation("LeadPulseUnlockTarget")
-  leadPulseUnlocksGiven  LeadPulseUnlock[] @relation("LeadPulseUnlockActor")
+  leadPulseUnlocks       LeadPulseUnlock[]     @relation("LeadPulseUnlockTarget")
+  leadPulseUnlocksGiven  LeadPulseUnlock[]     @relation("LeadPulseUnlockActor")
   // Monthly AI-style insight + Q&A loop on the BDE performance page
-  leadPulseBdeInsights LeadPulseBdeInsight[] @relation("BdeInsights")
-  collectionPlansCreated CollectionPlan[]   @relation("CollectionPlanCreatedBy")
+  leadPulseBdeInsights   LeadPulseBdeInsight[] @relation("BdeInsights")
+  collectionPlansCreated CollectionPlan[]      @relation("CollectionPlanCreatedBy")
 
   // HR relations
-  employeeProfile        Employee?              @relation("UserEmployee")
-  hrAttendanceUploads    HrAttendanceUpload[]   @relation("HrUploader")
-  hrLeaveReviews         HrLeaveRequest[]       @relation("HrLeaveReviewer")
-  hrSalaryRunsCreated    HrSalaryRun[]          @relation("HrSalaryRunCreator")
-  hrSalaryRunsApproved   HrSalaryRun[]          @relation("HrSalaryRunApprover")
-  hrPoliciesPublished    HrPolicy[]             @relation("HrPolicyPublisher")
-  hrTrainingsCreated     HrTraining[]           @relation("HrTrainingCreator")
-  hrNotificationsCreated HrNotification[]       @relation("HrNotificationCreator")
-  hrAuditLogs            HrAuditLog[]           @relation("HrAuditActor")
-  hrLeaveDecisions       HrAttendanceDay[]      @relation("HrLeaveDecider")
+  employeeProfile        Employee?            @relation("UserEmployee")
+  hrAttendanceUploads    HrAttendanceUpload[] @relation("HrUploader")
+  hrLeaveReviews         HrLeaveRequest[]     @relation("HrLeaveReviewer")
+  hrSalaryRunsCreated    HrSalaryRun[]        @relation("HrSalaryRunCreator")
+  hrSalaryRunsApproved   HrSalaryRun[]        @relation("HrSalaryRunApprover")
+  hrPoliciesPublished    HrPolicy[]           @relation("HrPolicyPublisher")
+  hrTrainingsCreated     HrTraining[]         @relation("HrTrainingCreator")
+  hrNotificationsCreated HrNotification[]     @relation("HrNotificationCreator")
+  hrAuditLogs            HrAuditLog[]         @relation("HrAuditActor")
+  hrLeaveDecisions       HrAttendanceDay[]    @relation("HrLeaveDecider")
+  psychTestsCreated      PsychTest[]          @relation("PsychTestCreator")
+  psychAssignmentsGiven  PsychAssignment[]    @relation("PsychAssigner")
 
   @@index([roleId])
 }
@@ -77,7 +79,7 @@ model Role {
   // Capability flags
   isAdmin       Boolean  @default(false) // Manage users + roles, see everything
   canApprove    Boolean  @default(false) // Approve/reject pending changes
-  needsApproval Boolean  @default(true)  // Their tx mutations enter the queue
+  needsApproval Boolean  @default(true) // Their tx mutations enter the queue
   // List of page paths this role is allowed to view (e.g. ["/overview", "/revenue"])
   pages         String[]
   // Built-in roles (Admin/Manager/Executive) cannot be deleted
@@ -112,7 +114,7 @@ model Transaction {
   createdAt   DateTime  @default(now())
   updatedAt   DateTime  @updatedAt
 
-  pendingApprovals PendingApproval[] @relation("targetTransaction")
+  pendingApprovals      PendingApproval[]          @relation("targetTransaction")
   collectionInstallment CollectionPlanInstallment? @relation("InstallmentTransaction")
 
   @@index([date])
@@ -162,33 +164,33 @@ model SubCategory {
 }
 
 model Service {
-  id          String        @id @default(cuid())
-  name        String        @unique
-  description String?
-  isActive    Boolean       @default(true)
-  isSystem    Boolean       @default(false)
+  id                String                @id @default(cuid())
+  name              String                @unique
+  description       String?
+  isActive          Boolean               @default(true)
+  isSystem          Boolean               @default(false)
   // Whether this service appears as a column on the L2 Targets matrix.
-  showInL2Targets Boolean   @default(true)
+  showInL2Targets   Boolean               @default(true)
   // Weight of this service when computing a group's actual on the
   // L2 Targets matrix. e.g. weight = 2 means a party closed against
   // this service counts as 2 toward the BDE's group total. Default
   // 1 means every service counts equally.
-  weight      Float         @default(1)
+  weight            Float                 @default(1)
   // Optional grouping for the L2 Targets matrix. Services in the same
   // group share a single per-month target; the matrix columns are
   // groups, not individual services.
-  groupId     String?
-  group       ServiceGroup? @relation(fields: [groupId], references: [id], onDelete: SetNull)
-  createdAt   DateTime      @default(now())
-  updatedAt   DateTime      @updatedAt
-  subItems    SubCategory[]
+  groupId           String?
+  group             ServiceGroup?         @relation(fields: [groupId], references: [id], onDelete: SetNull)
+  createdAt         DateTime              @default(now())
+  updatedAt         DateTime              @updatedAt
+  subItems          SubCategory[]
   // Legacy M:M (read-only at this point) — new code uses partyServices.
-  parties     Party[]
-  partyServices PartyService[]
-  leadPulseTargets LeadPulseTarget[]
-  leadPulseCloses LeadPulseDailyClose[]
+  parties           Party[]
+  partyServices     PartyService[]
+  leadPulseTargets  LeadPulseTarget[]
+  leadPulseCloses   LeadPulseDailyClose[]
   leadPulsePipeline LeadPulsePipeline[]
-  collectionPlans CollectionPlan[]
+  collectionPlans   CollectionPlan[]
 
   @@index([isActive])
   @@index([groupId])
@@ -199,14 +201,14 @@ model Service {
 /// Zealand", "Study Abroad"). Each Service belongs to at most one
 /// group.
 model ServiceGroup {
-  id           String   @id @default(cuid())
-  name         String   @unique
-  description  String?
-  displayOrder Int      @default(0)
-  isActive     Boolean  @default(true)
-  createdAt    DateTime @default(now())
-  updatedAt    DateTime @updatedAt
-  services     Service[]
+  id               String            @id @default(cuid())
+  name             String            @unique
+  description      String?
+  displayOrder     Int               @default(0)
+  isActive         Boolean           @default(true)
+  createdAt        DateTime          @default(now())
+  updatedAt        DateTime          @updatedAt
+  services         Service[]
   leadPulseTargets LeadPulseTarget[]
 
   @@index([isActive])
@@ -223,7 +225,7 @@ model PartyService {
   serviceId   String
   service     Service  @relation(fields: [serviceId], references: [id], onDelete: Restrict)
   /// Quoted package amount (₹) the candidate owes for this service.
-  totalAmount Decimal  @db.Decimal(14, 2) @default(0)
+  totalAmount Decimal  @default(0) @db.Decimal(14, 2)
   notes       String?
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
@@ -243,33 +245,33 @@ model PartyService {
 // ──────────────────────────────────────────────────────────────────────
 
 model LeadPulseRole {
-  id           String   @id @default(cuid())
-  userId       String   @unique
-  user         User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  id          String   @id @default(cuid())
+  userId      String   @unique
+  user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
   // 'l1' | 'l2' | 'supervisor'
-  role         String
+  role        String
   // Region codes from LeadPulseRegion.code; empty array = all regions.
-  regionFocus  String[] @default([])
-  displayName  String
-  active       Boolean  @default(true)
-  createdAt    DateTime @default(now())
-  updatedAt    DateTime @updatedAt
+  regionFocus String[] @default([])
+  displayName String
+  active      Boolean  @default(true)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
 
   @@index([role])
   @@index([active])
 }
 
 model LeadPulseSource {
-  id           String                @id @default(cuid())
-  code         String                @unique
-  label        String
-  displayOrder Int                   @default(0)
-  active       Boolean               @default(true)
-  createdAt    DateTime              @default(now())
-  updatedAt    DateTime              @updatedAt
-  entries      LeadPulseDailyEntry[]
-  snapshots    LeadPulseMonthlySnapshot[]
-  parties      Party[]
+  id                String                     @id @default(cuid())
+  code              String                     @unique
+  label             String
+  displayOrder      Int                        @default(0)
+  active            Boolean                    @default(true)
+  createdAt         DateTime                   @default(now())
+  updatedAt         DateTime                   @updatedAt
+  entries           LeadPulseDailyEntry[]
+  snapshots         LeadPulseMonthlySnapshot[]
+  parties           Party[]
   leadPulsePipeline LeadPulsePipeline[]
 
   @@index([active])
@@ -288,21 +290,21 @@ model LeadPulseRegion {
 }
 
 model LeadPulseDailyEntry {
-  id        String          @id @default(cuid())
-  userId    String
-  user      User            @relation(name: "LeadPulseEntries", fields: [userId], references: [id], onDelete: Cascade)
-  entryDate DateTime        @db.Date
-  sourceId  String
-  source    LeadPulseSource @relation(fields: [sourceId], references: [id], onDelete: Restrict)
+  id          String          @id @default(cuid())
+  userId      String
+  user        User            @relation(name: "LeadPulseEntries", fields: [userId], references: [id], onDelete: Cascade)
+  entryDate   DateTime        @db.Date
+  sourceId    String
+  source      LeadPulseSource @relation(fields: [sourceId], references: [id], onDelete: Restrict)
   // Snapshot of role at submission so historical reports stay accurate
   // even if the user's role changes later.
   roleAtEntry String
 
   // L1 fields (nullable; only set when roleAtEntry = 'l1')
-  leadsReceived    Int?
-  connectedCalls   Int?
-  disqualified     Int?
-  transferredToL2  Int?
+  leadsReceived   Int?
+  connectedCalls  Int?
+  disqualified    Int?
+  transferredToL2 Int?
 
   // L2 fields (nullable; only set when roleAtEntry = 'l2')
   receivedFromL1 Int?
@@ -313,11 +315,11 @@ model LeadPulseDailyEntry {
   closedLost     Int?
 
   // Common
-  status      String   @default("draft") // 'draft' | 'submitted'
+  status      String    @default("draft") // 'draft' | 'submitted'
   submittedAt DateTime?
-  locked      Boolean  @default(false)
-  createdAt   DateTime @default(now())
-  updatedAt   DateTime @updatedAt
+  locked      Boolean   @default(false)
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
 
   // Per-close service tag — only populated for L2 rows with
   // closedWon > 0. One row per closed lead so the same service can
@@ -356,37 +358,37 @@ model LeadPulseDailyClose {
 /// also inserts a LeadPulseDailyClose into the BDE's daily entry
 /// for `closedDate`, so the existing Targets matrix picks it up.
 model LeadPulsePipeline {
-  id                       String   @id @default(cuid())
-  userId                   String
-  user                     User     @relation("LeadPulsePipeline", fields: [userId], references: [id], onDelete: Cascade)
+  id     String @id @default(cuid())
+  userId String
+  user   User   @relation("LeadPulsePipeline", fields: [userId], references: [id], onDelete: Cascade)
 
-  candidateName            String
+  candidateName  String
   /// Free-text phone number captured at pipeline entry — kept as a
   /// string so country codes / hyphens / WhatsApp prefixes survive
   /// round-trips. No format validation; supervisor checks the value.
-  candidatePhone           String?
-  partyId                  String?
-  party                    Party?   @relation("PartyPipeline", fields: [partyId], references: [id], onDelete: SetNull)
+  candidatePhone String?
+  partyId        String?
+  party          Party?  @relation("PartyPipeline", fields: [partyId], references: [id], onDelete: SetNull)
 
-  serviceId                String
-  service                  Service  @relation(fields: [serviceId], references: [id], onDelete: Restrict)
-  sourceId                 String
-  source                   LeadPulseSource @relation(fields: [sourceId], references: [id], onDelete: Restrict)
+  serviceId String
+  service   Service         @relation(fields: [serviceId], references: [id], onDelete: Restrict)
+  sourceId  String
+  source    LeadPulseSource @relation(fields: [sourceId], references: [id], onDelete: Restrict)
 
   expectedCloseDate        DateTime @db.Date
-  expectedFirstInstallment Decimal  @db.Decimal(14, 2) @default(0)
+  expectedFirstInstallment Decimal  @default(0) @db.Decimal(14, 2)
 
   // 'open' | 'closed_won' | 'lost'
-  status                   String   @default("open")
-  closedDate               DateTime? @db.Date
+  status       String               @default("open")
+  closedDate   DateTime?            @db.Date
   // If a closed_won flip created a LeadPulseDailyClose, link to it
   // so re-opening can delete it cleanly.
-  dailyCloseId             String?  @unique
-  dailyClose               LeadPulseDailyClose? @relation("PipelineDailyClose", fields: [dailyCloseId], references: [id], onDelete: SetNull)
-  notes                    String?
+  dailyCloseId String?              @unique
+  dailyClose   LeadPulseDailyClose? @relation("PipelineDailyClose", fields: [dailyCloseId], references: [id], onDelete: SetNull)
+  notes        String?
 
-  createdAt                DateTime @default(now())
-  updatedAt                DateTime @updatedAt
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 
   @@index([userId, expectedCloseDate, status])
   @@index([partyId])
@@ -400,9 +402,9 @@ model LeadPulseDailyMeta {
   userId           String
   user             User      @relation(name: "LeadPulseMeta", fields: [userId], references: [id], onDelete: Cascade)
   entryDate        DateTime  @db.Date
-  totalFollowups   Int?      // L1 only
-  referredToDoc    Int?      // L2 only
-  referredToAbroad Int?      // L1 or L2
+  totalFollowups   Int? // L1 only
+  referredToDoc    Int? // L2 only
+  referredToAbroad Int? // L1 or L2
   notes            String?
   // status: 'draft' (in progress) | 'submitted' (awaiting supervisor) |
   //         'approved' (signed off) | 'rejected' (sent back to BDE)
@@ -444,16 +446,16 @@ model LeadPulseUnlock {
 }
 
 model LeadPulseAuditLog {
-  id           String   @id @default(cuid())
-  actorUserId  String?
-  actor        User?    @relation(name: "LeadPulseAudit", fields: [actorUserId], references: [id], onDelete: SetNull)
+  id          String   @id @default(cuid())
+  actorUserId String?
+  actor       User?    @relation(name: "LeadPulseAudit", fields: [actorUserId], references: [id], onDelete: SetNull)
   // 'entry_submitted' | 'entry_edited' | 'entry_locked_override' |
   // 'role_assigned' | 'role_changed' | 'source_added' | 'source_disabled' |
   // 'region_added' | 'region_disabled'
-  eventType  String
-  targetId   String?
-  metadata   Json?
-  occurredAt DateTime @default(now())
+  eventType   String
+  targetId    String?
+  metadata    Json?
+  occurredAt  DateTime @default(now())
 
   @@index([eventType])
   @@index([occurredAt])
@@ -461,7 +463,7 @@ model LeadPulseAuditLog {
 }
 
 model LeadPulseMonthlySnapshot {
-  id            String   @id @default(cuid())
+  id            String           @id @default(cuid())
   year          Int
   month         Int
   // null = team-level row
@@ -471,10 +473,10 @@ model LeadPulseMonthlySnapshot {
   // null = total-across-sources row
   sourceId      String?
   source        LeadPulseSource? @relation(fields: [sourceId], references: [id], onDelete: SetNull)
-  totalLeads    Int      @default(0)
-  totalWon      Int      @default(0)
-  conversionPct Decimal  @db.Decimal(5, 2) @default(0)
-  computedAt    DateTime @default(now())
+  totalLeads    Int              @default(0)
+  totalWon      Int              @default(0)
+  conversionPct Decimal          @default(0) @db.Decimal(5, 2)
+  computedAt    DateTime         @default(now())
 
   @@unique([year, month, userId, role, sourceId])
   @@index([year, month])
@@ -484,24 +486,24 @@ model LeadPulseMonthlySnapshot {
 /// edits these via /marketing/lead-pulse/targets; actuals are derived
 /// from Party.assignedL2BdeId × PartyService × Revenue Transaction.
 model LeadPulseTarget {
-  id          String   @id @default(cuid())
+  id          String        @id @default(cuid())
   year        Int
   month       Int
   userId      String
-  user        User     @relation(name: "LeadPulseTargets", fields: [userId], references: [id], onDelete: Cascade)
+  user        User          @relation(name: "LeadPulseTargets", fields: [userId], references: [id], onDelete: Cascade)
   // A target is either against an individual Service (legacy rows) or
   // a ServiceGroup (current model). Exactly one of these is set per
   // row — enforced at the API layer rather than as a DB check
   // constraint so the migration can keep historical per-service rows.
   serviceId   String?
-  service     Service? @relation(fields: [serviceId], references: [id], onDelete: Restrict)
+  service     Service?      @relation(fields: [serviceId], references: [id], onDelete: Restrict)
   groupId     String?
   group       ServiceGroup? @relation(fields: [groupId], references: [id], onDelete: Restrict)
-  target      Int      @default(0)
+  target      Int           @default(0)
   updatedById String?
-  updatedBy   User?    @relation(name: "LeadPulseTargetEditors", fields: [updatedById], references: [id], onDelete: SetNull)
-  createdAt   DateTime @default(now())
-  updatedAt   DateTime @updatedAt
+  updatedBy   User?         @relation(name: "LeadPulseTargetEditors", fields: [updatedById], references: [id], onDelete: SetNull)
+  createdAt   DateTime      @default(now())
+  updatedAt   DateTime      @updatedAt
 
   @@unique([year, month, userId, serviceId])
   @@unique([year, month, userId, groupId])
@@ -535,41 +537,40 @@ model Holiday {
   @@index([date])
 }
 
-
 // Master: parties (candidates / vendors) referenced by transactions.
 model Party {
-  id        String   @id @default(cuid())
-  name      String   @unique
+  id              String           @id @default(cuid())
+  name            String           @unique
   // 'Candidate' | 'Vendor'
-  group     String
+  group           String
   // What transaction types this party may be linked to: 'Revenue' | 'Expense' | 'Both'
-  txTypes   String   @default("Both")
-  email     String?
-  phone     String?
-  notes     String?
-  isActive  Boolean  @default(true)
+  txTypes         String           @default("Both")
+  email           String?
+  phone           String?
+  notes           String?
+  isActive        Boolean          @default(true)
   // Source (lead origin) — only meaningful for Candidates. Pulls from
   // LeadPulseSource so the dropdown stays in sync with the marketing
   // module's source list.
-  sourceId  String?
-  source    LeadPulseSource? @relation(fields: [sourceId], references: [id], onDelete: SetNull)
+  sourceId        String?
+  source          LeadPulseSource? @relation(fields: [sourceId], references: [id], onDelete: SetNull)
   // L2 BDE who closed this candidate. Populated by Suhaina (or any
   // supervisor) on the candidate detail page; drives the service-
   // conversion matrix on /marketing/lead-pulse/targets.
   assignedL2BdeId String?
-  assignedL2Bde   User?   @relation(name: "PartyAssignedL2Bde", fields: [assignedL2BdeId], references: [id], onDelete: SetNull)
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  assignedL2Bde   User?            @relation(name: "PartyAssignedL2Bde", fields: [assignedL2BdeId], references: [id], onDelete: SetNull)
+  createdAt       DateTime         @default(now())
+  updatedAt       DateTime         @updatedAt
 
-  transactions  Transaction[]
+  transactions      Transaction[]
   transactionDrafts TransactionDraft[]
   // Legacy implicit M:M kept for backwards compatibility — new UI uses
   // partyServices (with totalAmount). Will be removed once
   // migrate-party-services has been run everywhere.
-  services      Service[]
-  partyServices PartyService[]
-  pipelineRows  LeadPulsePipeline[] @relation("PartyPipeline")
-  collectionPlans CollectionPlan[]
+  services          Service[]
+  partyServices     PartyService[]
+  pipelineRows      LeadPulsePipeline[] @relation("PartyPipeline")
+  collectionPlans   CollectionPlan[]
 
   @@index([group])
   @@index([isActive])
@@ -594,11 +595,11 @@ model AuditLog {
 
 model PendingApproval {
   id            String       @id @default(cuid())
-  kind          String       // "create" | "update" | "delete"
+  kind          String // "create" | "update" | "delete"
   status        String       @default("pending") // "pending" | "approved" | "rejected"
   targetTxId    String?
   targetTx      Transaction? @relation("targetTransaction", fields: [targetTxId], references: [id], onDelete: SetNull)
-  proposed      Json?        // proposed transaction values (null for delete)
+  proposed      Json? // proposed transaction values (null for delete)
   submittedById String?
   submittedBy   User?        @relation("submittedApprovals", fields: [submittedById], references: [id], onDelete: SetNull)
   reviewedById  String?
@@ -611,7 +612,7 @@ model PendingApproval {
   /// Back-link: when an installment is submitted to the approval queue
   /// the resulting PendingApproval row carries this FK so approve/reject
   /// can flip the installment status without scanning the queue.
-  collectionInstallmentId String? @unique
+  collectionInstallmentId String?                    @unique
   collectionInstallment   CollectionPlanInstallment? @relation("InstallmentPending", fields: [collectionInstallmentId], references: [id], onDelete: SetNull)
 
   @@index([status, createdAt])
@@ -654,12 +655,12 @@ model TransactionDraft {
 /// that don't appear in the new CSV are preserved (a partial export
 /// won't wipe historical data).
 model VoxbayUpload {
-  id            String   @id @default(cuid())
-  uploadedById  String?
-  uploadedBy    User?    @relation(name: "VoxbayUploads", fields: [uploadedById], references: [id], onDelete: SetNull)
-  filename      String?
-  rowCount      Int      @default(0)
-  uploadedAt    DateTime @default(now())
+  id           String   @id @default(cuid())
+  uploadedById String?
+  uploadedBy   User?    @relation(name: "VoxbayUploads", fields: [uploadedById], references: [id], onDelete: SetNull)
+  filename     String?
+  rowCount     Int      @default(0)
+  uploadedAt   DateTime @default(now())
 
   @@index([uploadedAt])
 }
@@ -668,39 +669,39 @@ model VoxbayUpload {
 /// are normalised to seconds for analytics; the original HH:MM:SS
 /// string is preserved on `*Display` for the table.
 model VoxbayCall {
-  id                  String    @id @default(cuid())
+  id                      String    @id @default(cuid())
   /// Deterministic identity key for merge-on-upload semantics:
   /// `${sourceNumber}|${didNumber}|${callStartTime.toISOString()}`.
   /// Nullable for legacy rows; populated by the upload route + a
   /// backfill DDL step.
-  signature           String?   @unique
-  slNo                Int?
-  contactName         String?
-  sourceNumber        String?
-  didNumber           String?
-  cost                Float?
-  dtmfSeq             String?
-  callStartTime       DateTime?
-  callConnectedTime   DateTime?
-  callStatus          String?
-  userStatus          String?
-  stickyStatus        String?
-  holdTime            String?
-  callRecordFile      String?
-  application         String?
-  extNumber           String?
-  appName             String?
-  agentName           String?
-  lastTriedName       String?
-  firstTriedName      String?
-  totalDurationSec    Int       @default(0)
-  totalDurationDisplay String?
-  answeredDurationSec Int       @default(0)
+  signature               String?   @unique
+  slNo                    Int?
+  contactName             String?
+  sourceNumber            String?
+  didNumber               String?
+  cost                    Float?
+  dtmfSeq                 String?
+  callStartTime           DateTime?
+  callConnectedTime       DateTime?
+  callStatus              String?
+  userStatus              String?
+  stickyStatus            String?
+  holdTime                String?
+  callRecordFile          String?
+  application             String?
+  extNumber               String?
+  appName                 String?
+  agentName               String?
+  lastTriedName           String?
+  firstTriedName          String?
+  totalDurationSec        Int       @default(0)
+  totalDurationDisplay    String?
+  answeredDurationSec     Int       @default(0)
   answeredDurationDisplay String?
-  deptName            String?
-  disposition         String?
-  latestComment       String?
-  createdAt           DateTime  @default(now())
+  deptName                String?
+  disposition             String?
+  latestComment           String?
+  createdAt               DateTime  @default(now())
 
   @@index([callStartTime])
   @@index([callStatus])
@@ -715,27 +716,27 @@ model VoxbayCall {
 /// writes follow-up feedback. Admins can read everyone's; BDEs only
 /// see their own.
 model LeadPulseBdeInsight {
-  id          String   @id @default(cuid())
-  userId      String
-  user        User     @relation(name: "BdeInsights", fields: [userId], references: [id], onDelete: Cascade)
-  year        Int
-  month       Int
+  id     String @id @default(cuid())
+  userId String
+  user   User   @relation(name: "BdeInsights", fields: [userId], references: [id], onDelete: Cascade)
+  year   Int
+  month  Int
 
   /// Initial markdown analysis the BDE reads before answering.
-  analysis    String
+  analysis  String
   /// JSON: Array<{ id: string; question: string; hint?: string }>.
-  questions   Json
+  questions Json
   /// JSON: Record<string, string>  (question id → BDE's answer).
-  answers     Json?
+  answers   Json?
   /// Follow-up markdown feedback written after answers are submitted.
-  feedback    String?
+  feedback  String?
 
   /// 'draft' before BDE answers, 'answered' once submitted.
-  status      String   @default("draft")
-  answeredAt  DateTime?
+  status     String    @default("draft")
+  answeredAt DateTime?
 
-  createdAt   DateTime @default(now())
-  updatedAt   DateTime @updatedAt
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 
   @@unique([userId, year, month])
   @@index([userId])
@@ -783,31 +784,31 @@ model CollectionPlan {
 
 /// One expected installment line on a CollectionPlan.
 model CollectionPlanInstallment {
-  id          String   @id @default(cuid())
-  planId      String
-  plan        CollectionPlan @relation(fields: [planId], references: [id], onDelete: Cascade)
+  id                String           @id @default(cuid())
+  planId            String
+  plan              CollectionPlan   @relation(fields: [planId], references: [id], onDelete: Cascade)
   /// 1-based ordering inside the plan. Unique per plan.
-  seq         Int
-  expectedDate DateTime @db.Date
-  amount      Decimal  @db.Decimal(14, 2)
+  seq               Int
+  expectedDate      DateTime         @db.Date
+  amount            Decimal          @db.Decimal(14, 2)
   /// Optional per-installment overrides; fall back to plan defaults when null.
-  category    String?
-  subItem     String?
-  paymentMode String?
-  description String?
+  category          String?
+  subItem           String?
+  paymentMode       String?
+  description       String?
   /// 'pending'    — staged, not yet pushed to daily tracker.
   /// 'submitted'  — waiting on supervisor in the approval queue.
   /// 'received'   — approved + transaction row exists.
   /// 'cancelled'  — installment scrapped (no transaction).
-  status      String   @default("pending")
+  status            String           @default("pending")
   /// FK back to the active PendingApproval row (if status='submitted').
-  pendingApprovalId String? @unique
-  pending     PendingApproval? @relation("InstallmentPending")
+  pendingApprovalId String?          @unique
+  pending           PendingApproval? @relation("InstallmentPending")
   /// FK to the canonical Transaction (if status='received').
-  transactionId String? @unique
-  transaction   Transaction? @relation("InstallmentTransaction", fields: [transactionId], references: [id], onDelete: SetNull)
-  createdAt   DateTime @default(now())
-  updatedAt   DateTime @updatedAt
+  transactionId     String?          @unique
+  transaction       Transaction?     @relation("InstallmentTransaction", fields: [transactionId], references: [id], onDelete: SetNull)
+  createdAt         DateTime         @default(now())
+  updatedAt         DateTime         @updatedAt
 
   @@unique([planId, seq])
   @@index([planId])
@@ -820,81 +821,102 @@ model CollectionPlanInstallment {
 // ──────────────────────────────────────────────────────────────────────
 
 model HrShift {
-  id                 String   @id @default(cuid())
-  code               String   @unique
-  name               String
-  startTime          String
-  endTime            String
-  graceMinutes       Int      @default(0)
-  halfDayCutoffTime  String?
-  active             Boolean  @default(true)
-  createdAt          DateTime @default(now())
-  updatedAt          DateTime @updatedAt
-  employees          Employee[]
+  id                String              @id @default(cuid())
+  code              String              @unique
+  name              String
+  startTime         String
+  endTime           String
+  graceMinutes      Int                 @default(0)
+  halfDayCutoffTime String?
+  active            Boolean             @default(true)
+  createdAt         DateTime            @default(now())
+  updatedAt         DateTime            @updatedAt
+  employees         Employee[]
+  assignments       HrShiftAssignment[]
 
   @@index([active])
 }
 
 model Employee {
-  id                  String   @id @default(cuid())
-  empCode             String   @unique
-  name                String
-  dob                 DateTime? @db.Date
+  id                 String         @id @default(cuid())
+  empCode            String         @unique
+  name               String
+  dob                DateTime?      @db.Date
+  /// Optional photo URL (e.g. /uploads/employees/<id>.jpg). Used by the
+  /// Birthday Calendar widget and ESS profile avatar.
+  photoUrl           String?
   /// Free-text legacy designation (preserved during migration). New
   /// rows should set `designationId` instead, but this column stays
   /// readable so historical CSV exports keep working.
-  designation         String?
+  designation        String?
   /// Free-text legacy primary department. Superseded by the
   /// HrEmployeeDepartment many-to-many (isPrimary=true).
-  department          String?
+  department         String?
   /// FK into HrDesignation — defines the employee's tier in the org
   /// hierarchy.
-  designationId       String?
-  designationRef      HrDesignation? @relation(fields: [designationId], references: [id], onDelete: SetNull)
-  email               String?
-  officialEmail       String?
-  phone               String?
-  emergencyContact    String?
-  officeNumber        String?
-  address             String?
-  highestEducation    String?
-  maritalStatus       String?
-  experienceNotes     String?
-  yearsOfExperience   String?
-  aadhar              String?
-  pan                 String?
-  accountNumber       String?
-  ifsc                String?
-  bankName            String?
-  branch              String?
-  joinDate            DateTime? @db.Date
-  shiftId             String?
-  shift               HrShift?  @relation(fields: [shiftId], references: [id], onDelete: SetNull)
-  halfHourConcession  Boolean   @default(false)
-  active              Boolean   @default(true)
-  userId              String?  @unique
-  user                User?    @relation("UserEmployee", fields: [userId], references: [id], onDelete: SetNull)
+  designationId      String?
+  designationRef     HrDesignation? @relation(fields: [designationId], references: [id], onDelete: SetNull)
+  email              String?
+  officialEmail      String?
+  phone              String?
+  emergencyContact   String?
+  officeNumber       String?
+  address            String?
+  highestEducation   String?
+  maritalStatus      String?
+  experienceNotes    String?
+  yearsOfExperience  String?
+  aadhar             String?
+  pan                String?
+  accountNumber      String?
+  ifsc               String?
+  bankName           String?
+  branch             String?
+  joinDate           DateTime?      @db.Date
+  /// Legacy single-shift FK. New code must use HrShiftAssignment +
+  /// resolveShiftForDate() so old payroll cycles keep using the shift
+  /// that applied at the time of the cycle even after future shift
+  /// changes. Kept as a denormalised "current shift" cache.
+  shiftId            String?
+  shift              HrShift?       @relation(fields: [shiftId], references: [id], onDelete: SetNull)
+  /// Reporting manager (FK to another Employee). Drives the org chart
+  /// reporting-line on the ESS profile page.
+  reportsToId        String?
+  reportsTo          Employee?      @relation("EmployeeReportsTo", fields: [reportsToId], references: [id], onDelete: SetNull)
+  reports            Employee[]     @relation("EmployeeReportsTo")
+  halfHourConcession Boolean        @default(false)
+  active             Boolean        @default(true)
+  userId             String?        @unique
+  user               User?          @relation("UserEmployee", fields: [userId], references: [id], onDelete: SetNull)
 
-  createdAt           DateTime @default(now())
-  updatedAt           DateTime @updatedAt
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 
-  salaryStructures    HrSalaryStructure[]
-  attendanceDays      HrAttendanceDay[]
-  leaveBalances       HrLeaveBalance[]
-  leaveRequests       HrLeaveRequest[]
-  salaryLines         HrSalaryRunLine[]
-  policyAcks          HrPolicyAcknowledgement[]
-  trainingProgress    HrTrainingProgress[]
+  salaryStructures     HrSalaryStructure[]
+  attendanceDays       HrAttendanceDay[]
+  leaveBalances        HrLeaveBalance[]
+  leaveRequests        HrLeaveRequest[]
+  salaryLines          HrSalaryRunLine[]
+  policyAcks           HrPolicyAcknowledgement[]
+  trainingProgress     HrTrainingProgress[]
   notificationReceipts HrNotificationReceipt[]
-  departments         HrEmployeeDepartment[]
-  roleMemberships     HrEmployeeRole[]
+  departments          HrEmployeeDepartment[]
+  roleMemberships      HrEmployeeRole[]
   /// Departments this employee heads (zero, one, or many).
-  headOfDepartments   HrDepartment[] @relation("HrDepartmentHead")
+  headOfDepartments    HrDepartment[]            @relation("HrDepartmentHead")
+  psychAssignments     PsychAssignment[]
+  psychReports         PsychReport[]
+  shiftAssignments     HrShiftAssignment[]
+  leaveEligibility     HrLeaveEligibility?
+  leaveAccruals        HrLeaveAccrual[]
+  regularizations      HrAttendanceRegularization[] @relation("RegEmployee")
+  birthdayWishes       HrBirthdayWish[]          @relation("BirthdayRecipient")
 
   @@index([active])
   @@index([shiftId])
   @@index([department])
   @@index([designationId])
+  @@index([reportsToId])
 }
 
 /// Designation = seniority tier (e.g. Director, Sr. Manager, Manager,
@@ -902,13 +924,13 @@ model Employee {
 /// numeric rank — higher number = more senior. The Org Chart sorts
 /// employees inside each department by descending level.
 model HrDesignation {
-  id        String   @id @default(cuid())
-  name      String   @unique
+  id        String     @id @default(cuid())
+  name      String     @unique
   /// Higher = more senior. Used for tier ordering in the org chart.
-  level     Int      @default(0)
-  active    Boolean  @default(true)
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  level     Int        @default(0)
+  active    Boolean    @default(true)
+  createdAt DateTime   @default(now())
+  updatedAt DateTime   @updatedAt
   employees Employee[]
 
   @@index([active])
@@ -919,15 +941,16 @@ model HrDesignation {
 /// Documentation). Each can have a head; employees join via the
 /// HrEmployeeDepartment M:M with one flagged primary.
 model HrDepartment {
-  id              String   @id @default(cuid())
-  name            String   @unique
+  id              String                 @id @default(cuid())
+  name            String                 @unique
   description     String?
   headEmployeeId  String?
-  headEmployee    Employee? @relation("HrDepartmentHead", fields: [headEmployeeId], references: [id], onDelete: SetNull)
-  active          Boolean  @default(true)
-  createdAt       DateTime @default(now())
-  updatedAt       DateTime @updatedAt
+  headEmployee    Employee?              @relation("HrDepartmentHead", fields: [headEmployeeId], references: [id], onDelete: SetNull)
+  active          Boolean                @default(true)
+  createdAt       DateTime               @default(now())
+  updatedAt       DateTime               @updatedAt
   members         HrEmployeeDepartment[]
+  sandwichPolicy  HrSandwichPolicy[]
 
   @@index([active])
 }
@@ -936,13 +959,13 @@ model HrDepartment {
 /// department) pair may have isPrimary=true — enforced at the API
 /// layer (Prisma can't express the "exactly-one" constraint).
 model HrEmployeeDepartment {
-  id           String   @id @default(cuid())
+  id           String       @id @default(cuid())
   employeeId   String
-  employee     Employee @relation(fields: [employeeId], references: [id], onDelete: Cascade)
+  employee     Employee     @relation(fields: [employeeId], references: [id], onDelete: Cascade)
   departmentId String
   department   HrDepartment @relation(fields: [departmentId], references: [id], onDelete: Cascade)
-  isPrimary    Boolean  @default(false)
-  createdAt    DateTime @default(now())
+  isPrimary    Boolean      @default(false)
+  createdAt    DateTime     @default(now())
 
   @@unique([employeeId, departmentId])
   @@index([departmentId])
@@ -953,12 +976,12 @@ model HrEmployeeDepartment {
 /// Functional role / specialty (e.g. BDE L1, BDE L2, Counsellor,
 /// Tele Marketing, Voxbay Admin). Free-form — HR adds rows as needed.
 model HrRole {
-  id          String   @id @default(cuid())
-  name        String   @unique
+  id          String           @id @default(cuid())
+  name        String           @unique
   description String?
-  active      Boolean  @default(true)
-  createdAt   DateTime @default(now())
-  updatedAt   DateTime @updatedAt
+  active      Boolean          @default(true)
+  createdAt   DateTime         @default(now())
+  updatedAt   DateTime         @updatedAt
   members     HrEmployeeRole[]
 
   @@index([active])
@@ -991,14 +1014,14 @@ model HrSalaryStructure {
   effectiveFrom   DateTime @db.Date
   /// Basic salary (₹ / month) — primary input. Everything else derives.
   basic           Decimal  @db.Decimal(12, 2)
-  hraPct          Decimal  @db.Decimal(5, 2) @default(40)
-  conveyancePct   Decimal  @db.Decimal(5, 2) @default(20)
-  medicalPct      Decimal  @db.Decimal(5, 2) @default(25)
-  specialPct      Decimal  @db.Decimal(5, 2) @default(15)
+  hraPct          Decimal  @default(40) @db.Decimal(5, 2)
+  conveyancePct   Decimal  @default(20) @db.Decimal(5, 2)
+  medicalPct      Decimal  @default(25) @db.Decimal(5, 2)
+  specialPct      Decimal  @default(15) @db.Decimal(5, 2)
   esiApplicable   Boolean  @default(true)
   pfApplicable    Boolean  @default(true)
   /// Override Kerala PT slab if needed. Default 125 (₹125/mo slab).
-  professionalTax Decimal  @db.Decimal(8, 2) @default(125)
+  professionalTax Decimal  @default(125) @db.Decimal(8, 2)
   notes           String?
   createdAt       DateTime @default(now())
   updatedAt       DateTime @updatedAt
@@ -1009,49 +1032,49 @@ model HrSalaryStructure {
 }
 
 model HrLeavePolicy {
-  id                  String   @id @default(cuid())
-  name                String   @unique
-  monthlyAccrual      Decimal  @db.Decimal(4, 2) @default(1)
-  annualEntitlement   Decimal  @db.Decimal(5, 2) @default(12)
-  carryForward        Boolean  @default(true)
-  carryForwardCap     Decimal  @db.Decimal(5, 2) @default(0)
-  isDefault           Boolean  @default(false)
-  createdAt           DateTime @default(now())
-  updatedAt           DateTime @updatedAt
+  id                String   @id @default(cuid())
+  name              String   @unique
+  monthlyAccrual    Decimal  @default(1) @db.Decimal(4, 2)
+  annualEntitlement Decimal  @default(12) @db.Decimal(5, 2)
+  carryForward      Boolean  @default(true)
+  carryForwardCap   Decimal  @default(0) @db.Decimal(5, 2)
+  isDefault         Boolean  @default(false)
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
 }
 
 model HrLeaveBalance {
-  id           String   @id @default(cuid())
-  employeeId   String
-  employee     Employee @relation(fields: [employeeId], references: [id], onDelete: Cascade)
-  year         Int
-  opening      Decimal  @db.Decimal(5, 2) @default(0)
-  accrued      Decimal  @db.Decimal(5, 2) @default(0)
-  used         Decimal  @db.Decimal(5, 2) @default(0)
-  balance      Decimal  @db.Decimal(5, 2) @default(0)
-  updatedAt    DateTime @updatedAt
-  createdAt    DateTime @default(now())
+  id         String   @id @default(cuid())
+  employeeId String
+  employee   Employee @relation(fields: [employeeId], references: [id], onDelete: Cascade)
+  year       Int
+  opening    Decimal  @default(0) @db.Decimal(5, 2)
+  accrued    Decimal  @default(0) @db.Decimal(5, 2)
+  used       Decimal  @default(0) @db.Decimal(5, 2)
+  balance    Decimal  @default(0) @db.Decimal(5, 2)
+  updatedAt  DateTime @updatedAt
+  createdAt  DateTime @default(now())
 
   @@unique([employeeId, year])
   @@index([year])
 }
 
 model HrLeaveRequest {
-  id           String   @id @default(cuid())
+  id           String    @id @default(cuid())
   employeeId   String
-  employee     Employee @relation(fields: [employeeId], references: [id], onDelete: Cascade)
-  fromDate     DateTime @db.Date
-  toDate       DateTime @db.Date
-  days         Decimal  @db.Decimal(5, 2)
-  leaveType    String   @default("CL")
+  employee     Employee  @relation(fields: [employeeId], references: [id], onDelete: Cascade)
+  fromDate     DateTime  @db.Date
+  toDate       DateTime  @db.Date
+  days         Decimal   @db.Decimal(5, 2)
+  leaveType    String    @default("CL")
   reason       String?
-  status       String   @default("pending")
+  status       String    @default("pending")
   reviewedById String?
-  reviewedBy   User?    @relation("HrLeaveReviewer", fields: [reviewedById], references: [id], onDelete: SetNull)
+  reviewedBy   User?     @relation("HrLeaveReviewer", fields: [reviewedById], references: [id], onDelete: SetNull)
   reviewedAt   DateTime?
   reviewNote   String?
-  createdAt    DateTime @default(now())
-  updatedAt    DateTime @updatedAt
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
 
   @@index([employeeId, fromDate])
   @@index([status])
@@ -1061,54 +1084,54 @@ model HrLeaveRequest {
 //  and HR now read/write the same table.)
 
 model HrAttendanceUpload {
-  id          String   @id @default(cuid())
-  filename    String?
-  monthKey    String
-  rowCount    Int      @default(0)
+  id           String            @id @default(cuid())
+  filename     String?
+  monthKey     String
+  rowCount     Int               @default(0)
   uploadedById String?
-  uploadedBy  User?    @relation("HrUploader", fields: [uploadedById], references: [id], onDelete: SetNull)
-  uploadedAt  DateTime @default(now())
-  notes       String?
-  days        HrAttendanceDay[]
+  uploadedBy   User?             @relation("HrUploader", fields: [uploadedById], references: [id], onDelete: SetNull)
+  uploadedAt   DateTime          @default(now())
+  notes        String?
+  days         HrAttendanceDay[]
 
   @@index([monthKey])
   @@index([uploadedAt])
 }
 
 model HrAttendanceDay {
-  id           String   @id @default(cuid())
-  uploadId     String
-  upload       HrAttendanceUpload @relation(fields: [uploadId], references: [id], onDelete: Cascade)
-  employeeId   String
-  employee     Employee @relation(fields: [employeeId], references: [id], onDelete: Cascade)
-  date         DateTime @db.Date
-  shiftCode    String?  // "G", "X", "C" etc from biometric report
-  inTime       String?
-  outTime      String?
+  id              String             @id @default(cuid())
+  uploadId        String
+  upload          HrAttendanceUpload @relation(fields: [uploadId], references: [id], onDelete: Cascade)
+  employeeId      String
+  employee        Employee           @relation(fields: [employeeId], references: [id], onDelete: Cascade)
+  date            DateTime           @db.Date
+  shiftCode       String? // "G", "X", "C" etc from biometric report
+  inTime          String?
+  outTime         String?
   /// Minutes worked excluding OT (i.e. Work+OT - OT in the source file).
-  workMinutes  Int?
-  breakMinutes Int?
-  otMinutes    Int?
-  lateMinutes  Int?
+  workMinutes     Int?
+  breakMinutes    Int?
+  otMinutes       Int?
+  lateMinutes     Int?
   earlyOutMinutes Int?
   /// Normalised status: P | A | WO | HL | LV | HD. HD is derived when
   /// status=P but workMinutes is < ~4h (per the half-day rule).
   /// HR can later override A → LV (paid CL) or LV → A (LOP) from the
   /// /hr/leave-review page; the original biometric value is preserved
   /// in `rawStatus` for audit.
-  status       String
+  status          String
   /// Free-text remark from the biometric report (e.g. "LT-EO", "MIS-LT-OT").
-  remark       String?
-  rawName      String?
+  remark          String?
+  rawName         String?
   /// Original status from the biometric upload, before any HR override.
   /// Null on rows imported before this column existed (treat as same as
   /// `status` in that case).
-  rawStatus    String?
+  rawStatus       String?
   /// HR's classification note when overriding the leave decision.
-  decisionNote String?
-  decidedById  String?
-  decidedBy    User?    @relation("HrLeaveDecider", fields: [decidedById], references: [id], onDelete: SetNull)
-  decidedAt    DateTime?
+  decisionNote    String?
+  decidedById     String?
+  decidedBy       User?              @relation("HrLeaveDecider", fields: [decidedById], references: [id], onDelete: SetNull)
+  decidedAt       DateTime?
 
   @@unique([employeeId, date])
   @@index([date])
@@ -1116,158 +1139,158 @@ model HrAttendanceDay {
 }
 
 model HrSalaryRun {
-  id            String   @id @default(cuid())
-  monthKey      String   @unique
-  workingDaysBase Int    @default(30)
-  status        String   @default("draft")
-  totalNet      Decimal  @db.Decimal(14, 2) @default(0)
-  createdById   String?
-  createdBy     User?    @relation("HrSalaryRunCreator", fields: [createdById], references: [id], onDelete: SetNull)
-  approvedById  String?
-  approvedBy    User?    @relation("HrSalaryRunApprover", fields: [approvedById], references: [id], onDelete: SetNull)
-  approvedAt    DateTime?
-  axisExportName String?
-  axisExportedAt DateTime?
-  createdAt     DateTime @default(now())
-  updatedAt     DateTime @updatedAt
-  lines         HrSalaryRunLine[]
+  id              String            @id @default(cuid())
+  monthKey        String            @unique
+  workingDaysBase Int               @default(30)
+  status          String            @default("draft")
+  totalNet        Decimal           @default(0) @db.Decimal(14, 2)
+  createdById     String?
+  createdBy       User?             @relation("HrSalaryRunCreator", fields: [createdById], references: [id], onDelete: SetNull)
+  approvedById    String?
+  approvedBy      User?             @relation("HrSalaryRunApprover", fields: [approvedById], references: [id], onDelete: SetNull)
+  approvedAt      DateTime?
+  axisExportName  String?
+  axisExportedAt  DateTime?
+  createdAt       DateTime          @default(now())
+  updatedAt       DateTime          @updatedAt
+  lines           HrSalaryRunLine[]
 
   @@index([status])
 }
 
 model HrSalaryRunLine {
-  id                String   @id @default(cuid())
-  runId             String
-  run               HrSalaryRun @relation(fields: [runId], references: [id], onDelete: Cascade)
-  employeeId        String
-  employee          Employee    @relation(fields: [employeeId], references: [id], onDelete: Restrict)
-  totalWorkingDays  Decimal  @db.Decimal(5, 2)
-  daysAttended      Decimal  @db.Decimal(5, 2)
-  paidLeave         Decimal  @db.Decimal(5, 2) @default(0)
-  unpaidLeave       Decimal  @db.Decimal(5, 2) @default(0)
-  halfDayLeave      Decimal  @db.Decimal(5, 2) @default(0)
-  totalLeaveForLop  Decimal  @db.Decimal(5, 2) @default(0)
-  monthlySalary     Decimal  @db.Decimal(12, 2)
-  basicSalary       Decimal  @db.Decimal(12, 2)
-  basicAfterLop     Decimal  @db.Decimal(12, 2)
-  dailyBasis        Decimal  @db.Decimal(12, 2)
-  salaryBeforeEsi   Decimal  @db.Decimal(12, 2)
-  esiEmployee       Decimal  @db.Decimal(10, 2) @default(0)
-  pfEmployee        Decimal  @db.Decimal(10, 2) @default(0)
-  professionalTax   Decimal  @db.Decimal(10, 2) @default(0)
-  netSalary         Decimal  @db.Decimal(12, 2)
-  esiEmployer       Decimal  @db.Decimal(10, 2) @default(0)
-  pfEmployer        Decimal  @db.Decimal(10, 2) @default(0)
-  esiTotal          Decimal  @db.Decimal(10, 2) @default(0)
-  pfTotal           Decimal  @db.Decimal(10, 2) @default(0)
-  adjustments       Decimal  @db.Decimal(10, 2) @default(0)
-  adjustmentNote    String?
-  bankAccount       String?
-  bankIfsc          String?
-  bankName          String?
-  bankBranch        String?
-  createdAt         DateTime @default(now())
-  updatedAt         DateTime @updatedAt
+  id               String      @id @default(cuid())
+  runId            String
+  run              HrSalaryRun @relation(fields: [runId], references: [id], onDelete: Cascade)
+  employeeId       String
+  employee         Employee    @relation(fields: [employeeId], references: [id], onDelete: Restrict)
+  totalWorkingDays Decimal     @db.Decimal(5, 2)
+  daysAttended     Decimal     @db.Decimal(5, 2)
+  paidLeave        Decimal     @default(0) @db.Decimal(5, 2)
+  unpaidLeave      Decimal     @default(0) @db.Decimal(5, 2)
+  halfDayLeave     Decimal     @default(0) @db.Decimal(5, 2)
+  totalLeaveForLop Decimal     @default(0) @db.Decimal(5, 2)
+  monthlySalary    Decimal     @db.Decimal(12, 2)
+  basicSalary      Decimal     @db.Decimal(12, 2)
+  basicAfterLop    Decimal     @db.Decimal(12, 2)
+  dailyBasis       Decimal     @db.Decimal(12, 2)
+  salaryBeforeEsi  Decimal     @db.Decimal(12, 2)
+  esiEmployee      Decimal     @default(0) @db.Decimal(10, 2)
+  pfEmployee       Decimal     @default(0) @db.Decimal(10, 2)
+  professionalTax  Decimal     @default(0) @db.Decimal(10, 2)
+  netSalary        Decimal     @db.Decimal(12, 2)
+  esiEmployer      Decimal     @default(0) @db.Decimal(10, 2)
+  pfEmployer       Decimal     @default(0) @db.Decimal(10, 2)
+  esiTotal         Decimal     @default(0) @db.Decimal(10, 2)
+  pfTotal          Decimal     @default(0) @db.Decimal(10, 2)
+  adjustments      Decimal     @default(0) @db.Decimal(10, 2)
+  adjustmentNote   String?
+  bankAccount      String?
+  bankIfsc         String?
+  bankName         String?
+  bankBranch       String?
+  createdAt        DateTime    @default(now())
+  updatedAt        DateTime    @updatedAt
 
   @@unique([runId, employeeId])
   @@index([employeeId])
 }
 
 model HrPolicy {
-  id            String   @id @default(cuid())
+  id            String                    @id @default(cuid())
   title         String
-  version       String   @default("v1")
+  version       String                    @default("v1")
   body          String
   externalUrl   String?
   category      String?
-  status        String   @default("draft")
+  status        String                    @default("draft")
   publishedAt   DateTime?
   publishedById String?
-  publishedBy   User?    @relation("HrPolicyPublisher", fields: [publishedById], references: [id], onDelete: SetNull)
-  requiresAck   Boolean  @default(true)
-  createdAt     DateTime @default(now())
-  updatedAt     DateTime @updatedAt
+  publishedBy   User?                     @relation("HrPolicyPublisher", fields: [publishedById], references: [id], onDelete: SetNull)
+  requiresAck   Boolean                   @default(true)
+  createdAt     DateTime                  @default(now())
+  updatedAt     DateTime                  @updatedAt
   acks          HrPolicyAcknowledgement[]
 
   @@index([status])
 }
 
 model HrPolicyAcknowledgement {
-  id          String   @id @default(cuid())
-  policyId    String
-  policy      HrPolicy @relation(fields: [policyId], references: [id], onDelete: Cascade)
-  employeeId  String
-  employee    Employee @relation(fields: [employeeId], references: [id], onDelete: Cascade)
-  signatureName String
+  id             String   @id @default(cuid())
+  policyId       String
+  policy         HrPolicy @relation(fields: [policyId], references: [id], onDelete: Cascade)
+  employeeId     String
+  employee       Employee @relation(fields: [employeeId], references: [id], onDelete: Cascade)
+  signatureName  String
   signatureImage String?
-  ipAddress     String?
-  userAgent     String?
-  signedAt      DateTime  @default(now())
+  ipAddress      String?
+  userAgent      String?
+  signedAt       DateTime @default(now())
 
   @@unique([policyId, employeeId])
   @@index([employeeId])
 }
 
 model HrTraining {
-  id            String   @id @default(cuid())
-  title         String
-  description   String?
-  videoUrl      String?
-  quiz          Json?
-  passingScore  Int       @default(70)
-  status        String    @default("draft")
-  createdById   String?
-  createdBy     User?     @relation("HrTrainingCreator", fields: [createdById], references: [id], onDelete: SetNull)
-  createdAt     DateTime  @default(now())
-  updatedAt     DateTime  @updatedAt
-  progress      HrTrainingProgress[]
+  id           String               @id @default(cuid())
+  title        String
+  description  String?
+  videoUrl     String?
+  quiz         Json?
+  passingScore Int                  @default(70)
+  status       String               @default("draft")
+  createdById  String?
+  createdBy    User?                @relation("HrTrainingCreator", fields: [createdById], references: [id], onDelete: SetNull)
+  createdAt    DateTime             @default(now())
+  updatedAt    DateTime             @updatedAt
+  progress     HrTrainingProgress[]
 
   @@index([status])
 }
 
 model HrTrainingProgress {
-  id            String   @id @default(cuid())
-  trainingId    String
-  training      HrTraining @relation(fields: [trainingId], references: [id], onDelete: Cascade)
-  employeeId    String
-  employee      Employee @relation(fields: [employeeId], references: [id], onDelete: Cascade)
-  watchedPct    Int      @default(0)
-  score         Int?
-  attempts      Int      @default(0)
-  passed        Boolean  @default(false)
-  answers       Json?
-  completedAt   DateTime?
-  createdAt     DateTime @default(now())
-  updatedAt     DateTime @updatedAt
+  id          String     @id @default(cuid())
+  trainingId  String
+  training    HrTraining @relation(fields: [trainingId], references: [id], onDelete: Cascade)
+  employeeId  String
+  employee    Employee   @relation(fields: [employeeId], references: [id], onDelete: Cascade)
+  watchedPct  Int        @default(0)
+  score       Int?
+  attempts    Int        @default(0)
+  passed      Boolean    @default(false)
+  answers     Json?
+  completedAt DateTime?
+  createdAt   DateTime   @default(now())
+  updatedAt   DateTime   @updatedAt
 
   @@unique([trainingId, employeeId])
   @@index([employeeId])
 }
 
 model HrNotification {
-  id          String   @id @default(cuid())
+  id          String                  @id @default(cuid())
   title       String
   body        String
   linkUrl     String?
-  kind        String   @default("announcement")
-  requiresAck Boolean  @default(false)
+  kind        String                  @default("announcement")
+  requiresAck Boolean                 @default(false)
   createdById String?
-  createdBy   User?    @relation("HrNotificationCreator", fields: [createdById], references: [id], onDelete: SetNull)
-  createdAt   DateTime @default(now())
+  createdBy   User?                   @relation("HrNotificationCreator", fields: [createdById], references: [id], onDelete: SetNull)
+  createdAt   DateTime                @default(now())
   receipts    HrNotificationReceipt[]
 
   @@index([kind])
 }
 
 model HrNotificationReceipt {
-  id             String   @id @default(cuid())
+  id             String         @id @default(cuid())
   notificationId String
   notification   HrNotification @relation(fields: [notificationId], references: [id], onDelete: Cascade)
   employeeId     String
-  employee       Employee @relation(fields: [employeeId], references: [id], onDelete: Cascade)
+  employee       Employee       @relation(fields: [employeeId], references: [id], onDelete: Cascade)
   readAt         DateTime?
   acknowledgedAt DateTime?
-  createdAt      DateTime @default(now())
+  createdAt      DateTime       @default(now())
 
   @@unique([notificationId, employeeId])
   @@index([employeeId])
@@ -1287,4 +1310,371 @@ model HrAuditLog {
   @@index([eventType])
   @@index([occurredAt])
   @@index([actorUserId])
+}
+
+// ──────────────────────────────────────────────────────────────────────
+// Multi-shift assignment with effective date ranges.
+//
+// Why: the legacy `Employee.shiftId` is a single FK — changing it
+// retroactively breaks attendance/overtime/payroll for prior cycles.
+// HrShiftAssignment lets HR layer multiple shift periods on a single
+// employee. `resolveShiftForDate()` (in lib/hr-shift.ts) picks the
+// right one for any historical date.
+//
+// `effectiveTo` is nullable — null means "still in effect". The API
+// layer enforces non-overlap and auto-closes the previous open period
+// when a new one is added.
+// ──────────────────────────────────────────────────────────────────────
+
+model HrShiftAssignment {
+  id            String    @id @default(cuid())
+  employeeId    String
+  employee      Employee  @relation(fields: [employeeId], references: [id], onDelete: Cascade)
+  shiftId       String
+  shift         HrShift   @relation(fields: [shiftId], references: [id], onDelete: Restrict)
+  effectiveFrom DateTime  @db.Date
+  /// Null = open-ended (still in effect). Closed when a later
+  /// assignment is added.
+  effectiveTo   DateTime? @db.Date
+  /// HR-supplied reason for the change (e.g. "Promoted to evening
+  /// floor", "Cycle-end relief"). Surfaces in the shift history log.
+  reason        String?
+  /// 'pending' until reviewed; 'approved' once an HR Manager signs
+  /// off; 'rejected' if denied. Only approved rows are honoured by
+  /// resolveShiftForDate().
+  status        String    @default("approved")
+  createdById   String?
+  reviewedById  String?
+  reviewedAt    DateTime?
+  reviewNote    String?
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+
+  @@index([employeeId, effectiveFrom])
+  @@index([shiftId])
+  @@index([status])
+  @@index([effectiveFrom, effectiveTo])
+}
+
+// ──────────────────────────────────────────────────────────────────────
+// Per-employee monthly leave eligibility.
+//
+// Replaces the implicit "everyone accrues 1/mo" assumption with an
+// explicit per-employee toggle. When enabled, the monthly-accrual job
+// (POST /api/hr/leave/run-accrual) credits `leavesPerMonth` to the
+// employee's HrLeaveBalance for the current cycle and writes an
+// HrLeaveAccrual ledger row.
+// ──────────────────────────────────────────────────────────────────────
+
+model HrLeaveEligibility {
+  id              String    @id @default(cuid())
+  employeeId      String    @unique
+  employee        Employee  @relation(fields: [employeeId], references: [id], onDelete: Cascade)
+  enabled         Boolean   @default(false)
+  /// 'monthly' is the only supported value today; reserved for future
+  /// quarterly / annual schedules.
+  frequency       String    @default("monthly")
+  /// Date from which accrual kicks in.
+  effectiveFrom   DateTime  @db.Date
+  leavesPerPeriod Decimal   @default(1) @db.Decimal(4, 2)
+  /// Default leave type credited (CL / SL / PL).
+  leaveType       String    @default("CL")
+  /// When true, any unused balance carries forward to next year up
+  /// to `carryForwardCap`. When false, year-end balance resets to 0.
+  carryForward    Boolean   @default(true)
+  carryForwardCap Decimal   @default(0) @db.Decimal(5, 2)
+  /// Optional months after which credited but unused leaves expire.
+  expiryMonths    Int?
+  notes           String?
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+
+  @@index([enabled])
+}
+
+/// Ledger row written every time the accrual job credits leave to an
+/// employee, or HR makes a manual adjustment. Lets the leave-balance
+/// page show full history.
+model HrLeaveAccrual {
+  id          String   @id @default(cuid())
+  employeeId  String
+  employee    Employee @relation(fields: [employeeId], references: [id], onDelete: Cascade)
+  periodKey   String
+  /// Positive for credit, negative for debit/adjustment.
+  delta       Decimal  @db.Decimal(5, 2)
+  /// 'auto'   — scheduled accrual job
+  /// 'manual' — HR adjustment
+  /// 'expiry' — system-driven expiry
+  /// 'opening'— year-rollover opening balance
+  source      String
+  leaveType   String   @default("CL")
+  reason      String?
+  actorUserId String?
+  createdAt   DateTime @default(now())
+
+  @@unique([employeeId, periodKey, source])
+  @@index([employeeId, createdAt])
+  @@index([periodKey])
+}
+
+// ──────────────────────────────────────────────────────────────────────
+// Attendance regularization workflow.
+//
+// Employees use POST /api/me/regularization to flag a missed punch /
+// wrong time within 3 working days of the discrepancy. HR Managers
+// review on /hr/regularization; approving sets HrAttendanceDay.status
+// to "P" (or "HD") and writes the corrected times back, with a full
+// audit trail.
+// ──────────────────────────────────────────────────────────────────────
+
+model HrAttendanceRegularization {
+  id              String           @id @default(cuid())
+  employeeId      String
+  employee        Employee         @relation("RegEmployee", fields: [employeeId], references: [id], onDelete: Cascade)
+  /// Optional FK to the attendance row this request corrects. Null if
+  /// no attendance row was uploaded yet for this date.
+  attendanceDayId String?
+  date            DateTime         @db.Date
+  /// 'missing_punch' | 'wrong_in_time' | 'wrong_out_time' |
+  /// 'biometric_sync' | 'forgot_punch' | 'other'
+  reasonType      String
+  reason          String
+  proposedIn      String?
+  proposedOut     String?
+  /// Optional uploaded artefact (e.g. screenshot URL).
+  attachmentUrl   String?
+  status          String           @default("pending")
+  reviewedById    String?
+  reviewedAt      DateTime?
+  reviewNote      String?
+  createdAt       DateTime         @default(now())
+  updatedAt       DateTime         @updatedAt
+
+  @@index([employeeId, date])
+  @@index([status, createdAt])
+}
+
+// ──────────────────────────────────────────────────────────────────────
+// Sandwich-leave policy.
+//
+// When configured, intermediate week-offs/holidays sandwiched between
+// two leave days are counted as leave (LOP). Each row scopes the
+// policy globally or to a single department.
+// ──────────────────────────────────────────────────────────────────────
+
+model HrSandwichPolicy {
+  id           String        @id @default(cuid())
+  /// Null = company-wide. Set to scope to a single department.
+  departmentId String?
+  department   HrDepartment? @relation(fields: [departmentId], references: [id], onDelete: Cascade)
+  enabled      Boolean       @default(true)
+  /// Treat intermediate holidays as leave when bracketed by leave.
+  includeHolidays Boolean    @default(true)
+  /// Treat intermediate week-offs as leave when bracketed by leave.
+  includeWeekOffs Boolean    @default(true)
+  /// Maximum gap (days) between the two bracketing leave days for
+  /// the sandwich rule to apply. 7 covers a typical week.
+  maxGapDays   Int           @default(7)
+  notes        String?
+  createdAt    DateTime      @default(now())
+  updatedAt    DateTime      @updatedAt
+
+  @@unique([departmentId])
+  @@index([enabled])
+}
+
+// ──────────────────────────────────────────────────────────────────────
+// Birthday module — config + send log.
+// ──────────────────────────────────────────────────────────────────────
+
+model HrBirthdaySettings {
+  id              String   @id @default(cuid())
+  /// Singleton row — enforced via `@@unique([singleton])`.
+  singleton       Boolean  @unique @default(true)
+  /// Send the auto-generated wish on the birthday morning.
+  autoWishEnabled Boolean  @default(false)
+  /// Reminder N days in advance (0 = day-of only).
+  reminderDays    Int      @default(1)
+  /// Send via email, whatsapp, both, or none ("disabled").
+  channel         String   @default("email")
+  /// Template used for the auto-wish (supports {{name}}, {{dept}}).
+  template        String   @default("Happy birthday, {{name}}! Wishing you a wonderful year ahead. — Team DESGRO")
+  updatedAt       DateTime @updatedAt
+}
+
+/// One row per (employee, year) when the system sends a birthday
+/// wish. Prevents duplicate sends and lets HR review the send log.
+model HrBirthdayWish {
+  id          String   @id @default(cuid())
+  employeeId  String
+  employee    Employee @relation("BirthdayRecipient", fields: [employeeId], references: [id], onDelete: Cascade)
+  year        Int
+  channel     String
+  status      String   @default("sent")
+  payload     Json?
+  sentAt      DateTime @default(now())
+
+  @@unique([employeeId, year])
+  @@index([year])
+}
+
+// ──────────────────────────────────────────────────────────────────────
+// ESS credential generation log — one row per (employee, generation
+// event). Used so HR can re-issue and the audit page can show who
+// generated/reset credentials when.
+// ──────────────────────────────────────────────────────────────────────
+
+model HrEssCredentialEvent {
+  id          String   @id @default(cuid())
+  employeeId  String
+  /// 'create' | 'reset' | 'disable'
+  action      String
+  username    String
+  channel     String?
+  /// Hash of the temporary password sent — for audit only, never the
+  /// raw password.
+  tempPasswordHash String?
+  actorUserId String?
+  notes       String?
+  createdAt   DateTime @default(now())
+
+  @@index([employeeId, createdAt])
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// HR Psychometric Assessment (OCEAN / Big-Five) — Phase 1
+// Tokens are stored hashed; raw UUID is shown to HR once at assignment time
+// and never persisted in the DB.
+// ─────────────────────────────────────────────────────────────────────────────
+
+enum PsychDimension {
+  O
+  C
+  E
+  A
+  N
+  VALIDITY
+}
+
+enum PsychStatus {
+  ASSIGNED
+  IN_PROGRESS
+  COMPLETED
+  EXPIRED
+  INVALIDATED
+}
+
+model PsychTest {
+  id          String            @id @default(cuid())
+  name        String            @unique
+  description String?
+  active      Boolean           @default(true)
+  createdById String?
+  createdBy   User?             @relation("PsychTestCreator", fields: [createdById], references: [id], onDelete: SetNull)
+  createdAt   DateTime          @default(now())
+  updatedAt   DateTime          @updatedAt
+  questions   PsychQuestion[]
+  assignments PsychAssignment[]
+
+  @@index([active])
+}
+
+model PsychQuestion {
+  id             String          @id @default(cuid())
+  testId         String
+  test           PsychTest       @relation(fields: [testId], references: [id], onDelete: Cascade)
+  /// 1-based display order within the test.
+  order          Int
+  dimension      PsychDimension
+  textEn         String
+  /// Malayalam translation; null until HR fills it in via the question editor.
+  textMl         String?
+  /// If true, the response is reverse-scored before being summed into its
+  /// dimension (i.e. raw 5 → effective 1 for a positively-worded summary).
+  reverseScored  Boolean         @default(false)
+  /// Two questions sharing the same `validityPairId` are paired for the
+  /// internal consistency check (only used when dimension = VALIDITY).
+  validityPairId String?
+  active         Boolean         @default(true)
+  responses      PsychResponse[]
+
+  @@unique([testId, order])
+  @@index([testId, dimension])
+  @@index([validityPairId])
+}
+
+model PsychAssignment {
+  id            String          @id @default(cuid())
+  employeeId    String
+  employee      Employee        @relation(fields: [employeeId], references: [id], onDelete: Cascade)
+  testId        String
+  test          PsychTest       @relation(fields: [testId], references: [id], onDelete: Restrict)
+  /// SHA-256 hex of (rawToken + tokenSalt). The raw UUID is shown to HR
+  /// exactly once when the assignment is created — we never store it.
+  tokenHash     String          @unique
+  tokenSalt     String
+  status        PsychStatus     @default(ASSIGNED)
+  expiresAt     DateTime
+  assignedAt    DateTime        @default(now())
+  assignedById  String?
+  assignedBy    User?           @relation("PsychAssigner", fields: [assignedById], references: [id], onDelete: SetNull)
+  startedAt     DateTime?
+  submittedAt   DateTime?
+  /// SHA-256 hex of the requester IP captured at first GET — used for
+  /// fraud diagnostics, not raw IP storage.
+  ipHash        String?
+  /// Increments on every /api/psych/test/[token] GET — rate-limit counter.
+  startAttempts Int             @default(0)
+  responses     PsychResponse[]
+  report        PsychReport?
+
+  @@index([employeeId])
+  @@index([testId])
+  @@index([status])
+  @@index([expiresAt])
+}
+
+model PsychResponse {
+  id           String          @id @default(cuid())
+  assignmentId String
+  assignment   PsychAssignment @relation(fields: [assignmentId], references: [id], onDelete: Cascade)
+  questionId   String
+  question     PsychQuestion   @relation(fields: [questionId], references: [id], onDelete: Restrict)
+  value        Int
+  savedAt      DateTime        @default(now())
+
+  @@unique([assignmentId, questionId])
+  @@index([assignmentId])
+}
+
+model PsychReport {
+  id              String          @id @default(cuid())
+  assignmentId    String          @unique
+  assignment      PsychAssignment @relation(fields: [assignmentId], references: [id], onDelete: Cascade)
+  employeeId      String
+  employee        Employee        @relation(fields: [employeeId], references: [id], onDelete: Cascade)
+  /// Raw per-dimension sums { O, C, E, A, N }.
+  oceanRaw        Json
+  /// Normalized 0–100 per dimension { O, C, E, A, N }.
+  oceanNormalized Json
+  /// Percentile rank (0–100) vs running internal norms { O, C, E, A, N }.
+  oceanPercentile Json
+  attitudeIndex   Int
+  /// "Needs Attention" | "Moderate" | "Positive Attitude"
+  attitudeClass   String
+  profileType     String
+  profileLabel    String
+  /// Array of { code, label, severity, hrAction }.
+  riskFlags       Json
+  /// Array of strings.
+  recommendations Json
+  validityPassed  Boolean
+  validityNotes   String?
+  durationSeconds Int?
+  /// Array of strings — e.g. ["RUSHED"].
+  suspiciousFlags Json
+  generatedAt     DateTime        @default(now())
+
+  @@index([employeeId])
+  @@index([generatedAt])
 }

@@ -48,6 +48,13 @@ const config: Config = {
       },
       fontFamily: {
         sans: ["var(--font-inter)", "Inter", "system-ui", "sans-serif"],
+        malayalam: [
+          "Noto Sans Malayalam",
+          "var(--font-inter)",
+          "Inter",
+          "system-ui",
+          "sans-serif",
+        ],
       },
       borderRadius: {
         DEFAULT: "0.5rem",
