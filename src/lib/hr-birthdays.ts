@@ -15,6 +15,8 @@ export type BirthdayRow = {
   ageThisYear: number;
 };
 
+export type UpcomingBirthday = BirthdayRow & { delta: number };
+
 const MONTH_NAMES = [
   "January",
   "February",
@@ -87,7 +89,7 @@ export function birthdaysForMonth(rows: BirthdayRow[], month: number): BirthdayR
 }
 
 /** Upcoming birthdays within `windowDays`, sorted ascending from today. */
-export function upcomingBirthdays(rows: BirthdayRow[], windowDays = 14): BirthdayRow[] {
+export function upcomingBirthdays(rows: BirthdayRow[], windowDays = 14): UpcomingBirthday[] {
   const today = new Date();
   const todayDoy = dayOfYear(today);
   return rows

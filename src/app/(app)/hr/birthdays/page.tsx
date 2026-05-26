@@ -43,7 +43,7 @@ export default async function BirthdayCalendarPage({
   ]);
   const monthly = birthdaysForMonth(all, monthNum);
   const upcoming = upcomingBirthdays(all, 30);
-  const todayList = upcoming.filter((u) => (u as { delta: number }).delta === 0);
+  const todayList = upcoming.filter((u) => u.delta === 0);
   return (
     <>
       <TopBar
