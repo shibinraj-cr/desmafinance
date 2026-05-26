@@ -97,42 +97,86 @@ export async function POST(req: NextRequest) {
   const { date, closes } = parsed.data;
   const dateValue = toPrismaDate(date);
 
-  const sources = await prisma.leadPulseSource.findMany({ select: { id: true } });
+  const [sources, services] = await Promise.all([
+    prisma.leadPulseSource.findMany({ select: { id: true } }),
+    prisma.service.findMany({ select: { id: true } }),
+  ]);
   const validSourceIds = new Set(sources.map((s) => s.id));
+  const validServiceIds = new Set(services.map((s) => s.id));
 
-  let written = 0;
-  for (const [sourceId, closedWon] of Object.entries(closes)) {
+  // Per-source validation: when count > 0, exactly `count` service
+  // picks must be supplied AND each must reference a real Service.
+  // (count = 0 is allowed without picks — the row is just zeroed out.)
+  for (const [sourceId, row] of Object.entries(closes)) {
     if (!validSourceIds.has(sourceId)) continue;
-    await prisma.leadPulseDailyEntry.upsert({
-      where: {
-        userId_entryDate_sourceId: {
+    if (row.count === 0) continue;
+    const picks = row.serviceIds.filter((s) => s.trim() !== "");
+    if (picks.length !== row.count) {
+      return NextResponse.json(
+        {
+          error: "service_count_mismatch",
+          sourceId,
+          expected: row.count,
+          got: picks.length,
+        },
+        { status: 400 },
+      );
+    }
+    for (const sid of picks) {
+      if (!validServiceIds.has(sid)) {
+        return NextResponse.json({ error: "unknown_service", serviceId: sid }, { status: 400 });
+      }
+    }
+  }
+
+  // One transaction per source so a partial save doesn't leave the
+  // entry's closedWon out of sync with its LeadPulseDailyClose rows.
+  let written = 0;
+  for (const [sourceId, row] of Object.entries(closes)) {
+    if (!validSourceIds.has(sourceId)) continue;
+    await prisma.$transaction(async (tx) => {
+      const entry = await tx.leadPulseDailyEntry.upsert({
+        where: {
+          userId_entryDate_sourceId: {
+            userId: directorId,
+            entryDate: dateValue,
+            sourceId,
+          },
+        },
+        create: {
           userId: directorId,
           entryDate: dateValue,
           sourceId,
+          roleAtEntry: "l2",
+          status: "submitted",
+          submittedAt: new Date(),
+          locked: false,
+          receivedFromL1: 0,
+          directLeads: 0,
+          connected: 0,
+          quoteSent: 0,
+          closedWon: row.count,
+          closedLost: 0,
+          disqualified: 0,
         },
-      },
-      create: {
-        userId: directorId,
-        entryDate: dateValue,
-        sourceId,
-        roleAtEntry: "l2",
-        status: "submitted",
-        submittedAt: new Date(),
-        locked: false,
-        receivedFromL1: 0,
-        directLeads: 0,
-        connected: 0,
-        quoteSent: 0,
-        closedWon,
-        closedLost: 0,
-        disqualified: 0,
-      },
-      update: {
-        roleAtEntry: "l2",
-        status: "submitted",
-        submittedAt: new Date(),
-        closedWon,
-      },
+        update: {
+          roleAtEntry: "l2",
+          status: "submitted",
+          submittedAt: new Date(),
+          closedWon: row.count,
+        },
+      });
+      // Replace the close-tags for this entry. createMany after a
+      // deleteMany keeps the operation idempotent — re-saving the
+      // same form is a no-op for the matrix.
+      await tx.leadPulseDailyClose.deleteMany({ where: { entryId: entry.id } });
+      if (row.count > 0) {
+        await tx.leadPulseDailyClose.createMany({
+          data: row.serviceIds
+            .filter((s) => s.trim() !== "")
+            .map((serviceId) => ({ entryId: entry.id, serviceId })),
+        });
+      }
     });
     written += 1;
   }
