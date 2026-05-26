@@ -1,0 +1,144 @@
+/*
+ * Hierarchical org-chart CSS.
+ *
+ * Layout:
+ *   .wrap   — overflow-x scroll container so wide trees don't wrap
+ *   .tree   — outermost <ul>, holds the single root <li>
+ *   .tree ul — flex-row of children at any level (dept-head row)
+ *   .tree li — a child + optional sub-tree
+ *   .icList — vertical chain of leaf-level employee boxes under a head
+ *
+ * Connector lines are drawn with pseudo-elements:
+ *   - .tree li::before / ::after  — horizontal sibling bar above each child
+ *   - .tree ul ul::before         — vertical trunk from parent down to the bar
+ *   - .icList::before             — short trunk into the vertical IC chain
+ *   - .icItem::before             — vertical link between adjacent IC boxes
+ */
+
+.wrap {
+  overflow-x: auto;
+  padding: 1.5rem 0.5rem;
+}
+
+.tree {
+  display: flex;
+  justify-content: center;
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  min-width: max-content;
+}
+
+.tree ul {
+  display: flex;
+  justify-content: center;
+  list-style: none;
+  margin: 0;
+  padding: 28px 0 0 0;
+  position: relative;
+}
+
+.tree li {
+  position: relative;
+  padding: 28px 14px 0 14px;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+}
+
+.tree li::before,
+.tree li::after {
+  content: '';
+  position: absolute;
+  top: 0;
+  right: 50%;
+  width: 50%;
+  height: 28px;
+  border-top: 1.5px solid #94a3b8;
+}
+
+.tree li::after {
+  right: auto;
+  left: 50%;
+  border-left: 1.5px solid #94a3b8;
+}
+
+.tree > li::before,
+.tree > li::after {
+  display: none;
+}
+
+.tree ul ul::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 50%;
+  height: 28px;
+  border-left: 1.5px solid #94a3b8;
+}
+
+.tree li:only-child {
+  padding-top: 28px;
+}
+
+.tree li:only-child::before {
+  display: none;
+}
+
+.tree li:only-child::after {
+  border-top: none;
+  border-left: none;
+}
+
+.tree li:first-child::before {
+  border-top: none;
+}
+
+.tree li:last-child::after {
+  border-top: none;
+  border-left: none;
+}
+
+.tree li:last-child::before {
+  border-right: 1.5px solid #94a3b8;
+}
+
+.icList {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  position: relative;
+  margin-top: 16px;
+}
+
+.icList::before {
+  content: '';
+  position: absolute;
+  top: -16px;
+  left: 50%;
+  height: 16px;
+  border-left: 1.5px solid #94a3b8;
+}
+
+.icItem {
+  margin-top: 12px;
+  position: relative;
+}
+
+.icItem:first-child {
+  margin-top: 0;
+}
+
+.icItem::before {
+  content: '';
+  position: absolute;
+  top: -12px;
+  left: 50%;
+  height: 12px;
+  border-left: 1.5px solid #94a3b8;
+}
+
+.icItem:first-child::before {
+  display: none;
+}
