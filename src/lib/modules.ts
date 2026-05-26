@@ -157,6 +157,9 @@ export const MODULES: AppModule[] = [
       { href: "/hr/policies", label: "Policies & Manuals", icon: "menu_book" },
       { href: "/hr/trainings", label: "Trainings", icon: "school" },
       { href: "/hr/notifications", label: "Notifications", icon: "campaign" },
+      { href: "/hr/psych", label: "Psychometric", icon: "psychology" },
+      { href: "/hr/psych/assignments", label: "Psych Assignments", icon: "assignment_ind" },
+      { href: "/hr/psych/questions", label: "Psych Questions", icon: "quiz" },
     ],
   },
   {

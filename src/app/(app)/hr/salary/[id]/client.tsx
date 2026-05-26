@@ -159,6 +159,16 @@ export function SalaryRunDetail({
               Download Axis Bank file
             </a>
           )}
+          {canDownload && (
+            <a
+              href={`/hr/salary/${run.id}/slips`}
+              target="_blank"
+              rel="noopener"
+              className="px-md py-sm rounded bg-purple-600 text-white font-bold"
+            >
+              All salary slips (PDF)
+            </a>
+          )}
         </div>
         {error && <p className="text-red-700 text-label-sm mt-sm">{error}</p>}
       </Section>
@@ -179,6 +189,7 @@ export function SalaryRunDetail({
                 <th className="py-sm pr-md">Adjust</th>
                 <th className="py-sm pr-md font-bold">Net</th>
                 <th className="py-sm pr-md">Bank</th>
+                <th className="py-sm pr-md">Slip</th>
               </tr>
             </thead>
             <tbody>
@@ -241,12 +252,24 @@ export function SalaryRunDetail({
                       <div>{l.bankAccount}</div>
                       <div>{l.bankIfsc}</div>
                     </td>
+                    <td className="py-sm pr-md">
+                      {canDownload && (
+                        <a
+                          href={`/hr/salary/${run.id}/slip/${l.id}`}
+                          target="_blank"
+                          rel="noopener"
+                          className="px-sm py-[2px] rounded bg-primary text-on-primary text-caption font-semibold"
+                        >
+                          Slip
+                        </a>
+                      )}
+                    </td>
                   </tr>
                 );
               })}
               {lines.length === 0 && (
                 <tr>
-                  <td colSpan={11} className="py-lg text-center text-on-surface-variant">
+                  <td colSpan={12} className="py-lg text-center text-on-surface-variant">
                     No line items yet.
                   </td>
                 </tr>
