@@ -56,7 +56,7 @@ export default async function ExecutiveDashboardPage() {
       />
       <div className="p-margin space-y-lg">
         {/* Row 1 — Headline KPIs */}
-        <section className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-gutter">
+        <section className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5 gap-gutter">
           <KpiCard
             label={`Current Month Revenue · ${headline.currentMonthLabel}`}
             value={headline.currentMonthRevenue}
@@ -85,6 +85,19 @@ export default async function ExecutiveDashboardPage() {
             tone="default"
             hero
             hint={`Collections + open pipeline · ${headline.pendingApprovalsCount} approvals queued`}
+          />
+          {/* "Forecast" tile — the realistic upper bound on this month's
+              revenue: what's already landed + everything in flight
+              (expected collections + open pipeline). Same totalPending
+              composition as the tile to its left, but added on top of
+              the realised revenue so leadership sees the all-in
+              picture in one number. */}
+          <KpiCard
+            label={`Forecast · ${headline.currentMonthLabel}`}
+            value={headline.currentMonthRevenue + headline.totalPending}
+            tone="success"
+            hero
+            hint={`${inr(headline.currentMonthRevenue)} realised + ${inr(headline.totalPending)} pending`}
           />
         </section>
 
