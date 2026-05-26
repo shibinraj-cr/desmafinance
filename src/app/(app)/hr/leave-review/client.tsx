@@ -87,7 +87,10 @@ export function LeaveReviewClient({
     setSelectedIds(next);
   }
 
-  async function decide(decision: "paid" | "unpaid" | "reset", dayIds: string[]) {
+  async function decide(
+    decision: "paid" | "unpaid" | "half_day" | "on_duty" | "regularized" | "reset",
+    dayIds: string[],
+  ) {
     if (dayIds.length === 0) return;
     setError(null);
     const noteVal = dayIds.length === 1 ? notes[dayIds[0]] || null : null;
@@ -167,7 +170,7 @@ export function LeaveReviewClient({
               onClick={() => decide("paid", allSelectedIds)}
               className="px-sm py-xs rounded bg-purple-600 text-white text-label-sm font-bold disabled:opacity-50"
             >
-              Mark as Paid Leave (CL)
+              Paid Leave
             </button>
             <button
               disabled={pending}
@@ -175,7 +178,30 @@ export function LeaveReviewClient({
               className="px-sm py-xs rounded bg-red-600 text-white text-label-sm font-bold disabled:opacity-50"
               title="HD rows in the selection are skipped — their 0.5 LOP is already built in."
             >
-              Mark A days as Unpaid (LOP)
+              Unpaid (LOP)
+            </button>
+            <button
+              disabled={pending}
+              onClick={() => decide("half_day", allSelectedIds)}
+              className="px-sm py-xs rounded bg-yellow-600 text-white text-label-sm font-bold disabled:opacity-50"
+            >
+              Half-day
+            </button>
+            <button
+              disabled={pending}
+              onClick={() => decide("on_duty", allSelectedIds)}
+              className="px-sm py-xs rounded bg-indigo-600 text-white text-label-sm font-bold disabled:opacity-50"
+              title="On-duty (off-site work) — counts as present, no leave debit"
+            >
+              On Duty
+            </button>
+            <button
+              disabled={pending}
+              onClick={() => decide("regularized", allSelectedIds)}
+              className="px-sm py-xs rounded bg-cyan-600 text-white text-label-sm font-bold disabled:opacity-50"
+              title="Regularize — apply the employee's correction without going through the request workflow"
+            >
+              Regularized
             </button>
             <button
               disabled={pending}

@@ -10,9 +10,17 @@ export const dynamic = "force-dynamic";
 const DATE_RX = /^\d{4}-\d{2}-\d{2}$/;
 const DIRECTOR_USERNAME = "devika";
 
+const CloseRowSchema = z.object({
+  count: z.number().int().min(0),
+  // One serviceId per close, in order. Length must equal `count` for
+  // any source where count > 0. The L2 Targets matrix reads these to
+  // attribute Devika's closes to a service (and thus a service group).
+  serviceIds: z.array(z.string()).default([]),
+});
+
 const SaveSchema = z.object({
   date: z.string().regex(DATE_RX),
-  closes: z.record(z.string(), z.number().int().min(0)),
+  closes: z.record(z.string(), CloseRowSchema),
 });
 
 /**
@@ -55,10 +63,20 @@ export async function GET(req: NextRequest) {
   }
   const rows = await prisma.leadPulseDailyEntry.findMany({
     where: { userId: directorId, entryDate: toPrismaDate(date), roleAtEntry: "l2" },
-    select: { sourceId: true, closedWon: true },
+    include: {
+      closes: {
+        orderBy: { createdAt: "asc" },
+        select: { serviceId: true },
+      },
+    },
   });
-  const closes: Record<string, number> = {};
-  for (const r of rows) closes[r.sourceId] = r.closedWon ?? 0;
+  const closes: Record<string, { count: number; serviceIds: string[] }> = {};
+  for (const r of rows) {
+    closes[r.sourceId] = {
+      count: r.closedWon ?? 0,
+      serviceIds: r.closes.map((c) => c.serviceId),
+    };
+  }
   return NextResponse.json({ closes });
 }
 

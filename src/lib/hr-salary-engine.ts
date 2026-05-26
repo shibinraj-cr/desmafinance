@@ -190,6 +190,8 @@ export function bucketAttendance(days: { status: string }[]) {
   for (const d of days) {
     switch (d.status) {
       case "P":
+      case "OD":
+      case "REG":
         p++;
         break;
       case "A":

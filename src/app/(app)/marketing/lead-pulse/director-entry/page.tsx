@@ -68,7 +68,7 @@ export default async function DirectorEntryPage({
       ? searchParams.date
       : today;
 
-  const [sources, existing] = await Promise.all([
+  const [sources, existing, services] = await Promise.all([
     prisma.leadPulseSource.findMany({
       where: { active: true },
       orderBy: [{ displayOrder: "asc" }, { label: "asc" }],
@@ -80,11 +80,28 @@ export default async function DirectorEntryPage({
         entryDate: toPrismaDate(date),
         roleAtEntry: "l2",
       },
-      select: { sourceId: true, closedWon: true },
+      include: {
+        closes: {
+          orderBy: { createdAt: "asc" },
+          select: { serviceId: true },
+        },
+      },
+    }),
+    // Active services for the per-close service picker — same filter
+    // the L2 BDE form uses so both surfaces stay in lockstep.
+    prisma.service.findMany({
+      where: { isActive: true, showInL2Targets: true },
+      orderBy: { name: "asc" },
+      select: { id: true, name: true },
     }),
   ]);
-  const initialCloses: Record<string, number> = {};
-  for (const r of existing) initialCloses[r.sourceId] = r.closedWon ?? 0;
+  const initialCloses: Record<string, { count: number; serviceIds: string[] }> = {};
+  for (const r of existing) {
+    initialCloses[r.sourceId] = {
+      count: r.closedWon ?? 0,
+      serviceIds: r.closes.map((c) => c.serviceId),
+    };
+  }
 
   return (
     <DirectorEntryClient
@@ -92,6 +109,7 @@ export default async function DirectorEntryPage({
       date={date}
       today={today}
       sources={sources}
+      services={services}
       initialCloses={initialCloses}
     />
   );
