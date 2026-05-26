@@ -39,12 +39,23 @@ export type CeoHeadline = {
   expectedCollections: number;
   expectedCollectionsCount: number;
 
-  /** Sum of LeadPulsePipeline.expectedFirstInstallment where status = 'open'. */
+  /** Sum of LeadPulsePipeline.expectedFirstInstallment where status='open'
+   *  AND expectedCloseDate falls within the running calendar month. This
+   *  matches what the Lead Pulse "Pipeline Forecast — <month>" card
+   *  reports, so the two views agree. */
   pipelineValue: number;
   pipelineCount: number;
 
-  /** Total pending = expected collections + pipeline value (everything still
-   *  to come in). Keeps the headline single-number simple. */
+  /** Open pipeline rows whose expectedCloseDate falls outside the
+   *  running calendar month — future-month forecasts plus overdue-but-
+   *  still-open rows. Together with pipelineValue this is a clean
+   *  partition of every open pipeline row. */
+  pipelineValueBeyond: number;
+  pipelineCountBeyond: number;
+
+  /** Total pending = expected collections + ALL open pipeline (this
+   *  month + beyond). Keeps the headline single-number simple and
+   *  forward-looking. */
   totalPending: number;
 
   /** Finance approval queue — distinct from collection plans. Surfaced so the
@@ -72,7 +83,7 @@ export async function ceoHeadline(): Promise<CeoHeadline> {
   const nextMonthStart = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() + 1, 1));
   const prevMonthStart = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() - 1, 1));
 
-  const [cur, prev, plans, pipeline, approvals] = await Promise.all([
+  const [cur, prev, plans, pipelineCurrent, pipelineBeyond, approvals] = await Promise.all([
     safe(
       "transaction.aggregate(currentMonthRevenue)",
       () =>
@@ -112,11 +123,41 @@ export async function ceoHeadline(): Promise<CeoHeadline> {
         _count: { _all: 0 },
       },
     ),
+    // Pipeline split into "current month" vs "beyond" so the headline
+    // matches the Lead Pulse month-bound Pipeline Forecast tile.
+    // Rows with NO expectedCloseDate are grouped under "beyond" so
+    // every open row is represented somewhere in the dashboard.
     safe(
-      "leadPulsePipeline.aggregate(pipelineValue)",
+      "leadPulsePipeline.aggregate(pipelineCurrent)",
       () =>
         prisma.leadPulsePipeline.aggregate({
-          where: { status: "open" },
+          where: {
+            status: "open",
+            expectedCloseDate: { gte: currentMonthStart, lt: nextMonthStart },
+          },
+          _sum: { expectedFirstInstallment: true },
+          _count: { _all: true },
+        }),
+      {
+        _sum: { expectedFirstInstallment: null as null | { toString(): string } },
+        _count: { _all: 0 },
+      },
+    ),
+    safe(
+      "leadPulsePipeline.aggregate(pipelineBeyond)",
+      () =>
+        prisma.leadPulsePipeline.aggregate({
+          where: {
+            status: "open",
+            // Every open row that isn't expected to land *this* month —
+            // covers both future-month forecasts and overdue rows that
+            // haven't been moved to closed_won / lost yet. Together with
+            // pipelineCurrent this is a clean partition of all open rows.
+            OR: [
+              { expectedCloseDate: { lt: currentMonthStart } },
+              { expectedCloseDate: { gte: nextMonthStart } },
+            ],
+          },
           _sum: { expectedFirstInstallment: true },
           _count: { _all: true },
         }),
@@ -139,7 +180,8 @@ export async function ceoHeadline(): Promise<CeoHeadline> {
       ? ((currentMonthRevenue - previousMonthRevenue) / previousMonthRevenue) * 100
       : null;
   const expectedCollections = num(plans._sum.amount);
-  const pipelineValue = num(pipeline._sum.expectedFirstInstallment);
+  const pipelineValue = num(pipelineCurrent._sum.expectedFirstInstallment);
+  const pipelineValueBeyond = num(pipelineBeyond._sum.expectedFirstInstallment);
 
   return {
     currentMonthLabel: now.toLocaleString("en-US", { month: "long", year: "numeric" }),
@@ -149,8 +191,10 @@ export async function ceoHeadline(): Promise<CeoHeadline> {
     expectedCollections,
     expectedCollectionsCount: plans._count._all,
     pipelineValue,
-    pipelineCount: pipeline._count._all,
-    totalPending: expectedCollections + pipelineValue,
+    pipelineCount: pipelineCurrent._count._all,
+    pipelineValueBeyond,
+    pipelineCountBeyond: pipelineBeyond._count._all,
+    totalPending: expectedCollections + pipelineValue + pipelineValueBeyond,
     pendingApprovalsCount: approvals,
   };
 }

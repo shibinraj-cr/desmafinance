@@ -56,7 +56,7 @@ export default async function ExecutiveDashboardPage() {
       />
       <div className="p-margin space-y-lg">
         {/* Row 1 — Headline KPIs */}
-        <section className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5 gap-gutter">
+        <section className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6 gap-gutter">
           <KpiCard
             label={`Current Month Revenue · ${headline.currentMonthLabel}`}
             value={headline.currentMonthRevenue}
@@ -73,18 +73,25 @@ export default async function ExecutiveDashboardPage() {
             hint={`${headline.expectedCollectionsCount} installments pending / submitted`}
           />
           <KpiCard
-            label="Pipeline Value (Open)"
+            label={`Pipeline · ${headline.currentMonthLabel}`}
             value={headline.pipelineValue}
             tone="primary"
             hero
-            hint={`${headline.pipelineCount} open deals across L2 BDEs`}
+            hint={`${headline.pipelineCount} open deals expected to close this month`}
+          />
+          <KpiCard
+            label={`Pipeline · Beyond ${headline.currentMonthLabel}`}
+            value={headline.pipelineValueBeyond}
+            tone="default"
+            hero
+            hint={`${headline.pipelineCountBeyond} open deals due in later months`}
           />
           <KpiCard
             label="Total Pending"
             value={headline.totalPending}
             tone="default"
             hero
-            hint={`Collections + open pipeline · ${headline.pendingApprovalsCount} approvals queued`}
+            hint={`Collections + all open pipeline · ${headline.pendingApprovalsCount} approvals queued`}
           />
           {/* "Forecast" tile — the realistic upper bound on this month's
               revenue: what's already landed + everything in flight
