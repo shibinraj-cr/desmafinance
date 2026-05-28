@@ -155,16 +155,16 @@ export async function POST(
   // Route per role. We don't use submitCreate() directly because we
   // need to set PendingApproval.collectionInstallmentId atomically and
   // flip the installment to its new status / link.
-  if (perms.draftFirst) {
-    // Draft-first users never bypass their own review. The installment
-    // stays 'pending' until they push the draft through; the eventual
-    // PendingApproval row created from the draft will not be linked
-    // back to this installment, so the user should submit the
-    // installment directly from the Daily Tracker draft instead. For
-    // v1 we surface a 400 so the UI knows to route them via the
-    // standard Daily Tracker form.
-    return NextResponse.json({ error: "draft_first_not_supported" }, { status: 400 });
-  }
+  //
+  // draftFirst is intentionally NOT special-cased here. For ad-hoc
+  // Daily Tracker entries that flag routes a user's submissions through
+  // a personal draft queue first; but a collection-plan installment is
+  // already explicitly reviewed in the "Submit to Daily Tracker" dialog
+  // (category / sub-item / payment / EXP-DOM are confirmed there), and
+  // TransactionDraft has no link back to the installment — so a draft
+  // would orphan the installment and risk a double-submit. draftFirst
+  // executives therefore use the standard executive enqueue path below,
+  // which keeps the installment ↔ PendingApproval link intact.
 
   if (canApprove(perms)) {
     const tx = await prisma.transaction.create({
