@@ -9,6 +9,7 @@ export function KpiCard({
   trendInverted,
   sparkline,
   hero,
+  dark,
 }: {
   label: string;
   value: number | string;
@@ -22,9 +23,12 @@ export function KpiCard({
   sparkline?: number[];
   /** When true, the card is rendered larger / more prominent. */
   hero?: boolean;
+  /** Dark "feature" card on the brand surface (e.g. the headcount/net-position tile). */
+  dark?: boolean;
 }) {
-  const valueClass =
-    tone === "primary"
+  const valueClass = dark
+    ? "text-on-brand"
+    : tone === "primary"
       ? "text-accent"
       : tone === "danger"
         ? "text-error"
@@ -41,24 +45,26 @@ export function KpiCard({
           ? "border-l-4 border-l-green-600"
           : "";
 
+  // Dark cards sit on the brand surface with a gold accent edge; light cards
+  // keep the standard outlined-white treatment (+ any hero left border).
+  const container = dark
+    ? "bg-brand text-on-brand border-l-4 border-l-primary"
+    : "bg-surface-container-lowest border border-outline-variant " + heroBorder;
+  const labelClass = dark ? "text-on-brand-variant" : "text-on-surface-variant";
+
   const heroValue = hero ? "text-[40px] leading-[44px]" : "text-h1";
 
   return (
-    <div
-      className={
-        "bg-surface-container-lowest border border-outline-variant p-lg rounded-xl shadow-sm flex flex-col " +
-        heroBorder
-      }
-    >
+    <div className={"p-lg rounded-xl shadow-sm flex flex-col " + container}>
       <div className="flex items-start justify-between mb-sm">
-        <p className="text-label-sm text-on-surface-variant uppercase tracking-wider">{label}</p>
+        <p className={"text-label-sm uppercase tracking-wider " + labelClass}>{label}</p>
         <TrendChip pct={trendPct} inverted={trendInverted} />
       </div>
       <h3 className={`font-semibold ${valueClass} ${heroValue}`}>
         {typeof value === "number" ? inr(value) : value}
       </h3>
       {sparkline && sparkline.length > 1 && <Sparkline data={sparkline} tone={tone} />}
-      {hint && <p className="text-caption text-on-surface-variant mt-md">{hint}</p>}
+      {hint && <p className={"text-caption mt-md " + labelClass}>{hint}</p>}
     </div>
   );
 }

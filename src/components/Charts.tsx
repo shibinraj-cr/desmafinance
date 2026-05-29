@@ -113,13 +113,21 @@ export function CategoryDonut({
   data,
   centerTotal,
   centerLabel = "Total",
+  centerValue,
+  valueKind = "currency",
 }: {
   data: { name: string; value: number }[];
   /** When supplied, shown in the center of the donut. */
   centerTotal?: number | null;
   centerLabel?: string;
+  /** Overrides the center display string (e.g. "41 / 48"). Takes precedence over centerTotal. */
+  centerValue?: string;
+  /** Whether values are money (₹) or plain counts — drives the tooltip formatting. */
+  valueKind?: "currency" | "count";
 }) {
   const total = data.reduce((s, d) => s + d.value, 0);
+  const fmt = (v: number) => (valueKind === "count" ? `${v}` : inr(v));
+  const showCenter = centerValue !== undefined || (centerTotal !== undefined && centerTotal !== null);
   return (
     <div className="flex flex-col md:flex-row items-center gap-md">
       <div className="relative w-full md:w-1/2 h-56">
@@ -130,15 +138,17 @@ export function CategoryDonut({
                 <Cell key={i} fill={COLORS[i % COLORS.length]} />
               ))}
             </Pie>
-            <Tooltip formatter={(v: number) => inr(v)} />
+            <Tooltip formatter={(v: number) => fmt(v)} />
           </PieChart>
         </ResponsiveContainer>
-        {centerTotal !== undefined && centerTotal !== null && (
+        {showCenter && (
           <div className="absolute inset-0 flex flex-col items-center justify-center pointer-events-none">
+            <span className="text-h3 font-semibold text-on-surface">
+              {centerValue ?? inr(centerTotal)}
+            </span>
             <span className="text-caption text-on-surface-variant uppercase tracking-wider">
               {centerLabel}
             </span>
-            <span className="text-h3 font-semibold text-on-surface">{inr(centerTotal)}</span>
           </div>
         )}
       </div>
@@ -162,8 +172,16 @@ export function CategoryDonut({
   );
 }
 
-export function HorizontalBars({ data }: { data: { name: string; value: number }[] }) {
+export function HorizontalBars({
+  data,
+  valueKind = "currency",
+}: {
+  data: { name: string; value: number }[];
+  /** Whether the trailing value is money (₹33.07L) or a plain count (12). */
+  valueKind?: "currency" | "count";
+}) {
   const max = Math.max(...data.map((d) => d.value), 1);
+  const fmt = (v: number) => (valueKind === "count" ? `${v}` : `₹${(v / 1_00_000).toFixed(2)}L`);
   return (
     <div className="space-y-md">
       {data.map((d, i) => (
@@ -177,12 +195,39 @@ export function HorizontalBars({ data }: { data: { name: string; value: number }
               style={{ width: `${(d.value / max) * 100}%`, background: COLORS[i % COLORS.length] }}
             />
             <span className="ml-base text-label-sm font-mono text-on-surface whitespace-nowrap">
-              ₹{(d.value / 1_00_000).toFixed(2)}L
+              {fmt(d.value)}
             </span>
           </div>
         </div>
       ))}
     </div>
+  );
+}
+
+/** Area chart for a headcount-over-time series (plain integer counts). */
+export function HeadcountArea({ data }: { data: { month: string; count: number }[] }) {
+  return (
+    <ResponsiveContainer width="100%" height={260}>
+      <AreaChart data={data} margin={{ top: 10, right: 10, left: 0, bottom: 10 }}>
+        <defs>
+          <linearGradient id="hcFill" x1="0" y1="0" x2="0" y2="1">
+            <stop offset="5%" stopColor="#F5C518" stopOpacity={0.45} />
+            <stop offset="95%" stopColor="#F5C518" stopOpacity={0} />
+          </linearGradient>
+        </defs>
+        <CartesianGrid strokeDasharray="3 3" stroke="#e1e2e9" vertical={false} />
+        <XAxis dataKey="month" tick={{ fontSize: 12, fill: "#424751" }} axisLine={false} tickLine={false} />
+        <YAxis
+          tick={{ fontSize: 12, fill: "#424751" }}
+          axisLine={false}
+          tickLine={false}
+          allowDecimals={false}
+          width={32}
+        />
+        <Tooltip formatter={(v: number) => [`${v}`, "Headcount"]} />
+        <Area type="monotone" dataKey="count" name="Headcount" stroke="#C9A019" strokeWidth={2.5} fill="url(#hcFill)" />
+      </AreaChart>
+    </ResponsiveContainer>
   );
 }
 
