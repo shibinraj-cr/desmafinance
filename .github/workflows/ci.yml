@@ -1,0 +1,36 @@
+name: CI
+
+# Quality gate: typecheck + lint + tests on every PR (and pushes to the main
+# branches). These steps need no database or secrets — the test suite mocks
+# Prisma — so the gate is deterministic. `next build` is intentionally left out
+# until a build-time DATABASE_URL is wired up in repo secrets.
+on:
+  pull_request:
+  push:
+    branches: [main, master]
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Generate Prisma client
+        run: npx prisma generate
+
+      - name: Typecheck
+        run: npx tsc --noEmit
+
+      - name: Lint
+        run: npm run lint
+
+      - name: Test
+        run: npm test
