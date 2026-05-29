@@ -66,11 +66,11 @@ export default async function ExecutiveDashboardPage() {
             hint={`vs ${inr(headline.previousMonthRevenue)} last month`}
           />
           <KpiCard
-            label="Expected Collections"
+            label={`Expected Collections · ${headline.currentMonthLabel}`}
             value={headline.expectedCollections}
             tone="success"
             hero
-            hint={`${headline.expectedCollectionsCount} installments pending / submitted`}
+            hint={`${headline.expectedCollectionsCount} installment${headline.expectedCollectionsCount === 1 ? "" : "s"} due this month`}
           />
           <KpiCard
             label={`Pipeline · ${headline.currentMonthLabel}`}
@@ -93,18 +93,17 @@ export default async function ExecutiveDashboardPage() {
             hero
             hint={`Collections + all open pipeline · ${headline.pendingApprovalsCount} approvals queued`}
           />
-          {/* "Forecast" tile — the realistic upper bound on this month's
-              revenue: what's already landed + everything in flight
-              (expected collections + open pipeline). Same totalPending
-              composition as the tile to its left, but added on top of
-              the realised revenue so leadership sees the all-in
-              picture in one number. */}
+          {/* "Forecast" tile — what the running month should land at:
+              revenue already realised + collections due this month +
+              pipeline expected to close this month. Strictly this-month
+              (excludes beyond-month pipeline) so it reads as the natural
+              sum of the three month-scoped tiles to its left. */}
           <KpiCard
             label={`Forecast · ${headline.currentMonthLabel}`}
-            value={headline.currentMonthRevenue + headline.totalPending}
+            value={headline.monthForecast}
             tone="success"
             hero
-            hint={`${inr(headline.currentMonthRevenue)} realised + ${inr(headline.totalPending)} pending`}
+            hint={`${inr(headline.currentMonthRevenue)} revenue + ${inr(headline.expectedCollections)} collections + ${inr(headline.pipelineValue)} pipeline`}
           />
         </section>
 

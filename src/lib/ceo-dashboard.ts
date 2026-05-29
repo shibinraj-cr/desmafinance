@@ -35,7 +35,10 @@ export type CeoHeadline = {
   previousMonthRevenue: number;
   currentMonthRevenueTrendPct: number | null;
 
-  /** Sum of CollectionPlanInstallment.amount where status ∈ (pending, submitted). */
+  /** Sum of CollectionPlanInstallment.amount where status ∈ (pending,
+   *  submitted) AND expectedDate falls within the running calendar month —
+   *  receivables still due *this month*, so the headline reads as one
+   *  coherent this-month picture. */
   expectedCollections: number;
   expectedCollectionsCount: number;
 
@@ -53,10 +56,16 @@ export type CeoHeadline = {
   pipelineValueBeyond: number;
   pipelineCountBeyond: number;
 
-  /** Total pending = expected collections + ALL open pipeline (this
-   *  month + beyond). Keeps the headline single-number simple and
+  /** Total pending = expected collections (this month) + ALL open pipeline
+   *  (this month + beyond). Keeps the headline single-number simple and
    *  forward-looking. */
   totalPending: number;
+
+  /** Month forecast = current-month revenue (realised) + expected
+   *  collections due this month + pipeline expected to close this month.
+   *  The "what the full month should land at" headline, scoped strictly
+   *  to the running calendar month (excludes beyond-month pipeline). */
+  monthForecast: number;
 
   /** Finance approval queue — distinct from collection plans. Surfaced so the
    *  CEO can see if any reviews are stuck. */
@@ -114,7 +123,10 @@ export async function ceoHeadline(): Promise<CeoHeadline> {
       "collectionPlanInstallment.aggregate(expectedCollections)",
       () =>
         prisma.collectionPlanInstallment.aggregate({
-          where: { status: { in: ["pending", "submitted"] } },
+          where: {
+            status: { in: ["pending", "submitted"] },
+            expectedDate: { gte: currentMonthStart, lt: nextMonthStart },
+          },
           _sum: { amount: true },
           _count: { _all: true },
         }),
@@ -195,6 +207,7 @@ export async function ceoHeadline(): Promise<CeoHeadline> {
     pipelineValueBeyond,
     pipelineCountBeyond: pipelineBeyond._count._all,
     totalPending: expectedCollections + pipelineValue + pipelineValueBeyond,
+    monthForecast: currentMonthRevenue + expectedCollections + pipelineValue,
     pendingApprovalsCount: approvals,
   };
 }
