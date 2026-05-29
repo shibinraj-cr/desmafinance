@@ -2,6 +2,7 @@ import { redirect } from "next/navigation";
 import { prisma } from "@/lib/prisma";
 import { getCurrentUserAndPermissions } from "@/lib/permissions";
 import { SideNav } from "@/components/SideNav";
+import { GroupTabs } from "@/components/GroupTabs";
 import { RouteProgress } from "@/components/RouteProgress";
 
 export default async function AppLayout({ children }: { children: React.ReactNode }) {
@@ -29,7 +30,10 @@ export default async function AppLayout({ children }: { children: React.ReactNod
         pendingCount={pendingCount}
         rejectedCount={rejectedCount}
       />
-      <main className="flex-1 min-w-0 flex flex-col">{children}</main>
+      <main className="flex-1 min-w-0 flex flex-col">
+        <GroupTabs perms={perms} pendingCount={pendingCount} rejectedCount={rejectedCount} />
+        {children}
+      </main>
     </div>
   );
 }
