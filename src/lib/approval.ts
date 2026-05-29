@@ -199,6 +199,9 @@ export async function submitDraftToPending(opts: {
     amount: Number(draft.amount.toString()),
     flow: draft.flow,
     partyId: draft.partyId,
+    // EXP/DOM is only meaningful for Revenue; carry it through draft →
+    // pending so reviewers (and the GST calc) see the classification.
+    expDom: draft.type === "Revenue" ? (draft.expDom ?? null) : null,
   };
 
   if (canApprove(perms)) {
@@ -215,6 +218,7 @@ export async function submitDraftToPending(opts: {
           amount: draft.amount,
           flow: draft.flow,
           partyId: draft.partyId,
+          expDom: draft.type === "Revenue" ? (draft.expDom ?? null) : null,
           createdById: ownerId,
         },
       });
