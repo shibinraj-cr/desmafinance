@@ -415,82 +415,94 @@ export async function approvePending(opts: {
 
   if (p.kind === "create") {
     const data = p.proposed as unknown as TxProposed;
-    const tx = await prisma.transaction.create({
-      data: {
-        date: new Date(data.date),
-        month: data.month,
-        type: data.type,
-        category: data.category,
-        subItem: data.subItem,
-        description: data.description ?? null,
-        paymentMode: data.paymentMode,
-        amount: data.amount,
-        flow: data.flow,
-        partyId: data.partyId ?? null,
-        expDom: data.type === "Revenue" ? (data.expDom ?? null) : null,
-        createdById: p.submittedById,
-      },
-    });
-    await prisma.pendingApproval.update({
-      where: { id: pendingId },
-      data: {
-        status: "approved",
-        reviewedById: reviewerId,
-        reviewNote: note ?? null,
-        reviewedAt: new Date(),
-        targetTxId: tx.id,
-      },
-    });
-    // If this pending was raised from a Collection Plan installment,
-    // flip the installment to 'received' + link to the new transaction.
-    if (p.collectionInstallmentId) {
-      await prisma.collectionPlanInstallment.update({
-        where: { id: p.collectionInstallmentId },
+    // Atomic: create the ledger row, resolve the pending, and flip any
+    // linked installment together. A crash mid-way must not leave a
+    // committed Transaction behind a still-"pending" approval (which
+    // could then be approved again → double-posted revenue).
+    const created = await prisma.$transaction(async (tx) => {
+      const row = await tx.transaction.create({
         data: {
-          status: "received",
-          transactionId: tx.id,
-          pendingApprovalId: null,
+          date: new Date(data.date),
+          month: data.month,
+          type: data.type,
+          category: data.category,
+          subItem: data.subItem,
+          description: data.description ?? null,
+          paymentMode: data.paymentMode,
+          amount: data.amount,
+          flow: data.flow,
+          partyId: data.partyId ?? null,
+          expDom: data.type === "Revenue" ? (data.expDom ?? null) : null,
+          createdById: p.submittedById,
         },
       });
-    }
+      await tx.pendingApproval.update({
+        where: { id: pendingId },
+        data: {
+          status: "approved",
+          reviewedById: reviewerId,
+          reviewNote: note ?? null,
+          reviewedAt: new Date(),
+          targetTxId: row.id,
+        },
+      });
+      // If this pending was raised from a Collection Plan installment,
+      // flip the installment to 'received' + link to the new transaction.
+      if (p.collectionInstallmentId) {
+        await tx.collectionPlanInstallment.update({
+          where: { id: p.collectionInstallmentId },
+          data: {
+            status: "received",
+            transactionId: row.id,
+            pendingApprovalId: null,
+          },
+        });
+      }
+      return row;
+    });
     await recordAudit({
       entityType: "Transaction",
-      entityId: tx.id,
+      entityId: created.id,
       action: "APPROVE_CREATE",
       userId: reviewerId,
       changes: { pendingId, ...data, note: note ?? null },
     });
-    return { applied: true as const, transactionId: tx.id };
+    return { applied: true as const, transactionId: created.id };
   }
 
   if (p.kind === "update" && p.targetTxId) {
     const data = p.proposed as unknown as TxProposed;
-    const before = await prisma.transaction.findUnique({ where: { id: p.targetTxId } });
+    const targetTxId = p.targetTxId;
+    const before = await prisma.transaction.findUnique({ where: { id: targetTxId } });
     if (!before || before.deletedAt) return { error: "target_gone" as const };
-    const after = await prisma.transaction.update({
-      where: { id: p.targetTxId },
-      data: {
-        date: new Date(data.date),
-        month: data.month,
-        type: data.type,
-        category: data.category,
-        subItem: data.subItem,
-        description: data.description ?? null,
-        paymentMode: data.paymentMode,
-        amount: data.amount,
-        flow: data.flow,
-        partyId: data.partyId ?? null,
-        expDom: data.type === "Revenue" ? (data.expDom ?? null) : null,
-      },
-    });
-    await prisma.pendingApproval.update({
-      where: { id: pendingId },
-      data: {
-        status: "approved",
-        reviewedById: reviewerId,
-        reviewNote: note ?? null,
-        reviewedAt: new Date(),
-      },
+    // Atomic: apply the edit and resolve the pending together.
+    const after = await prisma.$transaction(async (tx) => {
+      const updated = await tx.transaction.update({
+        where: { id: targetTxId },
+        data: {
+          date: new Date(data.date),
+          month: data.month,
+          type: data.type,
+          category: data.category,
+          subItem: data.subItem,
+          description: data.description ?? null,
+          paymentMode: data.paymentMode,
+          amount: data.amount,
+          flow: data.flow,
+          partyId: data.partyId ?? null,
+          expDom: data.type === "Revenue" ? (data.expDom ?? null) : null,
+        },
+      });
+      await tx.pendingApproval.update({
+        where: { id: pendingId },
+        data: {
+          status: "approved",
+          reviewedById: reviewerId,
+          reviewNote: note ?? null,
+          reviewedAt: new Date(),
+        },
+      });
+      return updated;
     });
     await recordAudit({
       entityType: "Transaction",
@@ -508,29 +520,33 @@ export async function approvePending(opts: {
   }
 
   if (p.kind === "delete" && p.targetTxId) {
-    const before = await prisma.transaction.findUnique({ where: { id: p.targetTxId } });
+    const targetTxId = p.targetTxId;
+    const before = await prisma.transaction.findUnique({ where: { id: targetTxId } });
     if (!before || before.deletedAt) return { error: "target_gone" as const };
-    await prisma.transaction.update({
-      where: { id: p.targetTxId },
-      data: { deletedAt: new Date(), deletedById: reviewerId },
-    });
-    await prisma.pendingApproval.update({
-      where: { id: pendingId },
-      data: {
-        status: "approved",
-        reviewedById: reviewerId,
-        reviewNote: note ?? null,
-        reviewedAt: new Date(),
-      },
+    // Atomic: soft-delete the row and resolve the pending together.
+    await prisma.$transaction(async (tx) => {
+      await tx.transaction.update({
+        where: { id: targetTxId },
+        data: { deletedAt: new Date(), deletedById: reviewerId },
+      });
+      await tx.pendingApproval.update({
+        where: { id: pendingId },
+        data: {
+          status: "approved",
+          reviewedById: reviewerId,
+          reviewNote: note ?? null,
+          reviewedAt: new Date(),
+        },
+      });
     });
     await recordAudit({
       entityType: "Transaction",
-      entityId: p.targetTxId,
+      entityId: targetTxId,
       action: "APPROVE_DELETE",
       userId: reviewerId,
       changes: { pendingId, before: txSnapshot(before), note: note ?? null },
     });
-    return { applied: true as const, transactionId: p.targetTxId };
+    return { applied: true as const, transactionId: targetTxId };
   }
 
   return { error: "invalid_kind" as const };
@@ -549,23 +565,28 @@ export async function rejectPending(opts: {
   if (!p) return { error: "not_found" as const };
   if (p.status !== "pending") return { error: "already_resolved" as const };
 
-  await prisma.pendingApproval.update({
-    where: { id: pendingId },
-    data: {
-      status: "rejected",
-      reviewedById: reviewerId,
-      reviewNote: note ?? null,
-      reviewedAt: new Date(),
-    },
-  });
-  // Revert any linked installment back to 'pending' so the executive
-  // can edit + resubmit it from the Collection Plan detail page.
-  if (p.collectionInstallmentId) {
-    await prisma.collectionPlanInstallment.update({
-      where: { id: p.collectionInstallmentId },
-      data: { status: "pending", pendingApprovalId: null },
+  // Atomic: mark the pending rejected and revert any linked installment
+  // together, so a crash can't leave a rejected approval still owning a
+  // 'pending'-status installment (or vice versa).
+  await prisma.$transaction(async (tx) => {
+    await tx.pendingApproval.update({
+      where: { id: pendingId },
+      data: {
+        status: "rejected",
+        reviewedById: reviewerId,
+        reviewNote: note ?? null,
+        reviewedAt: new Date(),
+      },
     });
-  }
+    // Revert any linked installment back to 'pending' so the executive
+    // can edit + resubmit it from the Collection Plan detail page.
+    if (p.collectionInstallmentId) {
+      await tx.collectionPlanInstallment.update({
+        where: { id: p.collectionInstallmentId },
+        data: { status: "pending", pendingApprovalId: null },
+      });
+    }
+  });
   await recordAudit({
     entityType: "PendingApproval",
     entityId: pendingId,
