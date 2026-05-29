@@ -17,6 +17,9 @@ const TxFieldsSchema = z.object({
   amount: z.number().nonnegative(),
   flow: z.string().min(1),
   partyId: z.string().nullable().optional(),
+  // "EXP" | "DOM" — only meaningful for Revenue rows. Preserved through
+  // resubmit so the GST liability tag survives an edit round-trip.
+  expDom: z.string().nullable().optional(),
 });
 
 const BodySchema = z.object({

@@ -31,6 +31,8 @@ type ProposedTx = {
   amount: number;
   flow: string;
   partyId?: string | null;
+  /** "EXP" | "DOM" — only meaningful for Revenue rows. */
+  expDom?: string | null;
 };
 
 /**
@@ -86,6 +88,11 @@ export function ResubmitEditor({
   );
   const [partyId, setPartyId] = useState<string | null>(
     initialProposed?.partyId ?? null,
+  );
+  // Revenue-only EXP/DOM tag. Defaults to "DOM" when missing so the GST
+  // liability calc (DOM only) stays correct on resubmit.
+  const [expDom, setExpDom] = useState<"EXP" | "DOM">(
+    initialProposed?.expDom === "EXP" ? "EXP" : "DOM",
   );
 
   const visibleCategories = useMemo(
@@ -178,6 +185,7 @@ export function ResubmitEditor({
                 amount: amt,
                 flow: type === "Revenue" ? "Inflow" : "Outflow",
                 partyId: partyId || null,
+                expDom: type === "Revenue" ? expDom : null,
               },
             }),
       }),
@@ -343,6 +351,32 @@ export function ResubmitEditor({
               ))}
             </select>
           </Field>
+          {type === "Revenue" && (
+            <Field label="EXP / DOM">
+              <div className="flex rounded-lg border border-outline-variant overflow-hidden h-10">
+                {(["DOM", "EXP"] as const).map((opt) => (
+                  <button
+                    type="button"
+                    key={opt}
+                    onClick={() => setExpDom(opt)}
+                    className={
+                      "flex-1 text-label-sm font-semibold transition " +
+                      (expDom === opt
+                        ? "bg-primary text-on-primary"
+                        : "bg-surface-container-lowest text-on-surface-variant hover:bg-surface-container-low")
+                    }
+                    title={
+                      opt === "DOM"
+                        ? "Domestic — taxable for GST (counted in monthly liability)"
+                        : "Export — outside GST liability calc"
+                    }
+                  >
+                    {opt}
+                  </button>
+                ))}
+              </div>
+            </Field>
+          )}
           <div className="md:col-span-2">
             <Field label="Description">
               <textarea
