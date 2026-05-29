@@ -167,3 +167,16 @@ export function subItemsFor(type: TxType, category: string): string[] {
 export function flowFor(type: TxType): Flow {
   return type === "Revenue" ? "Inflow" : "Outflow";
 }
+
+const MONTH_ABBR = [
+  "Jan", "Feb", "Mar", "Apr", "May", "Jun",
+  "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
+] as const;
+
+/** Convert a date to the app's `MMM-YY` month code (e.g. "May-26").
+ *  Uses UTC parts so a YYYY-MM-DD date string maps to the calendar
+ *  month it names, regardless of server timezone. This is the format
+ *  stored on Transaction / TransactionDraft / PendingApproval.month. */
+export function monthCodeFromDate(d: Date): string {
+  return `${MONTH_ABBR[d.getUTCMonth()]}-${String(d.getUTCFullYear()).slice(-2)}`;
+}

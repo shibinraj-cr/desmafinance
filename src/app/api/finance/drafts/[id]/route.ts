@@ -2,12 +2,14 @@ import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 import { getCurrentUserAndPermissions } from "@/lib/permissions";
 import { discardDraft, updateDraft, type TxProposed } from "@/lib/approval";
+import { monthCodeFromDate } from "@/lib/catalog";
 
 export const dynamic = "force-dynamic";
 
+// `month` is derived from `date` server-side (the app stores it as a
+// `MMM-YY` code, not `YYYY-MM`), so it isn't accepted from the client.
 const PatchSchema = z.object({
   date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
-  month: z.string().regex(/^\d{4}-\d{2}$/),
   type: z.enum(["Revenue", "Expense"]),
   category: z.string().min(1),
   subItem: z.string().min(1),
@@ -16,6 +18,7 @@ const PatchSchema = z.object({
   amount: z.number().positive(),
   flow: z.enum(["Inflow", "Outflow"]),
   partyId: z.string().nullable().optional(),
+  expDom: z.enum(["EXP", "DOM"]).nullable().optional(),
 });
 
 export async function PATCH(req: NextRequest, { params }: { params: { id: string } }) {
@@ -28,7 +31,7 @@ export async function PATCH(req: NextRequest, { params }: { params: { id: string
   }
   const data: TxProposed = {
     date: parsed.data.date,
-    month: parsed.data.month,
+    month: monthCodeFromDate(new Date(parsed.data.date)),
     type: parsed.data.type,
     category: parsed.data.category,
     subItem: parsed.data.subItem,
@@ -37,6 +40,7 @@ export async function PATCH(req: NextRequest, { params }: { params: { id: string
     amount: parsed.data.amount,
     flow: parsed.data.flow,
     partyId: parsed.data.partyId ?? null,
+    expDom: parsed.data.type === "Revenue" ? (parsed.data.expDom ?? null) : null,
   };
   const result = await updateDraft({ draftId: params.id, userId, perms, data });
   if ("error" in result && result.error) {

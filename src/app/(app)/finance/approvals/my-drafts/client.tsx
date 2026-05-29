@@ -15,6 +15,7 @@ export type Draft = {
   paymentMode: string;
   amount: number;
   flow: string;
+  expDom: string | null;
   partyId: string | null;
   partyName: string | null;
   partyGroup: string | null;
@@ -89,8 +90,8 @@ export function MyDraftsClient({
       method: "PATCH",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({
+        // month is derived from date server-side, so it's not sent.
         date: e.date,
-        month: e.month,
         type: e.type,
         category: e.category,
         subItem: e.subItem,
@@ -99,6 +100,7 @@ export function MyDraftsClient({
         amount: e.amount,
         flow: e.flow,
         partyId: e.partyId,
+        expDom: e.type === "Revenue" ? (e.expDom ?? "DOM") : null,
       }),
     });
     setBusyIds((s) => {
@@ -260,6 +262,7 @@ export function MyDraftsClient({
                 <Th>Date</Th>
                 {isAdminViewer && <Th>Submitter</Th>}
                 <Th>Type</Th>
+                <Th>EXP/DOM</Th>
                 <Th>Category</Th>
                 <Th>Sub-item</Th>
                 <Th>Party</Th>
@@ -349,6 +352,22 @@ export function MyDraftsClient({
                         </select>
                       ) : (
                         row.type
+                      )}
+                    </td>
+                    <td className="px-sm py-sm">
+                      {row.type !== "Revenue" ? (
+                        <span className="text-on-surface-variant">—</span>
+                      ) : isEditing ? (
+                        <select
+                          value={row.expDom ?? "DOM"}
+                          onChange={(ev) => patchEdit(d.id, { expDom: ev.target.value })}
+                          className="h-9 px-sm rounded-md border border-outline-variant"
+                        >
+                          <option value="DOM">DOM</option>
+                          <option value="EXP">EXP</option>
+                        </select>
+                      ) : (
+                        <ExpDomBadge value={row.expDom} />
                       )}
                     </td>
                     <td className="px-sm py-sm">
@@ -524,6 +543,26 @@ export function MyDraftsClient({
         </div>
       )}
     </div>
+  );
+}
+
+function ExpDomBadge({ value }: { value: string | null }) {
+  if (value !== "DOM" && value !== "EXP") {
+    return <span className="text-on-surface-variant">—</span>;
+  }
+  const cls =
+    value === "EXP"
+      ? "bg-indigo-50 text-indigo-700 border-indigo-200"
+      : "bg-emerald-50 text-emerald-700 border-emerald-200";
+  return (
+    <span
+      className={
+        "inline-flex items-center px-sm py-[2px] rounded-full border text-label-sm font-semibold uppercase tracking-wider " +
+        cls
+      }
+    >
+      {value}
+    </span>
   );
 }
 
