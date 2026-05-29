@@ -97,6 +97,7 @@ export default async function MyDraftsPage() {
             paymentMode: d.paymentMode,
             amount: Number(d.amount.toString()),
             flow: d.flow,
+            expDom: d.expDom,
             partyId: d.partyId,
             partyName: d.party?.name ?? null,
             partyGroup: d.party?.group ?? null,
