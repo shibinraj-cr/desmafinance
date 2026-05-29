@@ -18,6 +18,7 @@
     "db:seed-salary-structures-v2": "tsx prisma/seed-salary-structures-v2.ts",
     "db:seed-holidays": "tsx prisma/seed-holidays.ts",
     "db:seed-masters": "tsx prisma/seed-masters.ts",
+    "db:backfill-pending-expdom": "tsx prisma/backfill-pending-expdom.ts",
     "db:migrate-services": "tsx prisma/migrate-services.ts",
     "db:migrate-expense-master": "tsx prisma/migrate-expense-master.ts",
     "db:migrate-party-services": "tsx prisma/migrate-party-services.ts",
