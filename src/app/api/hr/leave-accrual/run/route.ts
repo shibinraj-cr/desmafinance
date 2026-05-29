@@ -3,6 +3,7 @@ import { z } from "zod";
 import { getCurrentUserAndPermissions } from "@/lib/permissions";
 import { canApproveHr } from "@/lib/hr-rbac";
 import { runMonthlyAccrual } from "@/lib/hr-leave-accrual";
+import { withApiHandler } from "@/lib/api";
 
 const Schema = z.object({
   periodKey: z.string().regex(/^\d{4}-\d{2}$/, "Use YYYY-MM"),
@@ -16,7 +17,7 @@ const Schema = z.object({
  * Can be called by HR Manager from the UI, or by an external cron
  * (with admin creds) at the start of each month.
  */
-export async function POST(req: Request) {
+export const POST = withApiHandler(async (req: Request) => {
   const { perms } = await getCurrentUserAndPermissions();
   if (!canApproveHr(perms)) return NextResponse.json({ error: "forbidden" }, { status: 403 });
   const parsed = Schema.safeParse(await req.json());
@@ -25,4 +26,4 @@ export async function POST(req: Request) {
   }
   const result = await runMonthlyAccrual(parsed.data.periodKey);
   return NextResponse.json(result);
-}
+});
