@@ -16,11 +16,14 @@ import {
   ComposedChart,
 } from "recharts";
 
+// Series colours are unchanged (gold/cyan/orange); only the chart *chrome*
+// (grid lines + tooltip surface) is deepened to match the Futuristic HUD base.
 const GOLD = "#facc15";
 const CYAN = "#33e4ff";
 const ORANGE = "#ffb693";
 const TEXT = "#d1c6ab";
-const GRID = "#4d4632";
+const GRID = "#403a28";
+const TOOLTIP_BG = "#14110a";
 
 export function LeadVolumeChart({
   data,
@@ -70,7 +73,7 @@ export function LeadVolumeChart({
           width={32}
         />
         <Tooltip
-          contentStyle={{ backgroundColor: "#231f14", border: `1px solid ${GRID}`, color: "#ebe2d0" }}
+          contentStyle={{ backgroundColor: TOOLTIP_BG, border: `1px solid ${GRID}`, color: "#ebe2d0" }}
           labelStyle={{ color: TEXT }}
           formatter={(value: number, name: string, ctx: { payload?: { priorDate?: string } }) => {
             if (name === "Prior 30d") {
@@ -140,7 +143,7 @@ export function ConversionBySourceChart({
           tickLine={false}
         />
         <Tooltip
-          contentStyle={{ backgroundColor: "#231f14", border: `1px solid ${GRID}`, color: "#ebe2d0" }}
+          contentStyle={{ backgroundColor: TOOLTIP_BG, border: `1px solid ${GRID}`, color: "#ebe2d0" }}
           formatter={(v: number) => `${v.toFixed(1)}%`}
         />
         <Bar dataKey="conversionPct" fill={GOLD} radius={[0, 4, 4, 0]}>
@@ -207,7 +210,7 @@ export function GroupedConversionBySourceChart({
           tickLine={false}
         />
         <Tooltip
-          contentStyle={{ backgroundColor: "#231f14", border: `1px solid ${GRID}`, color: "#ebe2d0" }}
+          contentStyle={{ backgroundColor: TOOLTIP_BG, border: `1px solid ${GRID}`, color: "#ebe2d0" }}
           formatter={(v: number) => [`${Math.round(v)} won`, ""]}
         />
         <Bar dataKey="thisMonthWon" fill={GOLD} radius={[0, 3, 3, 0]} name="This month">
@@ -251,7 +254,7 @@ export function HistoricalFunnelChart({
           tickFormatter={(v: number) => `${v}%`}
         />
         <Tooltip
-          contentStyle={{ backgroundColor: "#231f14", border: `1px solid ${GRID}`, color: "#ebe2d0" }}
+          contentStyle={{ backgroundColor: TOOLTIP_BG, border: `1px solid ${GRID}`, color: "#ebe2d0" }}
         />
         <Line yAxisId="leads" type="monotone" dataKey="leads" stroke={GOLD} strokeWidth={2} dot />
         <Line yAxisId="pct" type="monotone" dataKey="l1ConversionPct" stroke={CYAN} strokeWidth={2} dot />
@@ -283,7 +286,7 @@ export function PerformanceOverTimeChart({
           width={32}
           tickFormatter={(v: number) => `${v}%`}
         />
-        <Tooltip contentStyle={{ backgroundColor: "#231f14", border: `1px solid ${GRID}`, color: "#ebe2d0" }} />
+        <Tooltip contentStyle={{ backgroundColor: TOOLTIP_BG, border: `1px solid ${GRID}`, color: "#ebe2d0" }} />
         <Line yAxisId="leads" type="monotone" dataKey="leads" stroke={GOLD} strokeWidth={2} dot={false} name="Leads" />
         <Line
           yAxisId="leads"
@@ -341,7 +344,7 @@ export function DisqualifiedMonthlyChart({
           tickFormatter={(v: number) => `${v}%`}
         />
         <Tooltip
-          contentStyle={{ backgroundColor: "#231f14", border: `1px solid ${GRID}`, color: "#ebe2d0" }}
+          contentStyle={{ backgroundColor: TOOLTIP_BG, border: `1px solid ${GRID}`, color: "#ebe2d0" }}
           formatter={(v: number, name: string) => {
             if (name === "Disqualified %") return [`${v.toFixed(1)}%`, name];
             return [v, name];
@@ -406,7 +409,7 @@ export function DisqualifiedDailyChart({
         />
         <YAxis allowDecimals={false} tick={{ fontSize: 11, fill: TEXT }} axisLine={{ stroke: GRID }} tickLine={false} width={32} />
         <Tooltip
-          contentStyle={{ backgroundColor: "#231f14", border: `1px solid ${GRID}`, color: "#ebe2d0" }}
+          contentStyle={{ backgroundColor: TOOLTIP_BG, border: `1px solid ${GRID}`, color: "#ebe2d0" }}
           formatter={(value: number, name: string, ctx: { payload?: { priorDate?: string } }) => {
             if (name === "Prior 30d") {
               return [value, `Prior 30d (${ctx.payload?.priorDate ?? ""})`];
@@ -474,7 +477,7 @@ export function TargetAchievementChart({
           tickLine={false}
         />
         <Tooltip
-          contentStyle={{ backgroundColor: "#231f14", border: `1px solid ${GRID}`, color: "#ebe2d0" }}
+          contentStyle={{ backgroundColor: TOOLTIP_BG, border: `1px solid ${GRID}`, color: "#ebe2d0" }}
           formatter={(v: number) => [v, ""]}
         />
         <Bar dataKey="actual" fill={GOLD} radius={[0, 4, 4, 0]} name="Actual">

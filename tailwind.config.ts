@@ -48,6 +48,10 @@ const config: Config = {
       },
       fontFamily: {
         sans: ["var(--font-inter)", "Inter", "system-ui", "sans-serif"],
+        // Lead Pulse "Futuristic HUD" display face — consumed only inside
+        // `.lp-scope` (the mono face is applied via scoped CSS so the global
+        // `font-mono` utility is left untouched for Finance/HR).
+        display: ["var(--font-display)", "var(--font-inter)", "Inter", "sans-serif"],
         malayalam: [
           "Noto Sans Malayalam",
           "var(--font-inter)",
