@@ -3,6 +3,7 @@ import { z } from "zod";
 import { prisma } from "@/lib/prisma";
 import { getCurrentUserAndPermissions } from "@/lib/permissions";
 import { canApproveHr } from "@/lib/hr-rbac";
+import { recomputeLeaveBalance } from "@/lib/hr-leave-balance";
 
 const Schema = z.object({
   action: z.enum(["approve", "reject", "cancel"]),
@@ -32,32 +33,11 @@ export async function POST(req: Request, { params }: { params: { id: string } })
     },
   });
 
-  if (status === "approved" && lr.leaveType !== "LOP") {
-    const year = lr.fromDate.getUTCFullYear();
-    const bal = await prisma.hrLeaveBalance.findUnique({
-      where: { employeeId_year: { employeeId: lr.employeeId, year } },
-    });
-    const used = Number(bal?.used ?? 0) + Number(lr.days);
-    const opening = Number(bal?.opening ?? 0);
-    const accrued = Number(bal?.accrued ?? 0);
-    if (bal) {
-      await prisma.hrLeaveBalance.update({
-        where: { id: bal.id },
-        data: { used, balance: opening + accrued - used },
-      });
-    } else {
-      await prisma.hrLeaveBalance.create({
-        data: {
-          employeeId: lr.employeeId,
-          year,
-          opening: 0,
-          accrued: 0,
-          used: Number(lr.days),
-          balance: -Number(lr.days),
-        },
-      });
-    }
-  }
+  // Keep the canonical balance in sync. `used` is derived from reviewed &
+  // decided attendance leave (LV/HD), not from the request itself, so the
+  // deduction lands when the leave shows up as a decided LV day — this just
+  // refreshes the stored row against current eligibility + decided leave.
+  await recomputeLeaveBalance(lr.employeeId, lr.fromDate.getUTCFullYear());
 
   await prisma.hrAuditLog.create({
     data: {

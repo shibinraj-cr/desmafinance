@@ -1,4 +1,5 @@
 import { prisma } from "./prisma";
+import { recomputeLeaveBalance } from "./hr-leave-balance";
 
 /**
  * Monthly leave accrual engine.
@@ -49,7 +50,8 @@ export async function runMonthlyAccrual(periodKey: string): Promise<{
     }
     try {
       await prisma.$transaction(async (tx) => {
-        // 1. Idempotent ledger insert.
+        // 1. Idempotent ledger insert (history; the unique constraint blocks
+        //    a second run for the same period).
         await tx.hrLeaveAccrual.create({
           data: {
             employeeId: e.employeeId,
@@ -60,30 +62,10 @@ export async function runMonthlyAccrual(periodKey: string): Promise<{
             reason: `Monthly accrual ${periodKey}`,
           },
         });
-        // 2. Bump (or create) the year balance row.
-        const bal = await tx.hrLeaveBalance.findUnique({
-          where: { employeeId_year: { employeeId: e.employeeId, year } },
-        });
-        if (bal) {
-          await tx.hrLeaveBalance.update({
-            where: { id: bal.id },
-            data: {
-              accrued: { increment: delta },
-              balance: { increment: delta },
-            },
-          });
-        } else {
-          await tx.hrLeaveBalance.create({
-            data: {
-              employeeId: e.employeeId,
-              year,
-              opening: 0,
-              accrued: delta,
-              used: 0,
-              balance: delta,
-            },
-          });
-        }
+        // 2. Recompute the canonical balance. Accrued is derived from
+        //    eligibility entitlement-to-date, so crediting this period simply
+        //    means the elapsed-month count (and thus the balance) moves up.
+        await recomputeLeaveBalance(e.employeeId, year, { db: tx });
       });
       credited++;
       totalDelta += delta;
@@ -138,29 +120,9 @@ export async function manualAdjustment(args: {
         actorUserId,
       },
     });
-    const bal = await tx.hrLeaveBalance.findUnique({
-      where: { employeeId_year: { employeeId, year } },
-    });
-    if (bal) {
-      await tx.hrLeaveBalance.update({
-        where: { id: bal.id },
-        data: {
-          accrued: { increment: delta > 0 ? delta : 0 },
-          balance: { increment: delta },
-        },
-      });
-    } else {
-      await tx.hrLeaveBalance.create({
-        data: {
-          employeeId,
-          year,
-          opening: 0,
-          accrued: delta > 0 ? delta : 0,
-          used: 0,
-          balance: delta,
-        },
-      });
-    }
+    // The recompute folds this manual ledger delta into `accrued` (it sums
+    // source 'manual' / 'expiry' rows for the year).
+    await recomputeLeaveBalance(employeeId, year, { db: tx });
     await tx.hrAuditLog.create({
       data: {
         actorUserId,
