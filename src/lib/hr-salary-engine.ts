@@ -18,6 +18,7 @@ import { cycleWindowForMonth, structureForMonth } from "./hr-data";
  * Payroll month math (mirrors the reference Jan–Apr 2026 calc files):
  *   workingDaysBase = 30  (calendar default; editable per run)
  *   dailyBasis      = gross / workingDaysBase
+ *   daysAttended    = workingDaysBase − totalLeaveForLop   (paid days)
  *   basicAfterLop   = basic × (daysAttended / workingDaysBase)
  *   salaryBeforeEsi = gross − (dailyBasis × totalLeaveForLop)
  *   ESI employee 0.75% · employer 3.25% on salaryBeforeEsi (if esiApplicable)
@@ -142,8 +143,17 @@ export function calcLine(args: {
   const paidCovered = Math.min(args.daysPaidLeave, Math.max(0, args.carriedBalanceBefore));
   const paidUncovered = Math.max(0, args.daysPaidLeave - paidCovered);
 
-  const daysAttended = round2(args.daysPresent + paidCovered + args.daysHalfDay * 0.5);
   const totalLeaveForLop = round2(args.daysAbsent + paidUncovered + args.daysHalfDay * 0.5);
+  // Paid days = working-days base − loss-of-pay. We derive attended days
+  // from LOP rather than summing present-marked rows, so the PF base stays
+  // consistent with the gross/LOP side: an employee paid the full month
+  // (minus explicit LOP) must also accrue PF on the full month. Summing
+  // present rows silently understated PF whenever an attendance row was
+  // missing or a day was left unmarked — e.g. Greeshma, Apr 2026, whose
+  // import was short ~6 present rows, so she accrued PF on 22.5 days while
+  // being paid salary for 28.5. (args.daysPresent is intentionally unused;
+  // unmarked days count as paid — attendance/leave marking is authoritative.)
+  const daysAttended = Math.max(0, round2(wd - totalLeaveForLop));
   const basicAfterLop = round2((args.basic * daysAttended) / wd);
   const salaryBeforeEsi = round2(gross - dailyBasis * totalLeaveForLop);
 

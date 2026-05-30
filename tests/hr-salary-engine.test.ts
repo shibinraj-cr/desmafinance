@@ -167,12 +167,12 @@ describe("calcLine", () => {
       daysPaidLeave: 5,
       carriedBalanceBefore: 10, // covers all 5
     });
-    expect(c.daysAttended).toBe(25); // 20 present + 5 covered leave
+    expect(c.daysAttended).toBe(30); // paid days = base − LOP (0 LOP); PF on full basic
     expect(c.totalLeaveForLop).toBe(0);
     expect(c.unpaidLeave).toBe(0);
     expect(c.paidLeave).toBe(5);
     expect(c.salaryBeforeEsi).toBe(20000); // no deduction
-    expect(c.netSalary).toBe(18725); // 20000 − 150 − 1000 − 125
+    expect(c.netSalary).toBe(18525); // 20000 − 150 − 1200 − 125 (PF on full basic)
   });
 
   it("paid leave only partly covered: the uncovered remainder becomes LOP", () => {
@@ -182,11 +182,11 @@ describe("calcLine", () => {
       daysPaidLeave: 5,
       carriedBalanceBefore: 2, // covers 2, leaves 3 unpaid
     });
-    expect(c.daysAttended).toBe(22); // 20 + 2 covered
+    expect(c.daysAttended).toBe(27); // paid days = base − 3 LOP
     expect(c.totalLeaveForLop).toBe(3); // 3 uncovered
     expect(c.unpaidLeave).toBe(3);
     expect(c.salaryBeforeEsi).toBeCloseTo(17999.99, 2);
-    expect(c.netSalary).toBe(16860);
+    expect(c.netSalary).toBe(16660); // 17999.99 − 135 − 1080 (PF on 27/30) − 125 → round
   });
 
   it("half-days count as 0.5 attended and 0.5 LOP", () => {
@@ -195,6 +195,35 @@ describe("calcLine", () => {
     expect(c.daysAttended).toBe(29); // 28 + 2×0.5
     expect(c.totalLeaveForLop).toBe(1); // 2×0.5
     expect(c.salaryBeforeEsi).toBeCloseTo(19333.33, 2);
+  });
+
+  it("Greeshma K X, April 2026: PF accrues on paid days (base − LOP), not present-count", () => {
+    // Regression for the Apr-2026 line that showed net ₹24,001 in the UI.
+    // Her attendance import was short ~6 present rows, so the old engine
+    // summed only 22.5 present days and accrued PF on 22.5/30 of basic —
+    // while paying salary for 28.5 days. Paid days must be base − LOP = 28.5.
+    const c = calcLine({
+      workingDaysBase: 30,
+      basic: 13375, // default 40/20/25/15 split → gross 26750
+      esiApplicable: false, // gross 26750 > ₹21k ceiling → no ESI
+      pfApplicable: true,
+      professionalTax: 208, // Kerala top slab
+      daysPresent: 21, // incomplete import — intentionally irrelevant now
+      daysHalfDay: 1, // 20 Apr
+      daysAbsent: 1, // 13 Apr
+      daysPaidLeave: 1, // covered by the carried balance below → not LOP
+      carriedBalanceBefore: 1,
+    });
+    expect(c.gross).toBe(26750);
+    expect(c.totalLeaveForLop).toBe(1.5); // 1 absent + 0.5 half-day
+    expect(c.daysAttended).toBe(28.5); // base − LOP, NOT the 22.5 present-count
+    expect(c.basicAfterLop).toBe(12706.25); // 13375 × 28.5/30
+    expect(c.esiEmployee).toBe(0);
+    expect(c.pfEmployee).toBe(1525); // 12% × 12706.25, whole-rupee rounded
+    expect(c.salaryBeforeEsi).toBe(25412.5);
+    // Net ₹23,680 — matches HR's April sheet (₹23,680.25) to the rupee; the
+    // 25-paise gap is the engine's whole-rupee rounding of PF, not the LOP bug.
+    expect(c.netSalary).toBe(23680);
   });
 
   it("zeroes ESI and PF when neither is applicable", () => {
