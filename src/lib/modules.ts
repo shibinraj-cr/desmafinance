@@ -10,6 +10,12 @@ export type AppPage = {
   icon: string;
   /** Pages tagged adminOnly are shown in the role-management UI as such. */
   adminOnly?: boolean;
+  /**
+   * Optional sidebar section this page belongs to (e.g. "LEAVE", "PAYROLL").
+   * Purely cosmetic: pages sharing a `group` render under one muted header in
+   * the sidebar. Untagged pages render flat. Does not affect routing or RBAC.
+   */
+  group?: string;
 };
 
 export type AppModule = {
@@ -48,15 +54,15 @@ export const MODULES: AppModule[] = [
     basePath: "/finance",
     status: "active",
     pages: [
-      { href: "/finance/overview", label: "Overview", icon: "dashboard" },
-      { href: "/finance/revenue", label: "Revenue", icon: "payments" },
-      { href: "/finance/expenses", label: "Expenses", icon: "receipt_long" },
-      { href: "/finance/cashflow", label: "Cash Flow", icon: "account_balance" },
-      { href: "/finance/daily-tracker", label: "Daily Tracker", icon: "edit_calendar" },
-      { href: "/finance/collection-plan", label: "Collection Plan", icon: "schedule_send" },
-      { href: "/finance/parties", label: "Candidates & Vendors", icon: "groups" },
-      { href: "/finance/approvals", label: "Approvals", icon: "rule" },
-      { href: "/finance/ai-insights", label: "AI Insights", icon: "psychology" },
+      { href: "/finance/overview", label: "Overview", icon: "dashboard", group: "OVERVIEW" },
+      { href: "/finance/revenue", label: "Revenue", icon: "payments", group: "MONEY IN" },
+      { href: "/finance/collection-plan", label: "Collection Plan", icon: "schedule_send", group: "MONEY IN" },
+      { href: "/finance/expenses", label: "Expenses", icon: "receipt_long", group: "MONEY OUT" },
+      { href: "/finance/cashflow", label: "Cash Flow", icon: "account_balance", group: "MONEY OUT" },
+      { href: "/finance/daily-tracker", label: "Daily Tracker", icon: "edit_calendar", group: "OPERATIONS" },
+      { href: "/finance/parties", label: "Parties", icon: "groups", group: "OPERATIONS" },
+      { href: "/finance/approvals", label: "Approvals", icon: "rule", group: "REVIEW" },
+      { href: "/finance/ai-insights", label: "AI Insights", icon: "psychology", group: "REVIEW" },
     ],
   },
   {
@@ -70,66 +76,79 @@ export const MODULES: AppModule[] = [
         href: "/marketing/lead-pulse",
         label: "Lead Pulse",
         icon: "trending_up",
+        group: "LEAD PULSE",
       },
       {
         href: "/marketing/lead-pulse/daily-entry",
         label: "Daily Entry",
         icon: "edit_note",
-      },
-      {
-        href: "/marketing/lead-pulse/pipeline",
-        label: "Pipeline",
-        icon: "timeline",
-      },
-      {
-        href: "/marketing/lead-pulse/monthly-report",
-        label: "Monthly Report",
-        icon: "table_chart",
-      },
-      {
-        href: "/marketing/lead-pulse/bde-performance",
-        label: "BDE Performance",
-        icon: "person_search",
-      },
-      {
-        href: "/marketing/lead-pulse/team-roster",
-        label: "Team Roster",
-        icon: "groups",
-      },
-      {
-        href: "/marketing/lead-pulse/approvals",
-        label: "Daily Approvals",
-        icon: "rule",
+        group: "LEAD PULSE",
       },
       {
         href: "/marketing/lead-pulse/director-entry",
         label: "Director Entry",
         icon: "co_present",
+        group: "LEAD PULSE",
+      },
+      {
+        href: "/marketing/lead-pulse/pipeline",
+        label: "Pipeline",
+        icon: "timeline",
+        group: "LEAD PULSE",
+      },
+      {
+        href: "/marketing/lead-pulse/monthly-report",
+        label: "Monthly Report",
+        icon: "table_chart",
+        group: "INSIGHTS",
+      },
+      {
+        href: "/marketing/lead-pulse/bde-performance",
+        label: "BDE Performance",
+        icon: "person_search",
+        group: "INSIGHTS",
+      },
+      {
+        href: "/marketing/lead-pulse/team-roster",
+        label: "Team Roster",
+        icon: "groups",
+        group: "TEAM & TARGETS",
       },
       {
         href: "/marketing/lead-pulse/targets",
         label: "L2 Targets",
         icon: "flag",
+        group: "TEAM & TARGETS",
       },
       {
-        href: "/marketing/lead-pulse/settings",
-        label: "Settings",
-        icon: "tune",
+        href: "/marketing/lead-pulse/approvals",
+        label: "Daily Approvals",
+        icon: "rule",
+        group: "TEAM & TARGETS",
       },
       {
         href: "/marketing/parties",
         label: "Candidates & Vendors",
         icon: "groups",
+        group: "TOOLS",
       },
       {
         href: "/marketing/holiday-calendar",
         label: "Holiday Calendar",
         icon: "event",
+        group: "TOOLS",
       },
       {
         href: "/marketing/voxbay",
         label: "Voxbay Call Analysis",
         icon: "phone_in_talk",
+        group: "TOOLS",
+      },
+      {
+        href: "/marketing/lead-pulse/settings",
+        label: "Settings",
+        icon: "tune",
+        group: "TOOLS",
       },
     ],
   },
@@ -140,31 +159,31 @@ export const MODULES: AppModule[] = [
     basePath: "/hr",
     status: "active",
     pages: [
-      { href: "/hr/dashboard", label: "Dashboard", icon: "dashboard" },
-      { href: "/hr/employees", label: "Employees", icon: "groups" },
-      { href: "/hr/org-chart", label: "Org Chart", icon: "account_tree" },
-      { href: "/hr/birthdays", label: "Birthday Calendar", icon: "cake" },
-      { href: "/hr/masters/designations", label: "Designations", icon: "stairs" },
-      { href: "/hr/masters/departments", label: "Departments", icon: "domain" },
-      { href: "/hr/masters/roles", label: "Roles", icon: "badge" },
-      { href: "/hr/shifts", label: "Shifts", icon: "schedule" },
-      { href: "/hr/shift-assignments", label: "Shift Assignments", icon: "schedule_send" },
-      { href: "/hr/attendance", label: "Attendance", icon: "fact_check" },
-      { href: "/hr/regularization", label: "Regularizations", icon: "edit_calendar" },
-      { href: "/hr/leave-review", label: "Leave Review", icon: "rule" },
-      { href: "/hr/leave", label: "Leave Requests", icon: "event_busy" },
-      { href: "/hr/leave-balances", label: "Leave Balances", icon: "savings" },
-      { href: "/hr/leave-eligibility", label: "Leave Eligibility", icon: "auto_awesome" },
-      { href: "/hr/sandwich-policy", label: "Sandwich Policy", icon: "rule_settings" },
-      { href: "/hr/holidays", label: "Holiday Calendar", icon: "event" },
-      { href: "/hr/salary-structures", label: "Salary Structures", icon: "calculate" },
-      { href: "/hr/salary", label: "Salary Runs", icon: "payments" },
-      { href: "/hr/policies", label: "Policies & Manuals", icon: "menu_book" },
-      { href: "/hr/trainings", label: "Trainings", icon: "school" },
-      { href: "/hr/notifications", label: "Notifications", icon: "campaign" },
-      { href: "/hr/psych", label: "Psychometric", icon: "psychology" },
-      { href: "/hr/psych/assignments", label: "Psych Assignments", icon: "assignment_ind" },
-      { href: "/hr/psych/questions", label: "Psych Questions", icon: "quiz" },
+      { href: "/hr/dashboard", label: "Dashboard", icon: "dashboard", group: "PEOPLE" },
+      { href: "/hr/employees", label: "Employees", icon: "groups", group: "PEOPLE" },
+      { href: "/hr/org-chart", label: "Org Chart", icon: "account_tree", group: "PEOPLE" },
+      { href: "/hr/birthdays", label: "Birthday Calendar", icon: "cake", group: "PEOPLE" },
+      { href: "/hr/leave", label: "Leave Requests", icon: "event_busy", group: "LEAVE" },
+      { href: "/hr/leave-review", label: "Leave Review", icon: "rule", group: "LEAVE" },
+      { href: "/hr/leave-balances", label: "Leave Balances", icon: "savings", group: "LEAVE" },
+      { href: "/hr/leave-eligibility", label: "Leave Eligibility", icon: "auto_awesome", group: "LEAVE" },
+      { href: "/hr/sandwich-policy", label: "Sandwich Policy", icon: "rule_settings", group: "LEAVE" },
+      { href: "/hr/attendance", label: "Attendance", icon: "fact_check", group: "ATTENDANCE" },
+      { href: "/hr/regularization", label: "Regularizations", icon: "edit_calendar", group: "ATTENDANCE" },
+      { href: "/hr/shifts", label: "Shifts", icon: "schedule", group: "ATTENDANCE" },
+      { href: "/hr/shift-assignments", label: "Shift Assignments", icon: "schedule_send", group: "ATTENDANCE" },
+      { href: "/hr/salary-structures", label: "Salary Structures", icon: "calculate", group: "PAYROLL" },
+      { href: "/hr/salary", label: "Salary Runs", icon: "payments", group: "PAYROLL" },
+      { href: "/hr/masters/designations", label: "Designations", icon: "stairs", group: "MASTERS" },
+      { href: "/hr/masters/departments", label: "Departments", icon: "domain", group: "MASTERS" },
+      { href: "/hr/masters/roles", label: "Roles", icon: "badge", group: "MASTERS" },
+      { href: "/hr/psych", label: "Psychometric", icon: "psychology", group: "PSYCHOMETRIC" },
+      { href: "/hr/psych/assignments", label: "Psych Assignments", icon: "assignment_ind", group: "PSYCHOMETRIC" },
+      { href: "/hr/psych/questions", label: "Psych Questions", icon: "quiz", group: "PSYCHOMETRIC" },
+      { href: "/hr/holidays", label: "Holiday Calendar", icon: "event", group: "RESOURCES" },
+      { href: "/hr/policies", label: "Policies & Manuals", icon: "menu_book", group: "RESOURCES" },
+      { href: "/hr/trainings", label: "Trainings", icon: "school", group: "RESOURCES" },
+      { href: "/hr/notifications", label: "Notifications", icon: "campaign", group: "RESOURCES" },
     ],
   },
   {
@@ -174,15 +193,15 @@ export const MODULES: AppModule[] = [
     basePath: "/me",
     status: "active",
     pages: [
-      { href: "/me/home", label: "Home", icon: "home" },
-      { href: "/me/attendance", label: "My Attendance", icon: "fact_check" },
-      { href: "/me/regularization", label: "Regularization", icon: "edit_calendar" },
-      { href: "/me/leave", label: "My Leave", icon: "event_busy" },
-      { href: "/me/birthdays", label: "Birthdays", icon: "cake" },
-      { href: "/me/policies", label: "Policies", icon: "menu_book" },
-      { href: "/me/trainings", label: "Trainings", icon: "school" },
-      { href: "/me/payslips", label: "Payslips", icon: "receipt_long" },
-      { href: "/me/notifications", label: "Notifications", icon: "notifications" },
+      { href: "/me/home", label: "Home", icon: "home", group: "HOME" },
+      { href: "/me/attendance", label: "My Attendance", icon: "fact_check", group: "TIME & LEAVE" },
+      { href: "/me/regularization", label: "Regularization", icon: "edit_calendar", group: "TIME & LEAVE" },
+      { href: "/me/leave", label: "My Leave", icon: "event_busy", group: "TIME & LEAVE" },
+      { href: "/me/payslips", label: "Payslips", icon: "receipt_long", group: "PAY" },
+      { href: "/me/birthdays", label: "Birthdays", icon: "cake", group: "RESOURCES" },
+      { href: "/me/policies", label: "Policies", icon: "menu_book", group: "RESOURCES" },
+      { href: "/me/trainings", label: "Trainings", icon: "school", group: "RESOURCES" },
+      { href: "/me/notifications", label: "Notifications", icon: "notifications", group: "RESOURCES" },
     ],
   },
   {
@@ -241,4 +260,45 @@ export function moduleForPath(href: string): AppModule | null {
     if (m.pages.some((p) => p.href === href || href.startsWith(p.href + "/"))) return m;
   }
   return null;
+}
+
+/** A named cluster of pages within a module (e.g. "LEAVE"). */
+export type AppGroup = { name: string; pages: AppPage[] };
+
+/**
+ * The module's pages bucketed into their `group`, in first-appearance order.
+ * Pages without a `group` fall under the "" bucket (used by ungrouped modules).
+ */
+export function moduleGroups(mod: AppModule): AppGroup[] {
+  const order: string[] = [];
+  const byName = new Map<string, AppPage[]>();
+  for (const p of mod.pages) {
+    const key = p.group ?? "";
+    if (!byName.has(key)) {
+      byName.set(key, []);
+      order.push(key);
+    }
+    byName.get(key)!.push(p);
+  }
+  return order.map((name) => ({ name, pages: byName.get(name)! }));
+}
+
+/** Whether a module organizes its pages into named groups. */
+export function moduleHasGroups(mod: AppModule): boolean {
+  return mod.pages.some((p) => !!p.group);
+}
+
+/**
+ * The most specific page within `mod` that `pathname` is currently on — the
+ * page with the longest matching href (so e.g. /marketing/lead-pulse/pipeline
+ * resolves to Pipeline, not the shorter Lead Pulse parent).
+ */
+export function activePage(mod: AppModule, pathname: string): AppPage | null {
+  let best: AppPage | null = null;
+  for (const p of mod.pages) {
+    if (pathname === p.href || pathname.startsWith(p.href + "/")) {
+      if (!best || p.href.length > best.href.length) best = p;
+    }
+  }
+  return best;
 }

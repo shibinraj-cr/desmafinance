@@ -7,12 +7,23 @@ import { signOut } from "next-auth/react";
 import { useEffect, useMemo, useState } from "react";
 import { createPortal } from "react-dom";
 import { canApprove, canSeePage, isAdmin, roleLabel, type Permissions } from "@/lib/rbac";
-import { MODULES, type AppModule, moduleForPath } from "@/lib/modules";
+import {
+  MODULES,
+  type AppModule,
+  moduleForPath,
+  moduleGroups,
+  moduleHasGroups,
+  activePage,
+} from "@/lib/modules";
 
 type NavItem = {
   href: string;
   label: string;
   icon: string;
+  /** Cosmetic sidebar section header this item sits under (e.g. "LEAVE"). */
+  group?: string;
+  /** Explicit active state. When omitted, NavList derives it from the path. */
+  active?: boolean;
   badgeCount?: number | null;
   /** Red-toned secondary badge — used for the signed-in user's
    *  unresolved-rejected approvals queue. */
@@ -31,11 +42,43 @@ function navForModule(
       href: p.href,
       label: p.label,
       icon: p.icon,
+      group: p.group,
       badgeCount:
         p.href === "/finance/approvals" && canApprove(perms) ? pendingCount : null,
       warningCount:
         p.href === "/finance/approvals" && rejectedCount > 0 ? rejectedCount : null,
     }));
+}
+
+/**
+ * Left-bar items for a module that organizes its pages into groups: one item
+ * per group (PEOPLE, LEAVE, …). Clicking a group lands on its first allowed
+ * page; the group is active when the current page belongs to it. Groups whose
+ * pages are all hidden by permissions are dropped.
+ */
+function groupNavForModule(
+  mod: AppModule,
+  perms: Permissions,
+  pathname: string,
+  pendingCount: number,
+  rejectedCount: number,
+): NavItem[] {
+  const current = activePage(mod, pathname);
+  return moduleGroups(mod)
+    .map((g) => ({ ...g, pages: g.pages.filter((p) => canSeePage(perms, p.href)) }))
+    .filter((g) => g.pages.length > 0)
+    .map((g) => {
+      const first = g.pages[0];
+      const hasApprovals = g.pages.some((p) => p.href === "/finance/approvals");
+      return {
+        href: first.href,
+        label: g.name,
+        icon: first.icon,
+        active: !!current && g.pages.some((p) => p.href === current.href),
+        badgeCount: hasApprovals && canApprove(perms) ? pendingCount : null,
+        warningCount: hasApprovals && rejectedCount > 0 ? rejectedCount : null,
+      };
+    });
 }
 
 /** Modules the user can see (active modules with at least one allowed page, or admin sees all). */
@@ -64,7 +107,7 @@ function NavList({
     // footer off-screen instead of scrolling internally.
     <nav className="flex-1 min-h-0 mt-base space-y-xs overflow-y-auto pr-xs scrollbar-thin">
       {items.map((n) => {
-        const active = pathname === n.href || pathname.startsWith(n.href + "/");
+        const active = n.active ?? (pathname === n.href || pathname.startsWith(n.href + "/"));
         return (
           <Link
             key={n.href}
@@ -257,7 +300,11 @@ export function SideNav({
 
   const activeModule =
     modules.find((m) => m.id === activeModuleId) ?? initialModule;
-  const items = navForModule(activeModule, perms, pendingCount, rejectedCount);
+  // Grouped modules list their groups in the left bar (pages live in the top
+  // tab strip); ungrouped modules keep the flat page list.
+  const items = moduleHasGroups(activeModule)
+    ? groupNavForModule(activeModule, perms, pathname, pendingCount, rejectedCount)
+    : navForModule(activeModule, perms, pendingCount, rejectedCount);
 
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [mounted, setMounted] = useState(false);
@@ -290,14 +337,14 @@ export function SideNav({
 
   return (
     <>
-      <aside className="hidden md:flex flex-col w-[260px] h-screen sticky top-0 p-md gap-base bg-brand text-on-brand border-r border-brand-line">
+      <aside className="dg-rail hidden md:flex flex-col w-[260px] h-screen sticky top-0 p-md gap-base bg-brand text-on-brand border-r border-brand-line">
         <BrandHeader />
         <ModuleSwitcher current={activeModule} modules={modules} onPick={pickModule} />
         <NavList items={items} pathname={pathname} />
         <UserFooter user={user} perms={perms} />
       </aside>
 
-      <header className="md:hidden sticky top-0 z-40 flex items-center gap-sm h-14 px-md bg-brand text-on-brand border-b border-brand-line">
+      <header className="dg-rail md:hidden sticky top-0 z-40 flex items-center gap-sm h-14 px-md bg-brand text-on-brand border-b border-brand-line">
         <button
           type="button"
           onClick={() => setDrawerOpen(true)}
@@ -348,7 +395,7 @@ export function SideNav({
               role="dialog"
               aria-modal="true"
               onClick={(e) => e.stopPropagation()}
-              className="flex flex-col w-[280px] max-w-[85vw] h-full bg-brand text-on-brand border-r border-brand-line p-md gap-base shadow-2xl"
+              className="dg-rail flex flex-col w-[280px] max-w-[85vw] h-full bg-brand text-on-brand border-r border-brand-line p-md gap-base shadow-2xl"
             >
               <div className="flex items-center justify-between">
                 <BrandHeader />
