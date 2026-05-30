@@ -2,6 +2,7 @@ import { redirect } from "next/navigation";
 import { prisma } from "@/lib/prisma";
 import { getCurrentUserAndPermissions } from "@/lib/permissions";
 import { isHrUser } from "@/lib/hr-rbac";
+import { isOwnerDesignation } from "@/lib/hr-salary-engine";
 import { recomputeAllLeaveBalances } from "@/lib/hr-leave-balance";
 import { TopBar } from "@/components/TopBar";
 import { Section } from "@/components/Cards";
@@ -28,11 +29,15 @@ export default async function LeaveBalancesPage() {
   // eligibility and the latest reviewed/decided leave, without waiting on the
   // monthly accrual job.
   await recomputeAllLeaveBalances(year);
-  const rows = await prisma.hrLeaveBalance.findMany({
+  const allRows = await prisma.hrLeaveBalance.findMany({
     where: { year },
-    include: { employee: true },
+    include: { employee: { include: { designationRef: { select: { name: true } } } } },
     orderBy: [{ employee: { name: "asc" } }],
   });
+  // Owners (MD / Director) have no leave — exclude from the balances view.
+  const rows = allRows.filter(
+    (r) => !(isOwnerDesignation(r.employee.designationRef?.name) || isOwnerDesignation(r.employee.designation)),
+  );
   return (
     <>
       <TopBar title="Leave Balances" subtitle={`Year ${year}`} />

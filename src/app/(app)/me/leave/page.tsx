@@ -4,6 +4,7 @@ import { getCurrentUserAndPermissions } from "@/lib/permissions";
 import { TopBar } from "@/components/TopBar";
 import { Section } from "@/components/Cards";
 import { employeeForUser } from "@/lib/hr-me";
+import { isOwnerDesignation } from "@/lib/hr-salary-engine";
 import { MyLeaveClient } from "./client";
 
 export const dynamic = "force-dynamic";
@@ -34,6 +35,8 @@ export default async function MyLeavePage() {
     include: { reviewedBy: { select: { username: true } } },
   });
   const bal = emp.leaveBalances[0];
+  // Owners (MD / Director) have no leave — show history only, no apply form.
+  const canApply = !(isOwnerDesignation(emp.designationRef?.name) || isOwnerDesignation(emp.designation));
   return (
     <>
       <TopBar
@@ -44,6 +47,7 @@ export default async function MyLeavePage() {
       />
       <div className="p-margin">
         <MyLeaveClient
+          canApply={canApply}
           balance={
             bal
               ? {

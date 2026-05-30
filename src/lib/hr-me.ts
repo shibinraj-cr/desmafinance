@@ -6,6 +6,7 @@ export async function employeeForUser(userId: string) {
     where: { userId },
     include: {
       shift: true,
+      designationRef: { select: { name: true } },
       leaveBalances: { orderBy: { year: "desc" }, take: 1 },
     },
   });

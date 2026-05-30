@@ -57,6 +57,20 @@ export function isTraineeDesignation(name?: string | null): boolean {
   return (name ?? "").trim().toLowerCase() === TRAINEE_DESIGNATION_NAME.toLowerCase();
 }
 
+/**
+ * Company owners (Managing Director / Director). Attendance and leaves do not
+ * apply to them: payroll pays their full structured salary every month with
+ * zero loss-of-pay, and they are excluded from leave accrual / the attendance
+ * grid. Matched by designation NAME (case-insensitive, trimmed) against both
+ * the modern HrDesignation relation and the legacy `employee.designation`.
+ */
+export const OWNER_DESIGNATION_NAMES = ["Managing Director", "Director"] as const;
+
+export function isOwnerDesignation(name?: string | null): boolean {
+  const n = (name ?? "").trim().toLowerCase();
+  return n !== "" && OWNER_DESIGNATION_NAMES.some((d) => d.toLowerCase() === n);
+}
+
 export type SalaryBreakdown = {
   basic: number;
   hra: number;
@@ -266,14 +280,26 @@ export async function computeSalaryRun(monthKey: string, userId: string | null):
       warnings.push(`No salary structure on file for ${e.empCode} ${e.name} — skipped.`);
       continue;
     }
-    const attendance = await prisma.hrAttendanceDay.findMany({
-      where: { employeeId: e.id, date: { gte: start, lte: end } },
-    });
-    if (attendance.length === 0) {
-      warnings.push(`No attendance for ${e.empCode} ${e.name} in ${monthKey} — skipped.`);
-      continue;
+    // Owners (Managing Director / Director) are paid their full structured
+    // salary every month. Attendance and leaves do not apply: no attendance
+    // is required and there is never any loss-of-pay. ESI/PF/PT still follow
+    // their salary structure as HR sets it.
+    const isOwner =
+      isOwnerDesignation(e.designationRef?.name) || isOwnerDesignation(e.designation);
+
+    let buckets: { daysPresent: number; daysAbsent: number; daysHalfDay: number; daysPaidLeave: number };
+    if (isOwner) {
+      buckets = { daysPresent: 0, daysAbsent: 0, daysHalfDay: 0, daysPaidLeave: 0 };
+    } else {
+      const attendance = await prisma.hrAttendanceDay.findMany({
+        where: { employeeId: e.id, date: { gte: start, lte: end } },
+      });
+      if (attendance.length === 0) {
+        warnings.push(`No attendance for ${e.empCode} ${e.name} in ${monthKey} — skipped.`);
+        continue;
+      }
+      buckets = bucketAttendance(attendance);
     }
-    const buckets = bucketAttendance(attendance);
 
     const balance = await prisma.hrLeaveBalance.findUnique({
       where: { employeeId_year: { employeeId: e.id, year } },

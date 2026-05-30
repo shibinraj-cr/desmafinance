@@ -2,6 +2,7 @@ import { redirect } from "next/navigation";
 import { prisma } from "@/lib/prisma";
 import { getCurrentUserAndPermissions } from "@/lib/permissions";
 import { isHrUser, canApproveHr } from "@/lib/hr-rbac";
+import { isOwnerDesignation } from "@/lib/hr-salary-engine";
 import { TopBar } from "@/components/TopBar";
 import { Section } from "@/components/Cards";
 import { LeaveEligibilityClient } from "./client";
@@ -27,7 +28,14 @@ export default async function LeaveEligibilityPage() {
     prisma.employee.findMany({
       where: { active: true },
       orderBy: { empCode: "asc" },
-      select: { id: true, empCode: true, name: true, joinDate: true },
+      select: {
+        id: true,
+        empCode: true,
+        name: true,
+        joinDate: true,
+        designation: true,
+        designationRef: { select: { name: true } },
+      },
     }),
     prisma.hrLeaveEligibility.findMany({
       include: { employee: { select: { empCode: true, name: true } } },
@@ -39,7 +47,10 @@ export default async function LeaveEligibilityPage() {
     }),
   ]);
   const map = new Map(eligibilities.map((e) => [e.employeeId, e]));
-  const rows = employees.map((emp) => {
+  const rows = employees
+    // Owners (MD / Director) have no leave — exclude from eligibility management.
+    .filter((emp) => !(isOwnerDesignation(emp.designationRef?.name) || isOwnerDesignation(emp.designation)))
+    .map((emp) => {
     const elig = map.get(emp.id);
     return {
       id: emp.id,

@@ -32,7 +32,15 @@ const STATUS_TONE: Record<string, string> = {
   cancelled: "bg-surface-container text-on-surface-variant",
 };
 
-export function MyLeaveClient({ balance, requests }: { balance: Balance | null; requests: Request[] }) {
+export function MyLeaveClient({
+  balance,
+  requests,
+  canApply = true,
+}: {
+  balance: Balance | null;
+  requests: Request[];
+  canApply?: boolean;
+}) {
   const router = useRouter();
   const [pending, start] = useTransition();
   const [error, setError] = useState<string | null>(null);
@@ -83,6 +91,7 @@ export function MyLeaveClient({ balance, requests }: { balance: Balance | null; 
         </Section>
       )}
 
+      {canApply ? (
       <Section title="Apply for leave">
         <div className="grid grid-cols-1 md:grid-cols-4 gap-sm items-end">
           <label className="flex flex-col gap-xs">
@@ -145,6 +154,13 @@ export function MyLeaveClient({ balance, requests }: { balance: Balance | null; 
           </div>
         </div>
       </Section>
+      ) : (
+        <Section title="Apply for leave">
+          <p className="py-md text-on-surface-variant text-label-sm">
+            Leave does not apply to your designation.
+          </p>
+        </Section>
+      )}
 
       <Section title="My requests">
         <table className="w-full text-label-sm">

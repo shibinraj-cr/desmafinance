@@ -22,6 +22,7 @@ import {
   suggestProfessionalTax,
   isEsiApplicable,
   isTraineeDesignation,
+  isOwnerDesignation,
   bucketAttendance,
   calcLine,
   DEFAULT_ALLOWANCE_PCTS,
@@ -30,6 +31,7 @@ import {
   PF_RATE,
   PF_CONTRIBUTION_CAP,
   TRAINEE_DESIGNATION_NAME,
+  OWNER_DESIGNATION_NAMES,
 } from "@/lib/hr-salary-engine";
 
 describe("deriveBreakdown", () => {
@@ -138,6 +140,54 @@ describe("calcLine — trainee override (basic only)", () => {
     expect(c.totalLeaveForLop).toBe(5);
     expect(c.salaryBeforeEsi).toBeCloseTo(8333.35, 2);
     expect(c.netSalary).toBe(8333); // round(8333.35 − 0 − 0 − 0)
+  });
+});
+
+describe("isOwnerDesignation", () => {
+  it("matches Managing Director / Director case-insensitively and trimmed", () => {
+    expect(isOwnerDesignation("Managing Director")).toBe(true);
+    expect(isOwnerDesignation("managing director")).toBe(true);
+    expect(isOwnerDesignation("  Director  ")).toBe(true);
+    expect(isOwnerDesignation("DIRECTOR")).toBe(true);
+  });
+  it("does not match other designations or empty values", () => {
+    expect(isOwnerDesignation("Manager")).toBe(false);
+    expect(isOwnerDesignation("Asst. Director")).toBe(false); // exact name only
+    expect(isOwnerDesignation("Trainee")).toBe(false);
+    expect(isOwnerDesignation(null)).toBe(false);
+    expect(isOwnerDesignation(undefined)).toBe(false);
+    expect(isOwnerDesignation("")).toBe(false);
+  });
+  it("exposes the canonical owner names", () => {
+    expect(OWNER_DESIGNATION_NAMES).toEqual(["Managing Director", "Director"]);
+  });
+});
+
+describe("calcLine — owner full pay (zero buckets, no LOP)", () => {
+  // computeSalaryRun feeds owners all-zero attendance buckets, so daysAttended
+  // derives to the full working-days base and there is no loss-of-pay. ESI/PF/PT
+  // still follow the saved structure (here: ESI off, PF on, PT 208).
+  it("pays the full structured salary regardless of attendance", () => {
+    const c = calcLine({
+      workingDaysBase: 30,
+      basic: 50000, // default split → gross 100000
+      esiApplicable: false,
+      pfApplicable: true,
+      professionalTax: 208,
+      daysPresent: 0,
+      daysHalfDay: 0,
+      daysAbsent: 0,
+      daysPaidLeave: 0,
+      carriedBalanceBefore: 0,
+    });
+    expect(c.gross).toBe(100000);
+    expect(c.totalLeaveForLop).toBe(0);
+    expect(c.daysAttended).toBe(30);
+    expect(c.salaryBeforeEsi).toBe(100000); // no LOP despite zero present days
+    expect(c.esiEmployee).toBe(0); // ESI off per structure
+    expect(c.pfEmployee).toBe(1800); // PF on, capped at ₹15k base
+    expect(c.professionalTax).toBe(208);
+    expect(c.netSalary).toBe(97992); // 100000 − 0 − 1800 − 208
   });
 });
 
