@@ -77,6 +77,9 @@ export function EmployeeEditor({
   employee,
   shifts,
   structures,
+  designationName,
+  departmentName,
+  roleNames,
   designations,
   departmentsList,
   rolesList,
@@ -86,6 +89,9 @@ export function EmployeeEditor({
   employee: EmpDraft;
   shifts: ShiftLite[];
   structures: Structure[];
+  designationName: string;
+  departmentName: string;
+  roleNames: string[];
   designations: DesignationLite[];
   departmentsList: DepartmentLite[];
   rolesList: RoleLite[];
@@ -171,18 +177,13 @@ export function EmployeeEditor({
               />
             </Field>
             <Field label="Designation">
-              <input
-                className="w-full px-sm py-sm rounded border border-outline-variant bg-surface"
-                value={draft.designation}
-                onChange={(e) => setDraft({ ...draft, designation: e.target.value })}
-              />
+              <MirrorValue value={designationName} />
             </Field>
             <Field label="Department">
-              <input
-                className="w-full px-sm py-sm rounded border border-outline-variant bg-surface"
-                value={draft.department}
-                onChange={(e) => setDraft({ ...draft, department: e.target.value })}
-              />
+              <MirrorValue value={departmentName} />
+            </Field>
+            <Field label="Role">
+              <MirrorValue value={roleNames.join(", ")} />
             </Field>
             <Field label="Shift">
               <select
@@ -344,6 +345,18 @@ export function EmployeeEditor({
               Active
             </label>
           </fieldset>
+
+          <p className="text-caption text-on-surface-variant mt-sm">
+            Designation, department &amp; role mirror the{" "}
+            <button
+              type="button"
+              onClick={() => setTab("org")}
+              className="underline text-primary"
+            >
+              Designation &amp; Departments
+            </button>{" "}
+            tab — edit them there.
+          </p>
 
           {canEdit && (
             <div className="mt-md flex items-center gap-sm">
@@ -998,5 +1011,14 @@ function Field({
       <span className="text-caption text-on-surface-variant">{label}</span>
       {children}
     </label>
+  );
+}
+
+/** Read-only display of a value mirrored from the Designation & Departments tab. */
+function MirrorValue({ value }: { value: string }) {
+  return (
+    <div className="w-full px-sm py-sm rounded border border-outline-variant bg-surface-container min-h-[2.625rem] flex items-center">
+      {value ? value : <span className="text-on-surface-variant">—</span>}
+    </div>
   );
 }

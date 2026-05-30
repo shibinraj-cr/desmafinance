@@ -31,6 +31,7 @@ export default async function EmployeeDetailPage({ params }: { params: { id: str
       where: { id: params.id },
       include: {
         shift: true,
+        designationRef: true,
         salaryStructures: { orderBy: { effectiveFrom: "desc" } },
         leaveBalances: { orderBy: { year: "desc" } },
         departments: { include: { department: true } },
@@ -56,11 +57,20 @@ export default async function EmployeeDetailPage({ params }: { params: { id: str
   const currentYear = new Date().getUTCFullYear();
   const currentBalance = employee.leaveBalances.find((b) => b.year === currentYear);
 
+  // Designation, department & role are the structured (Designation &
+  // Departments tab) values — the single source of truth — falling back to
+  // the legacy free-text columns only when no structured value is set.
+  const designationName = employee.designationRef?.name ?? employee.designation ?? "";
+  const primaryDept =
+    employee.departments.find((d) => d.isPrimary) ?? employee.departments[0];
+  const departmentName = primaryDept?.department.name ?? employee.department ?? "";
+  const roleNames = employee.roleMemberships.map((r) => r.role.name);
+
   return (
     <>
       <TopBar
         title={employee.name}
-        subtitle={`${employee.empCode} · ${employee.designation ?? "—"}`}
+        subtitle={`${employee.empCode} · ${designationName || "—"}`}
         action={
           <Link href="/hr/employees" className="text-label-sm underline">
             ← Back
@@ -103,6 +113,9 @@ export default async function EmployeeDetailPage({ params }: { params: { id: str
             })),
             roleIds: employee.roleMemberships.map((r) => r.roleId),
           }}
+          designationName={designationName}
+          departmentName={departmentName}
+          roleNames={roleNames}
           designations={designations.map((d) => ({
             id: d.id,
             name: d.name,
