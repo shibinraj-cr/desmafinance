@@ -24,6 +24,7 @@ type ProposedTx = {
   amount: number;
   flow: string;
   partyId?: string | null;
+  employeeId?: string | null;
   expDom?: string | null;
 };
 
@@ -126,6 +127,18 @@ export default async function ApprovalsPage({
         orderBy: [{ group: "asc" }, { name: "asc" }],
         select: { id: true, name: true, group: true, txTypes: true, isActive: true },
       }),
+      // Active employees — needed so the rejected-row resubmit editor can
+      // re-pick the employee counterparty on salary / incentive outflows.
+      prisma.employee.findMany({
+        where: { active: true },
+        orderBy: [{ name: "asc" }],
+        select: {
+          id: true,
+          name: true,
+          designation: true,
+          designationRef: { select: { name: true } },
+        },
+      }),
     ]),
     // Draft tab counts:
     //   - draftFirst users: count of their own drafts
@@ -140,7 +153,13 @@ export default async function ApprovalsPage({
   ]);
 
   const [pendingCount, approvedCount, rejectedCount] = counts;
-  const [categories, parties] = masters;
+  const [categories, parties, employeesRaw] = masters;
+  const employees = employeesRaw.map((e) => ({
+    id: e.id,
+    name: e.name,
+    designation: e.designationRef?.name ?? e.designation ?? null,
+  }));
+  const employeeById = new Map(employees.map((e) => [e.id, { id: e.id, name: e.name }]));
   const partyById = new Map(parties.map((pt) => [pt.id, pt]));
   // Lookup shape consumed by the new list-view client component.
   const partyLookup: PartyLookup = Object.fromEntries(
@@ -382,6 +401,7 @@ export default async function ApprovalsPage({
                   amount: Number(p.targetTx.amount.toString()),
                   flow: p.targetTx.flow,
                   partyId: p.targetTx.partyId,
+                  employeeId: p.targetTx.employeeId,
                   expDom: p.targetTx.expDom ?? null,
                 }
               : null;
@@ -426,13 +446,13 @@ export default async function ApprovalsPage({
                 </div>
 
                 {p.kind === "delete" && before && (
-                  <DiffCard before={before} after={null} partyById={partyById} />
+                  <DiffCard before={before} after={null} partyById={partyById} employeeById={employeeById} />
                 )}
                 {p.kind === "create" && proposed && (
-                  <DiffCard before={null} after={proposed} partyById={partyById} />
+                  <DiffCard before={null} after={proposed} partyById={partyById} employeeById={employeeById} />
                 )}
                 {p.kind === "update" && (
-                  <DiffCard before={before} after={proposed} partyById={partyById} />
+                  <DiffCard before={before} after={proposed} partyById={partyById} employeeById={employeeById} />
                 )}
 
                 {p.reviewNote && (
@@ -468,6 +488,7 @@ export default async function ApprovalsPage({
                       txTypes: pt.txTypes as "Revenue" | "Expense" | "Both",
                       isActive: pt.isActive,
                     }))}
+                    employees={employees}
                   />
                 )}
               </div>
@@ -763,10 +784,12 @@ function DiffCard({
   before,
   after,
   partyById,
+  employeeById,
 }: {
   before: ProposedTx | null;
   after: ProposedTx | null;
   partyById: Map<string, { id: string; name: string; group: string }>;
+  employeeById: Map<string, { id: string; name: string }>;
 }) {
   const fields: DiffField[] = [
     { key: "date", label: "Date" },
@@ -775,6 +798,7 @@ function DiffCard({
     { key: "category", label: "Category" },
     { key: "subItem", label: "Sub-item" },
     { key: "partyId", label: "Party" },
+    { key: "employeeId", label: "Employee" },
     { key: "description", label: "Description" },
     { key: "paymentMode", label: "Payment mode" },
     { key: "flow", label: "Flow" },
@@ -785,6 +809,11 @@ function DiffCard({
     if (id === null || id === undefined || id === "") return "—";
     const p = partyById.get(String(id));
     return p ? `${p.name} (${p.group})` : `(deleted party: ${String(id).slice(0, 8)})`;
+  };
+  const renderEmployeeId = (id: unknown) => {
+    if (id === null || id === undefined || id === "") return "—";
+    const e = employeeById.get(String(id));
+    return e ? `${e.name} (Employee)` : `(removed employee: ${String(id).slice(0, 8)})`;
   };
   return (
     <div className="overflow-x-auto rounded-lg border border-outline-variant">
@@ -804,6 +833,7 @@ function DiffCard({
             const fmt = (v: unknown) => {
               if (v === null || v === undefined || v === "") return "—";
               if (f.key === "partyId") return renderPartyId(v);
+              if (f.key === "employeeId") return renderEmployeeId(v);
               if (f.key === "amount") return inrFull(Number(v));
               if (f.key === "date" && typeof v === "string") return fmtDDMMYY(v);
               return String(v);

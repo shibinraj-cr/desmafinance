@@ -13,6 +13,9 @@ export type TxProposed = {
   amount: number;
   flow: string;
   partyId?: string | null;
+  /** Employee counterparty — salary / incentive outflows (Expense only).
+   *  A transaction carries EITHER partyId OR employeeId. */
+  employeeId?: string | null;
   /** "EXP" / "DOM" — required when type=Revenue, null on Expense. */
   expDom?: string | null;
 };
@@ -52,6 +55,7 @@ export async function submitCreate(opts: {
         amount: data.amount,
         flow: data.flow,
         partyId: data.partyId ?? null,
+        employeeId: data.employeeId ?? null,
         expDom: data.type === "Revenue" ? (data.expDom ?? null) : null,
       },
     });
@@ -78,6 +82,7 @@ export async function submitCreate(opts: {
         amount: data.amount,
         flow: data.flow,
         partyId: data.partyId ?? null,
+        employeeId: data.employeeId ?? null,
         expDom: data.type === "Revenue" ? (data.expDom ?? null) : null,
         createdById: userId,
       },
@@ -136,6 +141,7 @@ export async function updateDraft(opts: {
       amount: data.amount,
       flow: data.flow,
       partyId: data.partyId ?? null,
+      employeeId: data.employeeId ?? null,
       expDom: data.type === "Revenue" ? (data.expDom ?? null) : null,
     },
   });
@@ -199,6 +205,7 @@ export async function submitDraftToPending(opts: {
     amount: Number(draft.amount.toString()),
     flow: draft.flow,
     partyId: draft.partyId,
+    employeeId: draft.employeeId,
     // EXP/DOM is only meaningful for Revenue; carry it through draft →
     // pending so reviewers (and the GST calc) see the classification.
     expDom: draft.type === "Revenue" ? (draft.expDom ?? null) : null,
@@ -218,6 +225,7 @@ export async function submitDraftToPending(opts: {
           amount: draft.amount,
           flow: draft.flow,
           partyId: draft.partyId,
+          employeeId: draft.employeeId,
           expDom: draft.type === "Revenue" ? (draft.expDom ?? null) : null,
           createdById: ownerId,
         },
@@ -283,6 +291,7 @@ export async function submitUpdate(opts: {
         amount: data.amount,
         flow: data.flow,
         partyId: data.partyId ?? null,
+        employeeId: data.employeeId ?? null,
         expDom: data.type === "Revenue" ? (data.expDom ?? null) : null,
       },
     });
@@ -432,6 +441,7 @@ export async function approvePending(opts: {
           amount: data.amount,
           flow: data.flow,
           partyId: data.partyId ?? null,
+          employeeId: data.employeeId ?? null,
           expDom: data.type === "Revenue" ? (data.expDom ?? null) : null,
           createdById: p.submittedById,
         },
@@ -490,6 +500,7 @@ export async function approvePending(opts: {
           amount: data.amount,
           flow: data.flow,
           partyId: data.partyId ?? null,
+          employeeId: data.employeeId ?? null,
           expDom: data.type === "Revenue" ? (data.expDom ?? null) : null,
         },
       });
@@ -607,6 +618,9 @@ function txSnapshot(t: {
   paymentMode: string;
   amount: { toString(): string };
   flow: string;
+  partyId?: string | null;
+  employeeId?: string | null;
+  expDom?: string | null;
 }) {
   return {
     date: t.date.toISOString(),
@@ -618,5 +632,11 @@ function txSnapshot(t: {
     paymentMode: t.paymentMode,
     amount: Number(t.amount.toString()),
     flow: t.flow,
+    // Counterparty + EXP/DOM belong in the audit snapshot too, so the
+    // "before" state of an update/delete records who the row was with
+    // and its GST classification.
+    partyId: t.partyId ?? null,
+    employeeId: t.employeeId ?? null,
+    expDom: t.expDom ?? null,
   };
 }

@@ -28,6 +28,7 @@ export default async function EditTransactionPage({
     amount: t.amount.toString(),
     description: t.description ?? "",
     partyId: t.partyId ?? null,
+    employeeId: t.employeeId ?? null,
     expDom: t.expDom === "EXP" ? "EXP" : t.expDom === "DOM" ? "DOM" : null,
   };
 
@@ -41,6 +42,7 @@ export default async function EditTransactionPage({
           transactionId={t.id}
           categories={masters.categories}
           parties={masters.parties}
+          employees={masters.employees}
         />
       </div>
     </>

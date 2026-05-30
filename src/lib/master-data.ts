@@ -1,5 +1,5 @@
 import { prisma } from "./prisma";
-import type { MasterCategory, MasterParty } from "@/components/TransactionForm";
+import type { MasterCategory, MasterParty, MasterEmployee } from "@/components/TransactionForm";
 
 // Categories whose sub-items can be linked to a Service. Service-aware
 // reporting joins on these sub-items, so widening the set requires updating
@@ -51,8 +51,9 @@ export async function verifyCategorySubItem(
 export async function getTransactionFormMasters(): Promise<{
   categories: MasterCategory[];
   parties: MasterParty[];
+  employees: MasterEmployee[];
 }> {
-  const [cats, parties] = await Promise.all([
+  const [cats, parties, employees] = await Promise.all([
     prisma.category.findMany({
       orderBy: [{ type: "asc" }, { name: "asc" }],
       include: { subItems: { orderBy: { name: "asc" } } },
@@ -66,6 +67,18 @@ export async function getTransactionFormMasters(): Promise<{
         group: true,
         txTypes: true,
         isActive: true,
+      },
+    }),
+    // Active employees — selectable as the counterparty on Expense rows
+    // (salary / incentive outflows). Only name + designation are exposed.
+    prisma.employee.findMany({
+      where: { active: true },
+      orderBy: [{ name: "asc" }],
+      select: {
+        id: true,
+        name: true,
+        designation: true,
+        designationRef: { select: { name: true } },
       },
     }),
   ]);
@@ -87,6 +100,11 @@ export async function getTransactionFormMasters(): Promise<{
       group: p.group as "Candidate" | "Vendor",
       txTypes: p.txTypes as "Revenue" | "Expense" | "Both",
       isActive: p.isActive,
+    })),
+    employees: employees.map((e) => ({
+      id: e.id,
+      name: e.name,
+      designation: e.designationRef?.name ?? e.designation ?? null,
     })),
   };
 }

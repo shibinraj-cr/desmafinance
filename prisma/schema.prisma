@@ -107,6 +107,11 @@ model Transaction {
   expDom      String?
   partyId     String?
   party       Party?    @relation(fields: [partyId], references: [id], onDelete: SetNull)
+  /// Employee counterparty — used for salary / incentive outflows. A
+  /// transaction carries EITHER partyId OR employeeId (enforced at the
+  /// app layer, not the DB, so legacy party-less rows stay valid).
+  employeeId  String?
+  employee    Employee? @relation("EmployeeTransactions", fields: [employeeId], references: [id], onDelete: SetNull)
   createdById String?
   createdBy   User?     @relation(fields: [createdById], references: [id], onDelete: SetNull)
   deletedAt   DateTime?
@@ -125,6 +130,7 @@ model Transaction {
   @@index([month, type])
   @@index([paymentMode, type])
   @@index([partyId])
+  @@index([employeeId])
 }
 
 // Master: transaction Categories. A category can be Revenue-only,
@@ -641,6 +647,10 @@ model TransactionDraft {
   flow          String
   partyId       String?
   party         Party?   @relation(fields: [partyId], references: [id], onDelete: SetNull)
+  /// Mirrors Transaction.employeeId — employee counterparty for
+  /// salary / incentive outflow drafts.
+  employeeId    String?
+  employee      Employee? @relation("EmployeeTransactionDrafts", fields: [employeeId], references: [id], onDelete: SetNull)
   /// Mirrors Transaction.expDom — required on Revenue drafts.
   expDom        String?
   createdAt     DateTime @default(now())
@@ -648,6 +658,7 @@ model TransactionDraft {
 
   @@index([submittedById])
   @@index([createdAt])
+  @@index([employeeId])
 }
 
 /// Metadata about each Voxbay CSV upload. The actual call rows live
@@ -911,6 +922,10 @@ model Employee {
   leaveAccruals        HrLeaveAccrual[]
   regularizations      HrAttendanceRegularization[] @relation("RegEmployee")
   birthdayWishes       HrBirthdayWish[]          @relation("BirthdayRecipient")
+  /// Finance transactions/drafts where this employee is the counterparty
+  /// (salary / incentive outflows).
+  transactions         Transaction[]             @relation("EmployeeTransactions")
+  transactionDrafts    TransactionDraft[]        @relation("EmployeeTransactionDrafts")
 
   @@index([active])
   @@index([shiftId])

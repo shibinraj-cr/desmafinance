@@ -5,12 +5,12 @@ import { getTransactionFormMasters } from "@/lib/master-data";
 export const dynamic = "force-dynamic";
 
 export default async function NewTransactionPage() {
-  const { categories, parties } = await getTransactionFormMasters();
+  const { categories, parties, employees } = await getTransactionFormMasters();
   return (
     <>
       <TopBar title="New Transaction" subtitle="Record an inflow or outflow" />
       <div className="p-margin max-w-3xl">
-        <TransactionForm categories={categories} parties={parties} />
+        <TransactionForm categories={categories} parties={parties} employees={employees} />
       </div>
     </>
   );

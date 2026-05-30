@@ -51,7 +51,7 @@ export default async function DailyTrackerPage({
         }
       : {}),
   };
-  const [items, pendingCreates, pendingMutations, categories, parties] = await Promise.all([
+  const [items, pendingCreates, pendingMutations, categories, parties, employees] = await Promise.all([
     prisma.transaction.findMany({
       where,
       orderBy: [{ date: "desc" }, { createdAt: "desc" }],
@@ -84,11 +84,19 @@ export default async function DailyTrackerPage({
       orderBy: [{ group: "asc" }, { name: "asc" }],
       select: { id: true, name: true, group: true, txTypes: true, isActive: true },
     }),
+    // Active employees — to resolve employee-attributed outflows (salary /
+    // incentive) to a name in the ledger.
+    prisma.employee.findMany({
+      where: { active: true },
+      orderBy: [{ name: "asc" }],
+      select: { id: true, name: true },
+    }),
   ]);
 
   // Party id → name lookup used by both Transaction rows and pending
   // creates (whose partyId lives inside the JSON proposed payload).
   const partyById = new Map(parties.map((p) => [p.id, p]));
+  const employeeById = new Map(employees.map((e) => [e.id, e]));
 
   // Map: txId → kind of pending mutation (update | delete) on it.
   const pendingByTx = new Map<string, "update" | "delete">();
@@ -110,6 +118,7 @@ export default async function DailyTrackerPage({
     amount?: number | string;
     flow?: string;
     partyId?: string | null;
+    employeeId?: string | null;
   };
   type UnifiedRow = {
     id: string;
@@ -125,6 +134,7 @@ export default async function DailyTrackerPage({
     amount: number;
     flow: string;
     partyId: string | null;
+    employeeId: string | null;
   };
 
   const approvedRows: UnifiedRow[] = items.map((t) => ({
@@ -141,6 +151,7 @@ export default async function DailyTrackerPage({
     amount: Number(t.amount.toString()),
     flow: t.flow,
     partyId: t.partyId,
+    employeeId: t.employeeId,
   }));
 
   // Apply the same filter set to pending creates by reading the JSON
@@ -165,6 +176,7 @@ export default async function DailyTrackerPage({
         amount: Number(d.amount ?? 0),
         flow: d.flow ?? "",
         partyId: d.partyId ?? null,
+        employeeId: d.employeeId ?? null,
       };
     })
     .filter((r): r is UnifiedRow => r !== null)
@@ -361,6 +373,7 @@ export default async function DailyTrackerPage({
                           ? "bg-red-100 text-red-800 border border-red-300"
                           : "bg-green-100 text-green-800 border border-green-300";
                   const party = t.partyId ? partyById.get(t.partyId) : null;
+                  const employee = t.employeeId ? employeeById.get(t.employeeId) : null;
                   return (
                     <tr
                       key={t.id}
@@ -389,6 +402,13 @@ export default async function DailyTrackerPage({
                             {party.name}
                             <span className="text-on-surface-variant text-[11px] ml-[4px]">
                               ({party.group})
+                            </span>
+                          </span>
+                        ) : employee ? (
+                          <span>
+                            {employee.name}
+                            <span className="text-on-surface-variant text-[11px] ml-[4px]">
+                              (Employee)
                             </span>
                           </span>
                         ) : (

@@ -20,6 +20,12 @@ type MasterParty = {
   isActive: boolean;
 };
 
+type MasterEmployee = {
+  id: string;
+  name: string;
+  designation: string | null;
+};
+
 type ProposedTx = {
   date: string;
   month: string;
@@ -31,7 +37,7 @@ type ProposedTx = {
   amount: number;
   flow: string;
   partyId?: string | null;
-  /** "EXP" | "DOM" — only meaningful for Revenue rows. */
+  employeeId?: string | null;
   expDom?: string | null;
 };
 
@@ -52,12 +58,14 @@ export function ResubmitEditor({
   initialProposed,
   categories,
   parties,
+  employees = [],
 }: {
   pendingId: string;
   kind: "create" | "update" | "delete";
   initialProposed: ProposedTx | null;
   categories: MasterCategory[];
   parties: MasterParty[];
+  employees?: MasterEmployee[];
 }) {
   const router = useRouter();
   const [open, setOpen] = useState(false);
@@ -89,10 +97,16 @@ export function ResubmitEditor({
   const [partyId, setPartyId] = useState<string | null>(
     initialProposed?.partyId ?? null,
   );
-  // Revenue-only EXP/DOM tag. Defaults to "DOM" when missing so the GST
-  // liability calc (DOM only) stays correct on resubmit.
-  const [expDom, setExpDom] = useState<"EXP" | "DOM">(
-    initialProposed?.expDom === "EXP" ? "EXP" : "DOM",
+  const [employeeId, setEmployeeId] = useState<string | null>(
+    initialProposed?.employeeId ?? null,
+  );
+  // EXP/DOM tag — only meaningful for Revenue. Pre-fill from the rejected
+  // row when it carries a valid tag; otherwise leave it blank so the
+  // submitter must consciously pick. (The rows this recovers are the ones
+  // whose tag was lost — silently defaulting DOM could misclassify a true
+  // EXP/export row into the GST-taxable base.)
+  const [expDom, setExpDom] = useState<"" | "EXP" | "DOM">(
+    initialProposed?.expDom === "EXP" ? "EXP" : initialProposed?.expDom === "DOM" ? "DOM" : "",
   );
 
   const visibleCategories = useMemo(
@@ -144,6 +158,13 @@ export function ResubmitEditor({
       setCategoryName(firstCat.name);
       setSubItemName(firstCat.subItems.find((s) => s.isActive)?.name ?? "");
     }
+    // If the current party doesn't allow this tx type, clear it.
+    if (partyId) {
+      const cur = parties.find((p) => p.id === partyId);
+      if (cur && cur.txTypes !== next && cur.txTypes !== "Both") setPartyId(null);
+    }
+    // Employees may only be the counterparty on Expense rows.
+    if (next !== "Expense") setEmployeeId(null);
   }
 
   function onCategoryChange(next: string) {
@@ -160,8 +181,18 @@ export function ResubmitEditor({
         setError("All fields are required.");
         return;
       }
+      if (type === "Revenue" && expDom !== "EXP" && expDom !== "DOM") {
+        setError("Select EXP or DOM for this revenue entry.");
+        return;
+      }
       if (!Number.isFinite(amt) || amt < 0) {
         setError("Amount must be a non-negative number.");
+        return;
+      }
+      if (!partyId && !employeeId) {
+        setError(
+          type === "Expense" ? "Select a party or employee." : "Select a party.",
+        );
         return;
       }
     }
@@ -185,6 +216,7 @@ export function ResubmitEditor({
                 amount: amt,
                 flow: type === "Revenue" ? "Inflow" : "Outflow",
                 partyId: partyId || null,
+                employeeId: employeeId || null,
                 expDom: type === "Revenue" ? expDom : null,
               },
             }),
@@ -288,6 +320,19 @@ export function ResubmitEditor({
               ))}
             </select>
           </Field>
+          {type === "Revenue" && (
+            <Field label="EXP / DOM">
+              <select
+                value={expDom}
+                onChange={(e) => setExpDom(e.target.value as "" | "EXP" | "DOM")}
+                className={inputCls}
+              >
+                <option value="">— select —</option>
+                <option value="DOM">DOM</option>
+                <option value="EXP">EXP</option>
+              </select>
+            </Field>
+          )}
           <Field label="Category">
             <select
               value={categoryName}
@@ -337,46 +382,46 @@ export function ResubmitEditor({
               className={inputCls + " text-right font-mono"}
             />
           </Field>
-          <Field label="Party (optional)">
+          <Field label={type === "Expense" ? "Party / Employee" : "Party"}>
             <select
-              value={partyId ?? ""}
-              onChange={(e) => setPartyId(e.target.value || null)}
+              value={partyId ? `p:${partyId}` : employeeId ? `e:${employeeId}` : ""}
+              onChange={(e) => {
+                const v = e.target.value;
+                if (v.startsWith("e:")) {
+                  setEmployeeId(v.slice(2));
+                  setPartyId(null);
+                } else if (v.startsWith("p:")) {
+                  setPartyId(v.slice(2));
+                  setEmployeeId(null);
+                } else {
+                  setPartyId(null);
+                  setEmployeeId(null);
+                }
+              }}
               className={inputCls}
             >
-              <option value="">— none —</option>
-              {visibleParties.map((p) => (
-                <option key={p.id} value={p.id}>
-                  {p.name} {p.group === "Candidate" ? "(Candidate)" : "(Vendor)"}
-                </option>
-              ))}
+              <option value="">
+                {type === "Expense" ? "— select party or employee —" : "— select party —"}
+              </option>
+              <optgroup label="Candidates / Vendors">
+                {visibleParties.map((p) => (
+                  <option key={p.id} value={`p:${p.id}`}>
+                    {p.name} {p.group === "Candidate" ? "(Candidate)" : "(Vendor)"}
+                  </option>
+                ))}
+              </optgroup>
+              {type === "Expense" && employees.length > 0 && (
+                <optgroup label="Employees">
+                  {employees.map((emp) => (
+                    <option key={emp.id} value={`e:${emp.id}`}>
+                      {emp.name}
+                      {emp.designation ? ` · ${emp.designation}` : ""}
+                    </option>
+                  ))}
+                </optgroup>
+              )}
             </select>
           </Field>
-          {type === "Revenue" && (
-            <Field label="EXP / DOM">
-              <div className="flex rounded-lg border border-outline-variant overflow-hidden h-10">
-                {(["DOM", "EXP"] as const).map((opt) => (
-                  <button
-                    type="button"
-                    key={opt}
-                    onClick={() => setExpDom(opt)}
-                    className={
-                      "flex-1 text-label-sm font-semibold transition " +
-                      (expDom === opt
-                        ? "bg-primary text-on-primary"
-                        : "bg-surface-container-lowest text-on-surface-variant hover:bg-surface-container-low")
-                    }
-                    title={
-                      opt === "DOM"
-                        ? "Domestic — taxable for GST (counted in monthly liability)"
-                        : "Export — outside GST liability calc"
-                    }
-                  >
-                    {opt}
-                  </button>
-                ))}
-              </div>
-            </Field>
-          )}
           <div className="md:col-span-2">
             <Field label="Description">
               <textarea
