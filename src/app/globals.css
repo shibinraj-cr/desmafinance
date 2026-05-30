@@ -97,3 +97,206 @@ input.lp-date-input::-webkit-calendar-picker-indicator:hover {
 .lp-scope th {
   font-feature-settings: "tnum";
 }
+
+/* ════════════════════════════════════════════════════════
+   Lead Pulse — "Futuristic HUD" skin.
+   Layers glass + glow + ambient grid on top of the .lp-scope
+   tokens. Purely cosmetic: no page markup, data, or layout
+   logic is touched. Hooks are (a) the inline `var(--lp-*)`
+   surface references React serialises onto card elements and
+   (b) Recharts' stable `.recharts-*` class names.
+   ════════════════════════════════════════════════════════ */
+
+/* Module display face (Space Grotesk); numbers + labels go mono. */
+.lp-scope {
+  position: relative;
+  isolation: isolate;
+  font-family: var(--font-display), var(--font-inter), Inter, system-ui, sans-serif;
+}
+/* Mono for small technical labels + the clock only — big KPI numbers stay in
+   the display face (Space Grotesk) to match the reference and avoid widening
+   dense numeric table columns. */
+.lp-scope .font-mono,
+.lp-scope .uppercase.tracking-widest {
+  font-family: var(--font-mono), ui-monospace, SFMono-Regular, monospace;
+}
+
+/* ── Ambient background: corner glows + faint drifting grid ── */
+.lp-scope::before,
+.lp-scope::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  pointer-events: none;
+}
+.lp-scope::before {
+  background:
+    radial-gradient(1100px 540px at 10% -8%, rgba(250, 204, 21, 0.10), transparent 60%),
+    radial-gradient(900px 520px at 100% 0%, rgba(139, 123, 255, 0.08), transparent 55%),
+    radial-gradient(900px 700px at 60% 120%, rgba(250, 204, 21, 0.05), transparent 60%);
+}
+.lp-scope::after {
+  background-image:
+    linear-gradient(rgba(245, 197, 24, 0.04) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(245, 197, 24, 0.04) 1px, transparent 1px);
+  background-size: 46px 46px;
+  -webkit-mask-image: radial-gradient(120% 120% at 50% 25%, #000 30%, transparent 85%);
+  mask-image: radial-gradient(120% 120% at 50% 25%, #000 30%, transparent 85%);
+  animation: lpGridDrift 32s linear infinite;
+}
+@keyframes lpGridDrift {
+  to {
+    background-position: 46px 46px, 46px 46px;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .lp-scope::after {
+    animation: none;
+  }
+}
+
+/* ── HUD header band ── */
+.lp-hud-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  flex-wrap: wrap;
+  padding: 12px 24px;
+  margin-bottom: 4px;
+  border-bottom: 1px solid var(--lp-outline-variant);
+  background: linear-gradient(180deg, rgba(20, 17, 9, 0.55), transparent);
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
+}
+.lp-hud-title {
+  font-family: var(--font-display), Inter, sans-serif;
+  text-transform: uppercase;
+  letter-spacing: 0.14em;
+  font-size: 15px;
+  font-weight: 700;
+  color: var(--lp-on-surface);
+}
+.lp-hud-sub {
+  font-family: var(--font-mono), monospace;
+  text-transform: uppercase;
+  letter-spacing: 0.12em;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--lp-primary);
+  opacity: 0.9;
+}
+.lp-hud-live {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  height: 26px;
+  padding: 0 11px;
+  border-radius: 8px;
+  border: 1px solid var(--lp-outline-variant);
+  background: rgba(20, 17, 9, 0.6);
+  font-family: var(--font-mono), monospace;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--lp-on-surface-variant);
+}
+.lp-hud-live-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: #2fe6a8;
+  box-shadow: 0 0 0 0 rgba(47, 230, 168, 0.6);
+  animation: lpPulse 2s infinite;
+}
+@keyframes lpPulse {
+  0% {
+    box-shadow: 0 0 0 0 rgba(47, 230, 168, 0.5);
+  }
+  70% {
+    box-shadow: 0 0 0 7px rgba(47, 230, 168, 0);
+  }
+  100% {
+    box-shadow: 0 0 0 0 rgba(47, 230, 168, 0);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .lp-hud-live-dot {
+    animation: none;
+  }
+}
+
+/* ── Glass cards (base surface containers only) ── */
+.lp-scope [style*="var(--lp-surface-container)"] {
+  backdrop-filter: blur(var(--lp-glass-blur, 10px));
+  -webkit-backdrop-filter: blur(var(--lp-glass-blur, 10px));
+  box-shadow: var(--lp-glow);
+  position: relative;
+}
+/* top accent hairline on glass cards */
+.lp-scope [style*="var(--lp-surface-container)"]::before {
+  content: "";
+  position: absolute;
+  left: 14px;
+  right: 14px;
+  top: 0;
+  height: 1px;
+  background: linear-gradient(90deg, transparent, rgba(250, 204, 21, 0.45), transparent);
+  opacity: 0.6;
+  pointer-events: none;
+}
+
+/* ── Chart glow (geometry & series colours untouched) ── */
+.lp-scope .recharts-area-curve,
+.lp-scope .recharts-line-curve {
+  filter: drop-shadow(0 0 4px rgba(250, 204, 21, 0.35));
+}
+.lp-scope .recharts-area-area {
+  filter: drop-shadow(0 0 6px rgba(250, 204, 21, 0.12));
+}
+.lp-scope .recharts-bar-rectangle path,
+.lp-scope .recharts-rectangle {
+  filter: drop-shadow(0 0 5px rgba(250, 204, 21, 0.18));
+}
+.lp-scope .recharts-dot {
+  filter: drop-shadow(0 0 3px rgba(250, 204, 21, 0.4));
+}
+
+/* ── Tables: subtle HUD polish (no structural change) ── */
+.lp-scope thead {
+  border-bottom: 1px solid var(--lp-outline-variant);
+}
+.lp-scope tbody tr:hover {
+  background: rgba(250, 204, 21, 0.04);
+}
+
+/* ── Inputs: stronger gold focus glow ── */
+.lp-scope input:focus,
+.lp-scope select:focus,
+.lp-scope textarea:focus {
+  box-shadow: 0 0 0 2px rgba(250, 204, 21, 0.25), 0 0 12px rgba(250, 204, 21, 0.15);
+}
+
+/* ── Scrollbar tint inside the module ── */
+.lp-scope ::-webkit-scrollbar-thumb {
+  background: rgba(250, 204, 21, 0.2);
+}
+
+/* ════════════════════════════════════════════════════════
+   Shared shell — visual-only gold-glow pass (sidebar + tabs).
+   Hook classes (`dg-rail`, `dg-tabs`) are added in SideNav.tsx
+   and GroupTabs.tsx; no nav item, route, or badge logic changes.
+   ════════════════════════════════════════════════════════ */
+.dg-rail {
+  box-shadow: inset -1px 0 0 rgba(245, 197, 24, 0.1), 1px 0 26px rgba(0, 0, 0, 0.3);
+}
+/* glow on the active nav item (Tailwind `.bg-primary` marks active) */
+.dg-rail a.bg-primary {
+  box-shadow: 0 0 18px rgba(245, 197, 24, 0.28);
+}
+/* glow on the active tab underline (Tailwind `.border-primary` marks active) */
+.dg-tabs a.border-primary {
+  box-shadow: 0 6px 14px -8px rgba(245, 197, 24, 0.7);
+}
