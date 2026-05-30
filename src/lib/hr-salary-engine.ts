@@ -46,6 +46,17 @@ export const PF_RATE = 0.12;
 export const PF_WAGE_CEILING = 15000;
 export const PF_CONTRIBUTION_CAP = PF_WAGE_CEILING * PF_RATE; // 1800
 
+/**
+ * Trainees are paid on BASIC ONLY: no allowances, no ESI, no PF, no PT.
+ * Enforced by designation NAME (case-insensitive, trimmed), matched against
+ * both the modern HrDesignation relation and the legacy `employee.designation`.
+ */
+export const TRAINEE_DESIGNATION_NAME = "Trainee";
+
+export function isTraineeDesignation(name?: string | null): boolean {
+  return (name ?? "").trim().toLowerCase() === TRAINEE_DESIGNATION_NAME.toLowerCase();
+}
+
 export type SalaryBreakdown = {
   basic: number;
   hra: number;
@@ -241,7 +252,10 @@ export async function computeSalaryRun(monthKey: string, userId: string | null):
 
   await prisma.hrSalaryRunLine.deleteMany({ where: { runId: run.id } });
 
-  const employees = await prisma.employee.findMany({ where: { active: true } });
+  const employees = await prisma.employee.findMany({
+    where: { active: true },
+    include: { designationRef: true },
+  });
   const warnings: string[] = [];
   let totalNet = 0;
   let lineCount = 0;
@@ -266,16 +280,22 @@ export async function computeSalaryRun(monthKey: string, userId: string | null):
     });
     const carried = balance ? Number(balance.balance) : 0;
 
+    // Trainees are paid on BASIC ONLY — the engine forces allowances/ESI/PF/PT
+    // to zero by designation name, overriding whatever the saved structure
+    // says. Robust to both the modern relation and the legacy string.
+    const isTrainee =
+      isTraineeDesignation(e.designationRef?.name) || isTraineeDesignation(e.designation);
+
     const calc = calcLine({
       workingDaysBase,
       basic: Number(structure.basic),
-      hraPct: Number(structure.hraPct),
-      conveyancePct: Number(structure.conveyancePct),
-      medicalPct: Number(structure.medicalPct),
-      specialPct: Number(structure.specialPct),
-      esiApplicable: structure.esiApplicable,
-      pfApplicable: structure.pfApplicable,
-      professionalTax: Number(structure.professionalTax),
+      hraPct: isTrainee ? 0 : Number(structure.hraPct),
+      conveyancePct: isTrainee ? 0 : Number(structure.conveyancePct),
+      medicalPct: isTrainee ? 0 : Number(structure.medicalPct),
+      specialPct: isTrainee ? 0 : Number(structure.specialPct),
+      esiApplicable: isTrainee ? false : structure.esiApplicable,
+      pfApplicable: isTrainee ? false : structure.pfApplicable,
+      professionalTax: isTrainee ? 0 : Number(structure.professionalTax),
       ...buckets,
       carriedBalanceBefore: carried,
     });

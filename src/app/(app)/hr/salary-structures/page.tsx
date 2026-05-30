@@ -4,7 +4,7 @@ import { getCurrentUserAndPermissions } from "@/lib/permissions";
 import { isHrUser, canApproveHr } from "@/lib/hr-rbac";
 import { TopBar } from "@/components/TopBar";
 import { Section } from "@/components/Cards";
-import { deriveBreakdown, suggestProfessionalTax } from "@/lib/hr-salary-engine";
+import { deriveBreakdown, suggestProfessionalTax, isTraineeDesignation } from "@/lib/hr-salary-engine";
 import { SalaryStructuresClient } from "./client";
 
 export const dynamic = "force-dynamic";
@@ -29,12 +29,17 @@ export default async function SalaryStructuresPage() {
     where: { active: true },
     orderBy: { empCode: "asc" },
     include: {
+      designationRef: true,
       salaryStructures: { orderBy: { effectiveFrom: "desc" }, take: 1 },
     },
   });
 
   const rows = employees.map((e) => {
     const cur = e.salaryStructures[0];
+    // Trainees are paid on basic only — mirror the engine override so the
+    // planning view's money columns match the actual payout.
+    const isTrainee =
+      isTraineeDesignation(e.designationRef?.name) || isTraineeDesignation(e.designation);
     if (!cur) {
       return {
         id: e.id,
@@ -62,17 +67,20 @@ export default async function SalaryStructuresPage() {
     }
     const basic = Number(cur.basic);
     const breakdown = deriveBreakdown(basic, {
-      hraPct: Number(cur.hraPct),
-      conveyancePct: Number(cur.conveyancePct),
-      medicalPct: Number(cur.medicalPct),
-      specialPct: Number(cur.specialPct),
+      hraPct: isTrainee ? 0 : Number(cur.hraPct),
+      conveyancePct: isTrainee ? 0 : Number(cur.conveyancePct),
+      medicalPct: isTrainee ? 0 : Number(cur.medicalPct),
+      specialPct: isTrainee ? 0 : Number(cur.specialPct),
     });
-    const esiEmp = cur.esiApplicable ? Math.round(breakdown.gross * 0.0075) : 0;
+    const esiApplicable = !isTrainee && cur.esiApplicable;
+    const pfApplicable = !isTrainee && cur.pfApplicable;
+    const esiEmp = esiApplicable ? Math.round(breakdown.gross * 0.0075) : 0;
     // PF capped at ₹15,000 wage ceiling → max ₹1,800.
-    const pfEmp = cur.pfApplicable ? Math.round(Math.min(basic, 15000) * 0.12) : 0;
+    const pfEmp = pfApplicable ? Math.round(Math.min(basic, 15000) * 0.12) : 0;
     // Employer-side contributions
-    const esiEmployer = cur.esiApplicable ? Math.round(breakdown.gross * 0.0375) : 0;
-    const pfEmployer = cur.pfApplicable ? Math.round(Math.min(basic, 15000) * 0.12) : 0;
+    const esiEmployer = esiApplicable ? Math.round(breakdown.gross * 0.0375) : 0;
+    const pfEmployer = pfApplicable ? Math.round(Math.min(basic, 15000) * 0.12) : 0;
+    const professionalTax = isTrainee ? 0 : Number(cur.professionalTax);
     return {
       id: e.id,
       empCode: e.empCode,
@@ -80,19 +88,19 @@ export default async function SalaryStructuresPage() {
       designation: e.designation,
       effectiveFrom: cur.effectiveFrom.toISOString().slice(0, 10),
       basic,
-      hraPct: Number(cur.hraPct),
-      conveyancePct: Number(cur.conveyancePct),
-      medicalPct: Number(cur.medicalPct),
-      specialPct: Number(cur.specialPct),
+      hraPct: isTrainee ? 0 : Number(cur.hraPct),
+      conveyancePct: isTrainee ? 0 : Number(cur.conveyancePct),
+      medicalPct: isTrainee ? 0 : Number(cur.medicalPct),
+      specialPct: isTrainee ? 0 : Number(cur.specialPct),
       gross: breakdown.gross,
-      esiApplicable: cur.esiApplicable,
-      pfApplicable: cur.pfApplicable,
-      professionalTax: Number(cur.professionalTax),
+      esiApplicable,
+      pfApplicable,
+      professionalTax,
       esiEmployee: esiEmp,
       pfEmployee: pfEmp,
       esiEmployer,
       pfEmployer,
-      netTakeHome: breakdown.gross - esiEmp - pfEmp - Number(cur.professionalTax),
+      netTakeHome: breakdown.gross - esiEmp - pfEmp - professionalTax,
       ctc: breakdown.gross + pfEmployer + esiEmployer,
       hasStructure: true,
     };
