@@ -1,5 +1,6 @@
 import { prisma } from "./prisma";
 import { recomputeLeaveBalance } from "./hr-leave-balance";
+import { isOwnerDesignation } from "./hr-salary-engine";
 
 /**
  * Monthly leave accrual engine.
@@ -28,7 +29,17 @@ export async function runMonthlyAccrual(periodKey: string): Promise<{
 
   const eligibilities = await prisma.hrLeaveEligibility.findMany({
     where: { enabled: true, effectiveFrom: { lte: periodEnd } },
-    include: { employee: { select: { id: true, empCode: true, active: true } } },
+    include: {
+      employee: {
+        select: {
+          id: true,
+          empCode: true,
+          active: true,
+          designation: true,
+          designationRef: { select: { name: true } },
+        },
+      },
+    },
   });
 
   const details: { employeeId: string; empCode: string; delta: number; status: "credited" | "skipped"; reason?: string }[] = [];
@@ -39,6 +50,12 @@ export async function runMonthlyAccrual(periodKey: string): Promise<{
   for (const e of eligibilities) {
     if (!e.employee.active) {
       details.push({ employeeId: e.employeeId, empCode: e.employee.empCode, delta: 0, status: "skipped", reason: "inactive" });
+      skipped++;
+      continue;
+    }
+    // Owners (MD / Director) do not accrue leave — leave is not applicable.
+    if (isOwnerDesignation(e.employee.designationRef?.name) || isOwnerDesignation(e.employee.designation)) {
+      details.push({ employeeId: e.employeeId, empCode: e.employee.empCode, delta: 0, status: "skipped", reason: "owner — leave not applicable" });
       skipped++;
       continue;
     }
