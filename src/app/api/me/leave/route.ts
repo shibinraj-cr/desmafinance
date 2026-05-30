@@ -3,6 +3,7 @@ import { z } from "zod";
 import { prisma } from "@/lib/prisma";
 import { getCurrentUserAndPermissions } from "@/lib/permissions";
 import { countBusinessDays, employeeForUser } from "@/lib/hr-me";
+import { isOwnerDesignation } from "@/lib/hr-salary-engine";
 
 const Schema = z.object({
   fromDate: z.string().min(8),
@@ -34,6 +35,13 @@ export async function POST(req: Request) {
     return NextResponse.json(
       { error: "your login is not linked to an employee record — ask HR" },
       { status: 400 },
+    );
+  }
+  // Owners (MD / Director) do not take leave — leave is not applicable.
+  if (isOwnerDesignation(emp.designationRef?.name) || isOwnerDesignation(emp.designation)) {
+    return NextResponse.json(
+      { error: "leave does not apply to your designation" },
+      { status: 403 },
     );
   }
   const parsed = Schema.safeParse(await req.json());

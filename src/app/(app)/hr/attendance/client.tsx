@@ -252,13 +252,13 @@ export function AttendanceClient({
       )}
 
       <Section title="Attendance grid">
-        <div className="overflow-x-auto">
+        <div className="overflow-auto max-h-[70vh]">
           <table className="text-[11px] border-collapse">
             <thead>
               <tr>
                 <th
                   rowSpan={2}
-                  className="sticky left-0 bg-surface-container z-10 px-sm py-xs text-left text-label-sm"
+                  className="sticky left-0 top-0 bg-surface-container z-30 px-sm py-xs text-left text-label-sm"
                 >
                   Employee
                 </th>
@@ -268,7 +268,7 @@ export function AttendanceClient({
                     <th
                       key={d.iso}
                       className={
-                        "px-xs py-xs text-on-surface-variant w-12 text-center " +
+                        "sticky top-0 z-20 bg-surface-container px-xs py-xs text-on-surface-variant w-12 text-center " +
                         (isBoundary ? "border-l-2 border-l-primary/60" : "")
                       }
                       title={d.iso}
@@ -285,7 +285,7 @@ export function AttendanceClient({
                 })}
                 <th
                   rowSpan={2}
-                  className="px-sm py-xs text-on-surface-variant text-right whitespace-nowrap"
+                  className="sticky top-0 z-20 bg-surface-container px-sm py-xs text-on-surface-variant text-right whitespace-nowrap"
                 >
                   Summary
                 </th>

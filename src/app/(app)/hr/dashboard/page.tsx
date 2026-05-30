@@ -7,7 +7,7 @@ import { TopBar } from "@/components/TopBar";
 import { KpiCard, Section } from "@/components/Cards";
 import { CategoryDonut, HeadcountArea, HorizontalBars } from "@/components/Charts";
 import { monthLabel } from "@/lib/format";
-import { deriveBreakdown } from "@/lib/hr-salary-engine";
+import { deriveBreakdown, isTraineeDesignation } from "@/lib/hr-salary-engine";
 import { cycleMonthForDate, cycleWindowForMonth } from "@/lib/hr-data";
 import { loadActiveEmployeeBirthdays, upcomingBirthdays } from "@/lib/hr-birthdays";
 
@@ -67,6 +67,8 @@ export default async function HrDashboardPage() {
         where: { active: true },
         select: {
           joinDate: true,
+          designation: true,
+          designationRef: { select: { name: true } },
           departments: { where: { isPrimary: true }, select: { departmentId: true } },
           salaryStructures: {
             where: { effectiveFrom: { lte: today } },
@@ -114,11 +116,14 @@ export default async function HrDashboardPage() {
   for (const e of empData) {
     const s = e.salaryStructures[0];
     if (!s) continue;
+    // Trainees are paid on basic only — don't count allowances in CTC roll-ups.
+    const isTrainee =
+      isTraineeDesignation(e.designationRef?.name) || isTraineeDesignation(e.designation);
     const gross = deriveBreakdown(Number(s.basic), {
-      hraPct: Number(s.hraPct),
-      conveyancePct: Number(s.conveyancePct),
-      medicalPct: Number(s.medicalPct),
-      specialPct: Number(s.specialPct),
+      hraPct: isTrainee ? 0 : Number(s.hraPct),
+      conveyancePct: isTrainee ? 0 : Number(s.conveyancePct),
+      medicalPct: isTrainee ? 0 : Number(s.medicalPct),
+      specialPct: isTrainee ? 0 : Number(s.specialPct),
     }).gross;
     ctcSum += gross * 12;
     ctcCount += 1;

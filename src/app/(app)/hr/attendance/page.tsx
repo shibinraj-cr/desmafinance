@@ -2,6 +2,7 @@ import { redirect } from "next/navigation";
 import { prisma } from "@/lib/prisma";
 import { getCurrentUserAndPermissions } from "@/lib/permissions";
 import { isHrUser, canApproveHr } from "@/lib/hr-rbac";
+import { isOwnerDesignation } from "@/lib/hr-salary-engine";
 import { TopBar } from "@/components/TopBar";
 import { Section } from "@/components/Cards";
 import {
@@ -46,7 +47,7 @@ export default async function HrAttendancePage({
   const { start, end } = cycleWindowForMonth(requested);
   const dates = cycleDates(requested);
 
-  const [uploads, days, employees] = await Promise.all([
+  const [uploads, days, employeesRaw] = await Promise.all([
     prisma.hrAttendanceUpload.findMany({
       where: { monthKey: requested },
       orderBy: { uploadedAt: "desc" },
@@ -61,9 +62,20 @@ export default async function HrAttendancePage({
     prisma.employee.findMany({
       where: { active: true },
       orderBy: { empCode: "asc" },
-      select: { id: true, empCode: true, name: true, halfHourConcession: true },
+      select: {
+        id: true,
+        empCode: true,
+        name: true,
+        halfHourConcession: true,
+        designation: true,
+        designationRef: { select: { name: true } },
+      },
     }),
   ]);
+  // Owners (MD / Director) have no attendance — exclude them from the grid.
+  const employees = employeesRaw.filter(
+    (e) => !(isOwnerDesignation(e.designationRef?.name) || isOwnerDesignation(e.designation)),
+  );
 
   const grid: Record<
     string,
