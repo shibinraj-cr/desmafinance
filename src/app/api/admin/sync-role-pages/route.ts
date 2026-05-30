@@ -19,7 +19,7 @@ export const dynamic = "force-dynamic";
  *     (every page in the registry).
  *   - Non-admin roles keep their existing pages, but any of the
  *     "shared" any-auth-user pages they're missing are appended:
- *       /finance/parties        (Candidates & Vendors mirror)
+ *       /finance/parties        (Parties — incl. read-only employees)
  *       /finance/parties/[id]   (implicit prefix match)
  *       /finance/sources        (Sources mirror)
  *       /marketing/parties      (Marketing mirror)

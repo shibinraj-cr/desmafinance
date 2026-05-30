@@ -50,6 +50,44 @@ export async function loadEmployees(): Promise<EmployeeListRow[]> {
   }));
 }
 
+/** Minimal read-only directory row — only what the Finance "Parties" view is
+ *  allowed to show. No contact, bank, salary, or join details. */
+export type EmployeeDirectoryRow = {
+  id: string;
+  name: string;
+  designation: string | null;
+  department: string | null;
+};
+
+/**
+ * Active employees with ONLY name + designation + primary department, for the
+ * read-only Finance directory. Prefers the structured designation/department
+ * relations, falling back to the legacy free-text columns for un-migrated rows.
+ */
+export async function loadEmployeeDirectory(): Promise<EmployeeDirectoryRow[]> {
+  const rows = await prisma.employee.findMany({
+    where: { active: true },
+    orderBy: [{ name: "asc" }],
+    select: {
+      id: true,
+      name: true,
+      designation: true,
+      department: true,
+      designationRef: { select: { name: true } },
+      departments: {
+        where: { isPrimary: true },
+        select: { department: { select: { name: true } } },
+      },
+    },
+  });
+  return rows.map((e) => ({
+    id: e.id,
+    name: e.name,
+    designation: e.designationRef?.name ?? e.designation ?? null,
+    department: e.departments[0]?.department.name ?? e.department ?? null,
+  }));
+}
+
 export async function loadShifts() {
   return prisma.hrShift.findMany({ orderBy: { code: "asc" } });
 }
