@@ -21,6 +21,7 @@ import {
   deriveBreakdown,
   suggestProfessionalTax,
   isEsiApplicable,
+  isTraineeDesignation,
   bucketAttendance,
   calcLine,
   DEFAULT_ALLOWANCE_PCTS,
@@ -28,6 +29,7 @@ import {
   ESI_EMPLOYER_RATE,
   PF_RATE,
   PF_CONTRIBUTION_CAP,
+  TRAINEE_DESIGNATION_NAME,
 } from "@/lib/hr-salary-engine";
 
 describe("deriveBreakdown", () => {
@@ -57,6 +59,85 @@ describe("deriveBreakdown", () => {
     expect(b.medical).toBe(3500);
     expect(b.special).toBe(4000);
     expect(b.gross).toBe(25000);
+  });
+});
+
+describe("isTraineeDesignation", () => {
+  it("matches 'Trainee' case-insensitively and trimmed", () => {
+    expect(isTraineeDesignation("Trainee")).toBe(true);
+    expect(isTraineeDesignation("trainee")).toBe(true);
+    expect(isTraineeDesignation("  TRAINEE  ")).toBe(true);
+  });
+  it("does not match other designations or empty values", () => {
+    expect(isTraineeDesignation("Executive")).toBe(false);
+    expect(isTraineeDesignation("Sr. Trainee")).toBe(false); // exact name only
+    expect(isTraineeDesignation(null)).toBe(false);
+    expect(isTraineeDesignation(undefined)).toBe(false);
+    expect(isTraineeDesignation("")).toBe(false);
+  });
+  it("exposes the canonical name constant", () => {
+    expect(TRAINEE_DESIGNATION_NAME).toBe("Trainee");
+  });
+});
+
+describe("calcLine — trainee override (basic only)", () => {
+  // Mirrors exactly the args computeSalaryRun passes for a trainee: allowance
+  // pcts 0, ESI/PF off, PT 0. The saved structure had basic 10000 and would
+  // normally carry allowances + ESI + PF + PT, all of which must be suppressed.
+  it("full attendance: gross = basic, no ESI/PF/PT, net = basic", () => {
+    const c = calcLine({
+      workingDaysBase: 30,
+      basic: 10000,
+      hraPct: 0,
+      conveyancePct: 0,
+      medicalPct: 0,
+      specialPct: 0,
+      esiApplicable: false,
+      pfApplicable: false,
+      professionalTax: 0,
+      daysPresent: 30,
+      daysHalfDay: 0,
+      daysAbsent: 0,
+      daysPaidLeave: 0,
+      carriedBalanceBefore: 0,
+    });
+    expect(c.gross).toBe(10000);
+    expect(c.hra).toBe(0);
+    expect(c.conveyance).toBe(0);
+    expect(c.medical).toBe(0);
+    expect(c.special).toBe(0);
+    expect(c.salaryBeforeEsi).toBe(10000);
+    expect(c.esiEmployee).toBe(0);
+    expect(c.esiEmployer).toBe(0);
+    expect(c.pfEmployee).toBe(0);
+    expect(c.pfEmployer).toBe(0);
+    expect(c.professionalTax).toBe(0);
+    expect(c.netSalary).toBe(10000);
+  });
+
+  it("prorates basic for LOP exactly as a normal line would", () => {
+    // 5 unpaid absent days out of 30. gross = basic = 10000,
+    // dailyBasis = 10000/30, salaryBeforeEsi = 10000 − (10000/30)*5.
+    const c = calcLine({
+      workingDaysBase: 30,
+      basic: 10000,
+      hraPct: 0,
+      conveyancePct: 0,
+      medicalPct: 0,
+      specialPct: 0,
+      esiApplicable: false,
+      pfApplicable: false,
+      professionalTax: 0,
+      daysPresent: 25,
+      daysHalfDay: 0,
+      daysAbsent: 5,
+      daysPaidLeave: 0,
+      carriedBalanceBefore: 0,
+    });
+    expect(c.gross).toBe(10000);
+    expect(c.totalLeaveForLop).toBe(5);
+    expect(c.salaryBeforeEsi).toBeCloseTo(8333.35, 2);
+    expect(c.netSalary).toBe(8333); // round(8333.35 − 0 − 0 − 0)
   });
 });
 
