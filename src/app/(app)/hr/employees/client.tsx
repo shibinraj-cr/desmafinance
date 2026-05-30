@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useTransition, useRef } from "react";
+import { createPortal } from "react-dom";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
 import { Section } from "@/components/Cards";
@@ -197,8 +198,13 @@ export function NewEmployeeButton({ shifts }: { shifts: ShiftLite[] }) {
       >
         + Add employee
       </button>
-      {open && (
-        <div className="fixed inset-0 z-[1000] bg-black/40 flex items-center justify-center p-md" onClick={() => setOpen(false)}>
+      {open &&
+        createPortal(
+          // Rendered into document.body so the fixed overlay anchors to the
+          // viewport. The trigger lives inside TopBar, whose `backdrop-blur`
+          // would otherwise make this fixed element a child of the ~64px header
+          // (mispositioned + the required top fields unreachable).
+          <div className="fixed inset-0 z-[1000] bg-black/40 flex items-center justify-center p-md" onClick={() => setOpen(false)}>
           <div
             className="bg-surface rounded-xl shadow-2xl max-w-2xl w-full p-lg max-h-[90vh] overflow-y-auto"
             onClick={(e) => e.stopPropagation()}
@@ -320,14 +326,16 @@ export function NewEmployeeButton({ shifts }: { shifts: ShiftLite[] }) {
               <button
                 onClick={save}
                 disabled={pending || !draft.empCode || !draft.name}
-                className="px-md py-sm rounded bg-primary text-on-primary font-bold disabled:opacity-50"
+                title={!draft.empCode || !draft.name ? "Employee Code and Name are required" : undefined}
+                className="px-md py-sm rounded bg-primary text-on-primary font-bold disabled:opacity-50 disabled:cursor-not-allowed"
               >
                 Save
               </button>
             </div>
           </div>
-        </div>
-      )}
+        </div>,
+          document.body,
+        )}
     </>
   );
 }
