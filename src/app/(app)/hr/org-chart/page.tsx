@@ -116,6 +116,12 @@ export default async function OrgChartPage() {
   });
   const root = sortedByLevel[0] ?? null;
 
+  // Hide any department headed by the MD themselves (e.g. a "Management" dept) —
+  // it would draw a redundant "Reports directly to MD" box, and the MD is the root.
+  const chartDepartments = root
+    ? departments.filter((d) => d.headEmployeeId !== root.id)
+    : departments;
+
   const headIds = new Set(
     departments
       .map((d) => d.headEmployeeId)
@@ -180,9 +186,9 @@ export default async function OrgChartPage() {
                       sub="No MD / CEO assigned"
                     />
                   )}
-                  {departments.length > 0 && (
+                  {chartDepartments.length > 0 && (
                     <ul>
-                      {departments.map((d) => {
+                      {chartDepartments.map((d) => {
                         const isHeadRoot = d.headEmployeeId === root?.id;
                         const head = isHeadRoot ? null : d.headEmployee ?? null;
                         const ics = icsByDept[d.id] ?? [];
