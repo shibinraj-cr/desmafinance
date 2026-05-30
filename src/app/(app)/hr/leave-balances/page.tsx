@@ -2,6 +2,7 @@ import { redirect } from "next/navigation";
 import { prisma } from "@/lib/prisma";
 import { getCurrentUserAndPermissions } from "@/lib/permissions";
 import { isHrUser } from "@/lib/hr-rbac";
+import { recomputeAllLeaveBalances } from "@/lib/hr-leave-balance";
 import { TopBar } from "@/components/TopBar";
 import { Section } from "@/components/Cards";
 
@@ -23,6 +24,10 @@ export default async function LeaveBalancesPage() {
     );
   }
   const year = new Date().getUTCFullYear();
+  // Recompute before reading so the table always reflects current per-employee
+  // eligibility and the latest reviewed/decided leave, without waiting on the
+  // monthly accrual job.
+  await recomputeAllLeaveBalances(year);
   const rows = await prisma.hrLeaveBalance.findMany({
     where: { year },
     include: { employee: true },

@@ -3,6 +3,7 @@ import { z } from "zod";
 import { prisma } from "@/lib/prisma";
 import { getCurrentUserAndPermissions } from "@/lib/permissions";
 import { canApproveHr } from "@/lib/hr-rbac";
+import { recomputeLeaveBalance } from "@/lib/hr-leave-balance";
 
 const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
 
@@ -58,6 +59,14 @@ export async function PUT(req: Request, { params }: { params: { employeeId: stri
       notes: data.notes ?? null,
     },
   });
+  // Eligibility drives accrual — recompute the displayed (current-year)
+  // balance immediately so the change shows up without waiting on the
+  // monthly accrual job.
+  const balance = await recomputeLeaveBalance(
+    params.employeeId,
+    new Date().getUTCFullYear(),
+  );
+
   await prisma.hrAuditLog.create({
     data: {
       actorUserId: userId ?? null,
@@ -67,5 +76,5 @@ export async function PUT(req: Request, { params }: { params: { employeeId: stri
       metadata: { employeeId: params.employeeId, ...data },
     },
   });
-  return NextResponse.json({ eligibility: result });
+  return NextResponse.json({ eligibility: result, balance });
 }

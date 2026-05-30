@@ -1,11 +1,12 @@
 /**
  * Leave-accrual tests (src/lib/hr-leave-accrual.ts).
  *
- * runMonthlyAccrual credits each eligible employee their monthly allocation
- * inside a transaction, and is meant to be idempotent (a duplicate ledger row
- * is blocked by a unique constraint → that employee is "skipped"). We mock
- * Prisma and assert the skip rules, the credit path (balance create vs bump),
- * and the idempotency handling.
+ * runMonthlyAccrual credits each eligible employee for the period inside a
+ * transaction, and is meant to be idempotent (a duplicate ledger row is
+ * blocked by a unique constraint → that employee is "skipped"). The actual
+ * balance figures are owned by the canonical `recomputeLeaveBalance`
+ * (tested in hr-leave-balance.test.ts) — here we mock it and assert the
+ * accrual engine writes the ledger row and delegates the balance recompute.
  */
 import { describe, it, expect, vi, beforeEach } from "vitest";
 
@@ -17,20 +18,21 @@ vi.mock("@/lib/prisma", () => ({
   },
 }));
 
+vi.mock("@/lib/hr-leave-balance", () => ({
+  recomputeLeaveBalance: vi.fn(),
+}));
+
 import { prisma } from "@/lib/prisma";
+import { recomputeLeaveBalance } from "@/lib/hr-leave-balance";
 import { runMonthlyAccrual, manualAdjustment } from "@/lib/hr-leave-accrual";
 
 const findMany = prisma.hrLeaveEligibility.findMany as unknown as ReturnType<typeof vi.fn>;
 const auditCreate = prisma.hrAuditLog.create as unknown as ReturnType<typeof vi.fn>;
 const $transaction = prisma.$transaction as unknown as ReturnType<typeof vi.fn>;
+const recompute = recomputeLeaveBalance as unknown as ReturnType<typeof vi.fn>;
 
 let txClient: {
   hrLeaveAccrual: { create: ReturnType<typeof vi.fn> };
-  hrLeaveBalance: {
-    findUnique: ReturnType<typeof vi.fn>;
-    update: ReturnType<typeof vi.fn>;
-    create: ReturnType<typeof vi.fn>;
-  };
   hrAuditLog: { create: ReturnType<typeof vi.fn> };
 };
 
@@ -48,9 +50,9 @@ beforeEach(() => {
   findMany.mockReset();
   auditCreate.mockReset();
   $transaction.mockReset();
+  recompute.mockReset();
   txClient = {
     hrLeaveAccrual: { create: vi.fn() },
-    hrLeaveBalance: { findUnique: vi.fn(), update: vi.fn(), create: vi.fn() },
     hrAuditLog: { create: vi.fn() },
   };
   $transaction.mockImplementation(async (cb: (tx: typeof txClient) => unknown) => cb(txClient));
@@ -88,9 +90,8 @@ describe("runMonthlyAccrual — skip rules", () => {
 });
 
 describe("runMonthlyAccrual — credit path", () => {
-  it("bumps an existing year balance and writes the ledger row in one transaction", async () => {
+  it("writes the ledger row and recomputes the balance in one transaction", async () => {
     findMany.mockResolvedValueOnce([eligibility()]);
-    txClient.hrLeaveBalance.findUnique.mockResolvedValueOnce({ id: "bal1" });
 
     const res = await runMonthlyAccrual("2026-03");
 
@@ -105,29 +106,10 @@ describe("runMonthlyAccrual — credit path", () => {
         data: expect.objectContaining({ employeeId: "e1", periodKey: "2026-03", delta: 1.5, source: "auto" }),
       }),
     );
-    expect(txClient.hrLeaveBalance.update).toHaveBeenCalledWith(
-      expect.objectContaining({
-        where: { id: "bal1" },
-        data: { accrued: { increment: 1.5 }, balance: { increment: 1.5 } },
-      }),
-    );
-    expect(txClient.hrLeaveBalance.create).not.toHaveBeenCalled();
+    // Balance is delegated to the canonical recompute, scoped to the tx.
+    expect(recompute).toHaveBeenCalledWith("e1", 2026, { db: txClient });
     // A run-level audit row is written at the end.
     expect(auditCreate).toHaveBeenCalledTimes(1);
-  });
-
-  it("creates a fresh year balance when none exists", async () => {
-    findMany.mockResolvedValueOnce([eligibility()]);
-    txClient.hrLeaveBalance.findUnique.mockResolvedValueOnce(null);
-
-    await runMonthlyAccrual("2026-03");
-
-    expect(txClient.hrLeaveBalance.create).toHaveBeenCalledWith(
-      expect.objectContaining({
-        data: expect.objectContaining({ employeeId: "e1", year: 2026, accrued: 1.5, balance: 1.5, opening: 0, used: 0 }),
-      }),
-    );
-    expect(txClient.hrLeaveBalance.update).not.toHaveBeenCalled();
   });
 });
 
@@ -155,9 +137,7 @@ describe("manualAdjustment", () => {
     ).rejects.toThrow("delta cannot be zero");
   });
 
-  it("writes a manual-source ledger row and creates a balance when none exists", async () => {
-    txClient.hrLeaveBalance.findUnique.mockResolvedValueOnce(null);
-
+  it("writes a manual-source ledger row and recomputes the balance", async () => {
     await manualAdjustment({ employeeId: "e1", delta: 2, reason: "comp off", actorUserId: "u1" });
 
     expect($transaction).toHaveBeenCalledTimes(1);
@@ -166,9 +146,8 @@ describe("manualAdjustment", () => {
         data: expect.objectContaining({ employeeId: "e1", delta: 2, source: "manual", reason: "comp off" }),
       }),
     );
-    expect(txClient.hrLeaveBalance.create).toHaveBeenCalledWith(
-      expect.objectContaining({ data: expect.objectContaining({ balance: 2, accrued: 2 }) }),
-    );
+    // The manual delta is folded into `accrued` by the recompute.
+    expect(recompute).toHaveBeenCalledWith("e1", expect.any(Number), { db: txClient });
     expect(txClient.hrAuditLog.create).toHaveBeenCalledTimes(1);
   });
 });

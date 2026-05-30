@@ -4,6 +4,7 @@ import { getCurrentUserAndPermissions } from "@/lib/permissions";
 import { canApproveHr } from "@/lib/hr-rbac";
 import { parseAttendanceWorkbook, type ParsedDay } from "@/lib/hr-attendance-parser";
 import { cycleMonthForDate, cycleWindowForMonth } from "@/lib/hr-data";
+import { recomputeAllLeaveBalances } from "@/lib/hr-leave-balance";
 
 /**
  * Upload a biometric attendance .xls / .xlsx (any format supported by
@@ -225,10 +226,18 @@ export async function POST(req: Request) {
     },
   });
 
-  // Refresh leave balance accrual for every month covered.
+  // Refresh the canonical leave balances for every calendar year the import
+  // touches (a cycle straddles the year boundary, so cover both ends). This
+  // folds in per-employee eligibility accrual *and* the freshly imported
+  // reviewed/decided leave (LV/HD) in one pass.
+  const yearsTouched = new Set<number>();
   for (const m of monthSummaries) {
-    const [yStr, mStr] = m.monthKey.split("-");
-    await accrueMonth(+yStr, +mStr);
+    const { start, end } = cycleWindowForMonth(m.monthKey);
+    yearsTouched.add(start.getUTCFullYear());
+    yearsTouched.add(end.getUTCFullYear());
+  }
+  for (const y of yearsTouched) {
+    await recomputeAllLeaveBalances(y);
   }
 
   return NextResponse.json({
@@ -248,43 +257,3 @@ function nameTokens(s: string): string[] {
     .filter(Boolean);
 }
 
-async function accrueMonth(year: number, month: number) {
-  const policy =
-    (await prisma.hrLeavePolicy.findFirst({ where: { isDefault: true } })) ??
-    (await prisma.hrLeavePolicy.create({
-      data: {
-        name: "Default policy",
-        monthlyAccrual: 1,
-        annualEntitlement: 12,
-        carryForward: true,
-        isDefault: true,
-      },
-    }));
-
-  const employees = await prisma.employee.findMany({
-    where: { active: true },
-    select: { id: true },
-  });
-
-  for (const e of employees) {
-    const existing = await prisma.hrLeaveBalance.findUnique({
-      where: { employeeId_year: { employeeId: e.id, year } },
-    });
-    const accrued = Number(policy.monthlyAccrual) * month;
-    const opening = existing?.opening ?? 0;
-    const used = existing?.used ?? 0;
-    const balance = Number(opening) + accrued - Number(used);
-    await prisma.hrLeaveBalance.upsert({
-      where: { employeeId_year: { employeeId: e.id, year } },
-      update: { accrued, balance },
-      create: {
-        employeeId: e.id,
-        year,
-        opening: 0,
-        accrued,
-        used: 0,
-        balance: accrued,
-      },
-    });
-  }
-}
