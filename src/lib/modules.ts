@@ -61,6 +61,7 @@ export const MODULES: AppModule[] = [
       { href: "/finance/cashflow", label: "Cash Flow", icon: "account_balance", group: "MONEY OUT" },
       { href: "/finance/daily-tracker", label: "Daily Tracker", icon: "edit_calendar", group: "OPERATIONS" },
       { href: "/finance/parties", label: "Parties", icon: "groups", group: "OPERATIONS" },
+      { href: "/finance/incentive-calculator", label: "Incentive Calculator", icon: "redeem", group: "OPERATIONS" },
       { href: "/finance/approvals", label: "Approvals", icon: "rule", group: "REVIEW" },
       { href: "/finance/ai-insights", label: "AI Insights", icon: "psychology", group: "REVIEW" },
     ],
