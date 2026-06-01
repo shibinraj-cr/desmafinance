@@ -1693,3 +1693,61 @@ model PsychReport {
   @@index([employeeId])
   @@index([generatedAt])
 }
+
+/// BDE incentive calculator — one editable plan per period (e.g. "June 2026").
+/// Pure planning tool: Finance edits the rules + roster and the payout
+/// recomputes live on the client; this model just persists that working state
+/// so it survives reloads and is shared across the team.
+model IncentivePlan {
+  id              String         @id @default(cuid())
+  /// Human period label, e.g. "June 2026". One plan per period.
+  period          String         @unique
+  /// ₹ per enrolment below the boost threshold.
+  baseRate        Int            @default(1000)
+  /// Enrolment count at/above which every enrolment pays the boosted rate.
+  boostThreshold  Int            @default(16)
+  /// ₹ per enrolment once the boost threshold is reached.
+  boostRate       Int            @default(1500)
+  /// Flat ₹ bonus when a BDE hits their individual target.
+  individualBonus Int            @default(5000)
+  /// ₹ per lead closed within 48 hours.
+  fastBonus       Int            @default(250)
+  /// ₹ per self-sourced candidate reference closed.
+  refBonus        Int            @default(100)
+  /// Combined enrolments across all BDEs that unlock the team pool.
+  teamTarget      Int            @default(30)
+  /// ₹ pool released when the team target is met.
+  teamPool        Int            @default(15000)
+  /// Team-pool split: "equal" | "enrolments" | "achievers".
+  distMethod      String         @default("equal")
+  /// When true, a BDE earns ₹0 enrolment incentive until they clear their minimum.
+  requireMin      Boolean        @default(false)
+  /// User id of whoever last saved this plan (loose ref — no FK so the User
+  /// model needs no back-relation).
+  updatedById     String?
+  bdes            IncentiveBde[]
+  createdAt       DateTime       @default(now())
+  updatedAt       DateTime       @updatedAt
+}
+
+/// A single BDE row within an IncentivePlan.
+model IncentiveBde {
+  id        String        @id @default(cuid())
+  planId    String
+  plan      IncentivePlan @relation(fields: [planId], references: [id], onDelete: Cascade)
+  name      String
+  /// Minimum enrolments expected of this BDE.
+  minimum   Int           @default(8)
+  /// Individual target — hitting it pays individualBonus.
+  target    Int           @default(14)
+  /// Enrolments achieved this period.
+  enrol     Int           @default(0)
+  /// Leads closed within 48 hours.
+  fast48    Int           @default(0)
+  /// Self-sourced references closed.
+  selfRef   Int           @default(0)
+  /// Display order within the roster.
+  sortIndex Int           @default(0)
+
+  @@index([planId])
+}
