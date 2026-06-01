@@ -48,10 +48,16 @@ export function IncentiveCalculator({
   const computed = useMemo(() => computeIncentive(rules, bdes), [rules, bdes]);
   const animatedGrand = useCountUp(computed.grand);
 
-  // ---- debounced autosave -------------------------------------------------
+  // ---- explicit save (via the Save button) --------------------------------
+  // `dirty` = there are edits not yet persisted. The Save button is the
+  // primary, deliberate save; we also save before switching months and warn
+  // on tab close so nothing is silently lost.
+  const [dirty, setDirty] = useState(false);
+  const dirtyRef = useRef(dirty);
+  dirtyRef.current = dirty;
+
   const latest = useRef({ period, rules, bdes });
   latest.current = { period, rules, bdes };
-  const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const toastTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const doSave = useCallbackRef(async () => {
@@ -78,32 +84,24 @@ export function IncentiveCalculator({
       const data: { periods?: string[] } = await res.json();
       if (data.periods) setPeriods(data.periods);
       setSaveState("saved");
+      setDirty(false);
     } catch {
       setSaveState("error");
     }
   });
 
-  function scheduleSave() {
-    setSaveState("saving");
-    if (timer.current) clearTimeout(timer.current);
-    timer.current = setTimeout(() => doSave(), 700);
-  }
-
-  // flush a pending save immediately (used before switching period / on unmount)
-  const flush = useCallbackRef(async () => {
-    if (timer.current) {
-      clearTimeout(timer.current);
-      timer.current = null;
-      await doSave();
-    }
-  });
-
+  // Warn before leaving the tab with unsaved edits; best-effort save on unmount.
   useEffect(() => {
-    return () => {
-      if (timer.current) {
-        // best-effort flush on unmount
-        void doSave();
+    function onBeforeUnload(e: BeforeUnloadEvent) {
+      if (dirtyRef.current) {
+        e.preventDefault();
+        e.returnValue = "";
       }
+    }
+    window.addEventListener("beforeunload", onBeforeUnload);
+    return () => {
+      window.removeEventListener("beforeunload", onBeforeUnload);
+      if (dirtyRef.current) void doSave();
       if (toastTimer.current) clearTimeout(toastTimer.current);
     };
   }, [doSave]);
@@ -130,27 +128,28 @@ export function IncentiveCalculator({
   // ---- edit handlers ------------------------------------------------------
   function patchRules(patch: Partial<IncentiveRules>) {
     setRules((r) => ({ ...r, ...patch }));
-    scheduleSave();
+    setDirty(true);
   }
   function patchBde(i: number, patch: Partial<IncentiveBdeRow>) {
     setBdes((list) => list.map((b, idx) => (idx === i ? { ...b, ...patch } : b)));
-    scheduleSave();
+    setDirty(true);
   }
   function addBde() {
     setBdes((list) => [
       ...list,
       { name: "New BDE", minimum: 8, target: 14, enrol: 0, fast48: 0, selfRef: 0 },
     ]);
-    scheduleSave();
+    setDirty(true);
   }
   function removeBde(i: number) {
     setBdes((list) => list.filter((_, idx) => idx !== i));
-    scheduleSave();
+    setDirty(true);
   }
 
   // ---- period switching ---------------------------------------------------
   async function loadPeriod(p: string) {
-    await flush();
+    // Persist current edits before leaving this month so they aren't lost.
+    if (dirtyRef.current) await doSave();
     setSaveState("saving");
     try {
       const res = await fetch(`/api/finance/incentive-plan?period=${encodeURIComponent(p)}`);
@@ -166,6 +165,7 @@ export function IncentiveCalculator({
         setBdes(DEFAULT_BDES.map((b) => ({ ...b })));
         setSaveState("idle");
       }
+      setDirty(false);
       setPeriods((prev) => (prev.includes(p) ? prev : [p, ...prev]));
     } catch {
       setSaveState("error");
@@ -219,7 +219,7 @@ export function IncentiveCalculator({
         subtitle="L2 · BDE"
         action={
           <div className="flex items-center gap-base flex-wrap justify-end">
-            <SaveBadge state={saveState} />
+            <SaveButton dirty={dirty} state={saveState} onClick={() => doSave()} />
             {creating ? (
               <div className="flex items-center gap-xs">
                 <input
@@ -445,8 +445,8 @@ export function IncentiveCalculator({
 
         <footer className="pt-lg border-t border-outline-variant text-caption text-on-surface-variant text-center leading-relaxed">
           <span className="text-accent font-semibold">Desma International</span> · BDE Incentive
-          Calculator — all rules editable each month. Saved automatically · copy a summary or print
-          a clean payout report for finance.
+          Calculator — all rules editable each month. Click Save to persist · copy a summary or
+          print a clean payout report for finance.
         </footer>
       </div>
 
@@ -747,21 +747,51 @@ function ActionBtn({ icon, label, onClick }: { icon: string; label: string; onCl
   );
 }
 
-function SaveBadge({ state }: { state: SaveState }) {
-  const map: Record<SaveState, { text: string; cls: string; icon: string }> = {
-    idle: { text: "Not saved", cls: "text-on-surface-variant", icon: "cloud_off" },
-    saving: { text: "Saving…", cls: "text-on-surface-variant", icon: "cloud_sync" },
-    saved: { text: "Saved", cls: "text-green-700", icon: "cloud_done" },
-    error: { text: "Save failed", cls: "text-error", icon: "error" },
-  };
-  const s = map[state];
+function SaveButton({
+  dirty,
+  state,
+  onClick,
+}: {
+  dirty: boolean;
+  state: SaveState;
+  onClick: () => void;
+}) {
+  const saving = state === "saving";
+  // Needs saving when there are edits, the plan was never saved, or a prior
+  // save failed (retry). When clean & saved, the button is a passive "Saved".
+  const needsSave = dirty || state === "idle" || state === "error";
+  const enabled = !saving && needsSave;
+
+  const label = saving
+    ? "Saving…"
+    : dirty
+      ? "Save changes"
+      : state === "error"
+        ? "Retry save"
+        : state === "idle"
+          ? "Save"
+          : "Saved";
+  const icon = saving ? "cloud_sync" : !needsSave ? "cloud_done" : state === "error" ? "error" : "save";
+
+  const tone = saving
+    ? "bg-surface-container text-on-surface-variant cursor-wait"
+    : needsSave
+      ? "bg-primary text-on-primary hover:brightness-95 shadow-sm"
+      : "bg-surface-container-low text-on-surface-variant cursor-default";
+
   return (
-    <span className={"hidden md:inline-flex items-center gap-xs text-caption font-semibold " + s.cls}>
-      <span className="material-symbols-outlined" style={{ fontSize: 16 }}>
-        {s.icon}
+    <button
+      type="button"
+      onClick={onClick}
+      disabled={!enabled}
+      title={needsSave ? "Save this plan" : "All changes saved"}
+      className={"inline-flex items-center gap-xs h-9 px-md rounded-lg text-label-sm font-semibold transition " + tone}
+    >
+      <span className="material-symbols-outlined" style={{ fontSize: 18 }}>
+        {icon}
       </span>
-      {s.text}
-    </span>
+      <span>{label}</span>
+    </button>
   );
 }
 
