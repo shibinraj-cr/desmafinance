@@ -9,14 +9,21 @@ export const dynamic = "force-dynamic";
 
 const PAGE = "/finance/incentive-calculator";
 
+// Enrolment quantities may be fractional (e.g. .5 for some services); snap to
+// 2 dp to avoid float noise. Closes and money stay whole numbers.
+const qty = z
+  .coerce.number()
+  .min(0)
+  .max(1_000_000)
+  .transform((n) => Math.round(n * 100) / 100);
 const count = z.coerce.number().int().min(0).max(1_000_000);
 const money = z.coerce.number().int().min(0).max(100_000_000);
 
 const BdeInput = z.object({
   name: z.string().trim().min(1).max(80),
-  minimum: count,
-  target: count,
-  enrol: count,
+  minimum: qty,
+  target: qty,
+  enrol: qty,
   fast48: count,
   selfRef: count,
 });
@@ -24,12 +31,12 @@ const BdeInput = z.object({
 const PlanInput = z.object({
   period: z.string().trim().min(1).max(40),
   baseRate: money,
-  boostThreshold: count,
+  boostThreshold: qty,
   boostRate: money,
   individualBonus: money,
   fastBonus: money,
   refBonus: money,
-  teamTarget: count,
+  teamTarget: qty,
   teamPool: money,
   distMethod: z.enum(["equal", "enrolments", "achievers"]),
   requireMin: z.boolean(),

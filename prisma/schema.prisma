@@ -1690,7 +1690,8 @@ model IncentivePlan {
   /// ₹ per enrolment below the boost threshold.
   baseRate        Int            @default(1000)
   /// Enrolment count at/above which every enrolment pays the boosted rate.
-  boostThreshold  Int            @default(16)
+  /// Float — enrolments can be fractional (e.g. .5 for some services).
+  boostThreshold  Float          @default(16)
   /// ₹ per enrolment once the boost threshold is reached.
   boostRate       Int            @default(1500)
   /// Flat ₹ bonus when a BDE hits their individual target.
@@ -1700,7 +1701,7 @@ model IncentivePlan {
   /// ₹ per self-sourced candidate reference closed.
   refBonus        Int            @default(100)
   /// Combined enrolments across all BDEs that unlock the team pool.
-  teamTarget      Int            @default(30)
+  teamTarget      Float          @default(30)
   /// ₹ pool released when the team target is met.
   teamPool        Int            @default(15000)
   /// Team-pool split: "equal" | "enrolments" | "achievers".
@@ -1721,12 +1722,12 @@ model IncentiveBde {
   planId    String
   plan      IncentivePlan @relation(fields: [planId], references: [id], onDelete: Cascade)
   name      String
-  /// Minimum enrolments expected of this BDE.
-  minimum   Int           @default(8)
+  /// Minimum enrolments expected of this BDE. Float — supports .5 enrolments.
+  minimum   Float         @default(8)
   /// Individual target — hitting it pays individualBonus.
-  target    Int           @default(14)
-  /// Enrolments achieved this period.
-  enrol     Int           @default(0)
+  target    Float         @default(14)
+  /// Enrolments achieved this period (may be fractional, e.g. 12.5).
+  enrol     Float         @default(0)
   /// Leads closed within 48 hours.
   fast48    Int           @default(0)
   /// Self-sourced references closed.

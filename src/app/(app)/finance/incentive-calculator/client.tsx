@@ -14,6 +14,9 @@ import {
 } from "@/lib/incentive";
 
 const rupee = (n: number) => "₹" + Math.round(n || 0).toLocaleString("en-IN");
+// Enrolment counts can be fractional (e.g. 12.5) — show the decimal only when
+// there is one, and strip float noise.
+const qtyFmt = (n: number) => String(Math.round((n || 0) * 100) / 100);
 
 type SaveState = "idle" | "saving" | "saved" | "error";
 
@@ -190,7 +193,7 @@ export function IncentiveCalculator({
     const c = rules;
     let s = `BDE INCENTIVE — ${period}\nDesma International\n\n`;
     computed.rows.forEach((r) => {
-      s += `${r.name}: ${r.enrol} enrolments\n`;
+      s += `${r.name}: ${qtyFmt(r.enrol)} enrolments\n`;
       s += `  Enrolment incentive: ${rupee(r.enrolPay)} (@ ${rupee(r.rate)}${r.boost ? " boosted" : ""})\n`;
       s += `  Target bonus: ${rupee(r.tgtPay)}${r.tgtMet ? "" : " (not met)"}\n`;
       s += `  ≤48h closes (${r.fast48 || 0}): ${rupee(r.fastPay)}\n`;
@@ -198,7 +201,7 @@ export function IncentiveCalculator({
       s += `  Team share: ${rupee(r.teamShare)}\n`;
       s += `  TOTAL: ${rupee(r.total)}\n\n`;
     });
-    s += `Team target: ${computed.totalEnrol}/${c.teamTarget} — ${computed.teamHit ? "MET" : "not met"}\n`;
+    s += `Team target: ${qtyFmt(computed.totalEnrol)}/${qtyFmt(c.teamTarget)} — ${computed.teamHit ? "MET" : "not met"}\n`;
     s += `GRAND TOTAL: ${rupee(computed.grand)}\n`;
     navigator.clipboard?.writeText(s).then(
       () => showToast("Summary copied to clipboard"),
@@ -295,7 +298,7 @@ export function IncentiveCalculator({
             <p className="text-body-md text-on-surface-variant mt-sm">
               <b className="text-on-surface">{computed.rows.length}</b> BDE
               {computed.rows.length !== 1 ? "s" : ""} ·{" "}
-              <b className="text-on-surface">{computed.totalEnrol}</b> enrolment
+              <b className="text-on-surface">{qtyFmt(computed.totalEnrol)}</b> enrolment
               {computed.totalEnrol !== 1 ? "s" : ""} this period
             </p>
           </div>
@@ -314,7 +317,7 @@ export function IncentiveCalculator({
                 </span>
               ) : (
                 <span className="text-[11px] font-bold px-sm py-[3px] rounded-full border border-outline-variant text-on-surface-variant">
-                  {Math.max(0, rules.teamTarget - computed.totalEnrol)} to go
+                  {qtyFmt(Math.max(0, rules.teamTarget - computed.totalEnrol))} to go
                 </span>
               )}
             </div>
@@ -326,8 +329,8 @@ export function IncentiveCalculator({
             </div>
             <div className="flex items-baseline justify-between mt-sm">
               <span className="text-body-md text-on-surface-variant">
-                <b className="text-on-surface text-data-mono">{computed.totalEnrol}</b> of{" "}
-                {rules.teamTarget} enrolments
+                <b className="text-on-surface text-data-mono">{qtyFmt(computed.totalEnrol)}</b> of{" "}
+                {qtyFmt(rules.teamTarget)} enrolments
               </span>
               <span className="text-accent font-semibold text-body-md">
                 {computed.teamHit && rules.teamPool > 0
@@ -357,7 +360,7 @@ export function IncentiveCalculator({
               <NumInput value={rules.baseRate} onChange={(v) => patchRules({ baseRate: v })} hasPrefix />
             </RuleField>
             <RuleField label="Boost threshold" hint="Reach this many → higher rate on every enrolment.">
-              <NumInput value={rules.boostThreshold} onChange={(v) => patchRules({ boostThreshold: v })} />
+              <NumInput value={rules.boostThreshold} onChange={(v) => patchRules({ boostThreshold: v })} decimal />
             </RuleField>
             <RuleField label="Boosted rate / enrolment" prefix="₹">
               <NumInput value={rules.boostRate} onChange={(v) => patchRules({ boostRate: v })} hasPrefix />
@@ -372,7 +375,7 @@ export function IncentiveCalculator({
               <NumInput value={rules.refBonus} onChange={(v) => patchRules({ refBonus: v })} hasPrefix />
             </RuleField>
             <RuleField label="Team target (enrolments)" hint="Combined enrolments across all BDEs.">
-              <NumInput value={rules.teamTarget} onChange={(v) => patchRules({ teamTarget: v })} />
+              <NumInput value={rules.teamTarget} onChange={(v) => patchRules({ teamTarget: v })} decimal />
             </RuleField>
             <RuleField label="Team pool (if met)" prefix="₹">
               <NumInput value={rules.teamPool} onChange={(v) => patchRules({ teamPool: v })} hasPrefix />
@@ -505,9 +508,9 @@ function BdeCard({
       </div>
 
       <div className="grid grid-cols-3 gap-sm mb-sm">
-        <Mini label="Minimum" value={row.minimum} onChange={(v) => onPatch({ minimum: v })} />
-        <Mini label="Target" value={row.target} onChange={(v) => onPatch({ target: v })} />
-        <Mini label="Achieved" value={row.enrol} onChange={(v) => onPatch({ enrol: v })} accent big />
+        <Mini label="Minimum" value={row.minimum} onChange={(v) => onPatch({ minimum: v })} decimal />
+        <Mini label="Target" value={row.target} onChange={(v) => onPatch({ target: v })} decimal />
+        <Mini label="Achieved" value={row.enrol} onChange={(v) => onPatch({ enrol: v })} accent big decimal />
       </div>
       <div className="grid grid-cols-2 gap-sm mb-md">
         <Mini label="Closed ≤48h" value={row.fast48} onChange={(v) => onPatch({ fast48: v })} gold />
@@ -533,11 +536,11 @@ function BdeCard({
       {/* badges */}
       <div className="flex flex-wrap gap-xs mb-md">
         <Badge tone={row.minMet ? "met" : "off"}>
-          {row.minMet ? "✓ Min met" : `Below min · ${row.minimum}`}
+          {row.minMet ? "✓ Min met" : `Below min · ${qtyFmt(row.minimum)}`}
         </Badge>
         {row.boost && <Badge tone="boost">★ Boost rate</Badge>}
         <Badge tone={row.tgtMet ? "met" : "off"}>
-          {row.tgtMet ? "✓ Target met" : `Target ${row.target}`}
+          {row.tgtMet ? "✓ Target met" : `Target ${qtyFmt(row.target)}`}
         </Badge>
       </div>
 
@@ -614,6 +617,7 @@ function Mini({
   accent,
   gold,
   big,
+  decimal,
 }: {
   label: string;
   value: number;
@@ -621,6 +625,8 @@ function Mini({
   accent?: boolean;
   gold?: boolean;
   big?: boolean;
+  /** Allow fractional values (e.g. .5 enrolments). */
+  decimal?: boolean;
 }) {
   return (
     <label className="block">
@@ -636,8 +642,9 @@ function Mini({
         type="number"
         value={value}
         min={0}
+        step={decimal ? 0.5 : 1}
         onFocus={(e) => e.target.select()}
-        onChange={(e) => onChange(toInt(e.target.value))}
+        onChange={(e) => onChange(decimal ? toNum(e.target.value) : toInt(e.target.value))}
         className={
           "w-full text-center text-data-mono rounded-lg border border-outline-variant bg-surface-container-lowest outline-none focus:border-primary focus:ring-2 focus:ring-primary/20 py-sm " +
           (big ? "font-bold text-[17px]" : "")
@@ -680,18 +687,22 @@ function NumInput({
   value,
   onChange,
   hasPrefix,
+  decimal,
 }: {
   value: number;
   onChange: (v: number) => void;
   hasPrefix?: boolean;
+  /** Allow fractional values (e.g. .5 enrolments). */
+  decimal?: boolean;
 }) {
   return (
     <input
       type="number"
       min={0}
+      step={decimal ? 0.5 : 1}
       value={value}
       onFocus={(e) => e.target.select()}
-      onChange={(e) => onChange(toInt(e.target.value))}
+      onChange={(e) => onChange(decimal ? toNum(e.target.value) : toInt(e.target.value))}
       className={
         "w-full h-11 rounded-lg border border-outline-variant bg-surface-container-lowest text-data-mono outline-none focus:border-primary focus:ring-2 focus:ring-primary/20 " +
         (hasPrefix ? "pl-[26px] pr-md" : "px-md")
@@ -760,6 +771,13 @@ function toInt(raw: string): number {
   if (raw === "") return 0;
   const n = Math.trunc(Number(raw));
   return Number.isFinite(n) && n >= 0 ? n : 0;
+}
+
+// Like toInt but keeps decimals (snapped to 2 dp) — for fractional enrolments.
+function toNum(raw: string): number {
+  if (raw === "") return 0;
+  const n = Number(raw);
+  return Number.isFinite(n) && n >= 0 ? Math.round(n * 100) / 100 : 0;
 }
 
 function extractRules(p: IncentivePlanData): IncentiveRules {
