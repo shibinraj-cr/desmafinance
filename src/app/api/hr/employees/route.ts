@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { z } from "zod";
+import { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
 import { getCurrentUserAndPermissions } from "@/lib/permissions";
 import { canApproveHr, isHrUser } from "@/lib/hr-rbac";
@@ -51,34 +52,47 @@ export async function POST(req: Request) {
     return NextResponse.json({ error: "invalid", issues: parsed.error.issues }, { status: 400 });
   }
   const d = parsed.data;
-  const employee = await prisma.employee.create({
-    data: {
-      empCode: d.empCode,
-      name: d.name,
-      dob: parseHumanDate(d.dob),
-      designation: d.designation || null,
-      department: d.department || null,
-      email: d.email || null,
-      officialEmail: d.officialEmail || null,
-      phone: d.phone || null,
-      emergencyContact: d.emergencyContact || null,
-      officeNumber: d.officeNumber || null,
-      address: d.address || null,
-      highestEducation: d.highestEducation || null,
-      maritalStatus: d.maritalStatus || null,
-      experienceNotes: d.experienceNotes || null,
-      yearsOfExperience: d.yearsOfExperience || null,
-      aadhar: d.aadhar || null,
-      pan: d.pan || null,
-      accountNumber: d.accountNumber || null,
-      ifsc: d.ifsc || null,
-      bankName: d.bankName || null,
-      branch: d.branch || null,
-      joinDate: parseHumanDate(d.joinDate),
-      shiftId: d.shiftId || null,
-      halfHourConcession: d.halfHourConcession,
-      active: d.active,
-    },
-  });
-  return NextResponse.json({ employee });
+  try {
+    const employee = await prisma.employee.create({
+      data: {
+        empCode: d.empCode,
+        name: d.name,
+        dob: parseHumanDate(d.dob),
+        designation: d.designation || null,
+        department: d.department || null,
+        email: d.email || null,
+        officialEmail: d.officialEmail || null,
+        phone: d.phone || null,
+        emergencyContact: d.emergencyContact || null,
+        officeNumber: d.officeNumber || null,
+        address: d.address || null,
+        highestEducation: d.highestEducation || null,
+        maritalStatus: d.maritalStatus || null,
+        experienceNotes: d.experienceNotes || null,
+        yearsOfExperience: d.yearsOfExperience || null,
+        aadhar: d.aadhar || null,
+        pan: d.pan || null,
+        accountNumber: d.accountNumber || null,
+        ifsc: d.ifsc || null,
+        bankName: d.bankName || null,
+        branch: d.branch || null,
+        joinDate: parseHumanDate(d.joinDate),
+        shiftId: d.shiftId || null,
+        halfHourConcession: d.halfHourConcession,
+        active: d.active,
+      },
+    });
+    return NextResponse.json({ employee });
+  } catch (e) {
+    // P2002 = unique constraint violation. empCode is the only user-facing
+    // unique column on create, so surface a clear, actionable message instead
+    // of letting it bubble up as an opaque 500 ("create failed" in the UI).
+    if (e instanceof Prisma.PrismaClientKnownRequestError && e.code === "P2002") {
+      return NextResponse.json(
+        { error: `Employee code "${d.empCode}" is already in use` },
+        { status: 409 },
+      );
+    }
+    throw e;
+  }
 }
