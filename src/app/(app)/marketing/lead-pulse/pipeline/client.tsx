@@ -77,6 +77,7 @@ export function PipelineClient(props: {
   const [busy, startTransition] = useTransition();
   const [error, setError] = useState<string | null>(null);
   const [statusModal, setStatusModal] = useState<{ row: PipelineRow; to: "closed_won" | "lost" } | null>(null);
+  const [editModal, setEditModal] = useState<PipelineRow | null>(null);
 
   // Inline-create form state
   const [draft, setDraft] = useState({
@@ -169,6 +170,36 @@ export function PipelineClient(props: {
     });
   }
 
+  async function saveEdit(
+    row: PipelineRow,
+    patch: {
+      candidateName: string;
+      candidatePhone: string | null;
+      serviceId: string;
+      sourceId: string;
+      expectedCloseDate: string;
+      expectedFirstInstallment: number;
+      notes: string | null;
+    },
+  ) {
+    setError(null);
+    startTransition(async () => {
+      const res = await fetch(`/api/marketing/lead-pulse/pipeline/${row.id}`, {
+        method: "PATCH",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(patch),
+      });
+      if (!res.ok) {
+        const d = await res.json().catch(() => ({}));
+        const code = (d as { error?: string }).error ?? "Could not save changes.";
+        setError(code === "row_not_open" ? "This deal is no longer open — re-open it before editing." : code);
+        return;
+      }
+      setEditModal(null);
+      refresh();
+    });
+  }
+
   function renderRow(r: PipelineRow) {
     const isOwn = r.userId === props.currentUserId;
     const canTouch = isOwn || props.canSupervise;
@@ -196,6 +227,15 @@ export function PipelineClient(props: {
         <td className="px-[12px] py-[8px]">
           {canTouch && r.status === "open" && (
             <div className="flex gap-[6px] flex-wrap">
+              <button
+                onClick={() => setEditModal(r)}
+                disabled={busy}
+                className="text-[12px] px-[8px] py-[3px] rounded-[6px] border"
+                style={{ borderColor: "var(--lp-outline-variant)", color: "var(--lp-on-surface)" }}
+                title="Edit candidate details"
+              >
+                Edit
+              </button>
               <button
                 onClick={() => setStatusModal({ row: r, to: "closed_won" })}
                 disabled={busy}
@@ -449,6 +489,17 @@ export function PipelineClient(props: {
           busy={busy}
         />
       )}
+
+      {editModal && (
+        <EditModal
+          row={editModal}
+          services={props.services}
+          sources={props.sources}
+          onCancel={() => setEditModal(null)}
+          onConfirm={(patch) => saveEdit(editModal, patch)}
+          busy={busy}
+        />
+      )}
     </div>
   );
 }
@@ -606,6 +657,168 @@ function StatusModal({
             style={{ backgroundColor: "var(--lp-primary)", color: "var(--lp-on-primary)" }}
           >
             {busy ? "Saving…" : to === "closed_won" ? "Mark Won" : "Mark Lost"}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function EditModal({
+  row,
+  services,
+  sources,
+  onCancel,
+  onConfirm,
+  busy,
+}: {
+  row: PipelineRow;
+  services: ServiceOpt[];
+  sources: SourceOpt[];
+  onCancel: () => void;
+  onConfirm: (patch: {
+    candidateName: string;
+    candidatePhone: string | null;
+    serviceId: string;
+    sourceId: string;
+    expectedCloseDate: string;
+    expectedFirstInstallment: number;
+    notes: string | null;
+  }) => void;
+  busy: boolean;
+}) {
+  const [candidateName, setCandidateName] = useState(row.candidateName);
+  const [candidatePhone, setCandidatePhone] = useState(row.candidatePhone ?? "");
+  const [serviceId, setServiceId] = useState(row.serviceId);
+  const [sourceId, setSourceId] = useState(row.sourceId);
+  const [expectedCloseDate, setExpectedCloseDate] = useState(row.expectedCloseDate);
+  const [expectedFirstInstallment, setExpectedFirstInstallment] = useState(row.expectedFirstInstallment);
+  const [notes, setNotes] = useState(row.notes ?? "");
+
+  // Keep the row's current service/source selectable even if it has since been
+  // deactivated (and so dropped from the options), so editing other fields
+  // never silently reassigns it.
+  const serviceOpts = useMemo(
+    () => (services.some((s) => s.id === row.serviceId) ? services : [{ id: row.serviceId, name: `${row.serviceName} (inactive)` }, ...services]),
+    [services, row.serviceId, row.serviceName],
+  );
+  const sourceOpts = useMemo(
+    () => (sources.some((s) => s.id === row.sourceId) ? sources : [{ id: row.sourceId, code: "", label: `${row.sourceLabel} (inactive)` }, ...sources]),
+    [sources, row.sourceId, row.sourceLabel],
+  );
+
+  const canSave = candidateName.trim().length > 0 && !!serviceId && !!sourceId && !busy;
+
+  function submit() {
+    if (!canSave) return;
+    onConfirm({
+      candidateName: candidateName.trim(),
+      candidatePhone: candidatePhone.trim() || null,
+      serviceId,
+      sourceId,
+      expectedCloseDate,
+      expectedFirstInstallment: Number(expectedFirstInstallment) || 0,
+      notes: notes.trim() || null,
+    });
+  }
+
+  return (
+    <div
+      className="fixed inset-0 flex items-center justify-center px-[16px]"
+      style={{ backgroundColor: "rgba(0, 0, 0, 0.55)", zIndex: 50 }}
+      onClick={onCancel}
+    >
+      <div
+        onClick={(e) => e.stopPropagation()}
+        className="w-full max-w-lg rounded-[12px] p-[20px] border max-h-[90vh] overflow-y-auto"
+        style={{ backgroundColor: "var(--lp-surface-container)", borderColor: "var(--lp-outline-variant)" }}
+      >
+        <h3 className="text-[16px] font-bold mb-[12px]" style={{ color: "var(--lp-on-surface)" }}>
+          Edit pipeline deal
+        </h3>
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-[10px]">
+          <FieldLabel className="sm:col-span-2" text="Candidate name">
+            <input
+              value={candidateName}
+              onChange={(e) => setCandidateName(e.target.value)}
+              className="w-full h-[34px] px-[8px] rounded-[6px] text-[13px]"
+            />
+          </FieldLabel>
+          <FieldLabel text="Phone">
+            <input
+              type="tel"
+              inputMode="tel"
+              value={candidatePhone}
+              onChange={(e) => setCandidatePhone(e.target.value)}
+              placeholder="+91 …"
+              className="w-full h-[34px] px-[8px] rounded-[6px] text-[13px]"
+            />
+          </FieldLabel>
+          <FieldLabel text="Expected close date">
+            <input
+              type="date"
+              value={expectedCloseDate}
+              onChange={(e) => setExpectedCloseDate(e.target.value)}
+              className="w-full h-[34px] px-[8px] rounded-[6px] text-[13px]"
+            />
+          </FieldLabel>
+          <FieldLabel text="Service">
+            <select
+              value={serviceId}
+              onChange={(e) => setServiceId(e.target.value)}
+              className="w-full h-[34px] px-[8px] rounded-[6px] text-[13px]"
+            >
+              {serviceOpts.map((s) => (
+                <option key={s.id} value={s.id}>{s.name}</option>
+              ))}
+            </select>
+          </FieldLabel>
+          <FieldLabel text="Lead source">
+            <select
+              value={sourceId}
+              onChange={(e) => setSourceId(e.target.value)}
+              className="w-full h-[34px] px-[8px] rounded-[6px] text-[13px]"
+            >
+              {sourceOpts.map((s) => (
+                <option key={s.id} value={s.id}>{s.label}</option>
+              ))}
+            </select>
+          </FieldLabel>
+          <FieldLabel className="sm:col-span-2" text="Expected 1st installment (₹)">
+            <input
+              type="number"
+              min={0}
+              step={1000}
+              value={expectedFirstInstallment}
+              onChange={(e) => setExpectedFirstInstallment(Number(e.target.value) || 0)}
+              className="w-full h-[34px] px-[8px] rounded-[6px] text-[13px] text-right"
+            />
+          </FieldLabel>
+          <FieldLabel className="sm:col-span-2" text="Notes (optional)">
+            <textarea
+              rows={2}
+              value={notes}
+              onChange={(e) => setNotes(e.target.value)}
+              className="w-full px-[8px] py-[6px] rounded-[6px] text-[13px] resize-none"
+            />
+          </FieldLabel>
+        </div>
+        <div className="mt-[14px] flex items-center justify-end gap-[8px]">
+          <button
+            onClick={onCancel}
+            disabled={busy}
+            className="rounded-[8px] px-[12px] py-[6px] text-[13px] border"
+            style={{ borderColor: "var(--lp-outline-variant)", color: "var(--lp-on-surface)" }}
+          >
+            Cancel
+          </button>
+          <button
+            onClick={submit}
+            disabled={!canSave}
+            className="rounded-[8px] px-[14px] py-[6px] text-[13px] font-semibold"
+            style={{ backgroundColor: "var(--lp-primary)", color: "var(--lp-on-primary)", opacity: canSave ? 1 : 0.5 }}
+          >
+            {busy ? "Saving…" : "Save changes"}
           </button>
         </div>
       </div>
