@@ -15,6 +15,8 @@ export type TransactionFormValues = {
   amount: string;
   description: string;
   partyId: string | null;
+  /** Employee counterparty — only on Expense rows. Mutually exclusive with partyId. */
+  employeeId: string | null;
   /** "EXP" | "DOM" — only set when type=Revenue. */
   expDom: "EXP" | "DOM" | null;
 };
@@ -33,6 +35,12 @@ export type MasterParty = {
   group: "Candidate" | "Vendor";
   txTypes: "Revenue" | "Expense" | "Both";
   isActive: boolean;
+};
+
+export type MasterEmployee = {
+  id: string;
+  name: string;
+  designation: string | null;
 };
 
 function todayMonthCode(): string {
@@ -59,6 +67,7 @@ export function TransactionForm({
   transactionId,
   categories,
   parties,
+  employees = [],
 }: {
   mode?: "create" | "edit";
   initial?: Partial<TransactionFormValues>;
@@ -67,6 +76,8 @@ export function TransactionForm({
   categories: MasterCategory[];
   /** All parties (active only) keyed for the dropdown. */
   parties: MasterParty[];
+  /** Active employees — selectable as the counterparty on Expense rows. */
+  employees?: MasterEmployee[];
 }) {
   const router = useRouter();
   const [type, setType] = useState<TxType>((initial?.type as TxType) ?? "Revenue");
@@ -109,6 +120,7 @@ export function TransactionForm({
   const [amount, setAmount] = useState<string>(initial?.amount ?? "");
   const [description, setDescription] = useState<string>(initial?.description ?? "");
   const [partyId, setPartyId] = useState<string | null>(initial?.partyId ?? null);
+  const [employeeId, setEmployeeId] = useState<string | null>(initial?.employeeId ?? null);
   // Revenue-only EXP/DOM tag. Defaults to "DOM" on new Revenue rows
   // since domestic is the team's overwhelming default.
   const [expDom, setExpDom] = useState<"EXP" | "DOM">(
@@ -144,6 +156,8 @@ export function TransactionForm({
       const cur = partiesState.find((p) => p.id === partyId);
       if (cur && cur.txTypes !== next && cur.txTypes !== "Both") setPartyId(null);
     }
+    // Employees may only be the counterparty on Expense rows.
+    if (next !== "Expense" && employeeId) setEmployeeId(null);
   }
 
   function onCategoryChange(next: string) {
@@ -166,6 +180,14 @@ export function TransactionForm({
       setError("Pick a category and sub-category before saving.");
       return;
     }
+    if (!partyId && !employeeId) {
+      setError(
+        type === "Expense"
+          ? "Select a party or employee for this transaction."
+          : "Select a party for this transaction.",
+      );
+      return;
+    }
     setBusy(true);
     const url =
       mode === "edit" && transactionId
@@ -185,6 +207,7 @@ export function TransactionForm({
         paymentMode,
         amount,
         partyId: partyId || null,
+        employeeId: employeeId || null,
         expDom: type === "Revenue" ? expDom : null,
       }),
     });
@@ -217,6 +240,7 @@ export function TransactionForm({
       setAmount("");
       setDescription("");
       setPartyId(null);
+      setEmployeeId(null);
     }
     router.refresh();
     if (mode === "edit") {
@@ -227,6 +251,7 @@ export function TransactionForm({
   function handleNewParty(p: MasterParty) {
     setPartiesState((prev) => [...prev, p]);
     setPartyId(p.id);
+    setEmployeeId(null);
   }
 
   const accent =
@@ -368,19 +393,46 @@ export function TransactionForm({
           />
         </Field>
         <div className="md:col-span-2">
-          <Field label="Party (optional)">
+          <Field label={type === "Expense" ? "Party / Employee" : "Party"}>
             <div className="flex items-center gap-xs">
               <select
-                value={partyId ?? ""}
-                onChange={(e) => setPartyId(e.target.value || null)}
+                value={partyId ? `p:${partyId}` : employeeId ? `e:${employeeId}` : ""}
+                onChange={(e) => {
+                  const v = e.target.value;
+                  if (v.startsWith("e:")) {
+                    setEmployeeId(v.slice(2));
+                    setPartyId(null);
+                  } else if (v.startsWith("p:")) {
+                    setPartyId(v.slice(2));
+                    setEmployeeId(null);
+                  } else {
+                    setPartyId(null);
+                    setEmployeeId(null);
+                  }
+                }}
                 className={inputCls + " flex-1"}
+                required
               >
-                <option value="">— None —</option>
-                {visibleParties.map((p) => (
-                  <option key={p.id} value={p.id}>
-                    {p.name} · {p.group}
-                  </option>
-                ))}
+                <option value="">
+                  {type === "Expense" ? "— Select party or employee —" : "— Select party —"}
+                </option>
+                <optgroup label="Candidates / Vendors">
+                  {visibleParties.map((p) => (
+                    <option key={p.id} value={`p:${p.id}`}>
+                      {p.name} · {p.group}
+                    </option>
+                  ))}
+                </optgroup>
+                {type === "Expense" && employees.length > 0 && (
+                  <optgroup label="Employees">
+                    {employees.map((emp) => (
+                      <option key={emp.id} value={`e:${emp.id}`}>
+                        {emp.name}
+                        {emp.designation ? ` · ${emp.designation}` : ""}
+                      </option>
+                    ))}
+                  </optgroup>
+                )}
               </select>
               <InlineNewParty txType={type} onCreated={handleNewParty} />
             </div>

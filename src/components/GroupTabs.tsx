@@ -37,7 +37,7 @@ export function GroupTabs({
   if (pages.length === 0) return null;
 
   return (
-    <div className="dg-tabs flex items-center gap-base w-full min-h-[44px] px-md md:px-margin bg-surface border-b border-outline-variant overflow-x-auto scrollbar-thin">
+    <div className="flex items-center gap-base w-full min-h-[44px] px-md md:px-margin bg-surface border-b border-outline-variant overflow-x-auto scrollbar-thin">
       <span className="text-caption uppercase tracking-widest text-on-surface-variant font-semibold flex-shrink-0 hidden md:inline">
         {group.name}
       </span>

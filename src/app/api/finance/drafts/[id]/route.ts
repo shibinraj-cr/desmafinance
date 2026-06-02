@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 import { getCurrentUserAndPermissions } from "@/lib/permissions";
 import { discardDraft, updateDraft, type TxProposed } from "@/lib/approval";
+import { validateCounterparty } from "@/lib/tx-counterparty";
 import { monthCodeFromDate } from "@/lib/catalog";
 
 export const dynamic = "force-dynamic";
@@ -18,6 +19,7 @@ const PatchSchema = z.object({
   amount: z.number().positive(),
   flow: z.enum(["Inflow", "Outflow"]),
   partyId: z.string().nullable().optional(),
+  employeeId: z.string().nullable().optional(),
   expDom: z.enum(["EXP", "DOM"]).nullable().optional(),
 });
 
@@ -29,6 +31,19 @@ export async function PATCH(req: NextRequest, { params }: { params: { id: string
   if (!parsed.success) {
     return NextResponse.json({ error: "validation_failed", issues: parsed.error.format() }, { status: 400 });
   }
+  // EXP/DOM is mandatory for Revenue rows (drives the GST calc) — same
+  // guard the create/update transaction routes enforce, so no write path
+  // can leave a Revenue draft with a blank tag.
+  if (parsed.data.type === "Revenue" && parsed.data.expDom !== "EXP" && parsed.data.expDom !== "DOM") {
+    return NextResponse.json({ error: "expDom_required" }, { status: 400 });
+  }
+  // A counterparty (Party or Employee) is mandatory on every transaction.
+  const cerr = await validateCounterparty({
+    type: parsed.data.type,
+    partyId: parsed.data.partyId,
+    employeeId: parsed.data.employeeId,
+  });
+  if (cerr) return NextResponse.json({ error: cerr }, { status: 400 });
   const data: TxProposed = {
     date: parsed.data.date,
     month: monthCodeFromDate(new Date(parsed.data.date)),
@@ -40,6 +55,7 @@ export async function PATCH(req: NextRequest, { params }: { params: { id: string
     amount: parsed.data.amount,
     flow: parsed.data.flow,
     partyId: parsed.data.partyId ?? null,
+    employeeId: parsed.data.employeeId ?? null,
     expDom: parsed.data.type === "Revenue" ? (parsed.data.expDom ?? null) : null,
   };
   const result = await updateDraft({ draftId: params.id, userId, perms, data });

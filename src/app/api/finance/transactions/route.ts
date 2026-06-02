@@ -7,6 +7,7 @@ import { submitCreate, type TxProposed } from "@/lib/approval";
 import { getCurrentUserAndPermissions } from "@/lib/permissions";
 import { TYPES, FLOWS, MONTHS, PAYMENT_MODES, flowFor } from "@/lib/catalog";
 import { verifyCategorySubItem } from "@/lib/master-data";
+import { validateCounterparty } from "@/lib/tx-counterparty";
 
 const MAX_BODY_BYTES = 10_000;
 
@@ -26,6 +27,8 @@ const TxSchema = z.object({
   amount: z.coerce.number().positive().max(1_000_000_000),
   flow: z.enum(FLOWS).optional(),
   partyId: z.string().min(1).optional().nullable(),
+  /** Employee counterparty (Expense only). Mutually exclusive with partyId. */
+  employeeId: z.string().min(1).optional().nullable(),
   /** EXP / DOM tag. Required for Revenue (checked below); null on Expense. */
   expDom: z.enum(["EXP", "DOM"]).optional().nullable(),
 });
@@ -97,18 +100,13 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: "expDom_required" }, { status: 400 });
   }
 
-  if (data.partyId) {
-    const party = await prisma.party.findUnique({
-      where: { id: data.partyId },
-      select: { id: true, isActive: true, txTypes: true },
-    });
-    if (!party || !party.isActive) {
-      return NextResponse.json({ error: "party_not_found" }, { status: 400 });
-    }
-    if (party.txTypes !== "Both" && party.txTypes !== data.type) {
-      return NextResponse.json({ error: "party_tx_type_mismatch" }, { status: 400 });
-    }
-  }
+  // A counterparty (Party or Employee) is mandatory on every transaction.
+  const cerr = await validateCounterparty({
+    type: data.type,
+    partyId: data.partyId,
+    employeeId: data.employeeId,
+  });
+  if (cerr) return NextResponse.json({ error: cerr }, { status: 400 });
 
   const proposed: TxProposed = {
     date: data.date,
@@ -121,6 +119,7 @@ export async function POST(req: NextRequest) {
     amount: data.amount,
     flow: data.flow ?? flowFor(data.type),
     partyId: data.partyId ?? null,
+    employeeId: data.employeeId ?? null,
     expDom: data.type === "Revenue" ? (data.expDom ?? null) : null,
   };
 
