@@ -54,6 +54,8 @@ model User {
   // Monthly AI-style insight + Q&A loop on the BDE performance page
   leadPulseBdeInsights   LeadPulseBdeInsight[] @relation("BdeInsights")
   collectionPlansCreated CollectionPlan[]      @relation("CollectionPlanCreatedBy")
+  // Manual monthly Meta ad-spend entries edited in the Growth Planner
+  leadPulseMetaSpendEdits LeadPulseMetaSpend[] @relation("LeadPulseMetaSpendEditor")
 
   // HR relations
   employeeProfile        Employee?            @relation("UserEmployee")
@@ -107,6 +109,11 @@ model Transaction {
   expDom      String?
   partyId     String?
   party       Party?    @relation(fields: [partyId], references: [id], onDelete: SetNull)
+  /// Employee counterparty — used for salary / incentive outflows. A
+  /// transaction carries EITHER partyId OR employeeId (enforced at the
+  /// app layer, not the DB, so legacy party-less rows stay valid).
+  employeeId  String?
+  employee    Employee? @relation("EmployeeTransactions", fields: [employeeId], references: [id], onDelete: SetNull)
   createdById String?
   createdBy   User?     @relation(fields: [createdById], references: [id], onDelete: SetNull)
   deletedAt   DateTime?
@@ -125,6 +132,7 @@ model Transaction {
   @@index([month, type])
   @@index([paymentMode, type])
   @@index([partyId])
+  @@index([employeeId])
 }
 
 // Master: transaction Categories. A category can be Revenue-only,
@@ -512,6 +520,26 @@ model LeadPulseTarget {
   @@index([groupId])
 }
 
+/// Manual monthly Meta ad-spend, entered by supervisors in the Growth Planner.
+/// When a row exists for a (year, month) it OVERRIDES the Finance-derived figure
+/// (getMetaAdSpend) used by getPlannerBaseline; months without a row fall back to
+/// Finance. Drives the blended cost-per-qualified-lead = spend ÷ L2 leads.
+model LeadPulseMetaSpend {
+  id          String   @id @default(cuid())
+  year        Int
+  month       Int
+  /// Meta ad spend for this month, ₹ whole rupees.
+  amount      Int
+  note        String?
+  updatedById String?
+  updatedBy   User?    @relation("LeadPulseMetaSpendEditor", fields: [updatedById], references: [id], onDelete: SetNull)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@unique([year, month])
+  @@index([year, month])
+}
+
 // Marketing holiday calendar. Sundays are implicit and never stored.
 // One row per date, supervisor-editable.
 /// Shared holiday calendar — used by both the Marketing holiday-calendar
@@ -641,6 +669,10 @@ model TransactionDraft {
   flow          String
   partyId       String?
   party         Party?   @relation(fields: [partyId], references: [id], onDelete: SetNull)
+  /// Mirrors Transaction.employeeId — employee counterparty for
+  /// salary / incentive outflow drafts.
+  employeeId    String?
+  employee      Employee? @relation("EmployeeTransactionDrafts", fields: [employeeId], references: [id], onDelete: SetNull)
   /// Mirrors Transaction.expDom — required on Revenue drafts.
   expDom        String?
   createdAt     DateTime @default(now())
@@ -648,6 +680,7 @@ model TransactionDraft {
 
   @@index([submittedById])
   @@index([createdAt])
+  @@index([employeeId])
 }
 
 /// Metadata about each Voxbay CSV upload. The actual call rows live
@@ -911,6 +944,10 @@ model Employee {
   leaveAccruals        HrLeaveAccrual[]
   regularizations      HrAttendanceRegularization[] @relation("RegEmployee")
   birthdayWishes       HrBirthdayWish[]          @relation("BirthdayRecipient")
+  /// Finance transactions/drafts where this employee is the counterparty
+  /// (salary / incentive outflows).
+  transactions         Transaction[]             @relation("EmployeeTransactions")
+  transactionDrafts    TransactionDraft[]        @relation("EmployeeTransactionDrafts")
 
   @@index([active])
   @@index([shiftId])
