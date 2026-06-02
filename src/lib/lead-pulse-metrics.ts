@@ -1605,3 +1605,256 @@ export async function getPipelineForecast(
 
   return { byBde };
 }
+
+// ──────────────────────────────────────────────────────────────────────
+// Growth Planner baseline — the historic rates + capacity + roster that
+// feed the deterministic planner engine (lead-pulse-planner.ts) and the
+// AI narrative. All rates are volume-weighted over the trailing N complete
+// months (more stable than averaging monthly percentages).
+// ──────────────────────────────────────────────────────────────────────
+
+export type PlannerBaselineSource = {
+  sourceCode: string;
+  sourceLabel: string;
+  /** Mean monthly leads over the trailing window (L1.leadsReceived + L2.directLeads). */
+  avgMonthlyLeads: number;
+  /** 3-month-avg L2 conversion %, or null when too thin. */
+  l2ConversionPct: number | null;
+  /** 3-month-avg closed-won, or null. */
+  avgMonthlyWon: number | null;
+};
+
+export type PlannerBaseline = {
+  year: number;
+  month: number;
+  /** Number of complete prior months actually summed. */
+  monthsAnalyzed: number;
+  /** e.g. "Feb–Apr 2026". */
+  windowLabel: string;
+  rates: {
+    l1ToTransferPct: number;
+    l2ConvPct: number;
+    fromL1SharePct: number;
+    connectedPct: number;
+  };
+  capacity: {
+    leadsPerActiveL1: number;
+    closesPerActiveL2: number;
+  };
+  roster: { activeL1: number; activeL2: number };
+  avgMonthlyL1Leads: number;
+  avgMonthlyL2Leads: number;
+  avgMonthlyDirectLeads: number;
+  avgMonthlyClosedWon: number;
+  sources: PlannerBaselineSource[];
+  /**
+   * Meta lever. Meta is the controllable paid source whose budget the planner
+   * sizes. Spend comes from manual monthly entries (LeadPulseMetaSpend) when set,
+   * else the Finance-derived figure. Cost is BLENDED: spend ÷ qualified (L2)
+   * leads, so the budget scales with the leads L2 actually works.
+   */
+  meta: {
+    sourceCode: string;
+    /** Blended ₹ per qualified (L2) lead = window Meta spend ÷ window L2 leads; null if no qualified leads. */
+    costPerQualifiedLead: number | null;
+    spendPerMonth: number;
+    /** True when any month in the window used a manual LeadPulseMetaSpend override. */
+    spendIsManual: boolean;
+    /** Qualified (L2) leads/month = receivedFromL1 + directLeads (trailing avg). */
+    qualifiedLeadsPerMonth: number;
+    /** Meta-sourced leads/month — kept for source context (not the budget basis). */
+    leadsPerMonth: number;
+    /** Historic leads/month from every source except Meta. */
+    nonMetaLeadsPerMonth: number;
+    /** Per-month resolved spend (manual or Finance fallback) for the editor UI. */
+    perMonthSpend: ResolvedMonthlySpend[];
+  };
+};
+
+/** Finance sub-item that tags Meta ad spend (see catalog.ts EXPENSE_CATEGORIES "Marketing"). */
+export const META_AD_CATEGORY = "Marketing";
+export const META_AD_SUBITEM = "Digital Advertisement - Meta";
+
+/** Total Meta ad spend (₹) in [start, end] (inclusive YYYY-MM-DD), from Finance transactions. */
+export async function getMetaAdSpend(start: string, end: string): Promise<number> {
+  const agg = await prisma.transaction.aggregate({
+    where: {
+      type: "Expense",
+      category: META_AD_CATEGORY,
+      subItem: META_AD_SUBITEM,
+      deletedAt: null,
+      // Half-open [start, end+1day) so a transaction at any time on the end day counts.
+      date: { gte: toPrismaDate(start), lt: toPrismaDate(addDays(end, 1)) },
+    },
+    _sum: { amount: true },
+  });
+  return agg._sum.amount ? Number(agg._sum.amount) : 0;
+}
+
+/** One month's resolved Meta spend: manual override or Finance fallback. */
+export type ResolvedMonthlySpend = {
+  year: number;
+  month: number;
+  /** Resolved ₹ for the month (manual amount, else Finance-derived). */
+  amount: number;
+  /** True when a manual LeadPulseMetaSpend row supplied the amount. */
+  isManual: boolean;
+};
+
+/**
+ * Resolve Meta ad spend for each month in `months`, preferring a manual
+ * LeadPulseMetaSpend row and falling back to the Finance-derived figure
+ * (getMetaAdSpend). Returns the per-month breakdown, the window total, and
+ * whether any month used a manual override.
+ */
+export async function resolveMetaSpendForWindow(
+  months: Array<{ year: number; month: number }>,
+): Promise<{ total: number; perMonth: ResolvedMonthlySpend[]; anyManual: boolean }> {
+  if (months.length === 0) return { total: 0, perMonth: [], anyManual: false };
+
+  const manualRows = await prisma.leadPulseMetaSpend.findMany({
+    where: { OR: months.map((m) => ({ year: m.year, month: m.month })) },
+    select: { year: true, month: true, amount: true },
+  });
+  const manualByKey = new Map(manualRows.map((r) => [`${r.year}-${r.month}`, r.amount]));
+
+  const perMonth: ResolvedMonthlySpend[] = [];
+  for (const m of months) {
+    const manual = manualByKey.get(`${m.year}-${m.month}`);
+    if (manual != null) {
+      perMonth.push({ year: m.year, month: m.month, amount: manual, isManual: true });
+    } else {
+      const { start, end } = monthBounds(m.year, m.month);
+      const finance = await getMetaAdSpend(start, end);
+      perMonth.push({ year: m.year, month: m.month, amount: Math.round(finance), isManual: false });
+    }
+  }
+  const total = perMonth.reduce((a, p) => a + p.amount, 0);
+  return { total, perMonth, anyManual: perMonth.some((p) => p.isManual) };
+}
+
+const MONTH_SHORT = (y: number, m: number) =>
+  new Date(Date.UTC(y, m - 1, 1)).toLocaleString("en-US", { month: "short" });
+
+/**
+ * Assemble the historic baseline for the Growth Planner. Rates are computed
+ * from summed numerators/denominators across the trailing N complete months
+ * (default 3) so a single sparse month can't swing them. Per-head capacity
+ * divides trailing-average monthly volume by the *current* active roster —
+ * an approximation that answers "at the team's demonstrated per-head rate".
+ */
+export async function getPlannerBaseline(
+  year: number,
+  month: number,
+  n = 3,
+): Promise<PlannerBaseline> {
+  const months = lastNCompleteMonths(year, month, n);
+  const monthsAnalyzed = Math.max(1, months.length);
+  // Trailing window is contiguous: oldest month start → newest month end.
+  const oldest = months[months.length - 1];
+  const newest = months[0];
+  const windowStart = monthBounds(oldest.year, oldest.month).start;
+  const windowEnd = monthBounds(newest.year, newest.month).end;
+  const dateFilter = { gte: toPrismaDate(windowStart), lte: toPrismaDate(windowEnd) };
+
+  const [l1agg, l2agg, activeL1, activeL2, convBySource, leadAvgBySource, metaSpend] =
+    await Promise.all([
+      prisma.leadPulseDailyEntry.aggregate({
+        where: { roleAtEntry: "l1", status: "submitted", entryDate: dateFilter },
+        _sum: { leadsReceived: true, connectedCalls: true, transferredToL2: true },
+      }),
+      prisma.leadPulseDailyEntry.aggregate({
+        where: { roleAtEntry: "l2", status: "submitted", entryDate: dateFilter },
+        _sum: { receivedFromL1: true, directLeads: true, connected: true, closedWon: true },
+      }),
+      prisma.leadPulseRole.count({ where: { active: true, role: "l1" } }),
+      prisma.leadPulseRole.count({ where: { active: true, role: "l2" } }),
+      getMonthlyConversionBySource(year, month),
+      getSourceLeadCountAvgMonthly(year, month, n),
+      // Manual monthly Meta spend overrides Finance; falls back to it per month.
+      resolveMetaSpendForWindow(months),
+    ]);
+
+  const l1Leads = l1agg._sum.leadsReceived ?? 0;
+  const l1Connected = l1agg._sum.connectedCalls ?? 0;
+  const l1Transfer = l1agg._sum.transferredToL2 ?? 0;
+  const l2Recv = l2agg._sum.receivedFromL1 ?? 0;
+  const l2Direct = l2agg._sum.directLeads ?? 0;
+  const l2Connected = l2agg._sum.connected ?? 0;
+  const l2Won = l2agg._sum.closedWon ?? 0;
+  const l2Leads = l2Recv + l2Direct;
+  // "Total leads" excludes receivedFromL1 to avoid double-counting the
+  // L1→L2 hand-off, matching getSourceLeadCount's formula.
+  const totalLeadsForRate = l1Leads + l2Direct;
+
+  const rates = {
+    l1ToTransferPct: pct(l1Transfer, l1Leads) ?? 0,
+    l2ConvPct: pct(l2Won, l2Leads) ?? 0,
+    fromL1SharePct: pct(l2Recv, l2Leads) ?? 0,
+    connectedPct: pct(l1Connected + l2Connected, totalLeadsForRate) ?? 0,
+  };
+
+  const avgMonthlyL1Leads = Math.round(l1Leads / monthsAnalyzed);
+  const avgMonthlyDirectLeads = Math.round(l2Direct / monthsAnalyzed);
+  const avgMonthlyL2Leads = Math.round(l2Leads / monthsAnalyzed);
+  const avgMonthlyClosedWon = Math.round(l2Won / monthsAnalyzed);
+
+  const capacity = {
+    leadsPerActiveL1: activeL1 > 0 ? Math.round(avgMonthlyL1Leads / activeL1) : 0,
+    closesPerActiveL2: activeL2 > 0 ? Math.round((l2Won / monthsAnalyzed / activeL2) * 10) / 10 : 0,
+  };
+
+  const convByCode = new Map(convBySource.map((c) => [c.sourceCode, c]));
+  const sources: PlannerBaselineSource[] = leadAvgBySource
+    .map((l) => {
+      const c = convByCode.get(l.sourceCode);
+      return {
+        sourceCode: l.sourceCode,
+        sourceLabel: l.sourceLabel,
+        avgMonthlyLeads: l.avg,
+        l2ConversionPct: c?.avgPct ?? null,
+        avgMonthlyWon: c?.avgWon ?? null,
+      };
+    })
+    .sort((a, b) => b.avgMonthlyLeads - a.avgMonthlyLeads);
+
+  const windowLabel =
+    oldest.year === newest.year
+      ? `${MONTH_SHORT(oldest.year, oldest.month)}–${MONTH_SHORT(newest.year, newest.month)} ${newest.year}`
+      : `${MONTH_SHORT(oldest.year, oldest.month)} ${oldest.year}–${MONTH_SHORT(newest.year, newest.month)} ${newest.year}`;
+
+  // Meta lever (blended). Spend is the window total from resolveMetaSpendForWindow
+  // (manual overrides, else Finance). Cost-per-lead is BLENDED across all qualified
+  // (L2) leads — window spend ÷ window L2 leads — so the budget tracks the leads L2
+  // actually works. metaLeadsPerMonth / nonMeta are kept only for source context.
+  const metaSource = sources.find((s) => s.sourceCode === "meta");
+  const metaLeadsPerMonth = metaSource?.avgMonthlyLeads ?? 0;
+  const totalLeadsPerMonth = sources.reduce((a, s) => a + s.avgMonthlyLeads, 0);
+  const metaSpendPerMonth = Math.round(metaSpend.total / monthsAnalyzed);
+  const meta = {
+    sourceCode: "meta",
+    costPerQualifiedLead: l2Leads > 0 ? Math.round(metaSpend.total / l2Leads) : null,
+    spendPerMonth: metaSpendPerMonth,
+    spendIsManual: metaSpend.anyManual,
+    qualifiedLeadsPerMonth: avgMonthlyL2Leads,
+    leadsPerMonth: Math.round(metaLeadsPerMonth),
+    nonMetaLeadsPerMonth: Math.max(0, Math.round(totalLeadsPerMonth - metaLeadsPerMonth)),
+    perMonthSpend: metaSpend.perMonth,
+  };
+
+  return {
+    year,
+    month,
+    monthsAnalyzed,
+    windowLabel,
+    rates,
+    capacity,
+    roster: { activeL1, activeL2 },
+    avgMonthlyL1Leads,
+    avgMonthlyL2Leads,
+    avgMonthlyDirectLeads,
+    avgMonthlyClosedWon,
+    sources,
+    meta,
+  };
+}

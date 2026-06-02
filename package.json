@@ -18,6 +18,7 @@
     "db:seed": "tsx prisma/seed.ts",
     "db:seed-roles": "tsx prisma/seed-roles.ts",
     "db:seed-hr": "tsx prisma/seed-hr.ts",
+    "db:seed-hr-roles": "tsx prisma/seed-hr-roles.ts",
     "db:seed-salary-structures": "tsx prisma/seed-salary-structures.ts",
     "db:seed-salary-structures-v2": "tsx prisma/seed-salary-structures-v2.ts",
     "db:seed-holidays": "tsx prisma/seed-holidays.ts",
@@ -32,6 +33,7 @@
     "lp:import-historical:dry": "tsx prisma/lead-pulse-import-historical.ts --dry-run"
   },
   "dependencies": {
+    "@anthropic-ai/sdk": "^0.100.1",
     "@prisma/client": "^6.19.3",
     "bcryptjs": "^2.4.3",
     "next": "14.2.18",

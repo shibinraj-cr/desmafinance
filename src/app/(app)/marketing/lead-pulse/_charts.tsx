@@ -14,6 +14,9 @@ import {
   Bar,
   LabelList,
   ComposedChart,
+  FunnelChart,
+  Funnel,
+  Cell,
 } from "recharts";
 
 // Series colours are unchanged (gold/cyan/orange); only the chart *chrome*
@@ -223,6 +226,58 @@ export function GroupedConversionBySourceChart({
           <LabelList dataKey="avg3MoWon" position="right" formatter={intFmt} style={{ fill: ORANGE, fontSize: 11 }} />
         </Bar>
       </BarChart>
+    </ResponsiveContainer>
+  );
+}
+
+/**
+ * Reverse / goal-seek funnel for the Growth Planner. Stages run top→bottom
+ * (Leads needed → Connected → Quotes → Enrollments) tapering to the target,
+ * so the volume required at each stage to hit the goal reads at a glance.
+ */
+export function ReverseFunnelChart({
+  data,
+}: {
+  data: { name: string; value: number }[];
+}) {
+  // Gold → amber → cyan → orange ramp, matching the HUD palette.
+  const palette = [GOLD, "#f0b429", CYAN, ORANGE];
+  const rows = data.map((d, i) => ({ ...d, fill: palette[i % palette.length] }));
+  return (
+    <ResponsiveContainer width="100%" height={300}>
+      <FunnelChart margin={{ top: 8, right: 120, bottom: 8, left: 8 }}>
+        <Tooltip
+          contentStyle={{ backgroundColor: TOOLTIP_BG, border: `1px solid ${GRID}`, color: "#ebe2d0" }}
+          formatter={(v: number) => [v.toLocaleString("en-IN"), "Required"]}
+        />
+        <Funnel
+          dataKey="value"
+          data={rows}
+          isAnimationActive={false}
+          lastShapeType="triangle"
+          stroke={TOOLTIP_BG}
+        >
+          <LabelList
+            position="right"
+            dataKey="name"
+            stroke="none"
+            fill={TEXT}
+            fontSize={12}
+          />
+          <LabelList
+            position="center"
+            dataKey="value"
+            stroke="none"
+            fill="#14110a"
+            fontSize={13}
+            fontWeight={700}
+            formatter={(v: number) => v.toLocaleString("en-IN")}
+          />
+          {rows.map((r, i) => (
+            <Cell key={i} fill={r.fill} />
+          ))}
+        </Funnel>
+      </FunnelChart>
     </ResponsiveContainer>
   );
 }

@@ -110,6 +110,12 @@ export const MODULES: AppModule[] = [
         group: "INSIGHTS",
       },
       {
+        href: "/marketing/lead-pulse/planner",
+        label: "Growth Planner",
+        icon: "rocket_launch",
+        group: "INSIGHTS",
+      },
+      {
         href: "/marketing/lead-pulse/team-roster",
         label: "Team Roster",
         icon: "groups",
