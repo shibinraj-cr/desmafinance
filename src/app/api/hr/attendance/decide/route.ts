@@ -40,7 +40,6 @@ export async function POST(req: Request) {
   if (days.length === 0) return NextResponse.json({ error: "no matching days" }, { status: 404 });
 
   const updates: { id: string; newStatus: string }[] = [];
-  const blocked: string[] = [];
   for (const d of days) {
     let newStatus: string;
     switch (decision) {
@@ -48,11 +47,11 @@ export async function POST(req: Request) {
         newStatus = "LV";
         break;
       case "unpaid":
-        if (d.status === "HD") {
-          blocked.push(d.id);
-          continue;
-        }
-        newStatus = "A";
+        // HD rows already carry a built-in 0.5-day LOP. "Unpaid" on an HD
+        // confirms that half-day deduction as-is — the status stays HD, it's
+        // just recorded as a decision (no full-day conversion, so the 0.5 day
+        // isn't doubled). Any other status becomes a full-day LOP (status A).
+        newStatus = d.status === "HD" ? "HD" : "A";
         break;
       case "half_day":
         newStatus = "HD";
@@ -69,16 +68,6 @@ export async function POST(req: Request) {
         break;
     }
     updates.push({ id: d.id, newStatus });
-  }
-
-  if (blocked.length > 0 && updates.length === 0) {
-    return NextResponse.json(
-      {
-        error:
-          "Unpaid is not applicable to Half-day rows — HD already has 0.5 day deduction built in. Use Reset to revert, or Paid to convert to a full Paid Leave day.",
-      },
-      { status: 400 },
-    );
   }
 
   const now = new Date();
@@ -149,7 +138,6 @@ export async function POST(req: Request) {
   return NextResponse.json({
     updated: updates.length,
     decision,
-    blocked: blocked.length,
     sandwich: sandwichSummary,
   });
 }

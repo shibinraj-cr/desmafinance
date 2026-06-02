@@ -222,10 +222,10 @@ export function LeaveReviewClient({
         <p className="text-caption text-on-surface-variant mt-sm">
           <strong>A (Absent)</strong>: choose <em>Paid</em> (→ LV, deducts from leave balance) or
           <em> Unpaid</em> (→ stays A, full-day LOP).{" "}
-          <strong>HD (Half-day)</strong>: half is auto-deducted (0.5 LOP) — no action needed.{" "}
+          <strong>HD (Half-day)</strong>: half is auto-deducted (0.5 LOP).{" "}
           <em>Paid</em> on an HD row converts the whole day to paid leave (the missed half is
-          covered from balance). Unpaid is disabled on HD because the half-day deduction is
-          already built in.{" "}
+          covered from balance); <em>Unpaid</em> confirms the half-day LOP as-is (stays HD, the
+          0.5-day deduction is not doubled).{" "}
           <strong>Reset</strong> reverts to the original biometric value.
         </p>
       </Section>
@@ -387,7 +387,7 @@ export function LeaveReviewClient({
                         {r.decidedBy ? (
                           <>
                             <div className="text-label-sm font-semibold">
-                              {r.status === "LV" ? "Paid (CL)" : r.status === "A" ? "Unpaid (LOP)" : r.status}
+                              {r.status === "LV" ? "Paid (CL)" : r.status === "A" ? "Unpaid (LOP)" : r.status === "HD" ? "Half-day (0.5 LOP)" : r.status}
                             </div>
                             <div className="text-caption">
                               by {r.decidedBy}
@@ -421,18 +421,14 @@ export function LeaveReviewClient({
                               >
                                 Paid
                               </button>
-                              {/* Unpaid is hidden on HD rows — HD already has 0.5 day LOP
-                                  built in. Converting HD → A would over-deduct by 0.5. */}
-                              {r.status !== "HD" && (
-                                <button
-                                  disabled={pending}
-                                  onClick={() => decide("unpaid", [r.id])}
-                                  className="px-xs py-xs rounded bg-red-600 text-white text-[10px] font-bold disabled:opacity-50"
-                                  title="Confirm full-day LOP (deducts a full day from salary)"
-                                >
-                                  Unpaid
-                                </button>
-                              )}
+                              <button
+                                disabled={pending}
+                                onClick={() => decide("unpaid", [r.id])}
+                                className="px-xs py-xs rounded bg-red-600 text-white text-[10px] font-bold disabled:opacity-50"
+                                title={r.status === "HD" ? "Confirm the half-day LOP as-is (keeps the 0.5-day deduction; no full-day conversion)" : "Confirm full-day LOP (deducts a full day from salary)"}
+                              >
+                                Unpaid
+                              </button>
                               {r.decidedBy && (
                                 <button
                                   disabled={pending}
