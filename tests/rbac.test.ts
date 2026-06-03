@@ -100,6 +100,16 @@ describe("canSeePage", () => {
   it("rejects non-absolute hrefs", () => {
     expect(canSeePage(exec, "finance/overview")).toBe(false);
   });
+
+  it("shows self-service essentials (My Attendance, Regularization) to every role", () => {
+    // exec has only finance pages, yet still sees the always-visible tabs.
+    expect(canSeePage(exec, "/me/attendance")).toBe(true);
+    expect(canSeePage(exec, "/me/regularization")).toBe(true);
+    // and their child routes
+    expect(canSeePage(exec, "/me/attendance/2026-04")).toBe(true);
+    // but NOT other /me pages they weren't granted
+    expect(canSeePage(exec, "/me/payslips")).toBe(false);
+  });
 });
 
 describe("roleLabel", () => {

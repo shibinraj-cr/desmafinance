@@ -73,11 +73,20 @@ export function needsApproval(p?: Permissions | null): boolean {
   return !!p?.needsApproval;
 }
 
+// Pages every authenticated user can see, regardless of their role's page
+// list. These are self-service essentials that apply to all employees, so
+// they stay visible without having to add them to each (current or future)
+// role's Role.pages. The route-level guards on these pages already handle
+// the "login not linked to an employee" case gracefully.
+export const ALWAYS_VISIBLE_PAGES = ["/me/attendance", "/me/regularization"];
+
 export function canSeePage(p: Permissions, href: string): boolean {
   if (!href.startsWith("/")) return false;
   // Admins see every page — keeps newly added admin-only routes visible
   // without forcing a Role.pages migration each time.
   if (p.isAdmin) return true;
+  // Self-service essentials everyone can see.
+  if (ALWAYS_VISIBLE_PAGES.some((pg) => href === pg || href.startsWith(pg + "/"))) return true;
   // Exact match or prefix match (e.g. allowing /daily-tracker permits
   // /daily-tracker/[id]/edit too).
   return p.pages.some((pg) => href === pg || href.startsWith(pg + "/"));
