@@ -3,6 +3,7 @@ import { z } from "zod";
 import { prisma } from "@/lib/prisma";
 import { getCurrentUserAndPermissions } from "@/lib/permissions";
 import { canApproveHr } from "@/lib/hr-rbac";
+import { siteBaseUrl } from "@/lib/site-url";
 import {
   generateRawToken,
   generateSalt,
@@ -15,14 +16,6 @@ const Body = z.object({
   testId: z.string().min(1),
   ttlHours: z.number().int().min(1).max(720).optional(),
 });
-
-function siteBaseUrl(req: Request): string {
-  const env = process.env.NEXTAUTH_URL;
-  if (env) return env.replace(/\/$/, "");
-  const proto = (req.headers.get("x-forwarded-proto") ?? "https").split(",")[0];
-  const host = req.headers.get("host") ?? "localhost:3000";
-  return `${proto}://${host}`;
-}
 
 export async function POST(req: Request) {
   const { perms, userId } = await getCurrentUserAndPermissions();
