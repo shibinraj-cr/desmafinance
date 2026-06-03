@@ -29,6 +29,7 @@ export type PendingRow = {
   category: string;
   subItem: string;
   partyId: string | null;
+  employeeId: string | null;
   description: string | null;
   paymentMode: string;
   flow: string;
@@ -37,6 +38,7 @@ export type PendingRow = {
 };
 
 export type PartyLookup = Record<string, { name: string; group: string }>;
+export type EmployeeLookup = Record<string, { name: string }>;
 
 type Decision = "approve" | "reject" | null;
 type RowState = { decision: Decision; remarks: string };
@@ -44,9 +46,11 @@ type RowState = { decision: Decision; remarks: string };
 export function PendingList({
   rows,
   partyById,
+  employeeById,
 }: {
   rows: PendingRow[];
   partyById: PartyLookup;
+  employeeById: EmployeeLookup;
 }) {
   const router = useRouter();
   // Hydrate from localStorage on first paint so refreshes / nav-aways
@@ -292,6 +296,10 @@ export function PendingList({
             {rows.map((r) => {
               const s = state[r.id] ?? { decision: null, remarks: "" };
               const party = r.partyId ? partyById[r.partyId] : null;
+              // Salary / incentive outflows carry an employee counterparty
+              // instead of a party — resolve that so the column isn't blank.
+              const employee =
+                !party && r.employeeId ? employeeById[r.employeeId] : null;
               const rowTint =
                 s.decision === "approve"
                   ? "bg-green-50/40"
@@ -311,7 +319,11 @@ export function PendingList({
                   <td className="px-md py-sm">{r.category}</td>
                   <td className="px-md py-sm">{r.subItem}</td>
                   <td className="px-md py-sm">
-                    {party ? `${party.name} (${party.group})` : "—"}
+                    {party
+                      ? `${party.name} (${party.group})`
+                      : employee
+                        ? `${employee.name} (Employee)`
+                        : "—"}
                   </td>
                   <td className="px-md py-sm text-on-surface-variant max-w-[240px] truncate" title={r.description ?? undefined}>
                     {r.description || "—"}
