@@ -2,20 +2,13 @@ import { NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { getCurrentUserAndPermissions } from "@/lib/permissions";
 import { canApproveHr } from "@/lib/hr-rbac";
+import { siteBaseUrl } from "@/lib/site-url";
 import {
   generateRawToken,
   generateSalt,
   hashToken,
   DEFAULT_TTL_HOURS,
 } from "@/lib/psych-tokens";
-
-function siteBaseUrl(req: Request): string {
-  const env = process.env.NEXTAUTH_URL;
-  if (env) return env.replace(/\/$/, "");
-  const proto = (req.headers.get("x-forwarded-proto") ?? "https").split(",")[0];
-  const host = req.headers.get("host") ?? "localhost:3000";
-  return `${proto}://${host}`;
-}
 
 export async function POST(req: Request, { params }: { params: { id: string } }) {
   const { perms, userId } = await getCurrentUserAndPermissions();
