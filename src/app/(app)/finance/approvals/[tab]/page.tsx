@@ -8,7 +8,7 @@ import { canApprove } from "@/lib/rbac";
 import { getCurrentUserAndPermissions } from "@/lib/permissions";
 import { ApprovalActions } from "../actions";
 import { ResubmitEditor } from "../resubmit-editor";
-import { PendingList, type PendingRow, type PartyLookup } from "../pending-list";
+import { PendingList, type PendingRow, type PartyLookup, type EmployeeLookup } from "../pending-list";
 import { Tabs } from "../_tabs";
 
 export const dynamic = "force-dynamic";
@@ -165,6 +165,11 @@ export default async function ApprovalsPage({
   const partyLookup: PartyLookup = Object.fromEntries(
     parties.map((pt) => [pt.id, { name: pt.name, group: pt.group }]),
   );
+  // Employee counterparties (salary / incentive outflows) so the pending
+  // table can resolve `employeeId` → name, mirroring the party lookup.
+  const employeeLookup: EmployeeLookup = Object.fromEntries(
+    employees.map((e) => [e.id, { name: e.name }]),
+  );
 
   // Effective transaction type for each PendingApproval row — read from
   // the proposed JSON for create/update, from the target tx for delete.
@@ -280,6 +285,7 @@ export default async function ApprovalsPage({
                 category: p.targetTx.category,
                 subItem: p.targetTx.subItem,
                 partyId: p.targetTx.partyId,
+                employeeId: p.targetTx.employeeId,
                 description: p.targetTx.description,
                 paymentMode: p.targetTx.paymentMode,
                 flow: p.targetTx.flow,
@@ -297,6 +303,7 @@ export default async function ApprovalsPage({
           category: src.category ?? "",
           subItem: src.subItem ?? "",
           partyId: src.partyId ?? null,
+          employeeId: src.employeeId ?? null,
           description: src.description ?? null,
           paymentMode: src.paymentMode ?? "",
           flow: src.flow ?? "",
@@ -369,7 +376,7 @@ export default async function ApprovalsPage({
         />
 
         {isReviewerPending ? (
-          <PendingList rows={pendingRows} partyById={partyLookup} />
+          <PendingList rows={pendingRows} partyById={partyLookup} employeeById={employeeLookup} />
         ) : filteredItems.length === 0 ? (
           <Section title="">
             <div className="py-lg text-center text-on-surface-variant">
