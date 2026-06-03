@@ -1,7 +1,9 @@
 import { prisma } from "./prisma";
 
-/** Three working days excluding Sundays + holidays. */
-export const REGULARIZATION_WINDOW_WORKING_DAYS = 3;
+// TEMPORARY (testing): widened from 3 → 7 to allow regularizing older
+// discrepancies during testing. Revert to 3 when done.
+/** Working days excluding Sundays + holidays. */
+export const REGULARIZATION_WINDOW_WORKING_DAYS = 7;
 
 /**
  * Return true if `today - discrepancyDate` is within the
