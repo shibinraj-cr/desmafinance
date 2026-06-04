@@ -31,6 +31,7 @@ export default async function MyDraftsPage() {
       orderBy: [{ createdAt: "desc" }],
       include: {
         party: { select: { id: true, name: true, group: true } },
+        employee: { select: { id: true, name: true } },
         submittedBy: { select: { id: true, username: true } },
       },
     }),
@@ -101,6 +102,7 @@ export default async function MyDraftsPage() {
             partyId: d.partyId,
             partyName: d.party?.name ?? null,
             partyGroup: d.party?.group ?? null,
+            employeeName: d.employee?.name ?? null,
             submittedByUsername: d.submittedBy?.username ?? null,
             createdAt: d.createdAt.toISOString(),
           }))}

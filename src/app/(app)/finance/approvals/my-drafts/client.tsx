@@ -19,6 +19,8 @@ export type Draft = {
   partyId: string | null;
   partyName: string | null;
   partyGroup: string | null;
+  /** Employee counterparty name (e.g. salary payouts have an employee, not a party). */
+  employeeName: string | null;
   submittedByUsername: string | null;
   createdAt: string;
 };
@@ -429,6 +431,8 @@ export function MyDraftsClient({
                         </select>
                       ) : row.partyId ? (
                         `${d.partyName ?? "(unknown)"}${d.partyGroup ? ` (${d.partyGroup})` : ""}`
+                      ) : row.employeeName ? (
+                        `${d.employeeName} (Employee)`
                       ) : (
                         "—"
                       )}
