@@ -71,7 +71,10 @@ export function TargetAchievementCard({
         </span>
         {year != null && month != null && (
           <a
-            href={`/api/marketing/lead-pulse/target-achievement/og?year=${year}&month=${month}`}
+            // Cache-buster: the OG route also sends no-store, but a fresh URL
+            // each render guarantees browsers that already cached an older PNG
+            // (with next/og's default long TTL) fetch the current figures.
+            href={`/api/marketing/lead-pulse/target-achievement/og?year=${year}&month=${month}&t=${Date.now()}`}
             className="inline-flex items-center gap-[6px] h-[28px] px-[10px] rounded-[8px] text-[11px] font-semibold border"
             style={{
               borderColor: "var(--lp-primary)",

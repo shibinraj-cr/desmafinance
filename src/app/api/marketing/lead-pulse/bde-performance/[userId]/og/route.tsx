@@ -403,6 +403,8 @@ export async function GET(
       height: 1280,
       headers: {
         "Content-Disposition": `attachment; filename="bde-${target.username}-${rangeLabel.replace(/\s+/g, "-").toLowerCase()}.png"`,
+        // Live report — never cache (see team target-achievement route).
+        "Cache-Control": "no-store, max-age=0, must-revalidate",
       },
     },
   );

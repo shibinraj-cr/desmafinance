@@ -506,6 +506,11 @@ export async function GET(req: NextRequest) {
       height: 1280,
       headers: {
         "Content-Disposition": `attachment; filename="team-target-achievement-${year}-${String(month).padStart(2, "0")}.png"`,
+        // This report reflects live numbers, so it must never be cached.
+        // next/og's ImageResponse otherwise defaults to a long-lived,
+        // immutable Cache-Control, which made browsers serve a stale PNG
+        // (a user who downloaded once kept getting the old figures).
+        "Cache-Control": "no-store, max-age=0, must-revalidate",
       },
     },
   );
