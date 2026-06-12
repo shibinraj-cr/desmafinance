@@ -14,6 +14,13 @@ function fmtDate(d: Date): string {
   return `${dd}-${mm}-${yy}`;
 }
 
+/** Parse a `YYYY-MM-DD` query param into a UTC Date, or null if absent/invalid. */
+function parseDateParam(s: string | undefined, endOfDay = false): Date | null {
+  if (!s || !/^\d{4}-\d{2}-\d{2}$/.test(s)) return null;
+  const d = new Date(`${s}T${endOfDay ? "23:59:59.999" : "00:00:00.000"}Z`);
+  return isNaN(d.getTime()) ? null : d;
+}
+
 function statusBadge(s: string): { label: string; cls: string } {
   switch (s) {
     case "received":
@@ -27,9 +34,21 @@ function statusBadge(s: string): { label: string; cls: string } {
   }
 }
 
-export default async function CollectionPlanListPage() {
+export default async function CollectionPlanListPage({
+  searchParams,
+}: {
+  searchParams?: { from?: string; to?: string };
+}) {
   const { perms } = await getCurrentUserAndPermissions();
   if (!perms) redirect("/login");
+
+  // Optional installment-due-date range filter, used to cross-check the
+  // collection amounts expected/received in a given window.
+  const fromDate = parseDateParam(searchParams?.from);
+  const toDate = parseDateParam(searchParams?.to, true);
+  const rangeActive = !!(fromDate || toDate);
+  const inRange = (d: Date) =>
+    (!fromDate || d >= fromDate) && (!toDate || d <= toDate);
 
   const plans = await prisma.collectionPlan.findMany({
     orderBy: [{ createdAt: "desc" }],
@@ -40,27 +59,40 @@ export default async function CollectionPlanListPage() {
     },
   });
 
-  const rows = plans.map((p) => {
-    const total = p.installments.reduce((s, i) => s + Number(i.amount.toString()), 0);
-    const received = p.installments
-      .filter((i) => i.status === "received")
-      .reduce((s, i) => s + Number(i.amount.toString()), 0);
-    const submitted = p.installments
-      .filter((i) => i.status === "submitted")
-      .reduce((s, i) => s + Number(i.amount.toString()), 0);
-    const pending = p.installments
-      .filter((i) => i.status === "pending")
-      .reduce((s, i) => s + Number(i.amount.toString()), 0);
-    return { plan: p, total, received, submitted, pending };
-  });
+  const rows = plans
+    .map((p) => {
+      // When a range is active, only count installments due within it — so the
+      // tiles and per-row totals reflect just that window.
+      const insts = rangeActive
+        ? p.installments.filter((i) => inRange(i.expectedDate))
+        : p.installments;
+      const sum = (st?: string) =>
+        insts
+          .filter((i) => (st ? i.status === st : true))
+          .reduce((s, i) => s + Number(i.amount.toString()), 0);
+      return {
+        plan: p,
+        insts,
+        receivedCount: insts.filter((i) => i.status === "received").length,
+        total: sum(),
+        received: sum("received"),
+        submitted: sum("submitted"),
+        pending: sum("pending"),
+      };
+    })
+    // With a range applied, hide plans that have nothing due in the window.
+    .filter((r) => !rangeActive || r.insts.length > 0);
 
   const summary = {
-    plans: plans.length,
+    plans: rows.length,
     totalExpected: rows.reduce((s, r) => s + r.total, 0),
     totalReceived: rows.reduce((s, r) => s + r.received, 0),
     totalSubmitted: rows.reduce((s, r) => s + r.submitted, 0),
     totalPending: rows.reduce((s, r) => s + r.pending, 0),
   };
+
+  const fromVal = searchParams?.from ?? "";
+  const toVal = searchParams?.to ?? "";
 
   return (
     <>
@@ -77,8 +109,56 @@ export default async function CollectionPlanListPage() {
         }
       />
       <div className="p-margin space-y-lg">
+        {/* Date-range filter on installment due dates — cross-check the
+            collection amount expected/received within a window. */}
+        <form
+          method="get"
+          className="flex flex-wrap items-end gap-md bg-surface-container-lowest border border-outline-variant rounded-xl p-md"
+        >
+          <label className="flex flex-col text-caption text-on-surface-variant uppercase tracking-wide">
+            From (due date)
+            <input
+              type="date"
+              name="from"
+              defaultValue={fromVal}
+              max={toVal || undefined}
+              className="mt-xs px-sm py-sm rounded-md border border-outline-variant bg-surface text-body-md text-on-surface"
+            />
+          </label>
+          <label className="flex flex-col text-caption text-on-surface-variant uppercase tracking-wide">
+            To (due date)
+            <input
+              type="date"
+              name="to"
+              defaultValue={toVal}
+              min={fromVal || undefined}
+              className="mt-xs px-sm py-sm rounded-md border border-outline-variant bg-surface text-body-md text-on-surface"
+            />
+          </label>
+          <button
+            type="submit"
+            className="px-md py-sm bg-primary text-on-primary rounded-md text-body-md font-semibold hover:opacity-90"
+          >
+            Apply
+          </button>
+          {rangeActive && (
+            <Link
+              href="/finance/collection-plan"
+              className="px-md py-sm border border-outline-variant rounded-md text-body-md text-on-surface-variant hover:bg-surface-container-low"
+            >
+              Clear
+            </Link>
+          )}
+          {rangeActive && (
+            <span className="ml-auto self-center text-caption text-on-surface-variant">
+              Showing installments due{" "}
+              {fromDate ? fmtDate(fromDate) : "start"} – {toDate ? fmtDate(toDate) : "end"}
+            </span>
+          )}
+        </form>
+
         <section className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-gutter">
-          <Tile label="Expected" value={summary.totalExpected} />
+          <Tile label={rangeActive ? "Expected (in range)" : "Expected"} value={summary.totalExpected} />
           <Tile label="Received" value={summary.totalReceived} tone="success" />
           <Tile label="Awaiting Approval" value={summary.totalSubmitted} tone="warning" />
           <Tile label="Pending Submission" value={summary.totalPending} tone="info" />
@@ -87,8 +167,9 @@ export default async function CollectionPlanListPage() {
         <div className="bg-surface-container-lowest border border-outline-variant rounded-xl overflow-hidden">
           {rows.length === 0 ? (
             <div className="p-xl text-center text-on-surface-variant">
-              No collection plans yet. Start one for an upcoming candidate
-              receivable.
+              {rangeActive
+                ? "No installments due in the selected date range."
+                : "No collection plans yet. Start one for an upcoming candidate receivable."}
             </div>
           ) : (
             <div className="max-h-[calc(100vh-300px)] overflow-auto">
@@ -106,8 +187,8 @@ export default async function CollectionPlanListPage() {
                   </tr>
                 </thead>
                 <tbody>
-                  {rows.map(({ plan, total, received }) => {
-                    const nextDue = plan.installments.find(
+                  {rows.map(({ plan, total, received, insts, receivedCount }) => {
+                    const nextDue = insts.find(
                       (i) => i.status === "pending" || i.status === "submitted",
                     );
                     return (
@@ -128,8 +209,7 @@ export default async function CollectionPlanListPage() {
                           {plan.service?.name ?? "—"}
                         </td>
                         <td className="px-md py-sm text-right whitespace-nowrap">
-                          {plan.installments.filter((i) => i.status === "received").length}/
-                          {plan.installments.length}
+                          {receivedCount}/{insts.length}
                         </td>
                         <td className="px-md py-sm text-right whitespace-nowrap font-semibold">
                           {inr(total)}
