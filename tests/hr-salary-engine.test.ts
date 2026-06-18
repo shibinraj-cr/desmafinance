@@ -291,6 +291,22 @@ describe("calcLine", () => {
     expect(c.netSalary).toBe(31325); // 33333.35 − 0 − 1800 − 208 → round
   });
 
+  it("ignores a stale esiApplicable=true when gross exceeds the ₹21,000 ceiling", () => {
+    // Regression: Devika & Shibin Raj (Directors, ₹1.5L+ gross) had Jan-2026
+    // structures with esiApplicable=true, so the Apr-2026 run wrongly deducted
+    // ESI. The engine must enforce the statutory ceiling regardless of the flag.
+    const c = calcLine({
+      ...base,
+      basic: 96000, // default split → gross 192000, well above ₹21k
+      esiApplicable: true, // stale/incorrect flag from the saved structure
+      professionalTax: 208,
+      daysPresent: 30,
+    });
+    expect(c.gross).toBe(192000);
+    expect(c.esiEmployee).toBe(0);
+    expect(c.esiEmployer).toBe(0);
+  });
+
   it("paid leave fully covered by the carried balance: no LOP", () => {
     const c = calcLine({
       ...base,

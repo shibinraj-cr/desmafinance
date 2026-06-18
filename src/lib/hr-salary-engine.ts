@@ -21,7 +21,8 @@ import { cycleWindowForMonth, structureForMonth } from "./hr-data";
  *   daysAttended    = workingDaysBase − totalLeaveForLop   (paid days)
  *   basicAfterLop   = basic × (daysAttended / workingDaysBase)
  *   salaryBeforeEsi = gross − (dailyBasis × totalLeaveForLop)
- *   ESI employee 0.75% · employer 3.25% on salaryBeforeEsi (if esiApplicable)
+ *   ESI employee 0.75% · employer 3.25% on salaryBeforeEsi
+ *     (only if esiApplicable AND gross ≤ ₹21,000 statutory ceiling)
  *   PF  employee 12%   · employer 12%   on basicAfterLop   (if pfApplicable)
  *   PT  = professionalTax (flat, set by Kerala slab)
  *   net = salaryBeforeEsi − ESI(E) − PF(E) − PT
@@ -182,8 +183,15 @@ export function calcLine(args: {
   const basicAfterLop = round2((args.basic * daysAttended) / wd);
   const salaryBeforeEsi = round2(gross - dailyBasis * totalLeaveForLop);
 
-  const esiEmployee = args.esiApplicable ? round(salaryBeforeEsi * ESI_EMPLOYEE_RATE) : 0;
-  const esiEmployer = args.esiApplicable ? round(salaryBeforeEsi * ESI_EMPLOYER_RATE) : 0;
+  // ESI applies only when the structure flag is on AND gross is within the
+  // statutory ₹21,000/month ceiling. Enforcing the ceiling here — not just
+  // trusting the saved flag — means a stale/incorrect esiApplicable=true on a
+  // high earner's structure can never wrongly deduct ESI. (e.g. Devika &
+  // Shibin Raj, whose Jan-2026 structures carried esiApplicable=true despite
+  // ₹1.5L+ gross, so the Apr-2026 run wrongly deducted ESI.)
+  const esiApplies = args.esiApplicable && isEsiApplicable(gross);
+  const esiEmployee = esiApplies ? round(salaryBeforeEsi * ESI_EMPLOYEE_RATE) : 0;
+  const esiEmployer = esiApplies ? round(salaryBeforeEsi * ESI_EMPLOYER_RATE) : 0;
   // PF: 12% of basicAfterLop, capped at the statutory ₹15,000 wage
   // ceiling (so each side maxes out at ₹1,800/month).
   const pfBase = Math.min(basicAfterLop, PF_WAGE_CEILING);
