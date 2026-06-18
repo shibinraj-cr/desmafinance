@@ -48,6 +48,17 @@ export function computeDedupeKey(
   return null;
 }
 
+/**
+ * Email match key for duplicate detection: lowercased, trimmed email, or null
+ * when absent/blank. A lead is flagged duplicate when its `emailKey` OR its
+ * `phoneE164` collides with an existing lead — the two are matched
+ * independently, so the same person caught by either field is detected.
+ */
+export function emailKeyOf(email: string | null | undefined): string | null {
+  const e = email?.trim().toLowerCase();
+  return e ? e : null;
+}
+
 /** Fallback pill colour for a status with no explicit `color`. */
 export const DEFAULT_STATUS_COLOR = "#9aa0a6";
 

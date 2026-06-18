@@ -8,7 +8,7 @@ import { getCurrentUserAndPermissions } from "@/lib/permissions";
 import { getCrmAccess, canEditLead } from "@/lib/crm-rbac";
 import { recordLeadActivity } from "@/lib/crm-activity";
 import { recordAudit } from "@/lib/audit";
-import { normalizePhone, computeDedupeKey } from "@/lib/crm";
+import { normalizePhone, computeDedupeKey, emailKeyOf } from "@/lib/crm";
 import { leadRowInclude, serializeLead } from "@/lib/crm-leads";
 
 export const dynamic = "force-dynamic";
@@ -115,6 +115,7 @@ export const PATCH = withApiHandler(async (req: Request, { params }: Ctx) => {
     const finalPhone = "phone" in update ? (update.phone as string | null) : existing.phone;
     const e164 = normalizePhone(finalPhone);
     update.phoneE164 = e164;
+    update.emailKey = emailKeyOf(finalEmail);
     update.dedupeKey = computeDedupeKey(finalEmail, e164);
   }
 
