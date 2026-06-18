@@ -3,7 +3,7 @@
 import { Fragment, useEffect, useMemo, useState } from "react";
 import { createPortal } from "react-dom";
 import { useRouter } from "next/navigation";
-import type { LeadRow, NoteRow, ActivityRow } from "@/lib/crm-leads";
+import type { LeadRow, NoteRow, ActivityRow, TaskRow } from "@/lib/crm-leads";
 import { renderTemplate } from "@/lib/crm";
 import { StatusPill, type StatusOpt, type Opt, type BdeOpt } from "../client";
 
@@ -78,6 +78,11 @@ const ACTIVITY_ICON: Record<string, string> = {
   WHATSAPP_SENT: "chat",
   CALL_LOGGED: "call",
   PARTY_LINKED: "link",
+  TASK_CREATED: "add_task",
+  TASK_COMPLETED: "task_alt",
+  TASK_REOPENED: "restart_alt",
+  TASK_UPDATED: "edit",
+  TASK_DELETED: "delete",
 };
 
 function Avatar({ name }: { name: string | null }) {
@@ -135,6 +140,7 @@ export function LeadDetail({
   lead,
   notes,
   timeline,
+  tasks,
   masters,
   canEdit,
   access,
@@ -142,12 +148,15 @@ export function LeadDetail({
   lead: LeadRow;
   notes: NoteRow[];
   timeline: ActivityRow[];
+  tasks: TaskRow[];
   masters: DetailMasters;
   canEdit: boolean;
   access: DetailAccess;
 }) {
-  const [tab, setTab] = useState<"overview" | "history">("overview");
+  const [tab, setTab] = useState<"overview" | "tasks" | "history">("overview");
   const [comm, setComm] = useState<null | "email" | "whatsapp" | "call">(null);
+  const openTaskCount = tasks.filter((t) => t.status === "open").length;
+  const overdueCount = tasks.filter((t) => t.status === "open" && t.dueAt && new Date(t.dueAt).getTime() < Date.now()).length;
 
   return (
     <div className="space-y-lg">
@@ -165,6 +174,29 @@ export function LeadDetail({
             }
           >
             Overview
+          </button>
+          <button
+            type="button"
+            onClick={() => setTab("tasks")}
+            className={
+              "px-md h-9 text-label-sm font-semibold transition inline-flex items-center gap-xs " +
+              (tab === "tasks"
+                ? "bg-primary text-on-primary"
+                : "bg-surface-container-lowest text-on-surface-variant hover:bg-surface-container-low")
+            }
+          >
+            Tasks
+            {openTaskCount > 0 && (
+              <span
+                className={
+                  "inline-grid place-items-center min-w-[18px] h-[18px] px-[5px] rounded-full text-[10px] font-bold " +
+                  (overdueCount > 0 ? "bg-error text-white" : "bg-accent text-on-primary")
+                }
+                title={overdueCount > 0 ? `${overdueCount} overdue` : `${openTaskCount} open`}
+              >
+                {openTaskCount}
+              </span>
+            )}
           </button>
           {access.canViewHistory && (
             <button
@@ -190,7 +222,7 @@ export function LeadDetail({
         )}
       </div>
 
-      {tab === "overview" ? (
+      {tab === "overview" && (
         <>
           <StageBar lead={lead} statuses={masters.statuses} canEdit={canEdit} />
           <div className="grid grid-cols-1 lg:grid-cols-3 gap-lg">
@@ -206,9 +238,19 @@ export function LeadDetail({
             </div>
           </div>
         </>
-      ) : (
-        <HistoryPanel leadId={lead.id} bdes={masters.bdes} />
       )}
+
+      {tab === "tasks" && (
+        <TasksPanel
+          leadId={lead.id}
+          tasks={tasks}
+          canEdit={canEdit}
+          bdes={masters.bdes}
+          defaultAssigneeId={lead.assignedTo?.id ?? null}
+        />
+      )}
+
+      {tab === "history" && <HistoryPanel leadId={lead.id} bdes={masters.bdes} />}
 
       {comm === "email" && <EmailModal lead={lead} onClose={() => setComm(null)} />}
       {comm === "whatsapp" && <WhatsAppModal lead={lead} onClose={() => setComm(null)} />}
@@ -969,6 +1011,11 @@ const HISTORY_TYPES = [
   "WHATSAPP_SENT",
   "CALL_LOGGED",
   "PARTY_LINKED",
+  "TASK_CREATED",
+  "TASK_COMPLETED",
+  "TASK_REOPENED",
+  "TASK_UPDATED",
+  "TASK_DELETED",
 ];
 
 function HistoryPanel({ leadId, bdes }: { leadId: string; bdes: BdeOpt[] }) {
@@ -1120,5 +1167,269 @@ function HistoryPanel({ leadId, bdes }: { leadId: string; bdes: BdeOpt[] }) {
         </table>
       </div>
     </div>
+  );
+}
+
+// ── Tasks ─────────────────────────────────────────────────────────────────────
+const PRIORITY_META: Record<string, { label: string; color: string }> = {
+  high: { label: "High", color: "#dc2626" },
+  normal: { label: "Normal", color: "#3b82f6" },
+  low: { label: "Low", color: "#6b7280" },
+};
+
+function taskDueLabel(iso: string | null): { text: string; overdue: boolean } | null {
+  if (!iso) return null;
+  const d = new Date(iso);
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+  const day = new Date(d.getFullYear(), d.getMonth(), d.getDate());
+  const diff = Math.round((day.getTime() - today.getTime()) / 86400000);
+  const base = `${d.getDate()} ${MONTHS[d.getMonth()]}`;
+  if (diff < 0) return { text: `Overdue · ${base}`, overdue: true };
+  if (diff === 0) return { text: "Due today", overdue: false };
+  if (diff === 1) return { text: "Due tomorrow", overdue: false };
+  return { text: `Due ${base}`, overdue: false };
+}
+
+function PriorityPill({ priority }: { priority: string }) {
+  const meta = PRIORITY_META[priority] ?? PRIORITY_META.normal;
+  return (
+    <span
+      className="px-xs py-[1px] rounded-full text-[10px] font-bold"
+      style={{ backgroundColor: `${meta.color}1f`, color: meta.color }}
+    >
+      {meta.label}
+    </span>
+  );
+}
+
+function TasksPanel({
+  leadId,
+  tasks,
+  canEdit,
+  bdes,
+  defaultAssigneeId,
+}: {
+  leadId: string;
+  tasks: TaskRow[];
+  canEdit: boolean;
+  bdes: BdeOpt[];
+  defaultAssigneeId: string | null;
+}) {
+  const open = tasks.filter((t) => t.status === "open");
+  const done = tasks.filter((t) => t.status === "done");
+
+  return (
+    <div className={cardCls}>
+      <div className="flex items-center justify-between">
+        <h3 className="text-h3 text-on-surface">Tasks</h3>
+        <span className="text-label-sm text-on-surface-variant">
+          {open.length} open · {done.length} completed
+        </span>
+      </div>
+
+      {canEdit ? (
+        <TaskComposer leadId={leadId} bdes={bdes} defaultAssigneeId={defaultAssigneeId} />
+      ) : (
+        <p className="text-label-sm text-on-surface-variant inline-flex items-center gap-xs">
+          <span className="material-symbols-outlined" style={{ fontSize: 16 }}>
+            lock
+          </span>
+          Read-only — this lead isn&apos;t assigned to you.
+        </p>
+      )}
+
+      <div className="space-y-xs">
+        <div className="text-label-sm uppercase tracking-wider text-on-surface-variant">Open</div>
+        {open.length === 0 ? (
+          <p className="text-body-md text-on-surface-variant">No open tasks.</p>
+        ) : (
+          <ul className="space-y-base">
+            {open.map((t) => (
+              <TaskItem key={t.id} leadId={leadId} task={t} canEdit={canEdit} />
+            ))}
+          </ul>
+        )}
+      </div>
+
+      {done.length > 0 && (
+        <div className="space-y-xs">
+          <div className="text-label-sm uppercase tracking-wider text-on-surface-variant">Completed</div>
+          <ul className="space-y-base">
+            {done.map((t) => (
+              <TaskItem key={t.id} leadId={leadId} task={t} canEdit={canEdit} />
+            ))}
+          </ul>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function TaskComposer({
+  leadId,
+  bdes,
+  defaultAssigneeId,
+}: {
+  leadId: string;
+  bdes: BdeOpt[];
+  defaultAssigneeId: string | null;
+}) {
+  const router = useRouter();
+  const [subject, setSubject] = useState("");
+  const [due, setDue] = useState("");
+  const [priority, setPriority] = useState("normal");
+  const [assignee, setAssignee] = useState(defaultAssigneeId ?? "");
+  const [note, setNote] = useState("");
+  const [busy, setBusy] = useState(false);
+
+  async function add() {
+    if (!subject.trim() || busy) return;
+    setBusy(true);
+    const res = await fetch(`/api/crm/leads/${leadId}/tasks`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        subject: subject.trim(),
+        dueAt: due || null,
+        priority,
+        assignedToId: assignee || null,
+        note: note.trim() || null,
+      }),
+    });
+    setBusy(false);
+    if (res.ok) {
+      setSubject("");
+      setDue("");
+      setPriority("normal");
+      setNote("");
+      router.refresh();
+    }
+  }
+
+  return (
+    <div className="rounded-lg border border-outline-variant bg-surface-container-low p-md space-y-sm">
+      <input
+        value={subject}
+        onChange={(e) => setSubject(e.target.value)}
+        placeholder="Add a task (e.g. Follow-up call about documents)…"
+        className={inputCls}
+      />
+      <div className="grid grid-cols-1 sm:grid-cols-3 gap-base">
+        <Field label="Due date">
+          <input type="date" value={due} onChange={(e) => setDue(e.target.value)} className={inputCls} />
+        </Field>
+        <Field label="Priority">
+          <select value={priority} onChange={(e) => setPriority(e.target.value)} className={inputCls}>
+            <option value="low">Low</option>
+            <option value="normal">Normal</option>
+            <option value="high">High</option>
+          </select>
+        </Field>
+        <Field label="Assign to">
+          <select value={assignee} onChange={(e) => setAssignee(e.target.value)} className={inputCls}>
+            <option value="">Lead owner</option>
+            {bdes.map((b) => (
+              <option key={b.userId} value={b.userId}>
+                {b.displayName}
+              </option>
+            ))}
+          </select>
+        </Field>
+      </div>
+      <textarea
+        value={note}
+        onChange={(e) => setNote(e.target.value)}
+        placeholder="Note (optional)…"
+        rows={2}
+        className="w-full px-md py-sm rounded-lg border border-outline-variant bg-surface-container-lowest focus:border-primary focus:ring-2 focus:ring-primary/20 outline-none transition text-body-md resize-y"
+      />
+      <div className="flex justify-end">
+        <button type="button" disabled={!subject.trim() || busy} onClick={add} className={primaryBtn + " h-9"}>
+          {busy ? "Adding…" : "Add task"}
+        </button>
+      </div>
+    </div>
+  );
+}
+
+function TaskItem({ leadId, task, canEdit }: { leadId: string; task: TaskRow; canEdit: boolean }) {
+  const router = useRouter();
+  const [busy, setBusy] = useState(false);
+  const done = task.status === "done";
+  const due = taskDueLabel(task.dueAt);
+
+  async function toggle() {
+    if (!canEdit || busy) return;
+    setBusy(true);
+    const res = await fetch(`/api/crm/leads/${leadId}/tasks/${task.id}`, {
+      method: "PATCH",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ status: done ? "open" : "done" }),
+    });
+    setBusy(false);
+    if (res.ok) router.refresh();
+  }
+  async function remove() {
+    if (!canEdit || busy) return;
+    if (!confirm("Delete this task?")) return;
+    setBusy(true);
+    const res = await fetch(`/api/crm/leads/${leadId}/tasks/${task.id}`, { method: "DELETE" });
+    setBusy(false);
+    if (res.ok) router.refresh();
+  }
+
+  return (
+    <li className="flex items-start gap-sm rounded-lg border border-outline-variant bg-surface-container-low p-md">
+      <button
+        type="button"
+        onClick={toggle}
+        disabled={!canEdit || busy}
+        title={canEdit ? (done ? "Reopen" : "Mark complete") : "Read-only"}
+        className="mt-[2px] flex-shrink-0 disabled:cursor-default"
+      >
+        <span
+          className={"material-symbols-outlined " + (done ? "text-primary-container" : "text-on-surface-variant hover:text-accent")}
+          style={{ fontSize: 22 }}
+        >
+          {done ? "check_box" : "check_box_outline_blank"}
+        </span>
+      </button>
+      <div className="flex-1 min-w-0">
+        <p className={"text-body-md " + (done ? "line-through text-on-surface-variant" : "text-on-surface")}>{task.subject}</p>
+        <div className="flex items-center flex-wrap gap-sm mt-[3px] text-label-sm">
+          {done ? (
+            <span className="text-on-surface-variant">
+              Completed{task.completedAt ? ` ${fmtRelative(task.completedAt)}` : ""}
+            </span>
+          ) : (
+            due && (
+              <span className={due.overdue ? "text-error font-semibold" : "text-on-surface-variant"}>{due.text}</span>
+            )
+          )}
+          <PriorityPill priority={task.priority} />
+          {task.assignedToName && (
+            <span className="inline-flex items-center gap-xs text-on-surface-variant">
+              <Avatar name={task.assignedToName} />
+              {task.assignedToName}
+            </span>
+          )}
+        </div>
+        {task.note && <p className="mt-xs text-label-sm text-on-surface-variant whitespace-pre-wrap">{task.note}</p>}
+      </div>
+      {canEdit && (
+        <button
+          type="button"
+          onClick={remove}
+          disabled={busy}
+          className="text-on-surface-variant hover:text-error flex-shrink-0"
+          title="Delete task"
+        >
+          <span className="material-symbols-outlined" style={{ fontSize: 18 }}>
+            delete
+          </span>
+        </button>
+      )}
+    </li>
   );
 }

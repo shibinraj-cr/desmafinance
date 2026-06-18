@@ -77,6 +77,9 @@ model User {
   leadNotes              LeadNote[]           @relation("LeadNoteAuthor")
   leadActivities         LeadActivity[]       @relation("LeadActivityActor")
   leadImports            LeadImportBatch[]    @relation("LeadImportUploader")
+  crmTasksAssigned       CrmTask[]            @relation("CrmTaskAssignee")
+  crmTasksCreated        CrmTask[]            @relation("CrmTaskCreatedBy")
+  crmTasksCompleted      CrmTask[]            @relation("CrmTaskCompletedBy")
 
   @@index([roleId])
 }
@@ -1841,6 +1844,7 @@ model Lead {
 
   notes      LeadNote[]
   activities LeadActivity[]
+  tasks      CrmTask[]
 
   @@index([assignedToId])
   @@index([statusId])
@@ -1928,6 +1932,38 @@ model LeadActivity {
   @@index([leadId, occurredAt])
   @@index([type])
   @@index([actorId])
+}
+
+// Per-lead tasks / follow-ups (the Dynamics "Activities → Task" concept).
+// Visible to anyone with CRM view access; mutated only by the assigned BDE or an
+// admin (same canEditLead rule as notes/comms). Every change writes a
+// TASK_* LeadActivity so it surfaces in the Timeline + admin History.
+model CrmTask {
+  id            String    @id @default(cuid())
+  leadId        String
+  lead          Lead      @relation(fields: [leadId], references: [id], onDelete: Cascade)
+  subject       String
+  dueAt         DateTime?
+  // 'low' | 'normal' | 'high'
+  priority      String    @default("normal")
+  // 'open' | 'done'
+  status        String    @default("open")
+  note          String?
+  // The consultant (BDE) responsible for the task.
+  assignedToId  String?
+  assignedTo    User?     @relation("CrmTaskAssignee", fields: [assignedToId], references: [id], onDelete: SetNull)
+  createdById   String?
+  createdBy     User?     @relation("CrmTaskCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
+  completedById String?
+  completedBy   User?     @relation("CrmTaskCompletedBy", fields: [completedById], references: [id], onDelete: SetNull)
+  completedAt   DateTime?
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+
+  @@index([leadId, status])
+  // Supports a future cross-lead "My open tasks" / overdue view.
+  @@index([assignedToId, status, dueAt])
+  @@index([dueAt])
 }
 
 // Bulk-upload batches (for "X new, Y duplicates" reporting + provenance).

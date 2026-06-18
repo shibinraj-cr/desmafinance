@@ -189,6 +189,49 @@ export function serializeActivity(
   };
 }
 
+// ── Tasks (per-lead follow-ups) ─────────────────────────────────────────────
+export const taskInclude = Prisma.validator<Prisma.CrmTaskInclude>()({
+  assignedTo: { select: { id: true, username: true, leadPulseRole: { select: { displayName: true } } } },
+});
+export type TaskWithRels = Prisma.CrmTaskGetPayload<{ include: typeof taskInclude }>;
+
+export type TaskRow = {
+  id: string;
+  subject: string;
+  dueAt: string | null;
+  priority: string; // 'low' | 'normal' | 'high'
+  status: string; // 'open' | 'done'
+  note: string | null;
+  assignedToId: string | null;
+  assignedToName: string | null;
+  completedAt: string | null;
+  createdAt: string;
+};
+
+export function serializeTask(t: TaskWithRels): TaskRow {
+  return {
+    id: t.id,
+    subject: t.subject,
+    dueAt: t.dueAt ? t.dueAt.toISOString() : null,
+    priority: t.priority,
+    status: t.status,
+    note: t.note,
+    assignedToId: t.assignedToId,
+    assignedToName: t.assignedTo
+      ? t.assignedTo.leadPulseRole?.displayName ?? t.assignedTo.username
+      : null,
+    completedAt: t.completedAt ? t.completedAt.toISOString() : null,
+    createdAt: t.createdAt.toISOString(),
+  };
+}
+
+/** Open tasks first (by due date, soonest first), then completed. */
+export const taskOrderBy: Prisma.CrmTaskOrderByWithRelationInput[] = [
+  { status: "desc" }, // 'open' > 'done' alphabetically, so desc lists open first
+  { dueAt: "asc" },
+  { createdAt: "desc" },
+];
+
 export type BdeOption = {
   userId: string;
   displayName: string;
