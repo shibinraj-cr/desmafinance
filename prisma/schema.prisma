@@ -1824,9 +1824,12 @@ model Lead {
   partyId String?
   party   Party?  @relation("LeadParty", fields: [partyId], references: [id], onDelete: SetNull)
 
-  // Dedup + provenance. dedupeKey = lowercased email OR phoneE164 — a plain
-  // (non-unique) index because duplicates are flagged with a "Duplicate"
-  // status rather than dropped.
+  // Dedup keys. Detection matches an existing lead on emailKey OR phoneE164
+  // independently (either collision flags a "Duplicate"). emailKey = lowercased
+  // email; phoneE164 = normalised phone. Both plain (non-unique) indexes because
+  // duplicates are flagged with a "Duplicate" status rather than dropped.
+  // dedupeKey (legacy = email OR phone) is kept for provenance/back-compat.
+  emailKey      String?
   dedupeKey     String?
   importBatchId String?
   importBatch   LeadImportBatch? @relation(fields: [importBatchId], references: [id], onDelete: SetNull)
@@ -1856,6 +1859,7 @@ model Lead {
   @@index([createdAt])
   @@index([lastActivityAt])
   @@index([dedupeKey])
+  @@index([emailKey])
   @@index([email])
   @@index([phoneE164])
 }

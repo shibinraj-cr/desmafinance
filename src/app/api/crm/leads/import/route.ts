@@ -6,7 +6,7 @@ import { withApiHandler } from "@/lib/api";
 import { unauthorized, forbidden, badRequest } from "@/lib/http-error";
 import { getCurrentUserAndPermissions } from "@/lib/permissions";
 import { getCrmAccess } from "@/lib/crm-rbac";
-import { normalizePhone, computeDedupeKey } from "@/lib/crm";
+import { normalizePhone, computeDedupeKey, emailKeyOf } from "@/lib/crm";
 import { resolveDefaultStatus, getDuplicateStatus, getAssignableBdes } from "@/lib/crm-leads";
 
 export const dynamic = "force-dynamic";
@@ -93,14 +93,17 @@ export const POST = withApiHandler(async (req: Request) => {
     bdeMap.set(b.username.toLowerCase(), b.userId);
   }
 
-  // Existing dedupe keys in the DB (for cross-upload duplicate flagging).
-  const parsedKeys: string[] = [];
+  // Candidate match keys gathered across the file, for cross-upload duplicate
+  // flagging against existing leads. Email and phone are matched independently.
+  const parsedEmailKeys: string[] = [];
+  const parsedPhones: string[] = [];
 
   type Parsed = {
     candidateName: string;
     email: string | null;
     phone: string | null;
     phoneE164: string | null;
+    emailKey: string | null;
     dedupeKey: string | null;
     sourceId: string | null;
     serviceId: string | null;
@@ -128,8 +131,10 @@ export const POST = withApiHandler(async (req: Request) => {
     const email = get(row, "email") || null;
     const phone = get(row, "phone") || null;
     const phoneE164 = normalizePhone(phone);
-    const dedupeKey = computeDedupeKey(email, phoneE164);
-    if (dedupeKey) parsedKeys.push(dedupeKey);
+    const emailKey = emailKeyOf(email);
+    const dedupeKey = computeDedupeKey(email, phoneE164); // legacy provenance key
+    if (emailKey) parsedEmailKeys.push(emailKey);
+    if (phoneE164) parsedPhones.push(phoneE164);
 
     const extra: Record<string, string> = {};
     const noteVal = get(row, "notes");
@@ -144,6 +149,7 @@ export const POST = withApiHandler(async (req: Request) => {
       email,
       phone,
       phoneE164,
+      emailKey,
       dedupeKey,
       sourceId: sourceMap.get(get(row, "source").toLowerCase()) ?? null,
       serviceId: serviceMap.get(get(row, "service").toLowerCase()) ?? null,
@@ -153,20 +159,30 @@ export const POST = withApiHandler(async (req: Request) => {
     });
   }
 
-  const existing = parsedKeys.length
-    ? await prisma.lead.findMany({ where: { dedupeKey: { in: parsedKeys } }, select: { dedupeKey: true } })
+  // Existing leads that collide on email OR phone (matched independently).
+  const dupWhere: Prisma.LeadWhereInput[] = [];
+  if (parsedEmailKeys.length) dupWhere.push({ emailKey: { in: parsedEmailKeys } });
+  if (parsedPhones.length) dupWhere.push({ phoneE164: { in: parsedPhones } });
+  const existing = dupWhere.length
+    ? await prisma.lead.findMany({ where: { OR: dupWhere }, select: { emailKey: true, phoneE164: true } })
     : [];
-  const existingKeys = new Set(existing.map((e) => e.dedupeKey).filter(Boolean) as string[]);
+  const existingEmailKeys = new Set(existing.map((e) => e.emailKey).filter(Boolean) as string[]);
+  const existingPhones = new Set(existing.map((e) => e.phoneE164).filter(Boolean) as string[]);
 
-  // Decide new vs duplicate (existing in DB or earlier in this file).
-  const seen = new Set<string>();
+  // Decide new vs duplicate (collision on email OR phone, against the DB or an
+  // earlier row in this same file).
+  const seenEmailKeys = new Set<string>();
+  const seenPhones = new Set<string>();
   let duplicateRows = 0;
   let insertedRows = 0;
   const toCreate: Prisma.LeadCreateManyInput[] = [];
 
   for (const p of parsed) {
-    const isDup = !!p.dedupeKey && (existingKeys.has(p.dedupeKey) || seen.has(p.dedupeKey));
-    if (p.dedupeKey) seen.add(p.dedupeKey);
+    const emailDup = !!p.emailKey && (existingEmailKeys.has(p.emailKey) || seenEmailKeys.has(p.emailKey));
+    const phoneDup = !!p.phoneE164 && (existingPhones.has(p.phoneE164) || seenPhones.has(p.phoneE164));
+    const isDup = emailDup || phoneDup;
+    if (p.emailKey) seenEmailKeys.add(p.emailKey);
+    if (p.phoneE164) seenPhones.add(p.phoneE164);
     const statusId = isDup && dupStatus && dupStatus.active ? dupStatus.id : defStatus.id;
     if (isDup) duplicateRows++;
     else insertedRows++;
@@ -175,6 +191,7 @@ export const POST = withApiHandler(async (req: Request) => {
       email: p.email,
       phone: p.phone,
       phoneE164: p.phoneE164,
+      emailKey: p.emailKey,
       dedupeKey: p.dedupeKey,
       sourceId: p.sourceId,
       serviceId: p.serviceId,

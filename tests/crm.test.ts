@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { normalizePhone, computeDedupeKey, renderTemplate } from "@/lib/crm";
+import { normalizePhone, computeDedupeKey, emailKeyOf, renderTemplate } from "@/lib/crm";
 
 describe("normalizePhone", () => {
   it("prefixes +91 for bare 10-digit Indian mobiles", () => {
@@ -38,6 +38,23 @@ describe("computeDedupeKey", () => {
   it("returns null when neither is present", () => {
     expect(computeDedupeKey(null, null)).toBeNull();
     expect(computeDedupeKey("", "")).toBeNull();
+  });
+});
+
+describe("emailKeyOf", () => {
+  it("lowercases and trims the email", () => {
+    expect(emailKeyOf("  Foo@Bar.COM ")).toBe("foo@bar.com");
+  });
+  it("returns null for blank / missing input", () => {
+    expect(emailKeyOf(null)).toBeNull();
+    expect(emailKeyOf(undefined)).toBeNull();
+    expect(emailKeyOf("")).toBeNull();
+    expect(emailKeyOf("   ")).toBeNull();
+  });
+  it("is independent of the phone (unlike computeDedupeKey)", () => {
+    // A lead with only a phone has no email key — it is matched on phoneE164.
+    expect(emailKeyOf(null)).toBeNull();
+    expect(computeDedupeKey(null, "+919876543210")).toBe("+919876543210");
   });
 });
 

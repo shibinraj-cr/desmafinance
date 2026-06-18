@@ -6,7 +6,7 @@ import { unauthorized, forbidden, badRequest } from "@/lib/http-error";
 import { getCurrentUserAndPermissions } from "@/lib/permissions";
 import { getCrmAccess } from "@/lib/crm-rbac";
 import { recordLeadActivity } from "@/lib/crm-activity";
-import { normalizePhone, computeDedupeKey } from "@/lib/crm";
+import { normalizePhone, computeDedupeKey, emailKeyOf } from "@/lib/crm";
 import { parsePeriod, rangeFor } from "@/lib/period";
 import {
   leadRowInclude,
@@ -89,7 +89,8 @@ export const POST = withApiHandler(async (req: Request) => {
   const email = data.email || null;
   const phone = data.phone || null;
   const phoneE164 = normalizePhone(phone);
-  const dedupeKey = computeDedupeKey(email, phoneE164);
+  const emailKey = emailKeyOf(email);
+  const dedupeKey = computeDedupeKey(email, phoneE164); // legacy provenance key
 
   // Resolve the starting status. Non-default unless an explicit valid status is
   // provided; flipped to "Duplicate" below if a matching lead already exists.
@@ -108,9 +109,14 @@ export const POST = withApiHandler(async (req: Request) => {
   // flag that the visible status contradicts.
   let duplicateOfId: string | null = null;
   let duplicateFlagged = false;
-  if (dedupeKey) {
+  // Match an existing lead on email OR phone, independently — either collision
+  // means the new lead is a likely duplicate.
+  const dupOr: ({ emailKey: string } | { phoneE164: string })[] = [];
+  if (emailKey) dupOr.push({ emailKey });
+  if (phoneE164) dupOr.push({ phoneE164 });
+  if (dupOr.length) {
     const dup = await prisma.lead.findFirst({
-      where: { dedupeKey },
+      where: { OR: dupOr },
       select: { id: true },
       orderBy: { createdAt: "asc" },
     });
@@ -141,6 +147,7 @@ export const POST = withApiHandler(async (req: Request) => {
       email,
       phone,
       phoneE164,
+      emailKey,
       dedupeKey,
       sourceId: data.sourceId || null,
       serviceId: data.serviceId || null,
