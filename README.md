@@ -55,8 +55,16 @@ DATABASE_URL="postgres://…" npm run db:seed
 DATABASE_URL="postgres://…" EXCEL_PATH="/abs/path/file.xlsx" npm run db:seed-from-excel
 ```
 
-Subsequent deploys auto-run `prisma generate` (see `build` script). Schema changes
-require running `prisma db push` again from your machine.
+Subsequent deploys run `node scripts/build.mjs` (the `build` script): on
+**production** deploys it applies pending migrations with `prisma migrate deploy`
+before `prisma generate && next build`, so a schema change ships live in the same
+release as the code that needs it. Preview and local builds skip the migration so
+a feature-branch migration never touches the production database.
+
+This means committed migrations under `prisma/migrations/` deploy automatically on
+the next production release — you no longer need to run `prisma migrate deploy`
+from your machine. (You can still run `npm run db:migrate:deploy` manually against
+a `DATABASE_URL` if you want to migrate ahead of a deploy.)
 
 ## Adding more users
 
