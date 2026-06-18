@@ -160,6 +160,28 @@ export const MODULES: AppModule[] = [
     ],
   },
   {
+    id: "crm",
+    name: "CRM",
+    icon: "contacts",
+    basePath: "/crm",
+    status: "active",
+    pages: [
+      {
+        href: "/crm/leads",
+        label: "Leads",
+        icon: "groups",
+        group: "PIPELINE",
+      },
+      {
+        href: "/crm/settings",
+        label: "Settings",
+        icon: "tune",
+        group: "ADMIN",
+        adminOnly: true,
+      },
+    ],
+  },
+  {
     id: "hr",
     name: "HR",
     icon: "badge",

@@ -28,6 +28,8 @@
     "db:migrate-expense-master": "tsx prisma/migrate-expense-master.ts",
     "db:migrate-party-services": "tsx prisma/migrate-party-services.ts",
     "db:seed-lead-pulse": "tsx prisma/seed-lead-pulse.ts",
+    "db:seed-crm": "tsx prisma/seed-crm.ts",
+    "db:grant-crm-pages": "tsx prisma/grant-crm-pages.ts",
     "db:seed-from-excel": "tsx prisma/seed-from-excel.ts",
     "lp:import-historical": "tsx prisma/lead-pulse-import-historical.ts",
     "lp:import-historical:dry": "tsx prisma/lead-pulse-import-historical.ts --dry-run"

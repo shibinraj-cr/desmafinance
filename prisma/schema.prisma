@@ -71,6 +71,13 @@ model User {
   psychTestsCreated      PsychTest[]          @relation("PsychTestCreator")
   psychAssignmentsGiven  PsychAssignment[]    @relation("PsychAssigner")
 
+  // CRM relations
+  assignedLeads          Lead[]               @relation("LeadAssignee")
+  createdLeads           Lead[]               @relation("LeadCreatedBy")
+  leadNotes              LeadNote[]           @relation("LeadNoteAuthor")
+  leadActivities         LeadActivity[]       @relation("LeadActivityActor")
+  leadImports            LeadImportBatch[]    @relation("LeadImportUploader")
+
   @@index([roleId])
 }
 
@@ -199,6 +206,7 @@ model Service {
   leadPulseCloses   LeadPulseDailyClose[]
   leadPulsePipeline LeadPulsePipeline[]
   collectionPlans   CollectionPlan[]
+  leads             Lead[]
 
   @@index([isActive])
   @@index([groupId])
@@ -281,6 +289,7 @@ model LeadPulseSource {
   snapshots         LeadPulseMonthlySnapshot[]
   parties           Party[]
   leadPulsePipeline LeadPulsePipeline[]
+  leads             Lead[]
 
   @@index([active])
   @@index([displayOrder])
@@ -599,6 +608,7 @@ model Party {
   partyServices     PartyService[]
   pipelineRows      LeadPulsePipeline[] @relation("PartyPipeline")
   collectionPlans   CollectionPlan[]
+  leads             Lead[]              @relation("LeadParty")
 
   @@index([group])
   @@index([isActive])
@@ -1773,4 +1783,168 @@ model IncentiveBde {
   sortIndex Int           @default(0)
 
   @@index([planId])
+}
+
+// ── CRM: individual inbound leads ───────────────────────────────────────────
+// The CRM module tracks per-lead records (modelled on the Dynamics 365 Sales
+// "Opportunity" view). It reuses Marketing masters (LeadPulseSource, Service)
+// and BDE identity (LeadPulseRole) but keeps its own per-lead tables separate
+// from Lead Pulse's aggregate daily-metrics tables.
+
+model Lead {
+  id String @id @default(cuid())
+
+  // Core identity (shown as Excel-like columns)
+  candidateName String
+  email         String?
+  // Raw phone as captured, plus a normalised E.164 used for wa.me / tel links.
+  phone         String?
+  phoneE164     String?
+
+  // Classification (FKs to reusable masters)
+  sourceId        String?
+  source          LeadPulseSource?  @relation(fields: [sourceId], references: [id], onDelete: SetNull)
+  serviceId       String?
+  service         Service?          @relation(fields: [serviceId], references: [id], onDelete: SetNull)
+  qualificationId String?
+  qualification   CrmQualification? @relation(fields: [qualificationId], references: [id], onDelete: SetNull)
+
+  // Pipeline stage / disposition (admin-editable master)
+  statusId String
+  status   CrmLeadStatus @relation(fields: [statusId], references: [id], onDelete: Restrict)
+
+  // Assignment — the consultant (BDE) who owns this lead.
+  assignedToId String?
+  assignedTo   User?   @relation("LeadAssignee", fields: [assignedToId], references: [id], onDelete: SetNull)
+
+  // Optional linkage to the canonical candidate record once enrolled.
+  partyId String?
+  party   Party?  @relation("LeadParty", fields: [partyId], references: [id], onDelete: SetNull)
+
+  // Dedup + provenance. dedupeKey = lowercased email OR phoneE164 — a plain
+  // (non-unique) index because duplicates are flagged with a "Duplicate"
+  // status rather than dropped.
+  dedupeKey     String?
+  importBatchId String?
+  importBatch   LeadImportBatch? @relation(fields: [importBatchId], references: [id], onDelete: SetNull)
+
+  /// Free-form extras captured at import (region, campaign, city, age, …).
+  /// JSON: Record<string, string>.
+  extra Json?
+
+  createdById    String?
+  createdBy      User?    @relation("LeadCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+  // Drives "stale lead" sorting; bumped on every meaningful activity.
+  lastActivityAt DateTime @default(now())
+
+  notes      LeadNote[]
+  activities LeadActivity[]
+
+  @@index([assignedToId])
+  @@index([statusId])
+  @@index([sourceId])
+  @@index([serviceId])
+  @@index([qualificationId])
+  @@index([partyId])
+  @@index([importBatchId])
+  @@index([createdAt])
+  @@index([lastActivityAt])
+  @@index([dedupeKey])
+  @@index([email])
+  @@index([phoneE164])
+}
+
+// Admin-configurable pipeline stages / dispositions.
+model CrmLeadStatus {
+  id           String   @id @default(cuid())
+  // 'not_yet_started' | 'qualify' | 'follow_up' | 'duplicate' | 'not_interested' | 'enrolled'
+  code         String   @unique
+  label        String
+  // 'active' (shows on the stage bar) | 'won' | 'lost'
+  kind         String   @default("active")
+  displayOrder Int      @default(0)
+  // Hex colour for the pill (optional).
+  color        String?
+  // The status new leads start in. Exactly one row should have this true.
+  isDefault    Boolean  @default(false)
+  active       Boolean  @default(true)
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+  leads        Lead[]
+
+  @@index([active])
+  @@index([displayOrder])
+}
+
+model CrmQualification {
+  id           String   @id @default(cuid())
+  label        String   @unique
+  displayOrder Int      @default(0)
+  active       Boolean  @default(true)
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+  leads        Lead[]
+
+  @@index([active])
+  @@index([displayOrder])
+}
+
+// Per-lead notes (editable; edits are tracked as activities).
+model LeadNote {
+  id        String    @id @default(cuid())
+  leadId    String
+  lead      Lead      @relation(fields: [leadId], references: [id], onDelete: Cascade)
+  authorId  String?
+  author    User?     @relation("LeadNoteAuthor", fields: [authorId], references: [id], onDelete: SetNull)
+  body      String
+  editedAt  DateTime?
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+
+  @@index([leadId, createdAt])
+  @@index([authorId])
+}
+
+// Single source of truth for the Timeline AND the admin History tab.
+model LeadActivity {
+  id         String   @id @default(cuid())
+  leadId     String
+  lead       Lead     @relation(fields: [leadId], references: [id], onDelete: Cascade)
+  actorId    String?
+  actor      User?    @relation("LeadActivityActor", fields: [actorId], references: [id], onDelete: SetNull)
+  // See the taxonomy in src/lib/crm-activity.ts:
+  // LEAD_CREATED | LEAD_IMPORTED | LEAD_OPENED | STATUS_CHANGED | FIELD_UPDATED |
+  // ASSIGNED | REASSIGNED | UNASSIGNED | NOTE_ADDED | NOTE_EDITED | NOTE_DELETED |
+  // EMAIL_SENT | WHATSAPP_SENT | CALL_LOGGED | PARTY_LINKED
+  type       String
+  // Human summary rendered in the timeline, e.g. "Status changed: Qualify → Follow Up".
+  summary    String?
+  /// Structured payload: { from, to, noteId, subject, channel, outcome, durationSec, … }.
+  metadata   Json?
+  occurredAt DateTime @default(now())
+
+  @@index([leadId, occurredAt])
+  @@index([type])
+  @@index([actorId])
+}
+
+// Bulk-upload batches (for "X new, Y duplicates" reporting + provenance).
+model LeadImportBatch {
+  id            String   @id @default(cuid())
+  fileName      String?
+  uploadedById  String?
+  uploadedBy    User?    @relation("LeadImportUploader", fields: [uploadedById], references: [id], onDelete: SetNull)
+  totalRows     Int      @default(0)
+  insertedRows  Int      @default(0)
+  duplicateRows Int      @default(0)
+  errorRows     Int      @default(0)
+  // 'completed' | 'failed'
+  status        String   @default("completed")
+  createdAt     DateTime @default(now())
+  leads         Lead[]
+
+  @@index([createdAt])
+  @@index([uploadedById])
 }
