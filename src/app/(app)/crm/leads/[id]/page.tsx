@@ -13,6 +13,9 @@ import {
   activityInclude,
   serializeActivity,
   getAssignableBdes,
+  taskInclude,
+  serializeTask,
+  taskOrderBy,
 } from "@/lib/crm-leads";
 import { LeadDetail } from "./client";
 
@@ -44,7 +47,7 @@ export default async function LeadDetailPage({ params }: { params: { id: string 
   const lead = await prisma.lead.findUnique({ where: { id: params.id }, include: leadRowInclude });
   if (!lead) notFound();
 
-  const [notes, activities, statuses, sources, services, qualifications, bdes, parties] = await Promise.all([
+  const [notes, activities, tasks, statuses, sources, services, qualifications, bdes, parties] = await Promise.all([
     prisma.leadNote.findMany({ where: { leadId: params.id }, orderBy: { createdAt: "desc" }, include: noteInclude }),
     prisma.leadActivity.findMany({
       where: { leadId: params.id, type: { notIn: TIMELINE_EXCLUDE } },
@@ -52,6 +55,7 @@ export default async function LeadDetailPage({ params }: { params: { id: string 
       take: 200,
       include: activityInclude,
     }),
+    prisma.crmTask.findMany({ where: { leadId: params.id }, orderBy: taskOrderBy, include: taskInclude }),
     prisma.crmLeadStatus.findMany({
       where: { active: true },
       orderBy: [{ displayOrder: "asc" }, { label: "asc" }],
@@ -110,6 +114,7 @@ export default async function LeadDetailPage({ params }: { params: { id: string 
           lead={serializeLead(lead)}
           notes={notes.map(serializeNote)}
           timeline={activities.map((a) => serializeActivity(a, { includeMetadata: false }))}
+          tasks={tasks.map(serializeTask)}
           masters={masters}
           canEdit={canEditLead(access, lead, userId)}
           access={{

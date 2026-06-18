@@ -21,6 +21,11 @@ export const CRM_ACTIVITY_TYPES = [
   "WHATSAPP_SENT",
   "CALL_LOGGED",
   "PARTY_LINKED",
+  "TASK_CREATED",
+  "TASK_COMPLETED",
+  "TASK_REOPENED",
+  "TASK_UPDATED",
+  "TASK_DELETED",
 ] as const;
 
 export type CrmActivityType = (typeof CRM_ACTIVITY_TYPES)[number];
