@@ -1,22 +1,23 @@
 /**
- * Desma CRM — Meta lead-ads sheet sync.
+ * Desma CRM — lead spreadsheet sync (Meta lead-ads, Website/SEO form, …).
  *
- * Pushes new rows from every campaign tab to the CRM webhook. Each tab = one
- * campaign; the tab name is sent as the campaign. A per-tab cursor tracks the
- * last-synced row so only NEW leads are sent. Re-runs are safe — the CRM also
- * dedupes by a stable per-row key (externalKey), so nothing is double-inserted.
+ * Pushes new rows from every tab to the CRM webhook. Each tab is sent as a
+ * "campaign"; the `source` (set once in Script properties) picks the CRM column
+ * mapping. A per-tab cursor tracks the last-synced row so only NEW leads go out.
+ * Re-runs are safe — the CRM dedupes by a stable per-row key (externalKey), so
+ * nothing is double-inserted.
  *
- * ── SETUP (once) ────────────────────────────────────────────────────────────
- * 1. In the spreadsheet: Extensions → Apps Script. Paste this whole file. Save.
- * 2. Project Settings (gear) → Script properties → add two properties:
- *      CRM_WEBHOOK_URL     = https://www.desgro.in/api/integrations/meta-leads
- *      CRM_WEBHOOK_SECRET  = <same value as META_LEADS_WEBHOOK_SECRET in Vercel>
- * 3. Run the `initBaseline` function once (Run menu). This points every tab's
- *    cursor at its current last row, so only leads added AFTER now will sync.
- *    (Skip this step if you want to backfill the whole sheet instead.)
- * 4. Triggers (clock icon) → Add Trigger:
- *      function: syncNewLeads   event: Time-driven → Minutes timer → Every minute
- * Done. New Meta leads now flow into the CRM within ~1 minute.
+ * ── SETUP (once per spreadsheet) ────────────────────────────────────────────
+ * 1. Extensions → Apps Script. Paste this whole file. Save.
+ * 2. Project Settings (gear) → Script properties → add three properties:
+ *      CRM_WEBHOOK_URL     = https://www.desgro.in/api/integrations/sheet-leads
+ *      CRM_WEBHOOK_SECRET  = <same value as SHEET_LEADS_WEBHOOK_SECRET in Vercel>
+ *      CRM_SOURCE          = meta        (Meta lead-ads sheet)
+ *                          = website     (Website / SEO form sheet)
+ * 3. Run `initBaseline` once → only leads added AFTER now will sync.
+ *    (Run `resetForBackfill` instead to import the whole sheet.)
+ * 4. Triggers (clock icon) → Add Trigger → function `syncNewLeads`,
+ *    Time-driven → Minutes timer → Every minute.
  */
 
 var HEADER_ROW = 1;
@@ -29,10 +30,11 @@ function _config() {
   var p = PropertiesService.getScriptProperties();
   var url = p.getProperty('CRM_WEBHOOK_URL');
   var secret = p.getProperty('CRM_WEBHOOK_SECRET');
-  if (!url || !secret) {
-    throw new Error('Set CRM_WEBHOOK_URL and CRM_WEBHOOK_SECRET in Project Settings → Script properties.');
+  var source = p.getProperty('CRM_SOURCE');
+  if (!url || !secret || !source) {
+    throw new Error('Set CRM_WEBHOOK_URL, CRM_WEBHOOK_SECRET and CRM_SOURCE in Project Settings → Script properties.');
   }
-  return { url: url, secret: secret };
+  return { url: url, secret: secret, source: source };
 }
 
 /** Point every tab's cursor at its current last row — only new rows sync after. */
@@ -85,7 +87,6 @@ function _syncSheet(sh, cfg) {
   // getValues (NOT getDisplayValues) so phone numbers keep their full digits.
   var values = sh.getRange(startRow, 1, lastRow - cursor, lastCol).getValues();
 
-  // Build {rowNum, obj} for non-blank rows.
   var dataRows = [];
   for (var i = 0; i < values.length; i++) {
     var obj = {};
@@ -115,8 +116,6 @@ function _syncSheet(sh, cfg) {
     lastSentRow = chunk[chunk.length - 1].rowNum;
   }
 
-  // Advance cursor to the last successfully-sent row (or the whole sheet if all
-  // chunks succeeded). A failed chunk is retried on the next run.
   _docProps().setProperty(_cursorKey(name), String(allOk ? lastRow : lastSentRow));
 }
 
@@ -125,7 +124,7 @@ function _post(cfg, campaign, rows) {
     method: 'post',
     contentType: 'application/json',
     headers: { 'x-webhook-secret': cfg.secret },
-    payload: JSON.stringify({ campaign: campaign, rows: rows }),
+    payload: JSON.stringify({ source: cfg.source, campaign: campaign, rows: rows }),
     muteHttpExceptions: true,
   });
   var code = res.getResponseCode();
