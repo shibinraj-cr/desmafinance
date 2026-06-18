@@ -70,7 +70,7 @@ export default async function ExecutiveDashboardPage() {
             value={headline.expectedCollections}
             tone="success"
             hero
-            hint={`${headline.expectedCollectionsCount} installments pending / submitted`}
+            hint={`${headline.expectedCollectionsCount} installments pending submission · due ${headline.currentMonthLabel}`}
           />
           <KpiCard
             label={`Pipeline · ${headline.currentMonthLabel}`}
@@ -91,14 +91,12 @@ export default async function ExecutiveDashboardPage() {
             value={headline.totalPending}
             tone="default"
             hero
-            hint={`Collections + all open pipeline · ${headline.pendingApprovalsCount} approvals queued`}
+            hint={`Pending submission + ${headline.currentMonthLabel} pipeline · ${headline.pendingApprovalsCount} approvals queued`}
           />
           {/* "Forecast" tile — the realistic upper bound on this month's
-              revenue: what's already landed + everything in flight
-              (expected collections + open pipeline). Same totalPending
-              composition as the tile to its left, but added on top of
-              the realised revenue so leadership sees the all-in
-              picture in one number. */}
+              revenue: what's already landed (current month revenue) plus
+              everything pending for the month (Total Pending = pending-
+              submission collections + this month's open pipeline). */}
           <KpiCard
             label={`Forecast · ${headline.currentMonthLabel}`}
             value={headline.currentMonthRevenue + headline.totalPending}

@@ -35,7 +35,8 @@ export type CeoHeadline = {
   previousMonthRevenue: number;
   currentMonthRevenueTrendPct: number | null;
 
-  /** Sum of CollectionPlanInstallment.amount where status ∈ (pending, submitted). */
+  /** Sum of CollectionPlanInstallment.amount that are still Pending
+   *  Submission (status='pending') and due in the running calendar month. */
   expectedCollections: number;
   expectedCollectionsCount: number;
 
@@ -53,9 +54,9 @@ export type CeoHeadline = {
   pipelineValueBeyond: number;
   pipelineCountBeyond: number;
 
-  /** Total pending = expected collections + ALL open pipeline (this
-   *  month + beyond). Keeps the headline single-number simple and
-   *  forward-looking. */
+  /** Total pending = Pending-Submission collections (this month) +
+   *  this month's open pipeline (pipelineValue). Beyond-month pipeline is
+   *  shown separately and is NOT included here. */
   totalPending: number;
 
   /** Finance approval queue — distinct from collection plans. Surfaced so the
@@ -114,7 +115,11 @@ export async function ceoHeadline(): Promise<CeoHeadline> {
       "collectionPlanInstallment.aggregate(expectedCollections)",
       () =>
         prisma.collectionPlanInstallment.aggregate({
-          where: { status: { in: ["pending", "submitted"] } },
+          // Pending Submission, due in the running calendar month.
+          where: {
+            status: "pending",
+            expectedDate: { gte: currentMonthStart, lt: nextMonthStart },
+          },
           _sum: { amount: true },
           _count: { _all: true },
         }),
@@ -194,7 +199,7 @@ export async function ceoHeadline(): Promise<CeoHeadline> {
     pipelineCount: pipelineCurrent._count._all,
     pipelineValueBeyond,
     pipelineCountBeyond: pipelineBeyond._count._all,
-    totalPending: expectedCollections + pipelineValue + pipelineValueBeyond,
+    totalPending: expectedCollections + pipelineValue,
     pendingApprovalsCount: approvals,
   };
 }
