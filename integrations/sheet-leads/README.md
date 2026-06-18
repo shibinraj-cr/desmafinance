@@ -35,22 +35,26 @@ Add a source by adding an entry to `SHEET_SOURCES` in `src/lib/crm-sheet-ingest.
 
 ## Setup
 
+Everything except pasting the script into Google is done **in the CRM**:
+**Settings → Integrations** (admin). That page generates the secret, shows the
+webhook URL, the per-source column mappings, the Apps Script to copy, and a
+recent-syncs log.
+
 ### 1. CRM side (one-time)
-Vercel → Project → Settings → Environment Variables (Production):
+CRM → **Settings → Integrations** → **Generate secret** (stored in the DB). Copy
+the **webhook URL** and **secret** shown there.
 
-```
-SHEET_LEADS_WEBHOOK_SECRET = <openssl rand -base64 32>
-```
-
-Redeploy. Without it the webhook returns `503 not_configured`.
+> Alternatively (env-only setup) set `SHEET_LEADS_WEBHOOK_SECRET` in Vercel and
+> redeploy — the webhook prefers the in-app value and falls back to the env var.
 
 ### 2. Each spreadsheet (one-time)
 Do this **once per spreadsheet** (Meta sheet, Website sheet):
 
-1. **Extensions → Apps Script** → paste [`apps-script.gs`](./apps-script.gs) → Save.
+1. **Extensions → Apps Script** → paste the script from the CRM Integrations page
+   (canonical source: [`src/lib/sheet-leads-apps-script.ts`](../../src/lib/sheet-leads-apps-script.ts)) → Save.
 2. **Project Settings → Script properties**:
-   - `CRM_WEBHOOK_URL` = `https://www.desgro.in/api/integrations/sheet-leads`
-   - `CRM_WEBHOOK_SECRET` = same value as `SHEET_LEADS_WEBHOOK_SECRET`
+   - `CRM_WEBHOOK_URL` = the URL from the Integrations page (`…/api/integrations/sheet-leads`)
+   - `CRM_WEBHOOK_SECRET` = the secret from the Integrations page
    - `CRM_SOURCE` = `meta` (Meta sheet) **or** `website` (Website sheet)
 3. Run **`initBaseline`** once (authorise when asked) → only new leads sync.
    *(Run `resetForBackfill` instead to import the whole sheet.)*

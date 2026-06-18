@@ -4,6 +4,7 @@ import { timingSafeEqual } from "node:crypto";
 import { withApiHandler } from "@/lib/api";
 import { HttpError, unauthorized } from "@/lib/http-error";
 import { ingestSheetLeads } from "@/lib/crm-sheet-ingest";
+import { getSheetLeadsSecret } from "@/lib/app-settings";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs"; // node:crypto + Buffer
@@ -27,7 +28,7 @@ const BodySchema = z.object({
 // spreadsheet (Meta lead-ads, Website/SEO form, …). One request = one source +
 // one campaign tab's new rows. `source` selects the column mapping & CRM source.
 export const POST = withApiHandler(async (req: Request) => {
-  const expected = process.env.SHEET_LEADS_WEBHOOK_SECRET;
+  const expected = await getSheetLeadsSecret();
   if (!expected) throw new HttpError(503, "Sheet leads webhook not configured", "not_configured");
   if (!secretMatches(req.headers.get("x-webhook-secret"), expected)) throw unauthorized("invalid_secret");
 

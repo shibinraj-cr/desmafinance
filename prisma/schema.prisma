@@ -80,6 +80,7 @@ model User {
   crmTasksAssigned       CrmTask[]            @relation("CrmTaskAssignee")
   crmTasksCreated        CrmTask[]            @relation("CrmTaskCreatedBy")
   crmTasksCompleted      CrmTask[]            @relation("CrmTaskCompletedBy")
+  appSettings            AppSetting[]         @relation("AppSettingEditor")
 
   @@index([roleId])
 }
@@ -1991,4 +1992,17 @@ model LeadImportBatch {
 
   @@index([createdAt])
   @@index([uploadedById])
+}
+
+// Generic admin-managed key/value settings (e.g. the lead-spreadsheet webhook
+// secret), so integrations can be configured in-app instead of via env vars.
+model AppSetting {
+  key         String   @id
+  value       String
+  updatedById String?
+  updatedBy   User?    @relation("AppSettingEditor", fields: [updatedById], references: [id], onDelete: SetNull)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@index([updatedById])
 }

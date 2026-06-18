@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 import { createPortal } from "react-dom";
 import { useRouter } from "next/navigation";
+import { IntegrationsCard } from "./integrations";
 
 type StatusRow = {
   id: string;
@@ -60,6 +61,7 @@ const qualErrors: Record<string, string> = {
 export function SettingsClient({ statuses, qualifications }: { statuses: StatusRow[]; qualifications: QualRow[] }) {
   return (
     <div className="space-y-lg">
+      <IntegrationsCard />
       <StatusEditor statuses={statuses} />
       <QualificationEditor qualifications={qualifications} />
     </div>
