@@ -1831,6 +1831,10 @@ model Lead {
   // dedupeKey (legacy = email OR phone) is kept for provenance/back-compat.
   emailKey      String?
   dedupeKey     String?
+  // Stable per-source-row key for idempotent external ingestion (e.g. a Meta
+  // lead-ads spreadsheet row). Unique so a re-sent row is skipped, never
+  // double-inserted. Null for manually-created leads.
+  externalKey   String?          @unique
   importBatchId String?
   importBatch   LeadImportBatch? @relation(fields: [importBatchId], references: [id], onDelete: SetNull)
 
