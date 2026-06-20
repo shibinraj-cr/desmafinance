@@ -241,6 +241,7 @@ export async function ingestSheetLeads(opts: {
       externalKey: m.externalKey,
       sourceId: source?.id ?? null,
       statusId: isDup && dupStatus && dupStatus.active ? dupStatus.id : defStatus.id,
+      campaign: opts.campaign,
       extra: m.extra,
       ...(m.createdAt ? { createdAt: m.createdAt, lastActivityAt: m.createdAt } : {}),
     });

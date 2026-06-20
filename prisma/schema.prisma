@@ -1839,6 +1839,10 @@ model Lead {
   importBatchId String?
   importBatch   LeadImportBatch? @relation(fields: [importBatchId], references: [id], onDelete: SetNull)
 
+  // Campaign / spreadsheet tab the lead came from (e.g. a Meta campaign tab).
+  // Promoted from extra.campaign so the leads list can filter & segment by it.
+  campaign      String?
+
   /// Free-form extras captured at import (region, campaign, city, age, …).
   /// JSON: Record<string, string>.
   extra Json?
@@ -1865,6 +1869,7 @@ model Lead {
   @@index([lastActivityAt])
   @@index([dedupeKey])
   @@index([emailKey])
+  @@index([campaign])
   @@index([email])
   @@index([phoneE164])
 }

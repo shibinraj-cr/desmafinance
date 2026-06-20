@@ -44,6 +44,7 @@ export const GET = withApiHandler(async (req: Request) => {
     source: sp.get("source") || undefined,
     service: sp.get("service") || undefined,
     assignee: sp.get("assignee") || undefined,
+    campaign: sp.get("campaign") || undefined,
     q: sp.get("q") || undefined,
     from: range.from,
     to: range.to,

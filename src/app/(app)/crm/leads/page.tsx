@@ -57,6 +57,7 @@ export default async function LeadsPage({ searchParams }: { searchParams: SP }) 
     source: str(searchParams, "source"),
     service: str(searchParams, "service"),
     assignee: str(searchParams, "assignee"),
+    campaign: str(searchParams, "campaign"),
     q: str(searchParams, "q"),
     from: range.from,
     to: range.to,
@@ -68,7 +69,7 @@ export default async function LeadsPage({ searchParams }: { searchParams: SP }) 
   const totalPages = Math.max(1, Math.ceil(total / PAGE_SIZE));
   const page = Math.min(requestedPage, totalPages);
 
-  const [rows, statuses, sources, services, qualifications, bdes] = await Promise.all([
+  const [rows, statuses, sources, services, qualifications, bdes, campaignGroups] = await Promise.all([
     prisma.lead.findMany({
       where,
       orderBy: leadOrderBy(sort),
@@ -97,6 +98,11 @@ export default async function LeadsPage({ searchParams }: { searchParams: SP }) 
       select: { id: true, label: true },
     }),
     getAssignableBdes(),
+    prisma.lead.groupBy({
+      by: ["campaign"],
+      where: { campaign: { not: null } },
+      orderBy: { campaign: "asc" },
+    }),
   ]);
 
   const masters = {
@@ -105,6 +111,7 @@ export default async function LeadsPage({ searchParams }: { searchParams: SP }) 
     services: services.map((s) => ({ id: s.id, label: s.name })),
     qualifications,
     bdes,
+    campaigns: campaignGroups.map((g) => g.campaign).filter((c): c is string => !!c),
   };
   const accessProps = {
     canCreate: access.canCreateLeads,
