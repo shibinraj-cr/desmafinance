@@ -14,15 +14,35 @@ import { getSetting, setSetting, SHEET_LEADS_SECRET_KEY } from "@/lib/app-settin
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs"; // node:crypto
 
-function sourcesSummary() {
-  return Object.values(SHEET_SOURCES).map((s) => ({
-    key: s.key,
-    label: s.label,
-    sourceCode: s.sourceCode,
-    nameColumns: s.nameKeys.slice(0, 4),
-    emailColumns: s.emailKeys.slice(0, 3),
-    phoneColumns: s.phoneKeys.slice(0, 4),
-  }));
+async function sourcesSummary() {
+  return Promise.all(
+    Object.values(SHEET_SOURCES).map(async (s) => {
+      const src = await prisma.leadPulseSource.findUnique({
+        where: { code: s.sourceCode },
+        select: { id: true },
+      });
+      const [leadCount, lastBatch] = await Promise.all([
+        src ? prisma.lead.count({ where: { sourceId: src.id } }) : Promise.resolve(0),
+        // Last time this source pushed data (the import batch records the sync time;
+        // lead.createdAt is the original lead date, so it can't be used here).
+        prisma.leadImportBatch.findFirst({
+          where: { fileName: { startsWith: s.label + ":" } },
+          orderBy: { createdAt: "desc" },
+          select: { createdAt: true },
+        }),
+      ]);
+      return {
+        key: s.key,
+        label: s.label,
+        sourceCode: s.sourceCode,
+        nameColumns: s.nameKeys.slice(0, 4),
+        emailColumns: s.emailKeys.slice(0, 3),
+        phoneColumns: s.phoneKeys.slice(0, 4),
+        leadCount,
+        lastSyncAt: lastBatch?.createdAt?.toISOString() ?? null,
+      };
+    }),
+  );
 }
 
 // GET /api/crm/integrations — config for the Integrations settings page (admin).
@@ -52,7 +72,7 @@ export const GET = withApiHandler(async (req: Request) => {
     secret: secret ?? null,
     secretSet: !!secret,
     envFallback: !secret && !!process.env.SHEET_LEADS_WEBHOOK_SECRET,
-    sources: sourcesSummary(),
+    sources: await sourcesSummary(),
     appsScript: SHEET_LEADS_APPS_SCRIPT,
     recentBatches: recent.map((b) => ({ ...b, createdAt: b.createdAt.toISOString() })),
   });
