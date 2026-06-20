@@ -17,6 +17,7 @@ export type Masters = {
   services: Opt[];
   qualifications: Opt[];
   bdes: BdeOpt[];
+  campaigns: string[];
 };
 export type LeadsAccess = {
   canCreate: boolean;
@@ -450,6 +451,7 @@ export function LeadsTable({
     !!search.get("source") ||
     !!search.get("service") ||
     !!search.get("assignee") ||
+    !!search.get("campaign") ||
     !!search.get("q");
 
   return (
@@ -516,6 +518,17 @@ export function LeadsTable({
           ))}
         </select>
 
+        {masters.campaigns.length > 0 && (
+          <select className={selectClass} value={search.get("campaign") ?? ""} onChange={(e) => update({ campaign: e.target.value || null })}>
+            <option value="">All campaigns</option>
+            {masters.campaigns.map((c) => (
+              <option key={c} value={c}>
+                {c}
+              </option>
+            ))}
+          </select>
+        )}
+
         <select className={selectClass} value={search.get("sort") ?? "created_desc"} onChange={(e) => update({ sort: e.target.value })}>
           {SORT_OPTIONS.map((o) => (
             <option key={o.value} value={o.value}>
@@ -527,7 +540,7 @@ export function LeadsTable({
         {anyFilter && (
           <button
             type="button"
-            onClick={() => update({ status: null, source: null, service: null, assignee: null, q: null })}
+            onClick={() => update({ status: null, source: null, service: null, assignee: null, campaign: null, q: null })}
             className="h-9 px-md rounded-lg border border-outline-variant text-label-sm text-on-surface-variant hover:text-on-surface hover:bg-surface-container-low transition"
           >
             Clear all
@@ -543,6 +556,7 @@ export function LeadsTable({
               <tr>
                 <Th className="text-left">Created</Th>
                 <Th className="text-left">Source</Th>
+                <Th className="text-left">Campaign</Th>
                 <Th className="text-left">Status</Th>
                 <Th className="text-left">Candidate</Th>
                 <Th className="text-left">Email</Th>
@@ -556,7 +570,7 @@ export function LeadsTable({
             <tbody>
               {leads.length === 0 ? (
                 <tr>
-                  <td colSpan={10} className="px-md py-lg text-center text-on-surface-variant">
+                  <td colSpan={11} className="px-md py-lg text-center text-on-surface-variant">
                     No leads match this filter.
                   </td>
                 </tr>
@@ -569,6 +583,20 @@ export function LeadsTable({
                         {fmtDateTime(lead.createdAt)}
                       </Td>
                       <Td className="whitespace-nowrap">{lead.source?.label ?? "—"}</Td>
+                      <Td className="whitespace-nowrap text-on-surface-variant">
+                        {lead.campaign ? (
+                          <button
+                            type="button"
+                            onClick={() => update({ campaign: lead.campaign })}
+                            className="hover:text-primary hover:underline"
+                            title={`Filter by ${lead.campaign}`}
+                          >
+                            {lead.campaign}
+                          </button>
+                        ) : (
+                          "—"
+                        )}
+                      </Td>
                       <Td>
                         <StatusPill status={lead.status} />
                       </Td>

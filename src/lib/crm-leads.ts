@@ -30,6 +30,7 @@ export type LeadRow = {
   status: { id: string; code: string; label: string; kind: string; color: string | null };
   assignedTo: { id: string; name: string } | null;
   party: { id: string; name: string } | null;
+  campaign: string | null;
   dedupeKey: string | null;
   importBatchId: string | null;
   extra: Record<string, string> | null;
@@ -58,6 +59,7 @@ export function serializeLead(l: LeadWithRels): LeadRow {
       ? { id: l.assignedTo.id, name: l.assignedTo.leadPulseRole?.displayName ?? l.assignedTo.username }
       : null,
     party: l.party ? { id: l.party.id, name: l.party.name } : null,
+    campaign: l.campaign,
     dedupeKey: l.dedupeKey,
     importBatchId: l.importBatchId,
     extra: (l.extra as Record<string, string> | null) ?? null,
@@ -69,6 +71,7 @@ export type LeadFilterParams = {
   source?: string;
   service?: string;
   assignee?: string;
+  campaign?: string;
   q?: string;
   /** Resolved half-open createdAt range (e.g. from `rangeFor(parsePeriod(...))`). `to` is exclusive. */
   from?: Date;
@@ -83,6 +86,7 @@ export function buildLeadWhere(p: LeadFilterParams): Prisma.LeadWhereInput {
   if (p.service) where.serviceId = p.service;
   if (p.assignee === "unassigned") where.assignedToId = null;
   else if (p.assignee) where.assignedToId = p.assignee;
+  if (p.campaign) where.campaign = p.campaign;
   const q = p.q?.trim();
   if (q) {
     where.OR = [
