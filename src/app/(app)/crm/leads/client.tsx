@@ -454,6 +454,12 @@ export function LeadsTable({
     !!search.get("campaign") ||
     !!search.get("q");
 
+  // Export link mirrors the current filters (drop pagination — export all matches).
+  const exportParams = new URLSearchParams(search.toString());
+  exportParams.delete("page");
+  exportParams.delete("pageSize");
+  const exportHref = "/api/crm/leads/export" + (exportParams.toString() ? `?${exportParams.toString()}` : "");
+
   return (
     <div className="space-y-md">
       {/* Filter band */}
@@ -546,6 +552,17 @@ export function LeadsTable({
             Clear all
           </button>
         )}
+
+        <a
+          href={exportHref}
+          className="ml-auto h-9 px-md rounded-lg border border-outline-variant text-label-sm font-semibold text-on-surface-variant hover:text-on-surface hover:bg-surface-container-low transition inline-flex items-center gap-xs"
+          title="Download the filtered leads as an Excel file"
+        >
+          <span className="material-symbols-outlined" style={{ fontSize: 18 }}>
+            download
+          </span>
+          Export Excel
+        </a>
       </div>
 
       {/* Table */}
