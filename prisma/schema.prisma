@@ -390,6 +390,8 @@ model LeadPulsePipeline {
   candidatePhone String?
   partyId        String?
   party          Party?  @relation("PartyPipeline", fields: [partyId], references: [id], onDelete: SetNull)
+  // Back-relation for a CRM lead that owns this pipeline entry (1:1).
+  leadLink       Lead?   @relation("LeadPipeline")
 
   serviceId String
   service   Service         @relation(fields: [serviceId], references: [id], onDelete: Restrict)
@@ -1825,6 +1827,14 @@ model Lead {
   partyId String?
   party   Party?  @relation("LeadParty", fields: [partyId], references: [id], onDelete: SetNull)
 
+  // Deal: expected close date + value. Setting these mirrors the lead to a
+  // LeadPulsePipeline row (1:1 below) so it feeds the Marketing "expected to
+  // close" projection; on Enroll the pipeline flips to closed_won.
+  expectedValue     Decimal?           @db.Decimal(14, 2)
+  expectedCloseDate DateTime?          @db.Date
+  pipelineId        String?            @unique
+  pipeline          LeadPulsePipeline? @relation("LeadPipeline", fields: [pipelineId], references: [id], onDelete: SetNull)
+
   // Dedup keys. Detection matches an existing lead on emailKey OR phoneE164
   // independently (either collision flags a "Duplicate"). emailKey = lowercased
   // email; phoneE164 = normalised phone. Both plain (non-unique) indexes because
@@ -1872,6 +1882,7 @@ model Lead {
   @@index([campaign])
   @@index([email])
   @@index([phoneE164])
+  @@index([expectedCloseDate])
 }
 
 // Admin-configurable pipeline stages / dispositions.

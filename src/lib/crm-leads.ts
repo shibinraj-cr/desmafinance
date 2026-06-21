@@ -12,6 +12,7 @@ export const leadRowInclude = Prisma.validator<Prisma.LeadInclude>()({
     select: { id: true, username: true, leadPulseRole: { select: { displayName: true } } },
   },
   party: { select: { id: true, name: true } },
+  pipeline: { select: { status: true } },
 });
 
 export type LeadWithRels = Prisma.LeadGetPayload<{ include: typeof leadRowInclude }>;
@@ -31,6 +32,9 @@ export type LeadRow = {
   assignedTo: { id: string; name: string } | null;
   party: { id: string; name: string } | null;
   campaign: string | null;
+  expectedValue: number | null;
+  expectedCloseDate: string | null;
+  pipelineStatus: string | null; // 'open' | 'closed_won' | 'lost' (from the linked pipeline)
   dedupeKey: string | null;
   importBatchId: string | null;
   extra: Record<string, string> | null;
@@ -60,6 +64,9 @@ export function serializeLead(l: LeadWithRels): LeadRow {
       : null,
     party: l.party ? { id: l.party.id, name: l.party.name } : null,
     campaign: l.campaign,
+    expectedValue: l.expectedValue ? Number(l.expectedValue) : null,
+    expectedCloseDate: l.expectedCloseDate ? l.expectedCloseDate.toISOString() : null,
+    pipelineStatus: l.pipeline?.status ?? null,
     dedupeKey: l.dedupeKey,
     importBatchId: l.importBatchId,
     extra: (l.extra as Record<string, string> | null) ?? null,
