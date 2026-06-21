@@ -26,6 +26,8 @@ export const CRM_ACTIVITY_TYPES = [
   "TASK_REOPENED",
   "TASK_UPDATED",
   "TASK_DELETED",
+  "DEAL_UPDATED",
+  "ENROLLED",
 ] as const;
 
 export type CrmActivityType = (typeof CRM_ACTIVITY_TYPES)[number];

@@ -284,6 +284,7 @@ export function LeadDetail({
               <Timeline lead={lead} notes={notes} timeline={timeline} canEdit={canEdit} access={access} />
             </div>
             <div className="lg:col-span-1 space-y-lg">
+              <DealCard lead={lead} masters={masters} canEdit={canEdit} />
               <AssignmentCard lead={lead} masters={masters} canAssign={access.canAssign} />
               <LeadInfoCard lead={lead} masters={masters} isAdmin={access.isAdmin} />
             </div>
@@ -759,6 +760,188 @@ function AssignmentCard({ lead, masters, canAssign }: { lead: LeadRow; masters: 
         </Field>
       )}
     </div>
+  );
+}
+
+// ── Deal & enrollment ───────────────────────────────────────────────────────
+function pipelineBadgeStyle(status: string): React.CSSProperties {
+  const c = status === "closed_won" ? "#16a34a" : status === "lost" ? "#dc2626" : "#3b82f6";
+  return { backgroundColor: `${c}22`, color: c, border: `1px solid ${c}66` };
+}
+function DealRow({ label, value }: { label: string; value: React.ReactNode }) {
+  return (
+    <div className="flex items-baseline justify-between gap-base">
+      <dt className="text-label-sm text-on-surface-variant">{label}</dt>
+      <dd className="text-on-surface text-right">{value}</dd>
+    </div>
+  );
+}
+
+function DealCard({ lead, masters, canEdit }: { lead: LeadRow; masters: DetailMasters; canEdit: boolean }) {
+  const [modal, setModal] = useState<null | "deal" | "enroll">(null);
+  const isEnrolled = lead.status.code === "enrolled";
+  const hasDeal = lead.expectedValue != null || lead.expectedCloseDate != null;
+
+  return (
+    <div className={cardCls}>
+      <div className="flex items-center justify-between">
+        <h3 className="text-h3 text-on-surface">Deal</h3>
+        {lead.pipelineStatus && (
+          <span
+            className="px-xs py-[2px] rounded-full text-[10px] font-bold uppercase tracking-wider"
+            style={pipelineBadgeStyle(lead.pipelineStatus)}
+          >
+            {lead.pipelineStatus === "closed_won" ? "Won" : lead.pipelineStatus === "lost" ? "Lost" : "In forecast"}
+          </span>
+        )}
+      </div>
+
+      <dl className="space-y-xs">
+        <DealRow label="Service" value={lead.service?.name ?? "—"} />
+        <DealRow
+          label="Expected value"
+          value={lead.expectedValue != null ? `₹${lead.expectedValue.toLocaleString("en-IN")}` : "—"}
+        />
+        <DealRow
+          label="Expected close"
+          value={lead.expectedCloseDate ? new Date(lead.expectedCloseDate).toLocaleDateString("en-IN") : "—"}
+        />
+        <DealRow
+          label="Candidate"
+          value={
+            lead.party ? (
+              <span className="inline-flex items-center gap-xs text-green-700">
+                {lead.party.name}
+                <span className="material-symbols-outlined" style={{ fontSize: 16 }}>
+                  verified
+                </span>
+              </span>
+            ) : (
+              "Not enrolled"
+            )
+          }
+        />
+      </dl>
+
+      {canEdit && (
+        <div className="flex flex-wrap items-center gap-base pt-xs">
+          <button type="button" className={secondaryBtn + " h-9"} onClick={() => setModal("deal")}>
+            {hasDeal ? "Edit deal" : "Set deal"}
+          </button>
+          {isEnrolled ? (
+            <span className="inline-flex items-center gap-xs text-green-700 font-semibold text-label-sm">
+              <span className="material-symbols-outlined" style={{ fontSize: 18 }}>
+                verified
+              </span>
+              Enrolled
+            </span>
+          ) : (
+            <button type="button" className={primaryBtn + " h-9"} onClick={() => setModal("enroll")}>
+              Enroll
+            </button>
+          )}
+        </div>
+      )}
+
+      {modal && <DealModal lead={lead} masters={masters} mode={modal} onClose={() => setModal(null)} />}
+    </div>
+  );
+}
+
+function DealModal({
+  lead,
+  masters,
+  mode,
+  onClose,
+}: {
+  lead: LeadRow;
+  masters: DetailMasters;
+  mode: "deal" | "enroll";
+  onClose: () => void;
+}) {
+  const router = useRouter();
+  const l2Bdes = masters.bdes.filter((b) => b.role === "l2");
+  const assigneeIsL2 = !!lead.assignedTo && l2Bdes.some((b) => b.userId === lead.assignedTo!.id);
+  const [serviceId, setServiceId] = useState(lead.service?.id ?? "");
+  const [value, setValue] = useState(lead.expectedValue != null ? String(lead.expectedValue) : "");
+  const [closeDate, setCloseDate] = useState(lead.expectedCloseDate ? lead.expectedCloseDate.slice(0, 10) : "");
+  const [ownerId, setOwnerId] = useState(assigneeIsL2 ? lead.assignedTo!.id : "");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  async function submit() {
+    setError(null);
+    if (!serviceId) return setError("Pick a service.");
+    if (!(Number(value) > 0)) return setError("Enter an expected value.");
+    if (mode === "deal" && !closeDate) return setError("Pick an expected close date.");
+    if (!assigneeIsL2 && !ownerId) return setError("Choose an L2 BDE as the deal owner.");
+    setBusy(true);
+    const res = await fetch(`/api/crm/leads/${lead.id}/${mode === "enroll" ? "enroll" : "deal"}`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        serviceId,
+        expectedValue: Number(value),
+        expectedCloseDate: closeDate || undefined,
+        ownerUserId: assigneeIsL2 ? undefined : ownerId,
+      }),
+    });
+    setBusy(false);
+    if (!res.ok) {
+      const d = (await res.json().catch(() => ({}))) as { message?: string; error?: string };
+      setError(d.message || d.error || "Could not save.");
+      return;
+    }
+    onClose();
+    router.refresh();
+  }
+
+  return (
+    <Modal title={mode === "enroll" ? "Enroll candidate" : "Set deal"} onClose={onClose} busy={busy}>
+      {mode === "enroll" && (
+        <p className="text-label-sm text-on-surface-variant">
+          Marks the lead <b>Enrolled</b>, adds the candidate to the Candidate Master (Finance can transact), and records
+          the deal as won.
+        </p>
+      )}
+      <Field label="Service">
+        <select className={inputCls} value={serviceId} onChange={(e) => setServiceId(e.target.value)}>
+          <option value="">Select…</option>
+          {masters.services.map((s) => (
+            <option key={s.id} value={s.id}>
+              {s.label}
+            </option>
+          ))}
+        </select>
+      </Field>
+      <Field label="Expected value (₹)">
+        <input className={inputCls} type="number" min={0} value={value} onChange={(e) => setValue(e.target.value)} />
+      </Field>
+      <Field label={mode === "enroll" ? "Expected close date (optional)" : "Expected close date"}>
+        <input className={inputCls} type="date" value={closeDate} onChange={(e) => setCloseDate(e.target.value)} />
+      </Field>
+      {!assigneeIsL2 && (
+        <Field label="Deal owner (L2 BDE)">
+          <select className={inputCls} value={ownerId} onChange={(e) => setOwnerId(e.target.value)}>
+            <option value="">Select an L2 BDE…</option>
+            {l2Bdes.map((b) => (
+              <option key={b.userId} value={b.userId}>
+                {b.displayName}
+              </option>
+            ))}
+          </select>
+        </Field>
+      )}
+      {error && <p className="text-label-sm text-error">{error}</p>}
+      <div className="flex justify-end gap-base pt-xs">
+        <button type="button" className={secondaryBtn} disabled={busy} onClick={onClose}>
+          Cancel
+        </button>
+        <button type="button" className={primaryBtn} disabled={busy} onClick={submit}>
+          {busy ? "Saving…" : mode === "enroll" ? "Enroll" : "Save deal"}
+        </button>
+      </div>
+    </Modal>
   );
 }
 
