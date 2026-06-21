@@ -72,3 +72,26 @@ export function renderTemplate(
     .replace(/\{service\}/g, vars.service ?? "")
     .replace(/\{consultant\}/g, vars.consultant ?? "");
 }
+
+/** Merge fields supported in bulk-email subjects/bodies (shown in the composer hint). */
+export const BULK_EMAIL_MERGE_FIELDS = [
+  "name",
+  "first_name",
+  "service",
+  "consultant",
+  "campaign",
+  "qualification",
+] as const;
+
+/**
+ * Fill a template against an arbitrary `{token}` map. Unknown tokens are left
+ * verbatim (so a stray brace in the body doesn't silently vanish); known tokens
+ * with no value become "". Case-insensitive on the token name.
+ */
+export function fillTemplate(template: string, vars: Record<string, string | null | undefined>): string {
+  const lookup = new Map(Object.entries(vars).map(([k, v]) => [k.toLowerCase(), v ?? ""]));
+  return template.replace(/\{([a-z0-9_]+)\}/gi, (whole, token: string) => {
+    const key = token.toLowerCase();
+    return lookup.has(key) ? String(lookup.get(key)) : whole;
+  });
+}

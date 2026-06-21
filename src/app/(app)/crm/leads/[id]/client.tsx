@@ -191,6 +191,7 @@ export function LeadDetail({
   duplicates,
   masters,
   canEdit,
+  emailConfigured,
   access,
 }: {
   lead: LeadRow;
@@ -200,6 +201,7 @@ export function LeadDetail({
   duplicates: DuplicateRow[];
   masters: DetailMasters;
   canEdit: boolean;
+  emailConfigured: boolean;
   access: DetailAccess;
 }) {
   const [tab, setTab] = useState<"overview" | "tasks" | "history">("overview");
@@ -304,7 +306,7 @@ export function LeadDetail({
 
       {tab === "history" && <HistoryPanel leadId={lead.id} bdes={masters.bdes} />}
 
-      {comm === "email" && <EmailModal lead={lead} onClose={() => setComm(null)} />}
+      {comm === "email" && <EmailModal lead={lead} emailConfigured={emailConfigured} onClose={() => setComm(null)} />}
       {comm === "whatsapp" && <WhatsAppModal lead={lead} onClose={() => setComm(null)} />}
       {comm === "call" && <CallModal lead={lead} onClose={() => setComm(null)} />}
     </div>
@@ -1019,7 +1021,7 @@ const EMAIL_TEMPLATES: { id: string; label: string; subject: string; body: strin
   },
 ];
 
-function EmailModal({ lead, onClose }: { lead: LeadRow; onClose: () => void }) {
+function EmailModal({ lead, emailConfigured, onClose }: { lead: LeadRow; emailConfigured: boolean; onClose: () => void }) {
   const router = useRouter();
   const vars = { name: lead.candidateName, service: lead.service?.name ?? "", consultant: lead.assignedTo?.name ?? "" };
   const [tpl, setTpl] = useState("blank");
@@ -1045,13 +1047,16 @@ function EmailModal({ lead, onClose }: { lead: LeadRow; onClose: () => void }) {
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ channel: "email", subject, body }),
     });
-    setBusy(false);
     if (!res.ok) {
+      setBusy(false);
       const d = (await res.json().catch(() => ({}))) as { message?: string; error?: string };
       setError(d.message || (d.error === "no_email" ? "This lead has no email address." : "Failed."));
       return;
     }
-    const d = (await res.json()) as { mailtoUrl?: string };
+    // delivery==="gmail": sent server-side (a copy is in the mailbox's Sent).
+    // Otherwise we got a mailto: link to open the desktop mail client.
+    const d = (await res.json()) as { mailtoUrl?: string; delivery?: string };
+    setBusy(false);
     if (d.mailtoUrl) window.location.href = d.mailtoUrl;
     onClose();
     router.refresh();
@@ -1060,6 +1065,11 @@ function EmailModal({ lead, onClose }: { lead: LeadRow; onClose: () => void }) {
   return (
     <Modal title="Email lead" onClose={onClose} busy={busy}>
       {error && <div className="rounded-lg bg-error-container text-on-error-container px-md py-sm">{error}</div>}
+      {!emailConfigured && (
+        <div className="rounded-lg bg-amber-50 text-amber-800 border border-amber-200 px-md py-sm text-label-sm">
+          No email sender is configured, so this opens your desktop mail app. Admins can enable in-app sending in Settings → Integrations.
+        </div>
+      )}
       <Field label="To">
         <input className={inputCls} value={lead.email ?? ""} disabled />
       </Field>
@@ -1087,8 +1097,13 @@ function EmailModal({ lead, onClose }: { lead: LeadRow; onClose: () => void }) {
         <button type="button" className={secondaryBtn} disabled={busy} onClick={onClose}>
           Cancel
         </button>
-        <button type="button" className={primaryBtn} disabled={busy} onClick={send}>
-          {busy ? "Sending…" : "Open email"}
+        <button
+          type="button"
+          className={primaryBtn}
+          disabled={busy || (emailConfigured && !subject.trim() && !body.trim())}
+          onClick={send}
+        >
+          {busy ? "Sending…" : emailConfigured ? "Send email" : "Open email"}
         </button>
       </div>
     </Modal>

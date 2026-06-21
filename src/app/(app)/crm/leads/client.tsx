@@ -1,11 +1,11 @@
 "use client";
 
-import { useEffect, useRef, useState, useTransition } from "react";
+import { useEffect, useMemo, useRef, useState, useTransition } from "react";
 import { createPortal } from "react-dom";
 import Link from "next/link";
 import { useRouter, usePathname, useSearchParams } from "next/navigation";
 import type { LeadRow } from "@/lib/crm-leads";
-import { DEFAULT_STATUS_COLOR } from "@/lib/crm";
+import { DEFAULT_STATUS_COLOR, BULK_EMAIL_MERGE_FIELDS, fillTemplate } from "@/lib/crm";
 
 // ── Shared prop shapes ──────────────────────────────────────────────────────
 export type StatusOpt = { id: string; code: string; label: string; kind: string; color: string | null };
@@ -23,6 +23,8 @@ export type LeadsAccess = {
   canCreate: boolean;
   canAssign: boolean;
   canBulkImport: boolean;
+  canBulkEmail: boolean;
+  emailConfigured: boolean;
   isAdmin: boolean;
   isBde: boolean;
   userId: string;
@@ -445,6 +447,64 @@ export function LeadsTable({
     router.push(qs ? `${pathname}?${qs}` : pathname);
   }
 
+  // ── Bulk selection (admins only) ────────────────────────────────────────────
+  const bulk = access.canBulkEmail;
+  const [selected, setSelected] = useState<Set<string>>(new Set());
+  const [matchedAll, setMatchedAll] = useState<{ emailable: number; total: number; truncated: boolean } | null>(null);
+  const [selectingAll, setSelectingAll] = useState(false);
+  const [composeOpen, setComposeOpen] = useState(false);
+
+  // Reset the selection whenever the FILTER (not just the page) changes, so a
+  // "select all matching" set can never leak onto a different filter.
+  const filterKey = useMemo(() => {
+    const p = new URLSearchParams(search.toString());
+    p.delete("page");
+    return p.toString();
+  }, [search]);
+  useEffect(() => {
+    setSelected(new Set());
+    setMatchedAll(null);
+  }, [filterKey]);
+
+  const pageEmailableIds = useMemo(() => leads.filter((l) => l.email).map((l) => l.id), [leads]);
+  const allPageSelected = pageEmailableIds.length > 0 && pageEmailableIds.every((id) => selected.has(id));
+  const somePageSelected = pageEmailableIds.some((id) => selected.has(id));
+
+  function toggleOne(id: string) {
+    setSelected((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+    setMatchedAll(null);
+  }
+  function togglePage() {
+    setSelected((prev) => {
+      const next = new Set(prev);
+      if (allPageSelected) pageEmailableIds.forEach((id) => next.delete(id));
+      else pageEmailableIds.forEach((id) => next.add(id));
+      return next;
+    });
+    setMatchedAll(null);
+  }
+  function clearSelection() {
+    setSelected(new Set());
+    setMatchedAll(null);
+  }
+  async function selectAllMatching() {
+    setSelectingAll(true);
+    const params = new URLSearchParams(search.toString());
+    params.delete("page");
+    params.delete("pageSize");
+    const res = await fetch(`/api/crm/leads/ids${params.toString() ? `?${params.toString()}` : ""}`);
+    setSelectingAll(false);
+    if (!res.ok) return;
+    const d = (await res.json()) as { ids: string[]; emailable: number; total: number; truncated: boolean };
+    setSelected(new Set(d.ids));
+    setMatchedAll({ emailable: d.emailable, total: d.total, truncated: d.truncated });
+  }
+
   const totalPages = Math.max(1, Math.ceil(total / pageSize));
   const anyFilter =
     !!search.get("status") ||
@@ -565,12 +625,73 @@ export function LeadsTable({
         </a>
       </div>
 
+      {/* Bulk action bar */}
+      {bulk && selected.size > 0 && (
+        <div className="flex flex-wrap items-center gap-base rounded-xl border border-primary/40 bg-primary/5 px-md py-sm">
+          <span className="text-label-md font-semibold text-on-surface">
+            {selected.size.toLocaleString()} selected
+          </span>
+          {!matchedAll && total > pageEmailableIds.length && (
+            <button type="button" onClick={selectAllMatching} disabled={selectingAll} className="text-label-sm text-primary hover:underline disabled:opacity-60">
+              {selectingAll ? "Selecting…" : "Select every emailable lead matching the filter"}
+            </button>
+          )}
+          {matchedAll && (
+            <span className="text-label-sm text-on-surface-variant">
+              All {matchedAll.emailable.toLocaleString()} emailable lead{matchedAll.emailable === 1 ? "" : "s"} selected
+              {matchedAll.truncated ? " (capped at 5,000)" : ""}
+              {matchedAll.total > matchedAll.emailable ? ` · ${(matchedAll.total - matchedAll.emailable).toLocaleString()} have no email` : ""}
+            </span>
+          )}
+          <div className="ml-auto flex items-center gap-base">
+            <button type="button" onClick={clearSelection} className="text-label-sm text-on-surface-variant hover:text-on-surface">
+              Clear
+            </button>
+            <button
+              type="button"
+              onClick={() => setComposeOpen(true)}
+              className="inline-flex items-center gap-xs h-9 px-md rounded-lg bg-primary text-on-primary text-label-sm font-semibold hover:bg-primary-container transition"
+            >
+              <span className="material-symbols-outlined" style={{ fontSize: 18 }}>
+                mail
+              </span>
+              Send email
+            </button>
+          </div>
+        </div>
+      )}
+
+      {composeOpen && (
+        <BulkEmailModal
+          leadIds={Array.from(selected)}
+          truncated={matchedAll?.truncated ?? false}
+          emailConfigured={access.emailConfigured}
+          onClose={() => setComposeOpen(false)}
+          onDone={() => {
+            setComposeOpen(false);
+            clearSelection();
+            router.refresh();
+          }}
+        />
+      )}
+
       {/* Table */}
       <div className="bg-surface-container-lowest border border-outline-variant rounded-xl shadow-sm overflow-hidden">
         <div className="overflow-auto scrollbar-thin max-h-[calc(100vh-240px)]">
           <table className="w-full text-body-md">
             <thead className="bg-surface-container-low text-on-surface-variant sticky top-0 z-10 shadow-[0_1px_0_0_var(--lp-outline-variant)]">
               <tr>
+                {bulk && (
+                  <Th className="w-10">
+                    <Checkbox
+                      checked={allPageSelected}
+                      indeterminate={somePageSelected && !allPageSelected}
+                      disabled={pageEmailableIds.length === 0}
+                      onChange={togglePage}
+                      title="Select all emailable on this page"
+                    />
+                  </Th>
+                )}
                 <Th className="text-left">Created</Th>
                 <Th className="text-left">Source</Th>
                 <Th className="text-left">Campaign</Th>
@@ -587,7 +708,7 @@ export function LeadsTable({
             <tbody>
               {leads.length === 0 ? (
                 <tr>
-                  <td colSpan={11} className="px-md py-lg text-center text-on-surface-variant">
+                  <td colSpan={bulk ? 12 : 11} className="px-md py-lg text-center text-on-surface-variant">
                     No leads match this filter.
                   </td>
                 </tr>
@@ -595,7 +716,17 @@ export function LeadsTable({
                 leads.map((lead) => {
                   const canEdit = access.isAdmin || (access.isBde && lead.assignedTo?.id === access.userId);
                   return (
-                    <tr key={lead.id} className="border-t border-outline-variant/60 hover:bg-surface-container-low">
+                    <tr key={lead.id} className={"border-t border-outline-variant/60 hover:bg-surface-container-low" + (bulk && selected.has(lead.id) ? " bg-primary/5" : "")}>
+                      {bulk && (
+                        <Td>
+                          <Checkbox
+                            checked={selected.has(lead.id)}
+                            disabled={!lead.email}
+                            onChange={() => toggleOne(lead.id)}
+                            title={lead.email ? "Select" : "No email address"}
+                          />
+                        </Td>
+                      )}
                       <Td className="whitespace-nowrap font-mono tabular-nums text-on-surface-variant">
                         {fmtDateTime(lead.createdAt)}
                       </Td>
@@ -777,5 +908,338 @@ function AssignSelect({ lead, bdes }: { lead: LeadRow; bdes: BdeOpt[] }) {
         </option>
       ))}
     </select>
+  );
+}
+
+// ── Bulk email ──────────────────────────────────────────────────────────────
+function Checkbox({
+  checked,
+  indeterminate,
+  disabled,
+  onChange,
+  title,
+}: {
+  checked: boolean;
+  indeterminate?: boolean;
+  disabled?: boolean;
+  onChange: () => void;
+  title?: string;
+}) {
+  const ref = useRef<HTMLInputElement>(null);
+  useEffect(() => {
+    if (ref.current) ref.current.indeterminate = !!indeterminate && !checked;
+  }, [indeterminate, checked]);
+  return (
+    <input
+      ref={ref}
+      type="checkbox"
+      checked={checked}
+      disabled={disabled}
+      onChange={onChange}
+      title={title}
+      className="h-4 w-4 rounded border-outline-variant text-primary focus:ring-2 focus:ring-primary/40 cursor-pointer disabled:opacity-30 disabled:cursor-not-allowed align-middle"
+    />
+  );
+}
+
+const BULK_TEMPLATES: { id: string; label: string; subject: string; body: string }[] = [
+  { id: "blank", label: "Blank", subject: "", body: "" },
+  {
+    id: "intro",
+    label: "Introduction",
+    subject: "DESMA — {service}",
+    body: "Hi {first_name},\n\nThank you for your interest in {service}. I'm {consultant} from DESMA and I'll be happy to help you with the next steps.\n\nWarm regards,\n{consultant}\nDESMA",
+  },
+  {
+    id: "followup",
+    label: "Follow up",
+    subject: "Following up — {service}",
+    body: "Hi {first_name},\n\nJust following up on your interest in {service}. Do let me know a good time to connect.\n\n{consultant}\nDESMA",
+  },
+];
+
+const SAMPLE_VARS: Record<string, string> = {
+  name: "Priya Menon",
+  first_name: "Priya",
+  service: "AHPRA Direct",
+  consultant: "Your name",
+  campaign: "Meta — RN Australia",
+  qualification: "BSN",
+};
+
+type BulkProgress = { done: number; sent: number; failed: number; skippedNoEmail: number; skippedCap: number; capReached: boolean };
+
+const ZERO_PROGRESS: BulkProgress = { done: 0, sent: 0, failed: 0, skippedNoEmail: 0, skippedCap: 0, capReached: false };
+
+function BulkEmailModal({
+  leadIds,
+  truncated,
+  emailConfigured,
+  onClose,
+  onDone,
+}: {
+  leadIds: string[];
+  truncated: boolean;
+  emailConfigured: boolean;
+  onClose: () => void;
+  onDone: () => void;
+}) {
+  const [mounted, setMounted] = useState(false);
+  const [tpl, setTpl] = useState("blank");
+  const [subject, setSubject] = useState("");
+  const [body, setBody] = useState("");
+  const [showPreview, setShowPreview] = useState(false);
+  const [status, setStatus] = useState<"idle" | "sending" | "done" | "error">("idle");
+  const [progress, setProgress] = useState<BulkProgress>(ZERO_PROGRESS);
+  const [cursor, setCursor] = useState(0); // next leadIds index to attempt (enables Retry remaining)
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => setMounted(true), []);
+  useEffect(() => {
+    const prev = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    return () => {
+      document.body.style.overflow = prev;
+    };
+  }, []);
+
+  function applyTemplate(id: string) {
+    setTpl(id);
+    const t = BULK_TEMPLATES.find((x) => x.id === id);
+    if (t) {
+      setSubject(t.subject);
+      setBody(t.body);
+    }
+  }
+
+  // Send leadIds[startIdx..] in chunks, accumulating onto `base`. On any chunk
+  // failure it stops at that index (so "Retry remaining" can resume) and never
+  // shows a false success.
+  async function runFrom(startIdx: number, base: BulkProgress) {
+    setError(null);
+    setStatus("sending");
+    const agg: BulkProgress = { ...base };
+    const CHUNK = 50; // must stay ≤ MAX_PER_REQUEST on the server
+    let i = startIdx;
+    for (; i < leadIds.length; i += CHUNK) {
+      const chunk = leadIds.slice(i, i + CHUNK);
+      let res: Response | null = null;
+      try {
+        res = await fetch("/api/crm/leads/bulk-email", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ leadIds: chunk, subject, body }),
+        });
+      } catch {
+        res = null; // network error
+      }
+      if (!res || !res.ok) {
+        const d = res ? ((await res.json().catch(() => ({}))) as { message?: string; error?: string }) : {};
+        setError(
+          (d.message || d.error || "Sending was interrupted.") +
+            " Some emails in this batch may already have been sent — they're logged on the leads' timelines, so review before retrying to avoid duplicates.",
+        );
+        setProgress({ ...agg });
+        setCursor(i); // resume here
+        setStatus("error");
+        return;
+      }
+      const d = (await res.json()) as { sent: number; failed: number; skippedNoEmail: number; skippedCap: number; capReached: boolean; rateLimited: boolean; remaining: number };
+      agg.done += chunk.length;
+      agg.sent += d.sent;
+      agg.failed += d.failed;
+      agg.skippedNoEmail += d.skippedNoEmail;
+      agg.skippedCap += d.skippedCap;
+      agg.capReached = agg.capReached || d.capReached;
+      setProgress({ ...agg });
+      // remaining<=0 → daily cap or a throttle was hit; stop sending further chunks.
+      if (d.remaining <= 0) {
+        agg.capReached = agg.capReached || agg.done < leadIds.length;
+        setProgress({ ...agg });
+        break;
+      }
+    }
+    setCursor(leadIds.length);
+    setStatus("done");
+  }
+
+  function start() {
+    if (!subject.trim() || !body.trim()) {
+      setError("Both a subject and a message are required.");
+      return;
+    }
+    setProgress(ZERO_PROGRESS);
+    void runFrom(0, ZERO_PROGRESS);
+  }
+
+  if (!mounted) return null;
+  const total = leadIds.length;
+  const pct = total === 0 ? 0 : Math.round((progress.done / total) * 100);
+  const terminal = status === "done" || status === "error";
+
+  return createPortal(
+    <div className="fixed inset-0 z-[1000] grid place-items-center bg-black/50 p-md" onClick={() => (status === "idle" ? onClose() : terminal ? onDone() : undefined)}>
+      <div
+        onClick={(e) => e.stopPropagation()}
+        className="w-full max-w-lg max-h-[90vh] overflow-y-auto bg-surface-container-lowest border border-outline-variant rounded-xl shadow-lg p-lg space-y-md"
+      >
+        <div className="flex items-center justify-between">
+          <h3 className="text-h3 text-on-surface">Send email to {total.toLocaleString()} lead{total === 1 ? "" : "s"}</h3>
+          <span className="material-symbols-outlined text-on-surface-variant" style={{ fontSize: 24 }}>
+            mail
+          </span>
+        </div>
+
+        {!emailConfigured && (
+          <div className="rounded-lg bg-amber-50 text-amber-800 border border-amber-200 px-md py-sm text-label-sm">
+            No email sender is configured. Ask an admin to set it up in <span className="font-semibold">CRM → Settings → Integrations → Email sender</span> before sending.
+          </div>
+        )}
+
+        {status === "idle" && (
+          <>
+            <p className="text-label-sm text-on-surface-variant">
+              Each lead receives its own individual email (no shared To/CC). A copy lands in the team mailbox&apos;s Sent
+              folder and on each lead&apos;s timeline.
+            </p>
+            {truncated && (
+              <div className="rounded-lg bg-amber-50 text-amber-800 border border-amber-200 px-md py-sm text-label-sm">
+                More than 5,000 leads match this filter; only the first 5,000 are selected. Narrow the filter to reach the rest.
+              </div>
+            )}
+
+            <Field label="Template">
+              <select className={inputCls} value={tpl} onChange={(e) => applyTemplate(e.target.value)}>
+                {BULK_TEMPLATES.map((t) => (
+                  <option key={t.id} value={t.id}>
+                    {t.label}
+                  </option>
+                ))}
+              </select>
+            </Field>
+
+            <Field label="Subject">
+              <input className={inputCls} value={subject} onChange={(e) => setSubject(e.target.value)} placeholder="Subject line…" />
+            </Field>
+
+            <Field label="Message">
+              <textarea
+                className="w-full px-md py-sm rounded-lg border border-outline-variant bg-surface-container-lowest outline-none focus:border-primary text-body-md resize-y"
+                rows={8}
+                value={body}
+                onChange={(e) => setBody(e.target.value)}
+                placeholder="Write your message…"
+              />
+            </Field>
+
+            <div className="text-label-sm text-on-surface-variant">
+              Merge fields:{" "}
+              {BULK_EMAIL_MERGE_FIELDS.map((f) => (
+                <button
+                  key={f}
+                  type="button"
+                  onClick={() => setBody((b) => `${b}{${f}}`)}
+                  className="inline-block mr-xs mb-xs px-xs py-[1px] rounded bg-surface-container-high font-mono text-[11px] hover:bg-surface-container-highest"
+                  title={`Insert {${f}}`}
+                >
+                  {`{${f}}`}
+                </button>
+              ))}
+            </div>
+
+            <button type="button" onClick={() => setShowPreview((v) => !v)} className="text-label-sm text-primary hover:underline">
+              {showPreview ? "Hide" : "Show"} preview (sample data)
+            </button>
+            {showPreview && (
+              <div className="rounded-lg border border-outline-variant bg-surface-container-low p-md space-y-xs">
+                <div className="text-label-sm font-semibold text-on-surface">{fillTemplate(subject, SAMPLE_VARS) || "(no subject)"}</div>
+                <div className="text-body-md text-on-surface whitespace-pre-wrap">{fillTemplate(body, SAMPLE_VARS) || "(empty)"}</div>
+              </div>
+            )}
+
+            {error && <div className="rounded-lg bg-error-container text-on-error-container px-md py-sm text-label-sm">{error}</div>}
+
+            <div className="flex justify-end gap-base pt-xs">
+              <button type="button" className={secondaryBtn} onClick={onClose}>
+                Cancel
+              </button>
+              <button type="button" className={primaryBtn} disabled={!emailConfigured || !subject.trim() || !body.trim()} onClick={start}>
+                Send to {total.toLocaleString()}
+              </button>
+            </div>
+          </>
+        )}
+
+        {status === "sending" && (
+          <div className="space-y-sm py-md">
+            <p className="text-body-md text-on-surface">
+              Sending… {progress.done.toLocaleString()} / {total.toLocaleString()}
+            </p>
+            <div className="h-2 w-full rounded-full bg-surface-container-high overflow-hidden">
+              <div className="h-full bg-primary transition-all" style={{ width: `${pct}%` }} />
+            </div>
+            <p className="text-label-sm text-on-surface-variant">
+              {progress.sent.toLocaleString()} sent{progress.failed ? `, ${progress.failed} failed` : ""}. Please keep this window open.
+            </p>
+          </div>
+        )}
+
+        {status === "done" && (
+          <div className="space-y-md py-sm">
+            <div className="flex items-center gap-sm">
+              <span className="material-symbols-outlined text-green-600" style={{ fontSize: 28 }}>
+                check_circle
+              </span>
+              <div>
+                <p className="text-body-md font-semibold text-on-surface">{progress.sent.toLocaleString()} email{progress.sent === 1 ? "" : "s"} sent</p>
+                <p className="text-label-sm text-on-surface-variant">
+                  {progress.failed > 0 && `${progress.failed} failed · `}
+                  {progress.skippedNoEmail > 0 && `${progress.skippedNoEmail} had no email · `}
+                  {progress.skippedCap > 0 && `${progress.skippedCap} skipped (daily limit) · `}
+                  logged on each lead&apos;s timeline.
+                </p>
+              </div>
+            </div>
+            {progress.capReached && (
+              <div className="rounded-lg bg-amber-50 text-amber-800 border border-amber-200 px-md py-sm text-label-sm">
+                The daily send limit (or a Gmail throttle) was reached, so some leads weren&apos;t emailed. Try the rest later.
+              </div>
+            )}
+            <div className="flex justify-end">
+              <button type="button" className={primaryBtn} onClick={onDone}>
+                Done
+              </button>
+            </div>
+          </div>
+        )}
+
+        {status === "error" && (
+          <div className="space-y-md py-sm">
+            <div className="flex items-start gap-sm">
+              <span className="material-symbols-outlined text-error" style={{ fontSize: 28 }}>
+                error
+              </span>
+              <div>
+                <p className="text-body-md font-semibold text-on-surface">Sending stopped</p>
+                <p className="text-label-sm text-on-surface-variant">
+                  {progress.sent.toLocaleString()} of {total.toLocaleString()} sent so far
+                  {progress.failed > 0 ? ` · ${progress.failed} failed` : ""}. {total - cursor} not yet attempted.
+                </p>
+              </div>
+            </div>
+            {error && <div className="rounded-lg bg-error-container text-on-error-container px-md py-sm text-label-sm">{error}</div>}
+            <div className="flex justify-end gap-base">
+              <button type="button" className={secondaryBtn} onClick={onDone}>
+                Close
+              </button>
+              <button type="button" className={primaryBtn} onClick={() => void runFrom(cursor, progress)}>
+                Retry remaining ({(total - cursor).toLocaleString()})
+              </button>
+            </div>
+          </div>
+        )}
+      </div>
+    </div>,
+    document.body,
   );
 }

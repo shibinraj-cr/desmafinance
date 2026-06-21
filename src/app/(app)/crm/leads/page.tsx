@@ -12,6 +12,7 @@ import {
   serializeLead,
   getAssignableBdes,
 } from "@/lib/crm-leads";
+import { isEmailConfigured } from "@/lib/mailer";
 import { LeadsToolbar, LeadsTable } from "./client";
 
 export const dynamic = "force-dynamic";
@@ -69,7 +70,7 @@ export default async function LeadsPage({ searchParams }: { searchParams: SP }) 
   const totalPages = Math.max(1, Math.ceil(total / PAGE_SIZE));
   const page = Math.min(requestedPage, totalPages);
 
-  const [rows, statuses, sources, services, qualifications, bdes, campaignGroups] = await Promise.all([
+  const [rows, statuses, sources, services, qualifications, bdes, campaignGroups, emailConfigured] = await Promise.all([
     prisma.lead.findMany({
       where,
       orderBy: leadOrderBy(sort),
@@ -103,6 +104,7 @@ export default async function LeadsPage({ searchParams }: { searchParams: SP }) 
       where: { campaign: { not: null } },
       orderBy: { campaign: "asc" },
     }),
+    isEmailConfigured(),
   ]);
 
   const masters = {
@@ -117,6 +119,8 @@ export default async function LeadsPage({ searchParams }: { searchParams: SP }) 
     canCreate: access.canCreateLeads,
     canAssign: access.canAssign,
     canBulkImport: access.canBulkImport,
+    canBulkEmail: access.canBulkEmail,
+    emailConfigured,
     isAdmin: access.isAdmin,
     isBde: access.isBde,
     userId,

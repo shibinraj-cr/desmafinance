@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import { createPortal } from "react-dom";
 import { useRouter } from "next/navigation";
 import { IntegrationsCard } from "./integrations";
+import { EmailSenderCard } from "./email-sender";
 
 type StatusRow = {
   id: string;
@@ -62,6 +63,7 @@ export function SettingsClient({ statuses, qualifications }: { statuses: StatusR
   return (
     <div className="space-y-lg">
       <IntegrationsCard />
+      <EmailSenderCard />
       <StatusEditor statuses={statuses} />
       <QualificationEditor qualifications={qualifications} />
     </div>

@@ -17,6 +17,7 @@ import {
   serializeTask,
   taskOrderBy,
 } from "@/lib/crm-leads";
+import { isEmailConfigured } from "@/lib/mailer";
 import { LeadDetail } from "./client";
 
 export const dynamic = "force-dynamic";
@@ -47,7 +48,7 @@ export default async function LeadDetailPage({ params }: { params: { id: string 
   const lead = await prisma.lead.findUnique({ where: { id: params.id }, include: leadRowInclude });
   if (!lead) notFound();
 
-  const [notes, activities, tasks, statuses, sources, services, qualifications, bdes, parties] = await Promise.all([
+  const [notes, activities, tasks, statuses, sources, services, qualifications, bdes, parties, emailConfigured] = await Promise.all([
     prisma.leadNote.findMany({ where: { leadId: params.id }, orderBy: { createdAt: "desc" }, include: noteInclude }),
     prisma.leadActivity.findMany({
       where: { leadId: params.id, type: { notIn: TIMELINE_EXCLUDE } },
@@ -78,6 +79,7 @@ export default async function LeadDetailPage({ params }: { params: { id: string 
       orderBy: { name: "asc" },
       select: { id: true, name: true },
     }),
+    isEmailConfigured(),
   ]);
 
   // Best-effort: record that this user opened the lead (once per day).
@@ -157,6 +159,7 @@ export default async function LeadDetailPage({ params }: { params: { id: string 
           duplicates={duplicates}
           masters={masters}
           canEdit={canEditLead(access, lead, userId)}
+          emailConfigured={emailConfigured}
           access={{
             isAdmin: access.isAdmin,
             canAssign: access.canAssign,
