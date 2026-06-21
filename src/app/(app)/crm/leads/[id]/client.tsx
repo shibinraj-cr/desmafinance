@@ -3,6 +3,7 @@
 import { Fragment, useEffect, useMemo, useState } from "react";
 import { createPortal } from "react-dom";
 import { useRouter } from "next/navigation";
+import Link from "next/link";
 import type { LeadRow, NoteRow, ActivityRow, TaskRow } from "@/lib/crm-leads";
 import { renderTemplate } from "@/lib/crm";
 import { StatusPill, type StatusOpt, type Opt, type BdeOpt } from "../client";
@@ -135,12 +136,59 @@ function Modal({
   );
 }
 
+export type DuplicateRow = {
+  id: string;
+  candidateName: string;
+  email: string | null;
+  phone: string | null;
+  createdAt: string;
+  source: string | null;
+  status: { label: string; color: string | null };
+  matchedOn: string; // "email", "phone", or "email + phone"
+};
+
+// Banner shown on a lead that shares an email or phone with other lead(s) — so a
+// "Duplicate"-flagged lead reveals exactly which record(s) it matches.
+function DuplicatesBanner({ duplicates }: { duplicates: DuplicateRow[] }) {
+  const fields = Array.from(new Set(duplicates.flatMap((d) => d.matchedOn.split(" + ")).filter(Boolean)));
+  return (
+    <div className="rounded-xl border border-amber-300 bg-amber-50 p-md">
+      <div className="flex items-center gap-xs text-amber-800 font-semibold">
+        <span className="material-symbols-outlined" style={{ fontSize: 20 }}>
+          content_copy
+        </span>
+        {duplicates.length} possible duplicate{duplicates.length === 1 ? "" : "s"}
+        {fields.length > 0 && <span className="font-normal text-amber-700">— same {fields.join(" / ")}</span>}
+      </div>
+      <ul className="mt-sm space-y-xs">
+        {duplicates.map((d) => (
+          <li key={d.id} className="flex flex-wrap items-center gap-xs text-body-md">
+            <Link href={`/crm/leads/${d.id}`} className="font-semibold text-on-surface hover:text-primary hover:underline">
+              {d.candidateName}
+            </Link>
+            <span className="text-on-surface-variant">· {d.phone ?? d.email ?? "—"}</span>
+            {d.source && <span className="text-on-surface-variant">· {d.source}</span>}
+            <span
+              className="px-xs py-[1px] rounded-full text-[10px] font-bold"
+              style={{ backgroundColor: (d.status.color ?? "#9aa0a6") + "22", color: d.status.color ?? "#6b7280" }}
+            >
+              {d.status.label}
+            </span>
+            <span className="text-label-sm text-on-surface-variant">matched on {d.matchedOn}</span>
+          </li>
+        ))}
+      </ul>
+    </div>
+  );
+}
+
 // ── Root ──────────────────────────────────────────────────────────────────────
 export function LeadDetail({
   lead,
   notes,
   timeline,
   tasks,
+  duplicates,
   masters,
   canEdit,
   access,
@@ -149,6 +197,7 @@ export function LeadDetail({
   notes: NoteRow[];
   timeline: ActivityRow[];
   tasks: TaskRow[];
+  duplicates: DuplicateRow[];
   masters: DetailMasters;
   canEdit: boolean;
   access: DetailAccess;
@@ -221,6 +270,8 @@ export function LeadDetail({
           </div>
         )}
       </div>
+
+      {duplicates.length > 0 && <DuplicatesBanner duplicates={duplicates} />}
 
       {tab === "overview" && (
         <>
