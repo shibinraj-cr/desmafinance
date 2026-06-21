@@ -9,6 +9,8 @@ type Source = {
   nameColumns: string[];
   emailColumns: string[];
   phoneColumns: string[];
+  leadCount: number;
+  lastSyncAt: string | null;
 };
 type Batch = {
   id: string;
@@ -38,6 +40,15 @@ function fmt(iso: string) {
   const d = new Date(iso);
   const M = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
   return `${String(d.getDate()).padStart(2, "0")} ${M[d.getMonth()]} ${String(d.getFullYear()).slice(2)}, ${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`;
+}
+function rel(iso: string) {
+  const s = Math.max(1, Math.round((Date.now() - new Date(iso).getTime()) / 1000));
+  if (s < 60) return s + "s ago";
+  const m = Math.round(s / 60);
+  if (m < 60) return m + "m ago";
+  const h = Math.round(m / 60);
+  if (h < 24) return h + "h ago";
+  return Math.round(h / 24) + "d ago";
 }
 
 export function IntegrationsCard() {
@@ -153,6 +164,7 @@ export function IntegrationsCard() {
                   <tr className="text-left">
                     <th className="px-md py-xs">CRM_SOURCE</th>
                     <th className="px-md py-xs">CRM source</th>
+                    <th className="px-md py-xs">Status</th>
                     <th className="px-md py-xs">Name / Email / Phone columns</th>
                   </tr>
                 </thead>
@@ -161,6 +173,20 @@ export function IntegrationsCard() {
                     <tr key={s.key} className="border-t border-outline-variant/60">
                       <td className="px-md py-xs font-mono">{s.key}</td>
                       <td className="px-md py-xs">{s.label}</td>
+                      <td className="px-md py-xs whitespace-nowrap">
+                        {s.leadCount > 0 || s.lastSyncAt ? (
+                          <span className="inline-flex items-center gap-xs">
+                            <span className="h-2 w-2 rounded-full bg-green-500" />
+                            <span className="text-on-surface font-medium">{s.leadCount.toLocaleString()} leads</span>
+                            {s.lastSyncAt && <span className="text-on-surface-variant">· last sync {rel(s.lastSyncAt)}</span>}
+                          </span>
+                        ) : (
+                          <span className="inline-flex items-center gap-xs text-on-surface-variant">
+                            <span className="h-2 w-2 rounded-full bg-outline" />
+                            No data received yet
+                          </span>
+                        )}
+                      </td>
                       <td className="px-md py-xs text-on-surface-variant">
                         {s.nameColumns.join(", ")} · {s.emailColumns.join(", ")} · {s.phoneColumns.join(", ")}
                       </td>
