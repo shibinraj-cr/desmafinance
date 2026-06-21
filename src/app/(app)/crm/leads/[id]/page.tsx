@@ -83,6 +83,45 @@ export default async function LeadDetailPage({ params }: { params: { id: string 
   // Best-effort: record that this user opened the lead (once per day).
   await recordLeadOpenedOncePerDay(params.id, userId);
 
+  // Other leads sharing this lead's email or phone — so a flagged duplicate
+  // shows exactly which record(s) it matches (and any lead shows its twins).
+  const dupOr: Array<{ emailKey: string } | { phoneE164: string }> = [];
+  if (lead.emailKey) dupOr.push({ emailKey: lead.emailKey });
+  if (lead.phoneE164) dupOr.push({ phoneE164: lead.phoneE164 });
+  const dupRows = dupOr.length
+    ? await prisma.lead.findMany({
+        where: { id: { not: lead.id }, OR: dupOr },
+        orderBy: { createdAt: "asc" },
+        take: 25,
+        select: {
+          id: true,
+          candidateName: true,
+          email: true,
+          phone: true,
+          emailKey: true,
+          phoneE164: true,
+          createdAt: true,
+          source: { select: { label: true } },
+          status: { select: { label: true, color: true } },
+        },
+      })
+    : [];
+  const duplicates = dupRows.map((d) => {
+    const on: string[] = [];
+    if (lead.emailKey && d.emailKey === lead.emailKey) on.push("email");
+    if (lead.phoneE164 && d.phoneE164 === lead.phoneE164) on.push("phone");
+    return {
+      id: d.id,
+      candidateName: d.candidateName,
+      email: d.email,
+      phone: d.phone,
+      createdAt: d.createdAt.toISOString(),
+      source: d.source?.label ?? null,
+      status: { label: d.status.label, color: d.status.color },
+      matchedOn: on.join(" + "),
+    };
+  });
+
   const masters = {
     statuses,
     sources,
@@ -115,6 +154,7 @@ export default async function LeadDetailPage({ params }: { params: { id: string 
           notes={notes.map(serializeNote)}
           timeline={activities.map((a) => serializeActivity(a, { includeMetadata: false }))}
           tasks={tasks.map(serializeTask)}
+          duplicates={duplicates}
           masters={masters}
           canEdit={canEditLead(access, lead, userId)}
           access={{

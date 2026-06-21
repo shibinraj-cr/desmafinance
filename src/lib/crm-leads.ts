@@ -89,12 +89,21 @@ export function buildLeadWhere(p: LeadFilterParams): Prisma.LeadWhereInput {
   if (p.campaign) where.campaign = p.campaign;
   const q = p.q?.trim();
   if (q) {
-    where.OR = [
+    const or: Prisma.LeadWhereInput[] = [
       { candidateName: { contains: q, mode: "insensitive" } },
       { email: { contains: q, mode: "insensitive" } },
       { phone: { contains: q } },
       { phoneE164: { contains: q } },
     ];
+    // Format-agnostic phone search: match the bare digits against the normalized
+    // phoneE164 (and raw phone), so "+91 78142 95082" also finds a lead stored as
+    // "917814295082" / "7814295082" and vice-versa.
+    const digits = q.replace(/\D/g, "");
+    if (digits.length >= 4) {
+      or.push({ phoneE164: { contains: digits } });
+      or.push({ phone: { contains: digits } });
+    }
+    where.OR = or;
   }
   if (p.from || p.to) {
     const createdAt: Prisma.DateTimeFilter = {};
