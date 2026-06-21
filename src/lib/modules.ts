@@ -173,6 +173,12 @@ export const MODULES: AppModule[] = [
         group: "PIPELINE",
       },
       {
+        href: "/crm/tasks",
+        label: "Tasks",
+        icon: "task_alt",
+        group: "PIPELINE",
+      },
+      {
         href: "/crm/settings",
         label: "Settings",
         icon: "tune",

@@ -252,6 +252,140 @@ export const taskOrderBy: Prisma.CrmTaskOrderByWithRelationInput[] = [
   { createdAt: "desc" },
 ];
 
+// ── Cross-lead task board (the "Tasks" tab) ─────────────────────────────────
+// A flat, filterable list of every lead's tasks for all BDEs + admins. Shares
+// the per-lead task mutation routes; only the listing lives here.
+
+export const crmTaskListInclude = Prisma.validator<Prisma.CrmTaskInclude>()({
+  assignedTo: { select: { id: true, username: true, leadPulseRole: { select: { displayName: true } } } },
+  lead: {
+    select: {
+      id: true,
+      candidateName: true,
+      phone: true,
+      phoneE164: true,
+      // Drives the canEdit rule (admin, or the lead's own BDE) — identical to
+      // the per-task PATCH route's `canEditLead(access, task.lead, userId)`.
+      assignedToId: true,
+      status: { select: { label: true, color: true } },
+    },
+  },
+});
+export type CrmTaskWithRels = Prisma.CrmTaskGetPayload<{ include: typeof crmTaskListInclude }>;
+
+export type CrmTaskListRow = {
+  id: string;
+  leadId: string;
+  subject: string;
+  dueAt: string | null;
+  priority: string; // 'low' | 'normal' | 'high'
+  status: string; // 'open' | 'done'
+  note: string | null;
+  assignedToId: string | null;
+  assignedToName: string | null;
+  completedAt: string | null;
+  createdAt: string;
+  lead: {
+    id: string;
+    candidateName: string;
+    phone: string | null;
+    phoneE164: string | null;
+    assignedToId: string | null;
+    status: { label: string; color: string | null };
+  };
+};
+
+export function serializeCrmTaskListRow(t: CrmTaskWithRels): CrmTaskListRow {
+  return {
+    id: t.id,
+    leadId: t.leadId,
+    subject: t.subject,
+    dueAt: t.dueAt ? t.dueAt.toISOString() : null,
+    priority: t.priority,
+    status: t.status,
+    note: t.note,
+    assignedToId: t.assignedToId,
+    assignedToName: t.assignedTo
+      ? t.assignedTo.leadPulseRole?.displayName ?? t.assignedTo.username
+      : null,
+    completedAt: t.completedAt ? t.completedAt.toISOString() : null,
+    createdAt: t.createdAt.toISOString(),
+    lead: {
+      id: t.lead.id,
+      candidateName: t.lead.candidateName,
+      phone: t.lead.phone,
+      phoneE164: t.lead.phoneE164,
+      assignedToId: t.lead.assignedToId,
+      status: { label: t.lead.status.label, color: t.lead.status.color },
+    },
+  };
+}
+
+export type CrmTaskFilterParams = {
+  status?: string; // 'open' | 'done' (undefined = all)
+  assignee?: string; // userId | 'unassigned'
+  priority?: string; // 'low' | 'normal' | 'high'
+  due?: string; // 'overdue' | 'today' | 'week' | 'no_date'
+  q?: string; // matches task subject OR lead name
+  /** Injected "now" so date math is stable within a request. */
+  now?: Date;
+};
+
+/** Midnight (local) at the start of `d`. */
+function startOfDay(d: Date): Date {
+  return new Date(d.getFullYear(), d.getMonth(), d.getDate());
+}
+
+/** Build the Prisma `where` for the cross-lead task list. */
+export function buildCrmTaskWhere(p: CrmTaskFilterParams): Prisma.CrmTaskWhereInput {
+  const where: Prisma.CrmTaskWhereInput = {};
+  if (p.status === "open" || p.status === "done") where.status = p.status;
+  if (p.assignee === "unassigned") where.assignedToId = null;
+  else if (p.assignee) where.assignedToId = p.assignee;
+  if (p.priority === "low" || p.priority === "normal" || p.priority === "high") {
+    where.priority = p.priority;
+  }
+
+  const today = startOfDay(p.now ?? new Date());
+  const tomorrow = new Date(today.getTime() + 24 * 60 * 60 * 1000);
+  const weekEnd = new Date(today.getTime() + 7 * 24 * 60 * 60 * 1000);
+  if (p.due === "overdue") {
+    where.dueAt = { lt: today };
+    where.status = "open"; // only open tasks can be overdue
+  } else if (p.due === "today") {
+    where.dueAt = { gte: today, lt: tomorrow };
+  } else if (p.due === "week") {
+    where.dueAt = { gte: today, lt: weekEnd };
+  } else if (p.due === "no_date") {
+    where.dueAt = null;
+  }
+
+  const q = p.q?.trim();
+  if (q) {
+    where.OR = [
+      { subject: { contains: q, mode: "insensitive" } },
+      { lead: { candidateName: { contains: q, mode: "insensitive" } } },
+    ];
+  }
+  return where;
+}
+
+/** Ordering for the task board. Open-relevant sorts keep null due dates last. */
+export function crmTaskListOrderBy(sort?: string): Prisma.CrmTaskOrderByWithRelationInput[] {
+  switch (sort) {
+    case "due_desc":
+      return [{ dueAt: { sort: "desc", nulls: "last" } }, { createdAt: "desc" }];
+    case "created_desc":
+      return [{ createdAt: "desc" }];
+    case "created_asc":
+      return [{ createdAt: "asc" }];
+    case "due_asc":
+    default:
+      // Open first, then soonest due (nulls last), then newest.
+      return [{ status: "desc" }, { dueAt: { sort: "asc", nulls: "last" } }, { createdAt: "desc" }];
+  }
+}
+
 export type BdeOption = {
   userId: string;
   displayName: string;
