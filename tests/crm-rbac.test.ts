@@ -16,6 +16,7 @@ function access(partial: Partial<CrmAccess>): CrmAccess {
     canViewLeads: true,
     canCreateLeads: false,
     canBulkImport: false,
+    canBulkEmail: false,
     canAssign: false,
     canViewHistory: false,
     canManageSettings: false,

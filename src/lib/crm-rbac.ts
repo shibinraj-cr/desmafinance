@@ -28,6 +28,8 @@ export type CrmAccess = {
   canViewLeads: boolean;
   canCreateLeads: boolean;
   canBulkImport: boolean;
+  /** Send a bulk email to many leads at once (admin-only, like bulk import). */
+  canBulkEmail: boolean;
   canAssign: boolean;
   canViewHistory: boolean;
   canManageSettings: boolean;
@@ -56,6 +58,7 @@ export async function getCrmAccess(
     canViewLeads: admin || isBde || isSupervisor || hasPage,
     canCreateLeads: admin || isBde,
     canBulkImport: admin,
+    canBulkEmail: admin,
     canAssign: admin,
     canViewHistory: admin,
     canManageSettings: admin,

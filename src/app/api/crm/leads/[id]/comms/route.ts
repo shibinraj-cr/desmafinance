@@ -6,8 +6,10 @@ import { unauthorized, forbidden, notFound, badRequest } from "@/lib/http-error"
 import { getCurrentUserAndPermissions } from "@/lib/permissions";
 import { getCrmAccess, canEditLead } from "@/lib/crm-rbac";
 import { recordLeadActivity, type CrmActivityType } from "@/lib/crm-activity";
+import { getEmailConfig, sendEmail } from "@/lib/mailer";
 
 export const dynamic = "force-dynamic";
+export const runtime = "nodejs"; // nodemailer (SMTP) for the server-side send path
 
 const CALL_OUTCOMES = ["connected", "no_answer", "busy", "wrong_number"] as const;
 const OUTCOME_LABEL: Record<string, string> = {
@@ -57,6 +59,31 @@ export const POST = withApiHandler(async (req: Request, { params }: { params: { 
     if (!lead.email) throw badRequest("Lead has no email address", "no_email");
     const subject = data.subject ?? "";
     const body = data.body ?? "";
+
+    // When a sender is configured AND there's actual content, deliver server-side
+    // (the message lands in the lead's inbox and the team mailbox's Sent folder).
+    // Otherwise fall back to a mailto deep link — and a content-less call (the
+    // list-grid quick action) is always just an intent log, never a blank send.
+    const cfg = body || subject ? await getEmailConfig() : null;
+    if (cfg) {
+      try {
+        const { messageId } = await sendEmail(cfg, { to: lead.email, subject, text: body });
+        await logComm(params.id, userId, "EMAIL_SENT", `Emailed ${lead.email}`, {
+          to: lead.email,
+          subject,
+          body,
+          delivery: "gmail",
+          messageId,
+        });
+        return NextResponse.json({ channel: "email", delivery: "gmail", sentTo: lead.email });
+      } catch (e) {
+        throw badRequest(
+          `Couldn't send the email: ${e instanceof Error ? e.message : "unknown error"}`,
+          "email_send_failed",
+        );
+      }
+    }
+
     const mailtoUrl =
       `mailto:${encodeURIComponent(lead.email)}` +
       `?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`;
