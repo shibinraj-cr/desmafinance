@@ -15,10 +15,12 @@ export function GroupTabs({
   perms,
   pendingCount,
   rejectedCount,
+  newLeadsCount,
 }: {
   perms: Permissions;
   pendingCount: number;
   rejectedCount: number;
+  newLeadsCount: number;
 }) {
   const pathname = usePathname();
 
@@ -44,8 +46,14 @@ export function GroupTabs({
       <nav className="flex items-stretch gap-md">
         {pages.map((p) => {
           const active = current.href === p.href;
-          const showBadge =
-            p.href === "/finance/approvals" && canApprove(perms) && pendingCount > 0;
+          // New-leads badge on the CRM Leads tab; approvals badge on the
+          // finance Approvals tab. A tab shows at most one.
+          const tabBadge =
+            p.href === "/finance/approvals" && canApprove(perms) && pendingCount > 0
+              ? pendingCount
+              : p.href === "/crm/leads" && newLeadsCount > 0
+                ? newLeadsCount
+                : 0;
           const showWarning =
             p.href === "/finance/approvals" && rejectedCount > 0;
           return (
@@ -72,9 +80,12 @@ export function GroupTabs({
                   {rejectedCount}
                 </span>
               ) : null}
-              {showBadge ? (
-                <span className="text-[10px] font-bold bg-primary text-on-primary px-xs py-[1px] rounded-full min-w-[18px] text-center">
-                  {pendingCount}
+              {tabBadge > 0 ? (
+                <span
+                  title={p.href === "/crm/leads" ? `${tabBadge} new lead${tabBadge === 1 ? "" : "s"} assigned to you` : undefined}
+                  className="text-[10px] font-bold bg-primary text-on-primary px-xs py-[1px] rounded-full min-w-[18px] text-center"
+                >
+                  {tabBadge}
                 </span>
               ) : null}
             </Link>
