@@ -29,8 +29,25 @@ function directUrl(url) {
 
 const env = process.env.VERCEL_ENV ?? "(local)";
 if (process.env.VERCEL_ENV === "production") {
-  console.log("[build] VERCEL_ENV=production → applying database migrations (direct connection)");
-  run("prisma migrate deploy", { DATABASE_URL: directUrl(process.env.DATABASE_URL) });
+  const directEnv = { DATABASE_URL: directUrl(process.env.DATABASE_URL) };
+  // Only run migrate deploy when migrations are actually pending. `migrate
+  // status` reads _prisma_migrations WITHOUT taking the advisory lock and exits
+  // non-zero when something is pending; `migrate deploy` DOES take the lock, so
+  // skipping it on an already-migrated DB avoids the advisory-lock contention
+  // entirely on the common no-schema-change deploy.
+  let upToDate = false;
+  try {
+    run("prisma migrate status", directEnv);
+    upToDate = true;
+  } catch {
+    upToDate = false;
+  }
+  if (upToDate) {
+    console.log("[build] VERCEL_ENV=production → DB already up to date, skipping migrate deploy");
+  } else {
+    console.log("[build] VERCEL_ENV=production → pending migrations, applying (direct connection)");
+    run("prisma migrate deploy", directEnv);
+  }
 } else {
   console.log(`[build] VERCEL_ENV=${env} → skipping migrate deploy (production only)`);
 }
