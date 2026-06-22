@@ -1220,7 +1220,16 @@ function WhatsAppModal({ lead, onClose }: { lead: LeadRow; onClose: () => void }
   const router = useRouter();
   const vars = { name: lead.candidateName, service: lead.service?.name ?? "", consultant: lead.assignedTo?.name ?? "" };
   const [message, setMessage] = useState(
-    renderTemplate("Hi {name}, this is {consultant} from DESMA regarding {service}.", vars),
+    renderTemplate(
+      "Hi {name} 😊,\n\n" +
+        "This is {consultant} from DESMA International.\n\n" +
+        "We help nurses like you through the Australian Nursing Registration process — step by step, stress-free.\n\n" +
+        "👉 Please save my number now to get all important updates.\n\n" +
+        "Once done, reply “SAVED” so I can assist you further.\n\n" +
+        "Got any questions?\n" +
+        "📞 I HAVE BOTIM. Call me NOW — I’m just a ping away to help you get started!",
+      vars,
+    ),
   );
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -1259,7 +1268,7 @@ function WhatsAppModal({ lead, onClose }: { lead: LeadRow; onClose: () => void }
       <Field label="Message">
         <textarea
           className="w-full px-md py-sm rounded-lg border border-outline-variant bg-surface-container-lowest outline-none focus:border-primary text-body-md resize-y"
-          rows={4}
+          rows={12}
           value={message}
           onChange={(e) => setMessage(e.target.value)}
         />
