@@ -128,6 +128,12 @@ export const MODULES: AppModule[] = [
         group: "TEAM & TARGETS",
       },
       {
+        href: "/marketing/lead-pulse/crm-metrics",
+        label: "CRM Metrics (Beta)",
+        icon: "compare_arrows",
+        group: "TEAM & TARGETS",
+      },
+      {
         href: "/marketing/lead-pulse/approvals",
         label: "Daily Approvals",
         icon: "rule",
