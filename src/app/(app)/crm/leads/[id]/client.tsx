@@ -5,6 +5,7 @@ import { createPortal } from "react-dom";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
 import type { LeadRow, NoteRow, ActivityRow, TaskRow } from "@/lib/crm-leads";
+import { isActionOnlyStatus } from "@/lib/crm-leads";
 import { renderTemplate } from "@/lib/crm";
 import { StatusPill, type StatusOpt, type Opt, type BdeOpt } from "../client";
 
@@ -85,6 +86,9 @@ const ACTIVITY_ICON: Record<string, string> = {
   TASK_REOPENED: "restart_alt",
   TASK_UPDATED: "edit",
   TASK_DELETED: "delete",
+  DEAL_UPDATED: "handshake",
+  ENROLLED: "verified",
+  REVENUE_DRAFTED: "request_quote",
 };
 
 function Avatar({ name }: { name: string | null }) {
@@ -353,20 +357,31 @@ function StageBar({ lead, statuses, canEdit }: { lead: LeadRow; statuses: Status
     <div className="bg-surface-container-lowest border border-outline-variant rounded-xl shadow-sm p-md flex flex-wrap items-center gap-xs">
       {active.map((s, i) => {
         const reached = !isEndState && currentIdx >= 0 && i <= currentIdx;
+        // "Pipeline" shows on the bar as a milestone but is set only by the
+        // Set-deal action — never clickable.
+        const locked = isActionOnlyStatus(s.code);
         return (
           <button
             key={s.id}
             type="button"
-            disabled={!canEdit || busy}
-            onClick={() => setStatus(s.id)}
+            disabled={!canEdit || busy || locked}
+            onClick={() => {
+              if (!locked) setStatus(s.id);
+            }}
             className={
               "h-9 px-md text-label-sm font-semibold rounded-lg transition disabled:cursor-default " +
               (reached
                 ? "bg-primary text-on-primary"
                 : "bg-surface-container-low text-on-surface-variant hover:bg-surface-container-high") +
-              (canEdit ? " cursor-pointer" : "")
+              (canEdit && !locked ? " cursor-pointer" : "")
             }
-            title={canEdit ? `Set status: ${s.label}` : s.label}
+            title={
+              locked
+                ? `${s.label} is set by an action (Set deal), not the status picker`
+                : canEdit
+                  ? `Set status: ${s.label}`
+                  : s.label
+            }
           >
             {i + 1}. {s.label}
           </button>
@@ -492,11 +507,20 @@ function SummaryCard({ lead, masters, canEdit }: { lead: LeadRow; masters: Detai
           </Field>
           <Field label="Status">
             <select className={inputCls} value={draft.statusId} onChange={(e) => setDraft({ ...draft, statusId: e.target.value })}>
-              {masters.statuses.map((s) => (
-                <option key={s.id} value={s.id}>
-                  {s.label}
+              {/* Pipeline & Enrolled are set by actions (Set deal / Enroll), not here.
+                  If the lead is already in one, show it as a disabled current value. */}
+              {isActionOnlyStatus(lead.status.code) && (
+                <option value={lead.status.id} disabled>
+                  {lead.status.label} (set by action)
                 </option>
-              ))}
+              )}
+              {masters.statuses
+                .filter((s) => !isActionOnlyStatus(s.code))
+                .map((s) => (
+                  <option key={s.id} value={s.id}>
+                    {s.label}
+                  </option>
+                ))}
             </select>
           </Field>
           <div className="flex justify-end gap-base">

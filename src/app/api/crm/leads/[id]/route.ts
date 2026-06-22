@@ -9,7 +9,7 @@ import { getCrmAccess, canEditLead } from "@/lib/crm-rbac";
 import { recordLeadActivity } from "@/lib/crm-activity";
 import { recordAudit } from "@/lib/audit";
 import { normalizePhone, computeDedupeKey, emailKeyOf } from "@/lib/crm";
-import { leadRowInclude, serializeLead } from "@/lib/crm-leads";
+import { leadRowInclude, serializeLead, isActionOnlyStatus } from "@/lib/crm-leads";
 
 export const dynamic = "force-dynamic";
 
@@ -136,6 +136,12 @@ export const PATCH = withApiHandler(async (req: Request, { params }: Ctx) => {
   if (d.statusId !== undefined && d.statusId !== existing.statusId) {
     const newStatus = await prisma.crmLeadStatus.findFirst({ where: { id: d.statusId, active: true } });
     if (!newStatus) throw badRequest("Unknown or inactive status", "invalid_status");
+    if (isActionOnlyStatus(newStatus.code)) {
+      throw badRequest(
+        `"${newStatus.label}" is set by an action (Set deal / Enroll), not the status picker.`,
+        "status_action_only",
+      );
+    }
     update.statusId = d.statusId;
     statusChange = { from: existing.status.label, to: newStatus.label };
   }
