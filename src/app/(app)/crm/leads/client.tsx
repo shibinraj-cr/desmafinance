@@ -451,6 +451,13 @@ const SORT_OPTIONS: { value: string; label: string }[] = [
   { value: "name_asc", label: "Name A–Z" },
 ];
 
+// Reorderable leads-table data columns (the selection + Actions columns stay
+// fixed). Order is remembered per browser in localStorage.
+const LEADS_COL_ORDER_KEY = "crm.leads.columnOrder.v1";
+const LEADS_DEFAULT_COLUMNS = [
+  "created", "source", "campaign", "status", "candidate", "email", "phone", "service", "qualification", "consultant",
+] as const;
+
 export function LeadsTable({
   leads,
   total,
@@ -509,6 +516,41 @@ export function LeadsTable({
   const allPageSelected = pageEmailableIds.length > 0 && pageEmailableIds.every((id) => selected.has(id));
   const somePageSelected = pageEmailableIds.some((id) => selected.has(id));
 
+  // ── Reorderable columns (drag headers; persisted per browser) ───────────────
+  const [colOrder, setColOrder] = useState<string[]>([...LEADS_DEFAULT_COLUMNS]);
+  const [dragCol, setDragCol] = useState<string | null>(null);
+  useEffect(() => {
+    try {
+      const saved = JSON.parse(localStorage.getItem(LEADS_COL_ORDER_KEY) || "null");
+      if (Array.isArray(saved)) {
+        const known = new Set<string>(LEADS_DEFAULT_COLUMNS);
+        const kept = saved.filter((id: unknown): id is string => typeof id === "string" && known.has(id));
+        const missing = LEADS_DEFAULT_COLUMNS.filter((id) => !kept.includes(id));
+        setColOrder([...kept, ...missing]);
+      }
+    } catch {
+      /* ignore malformed localStorage */
+    }
+  }, []);
+  function saveColOrder(order: string[]) {
+    setColOrder(order);
+    try {
+      localStorage.setItem(LEADS_COL_ORDER_KEY, JSON.stringify(order));
+    } catch {
+      /* ignore */
+    }
+  }
+  function dropCol(targetId: string) {
+    if (!dragCol || dragCol === targetId) {
+      setDragCol(null);
+      return;
+    }
+    const next = colOrder.filter((id) => id !== dragCol);
+    next.splice(next.indexOf(targetId), 0, dragCol);
+    saveColOrder(next);
+    setDragCol(null);
+  }
+
   function toggleOne(id: string) {
     setSelected((prev) => {
       const next = new Set(prev);
@@ -566,6 +608,67 @@ export function LeadsTable({
   const isMyNew = mineAssignee && !!newStatusId && search.get("status") === newStatusId;
   const isMyLeads = mineAssignee && !isMyNew;
   const showMine = access.isBde;
+
+  // Column definitions (selection + Actions are rendered separately and fixed).
+  const dataColumns: {
+    id: string;
+    label: string;
+    className: string;
+    render: (lead: LeadRow, canEdit: boolean) => React.ReactNode;
+  }[] = [
+    { id: "created", label: "Created", className: "whitespace-nowrap font-mono tabular-nums text-on-surface-variant", render: (l) => fmtDateTime(l.createdAt) },
+    { id: "source", label: "Source", className: "whitespace-nowrap", render: (l) => l.source?.label ?? "—" },
+    {
+      id: "campaign",
+      label: "Campaign",
+      className: "whitespace-nowrap text-on-surface-variant",
+      render: (l) =>
+        l.campaign ? (
+          <button type="button" onClick={() => update({ campaign: l.campaign })} className="hover:text-primary hover:underline" title={`Filter by ${l.campaign}`}>
+            {l.campaign}
+          </button>
+        ) : (
+          "—"
+        ),
+    },
+    { id: "status", label: "Status", className: "", render: (l) => <StatusPill status={l.status} /> },
+    {
+      id: "candidate",
+      label: "Candidate",
+      className: "whitespace-nowrap font-semibold",
+      render: (l) => (
+        <Link href={`/crm/leads/${l.id}`} className="text-on-surface hover:text-primary hover:underline">
+          {l.candidateName}
+        </Link>
+      ),
+    },
+    { id: "email", label: "Email", className: "whitespace-nowrap text-on-surface-variant", render: (l) => l.email ?? "—" },
+    { id: "phone", label: "Phone", className: "whitespace-nowrap text-on-surface-variant", render: (l) => l.phone ?? "—" },
+    { id: "service", label: "Service", className: "whitespace-nowrap", render: (l) => l.service?.name ?? "—" },
+    { id: "qualification", label: "Qualification", className: "whitespace-nowrap", render: (l) => l.qualification?.label ?? "—" },
+    {
+      id: "consultant",
+      label: "Consultant",
+      className: "whitespace-nowrap",
+      render: (l, canEdit) =>
+        access.canAssign ? (
+          <AssignSelect lead={l} bdes={masters.bdes} />
+        ) : (
+          <span className="inline-flex items-center gap-xs">
+            {l.assignedTo?.name ?? <span className="text-on-surface-variant">Unassigned</span>}
+            {!canEdit && access.isBde && (
+              <span className="material-symbols-outlined text-on-surface-variant" style={{ fontSize: 14 }} title={l.assignedTo ? `Assigned to ${l.assignedTo.name}` : "Unassigned"}>
+                lock
+              </span>
+            )}
+          </span>
+        ),
+    },
+  ];
+  const orderedColumns = colOrder
+    .map((id) => dataColumns.find((c) => c.id === id))
+    .filter((c): c is (typeof dataColumns)[number] => !!c);
+  const columnsCustomized = colOrder.join(",") !== [...LEADS_DEFAULT_COLUMNS].join(",");
 
   return (
     <div className="space-y-md">
@@ -682,6 +785,20 @@ export function LeadsTable({
           </span>
           Export Excel
         </a>
+
+        {columnsCustomized && (
+          <button
+            type="button"
+            onClick={() => saveColOrder([...LEADS_DEFAULT_COLUMNS])}
+            className="h-9 px-md rounded-lg border border-outline-variant text-label-sm text-on-surface-variant hover:text-on-surface hover:bg-surface-container-low transition inline-flex items-center gap-xs"
+            title="Reset the column order to default"
+          >
+            <span className="material-symbols-outlined" style={{ fontSize: 18 }}>
+              restart_alt
+            </span>
+            Reset columns
+          </button>
+        )}
       </div>
 
       {/* Bulk action bar */}
@@ -751,23 +868,35 @@ export function LeadsTable({
                     />
                   </Th>
                 )}
-                <Th className="text-left">Created</Th>
-                <Th className="text-left">Source</Th>
-                <Th className="text-left">Campaign</Th>
-                <Th className="text-left">Status</Th>
-                <Th className="text-left">Candidate</Th>
-                <Th className="text-left">Email</Th>
-                <Th className="text-left">Phone</Th>
-                <Th className="text-left">Service</Th>
-                <Th className="text-left">Qualification</Th>
-                <Th className="text-left">Consultant</Th>
+                {orderedColumns.map((col) => (
+                  <th
+                    key={col.id}
+                    draggable
+                    onDragStart={() => setDragCol(col.id)}
+                    onDragEnd={() => setDragCol(null)}
+                    onDragOver={(e) => e.preventDefault()}
+                    onDrop={() => dropCol(col.id)}
+                    title="Drag to reorder"
+                    className={
+                      "px-md py-sm text-label-sm uppercase tracking-wider text-left whitespace-nowrap cursor-move select-none hover:bg-surface-container transition " +
+                      (dragCol === col.id ? "opacity-40" : "")
+                    }
+                  >
+                    <span className="inline-flex items-center gap-xs">
+                      <span className="material-symbols-outlined opacity-40" style={{ fontSize: 14 }}>
+                        drag_indicator
+                      </span>
+                      {col.label}
+                    </span>
+                  </th>
+                ))}
                 <Th className="text-right">Actions</Th>
               </tr>
             </thead>
             <tbody>
               {leads.length === 0 ? (
                 <tr>
-                  <td colSpan={bulk ? 12 : 11} className="px-md py-lg text-center text-on-surface-variant">
+                  <td colSpan={(bulk ? 1 : 0) + orderedColumns.length + 1} className="px-md py-lg text-center text-on-surface-variant">
                     No leads match this filter.
                   </td>
                 </tr>
@@ -786,54 +915,11 @@ export function LeadsTable({
                           />
                         </Td>
                       )}
-                      <Td className="whitespace-nowrap font-mono tabular-nums text-on-surface-variant">
-                        {fmtDateTime(lead.createdAt)}
-                      </Td>
-                      <Td className="whitespace-nowrap">{lead.source?.label ?? "—"}</Td>
-                      <Td className="whitespace-nowrap text-on-surface-variant">
-                        {lead.campaign ? (
-                          <button
-                            type="button"
-                            onClick={() => update({ campaign: lead.campaign })}
-                            className="hover:text-primary hover:underline"
-                            title={`Filter by ${lead.campaign}`}
-                          >
-                            {lead.campaign}
-                          </button>
-                        ) : (
-                          "—"
-                        )}
-                      </Td>
-                      <Td>
-                        <StatusPill status={lead.status} />
-                      </Td>
-                      <Td className="whitespace-nowrap font-semibold">
-                        <Link href={`/crm/leads/${lead.id}`} className="text-on-surface hover:text-primary hover:underline">
-                          {lead.candidateName}
-                        </Link>
-                      </Td>
-                      <Td className="whitespace-nowrap text-on-surface-variant">{lead.email ?? "—"}</Td>
-                      <Td className="whitespace-nowrap text-on-surface-variant">{lead.phone ?? "—"}</Td>
-                      <Td className="whitespace-nowrap">{lead.service?.name ?? "—"}</Td>
-                      <Td className="whitespace-nowrap">{lead.qualification?.label ?? "—"}</Td>
-                      <Td className="whitespace-nowrap">
-                        {access.canAssign ? (
-                          <AssignSelect lead={lead} bdes={masters.bdes} />
-                        ) : (
-                          <span className="inline-flex items-center gap-xs">
-                            {lead.assignedTo?.name ?? <span className="text-on-surface-variant">Unassigned</span>}
-                            {!canEdit && access.isBde && (
-                              <span
-                                className="material-symbols-outlined text-on-surface-variant"
-                                style={{ fontSize: 14 }}
-                                title={lead.assignedTo ? `Assigned to ${lead.assignedTo.name}` : "Unassigned"}
-                              >
-                                lock
-                              </span>
-                            )}
-                          </span>
-                        )}
-                      </Td>
+                      {orderedColumns.map((col) => (
+                        <Td key={col.id} className={col.className}>
+                          {col.render(lead, canEdit)}
+                        </Td>
+                      ))}
                       <Td>
                         <div className="flex items-center justify-end gap-xs">
                           <CommLink
