@@ -1,6 +1,7 @@
 import { redirect } from "next/navigation";
 import { prisma } from "@/lib/prisma";
 import { getCurrentUserAndPermissions } from "@/lib/permissions";
+import { countNewLeadsAssignedTo } from "@/lib/crm-leads";
 import { SideNav } from "@/components/SideNav";
 import { GroupTabs } from "@/components/GroupTabs";
 import { RouteProgress } from "@/components/RouteProgress";
@@ -12,11 +13,14 @@ export default async function AppLayout({ children }: { children: React.ReactNod
   // Pending-approvals badge count for managers/admins.
   // Rejected-queue count for the signed-in user (their own rejections
   // they haven't resubmitted or dismissed yet).
-  const [pendingCount, rejectedCount] = await Promise.all([
+  // New-leads count: fresh leads assigned to the signed-in BDE, for the CRM
+  // nav badge (0 for anyone with no fresh assigned leads).
+  const [pendingCount, rejectedCount, newLeadsCount] = await Promise.all([
     prisma.pendingApproval.count({ where: { status: "pending" } }).catch(() => 0),
     prisma.pendingApproval
       .count({ where: { status: "rejected", submittedById: userId } })
       .catch(() => 0),
+    countNewLeadsAssignedTo(userId),
   ]);
 
   return (
@@ -29,9 +33,15 @@ export default async function AppLayout({ children }: { children: React.ReactNod
         perms={perms}
         pendingCount={pendingCount}
         rejectedCount={rejectedCount}
+        newLeadsCount={newLeadsCount}
       />
       <main className="flex-1 min-w-0 flex flex-col">
-        <GroupTabs perms={perms} pendingCount={pendingCount} rejectedCount={rejectedCount} />
+        <GroupTabs
+          perms={perms}
+          pendingCount={pendingCount}
+          rejectedCount={rejectedCount}
+          newLeadsCount={newLeadsCount}
+        />
         {children}
       </main>
     </div>

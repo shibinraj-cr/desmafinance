@@ -28,6 +28,8 @@ export type LeadsAccess = {
   isAdmin: boolean;
   isBde: boolean;
   userId: string;
+  /** Count of fresh (Not Yet Started) leads assigned to the signed-in BDE. */
+  newLeadsCount: number;
 };
 
 // ── Reusable class strings (verbatim from the design system) ────────────────
@@ -54,6 +56,43 @@ function Th({ children, className = "" }: { children?: React.ReactNode; classNam
 }
 function Td({ children, className = "" }: { children?: React.ReactNode; className?: string }) {
   return <td className={"px-md py-sm align-middle " + className}>{children}</td>;
+}
+
+function Chip({
+  label,
+  count,
+  active,
+  onClick,
+}: {
+  label: string;
+  count?: number;
+  active: boolean;
+  onClick: () => void;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className={
+        "inline-flex items-center gap-xs h-8 px-md rounded-full border text-label-sm font-semibold transition " +
+        (active
+          ? "bg-primary text-on-primary border-primary"
+          : "border-outline-variant text-on-surface-variant hover:bg-surface-container-low")
+      }
+    >
+      {label}
+      {typeof count === "number" && count > 0 && (
+        <span
+          className={
+            "text-[10px] font-bold px-xs py-[1px] rounded-full min-w-[18px] text-center " +
+            (active ? "bg-on-primary/20" : "bg-primary text-on-primary")
+          }
+        >
+          {count}
+        </span>
+      )}
+    </button>
+  );
 }
 
 const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
@@ -520,8 +559,28 @@ export function LeadsTable({
   exportParams.delete("pageSize");
   const exportHref = "/api/crm/leads/export" + (exportParams.toString() ? `?${exportParams.toString()}` : "");
 
+  // "My leads" / "My new leads" quick filters for BDEs. "New" = Not Yet Started
+  // leads assigned to me (fresh, not-yet-worked).
+  const newStatusId = masters.statuses.find((s) => s.code === "not_yet_started")?.id ?? null;
+  const mineAssignee = search.get("assignee") === access.userId;
+  const isMyNew = mineAssignee && !!newStatusId && search.get("status") === newStatusId;
+  const isMyLeads = mineAssignee && !isMyNew;
+  const showMine = access.isBde;
+
   return (
     <div className="space-y-md">
+      {showMine && (
+        <div className="flex flex-wrap items-center gap-xs">
+          <Chip label="All leads" active={!mineAssignee} onClick={() => update({ assignee: null, status: null })} />
+          <Chip label="My leads" active={isMyLeads} onClick={() => update({ assignee: access.userId, status: null })} />
+          <Chip
+            label="My new leads"
+            count={access.newLeadsCount}
+            active={isMyNew}
+            onClick={() => update({ assignee: access.userId, status: newStatusId })}
+          />
+        </div>
+      )}
       {/* Filter band */}
       <div className="flex flex-wrap items-center gap-base">
         <form

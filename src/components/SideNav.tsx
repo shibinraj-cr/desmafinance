@@ -35,6 +35,7 @@ function navForModule(
   perms: Permissions,
   pendingCount: number,
   rejectedCount: number,
+  newLeadsCount: number,
 ): NavItem[] {
   return mod.pages
     .filter((p) => canSeePage(perms, p.href))
@@ -44,7 +45,11 @@ function navForModule(
       icon: p.icon,
       group: p.group,
       badgeCount:
-        p.href === "/finance/approvals" && canApprove(perms) ? pendingCount : null,
+        p.href === "/finance/approvals" && canApprove(perms)
+          ? pendingCount
+          : p.href === "/crm/leads"
+            ? newLeadsCount
+            : null,
       warningCount:
         p.href === "/finance/approvals" && rejectedCount > 0 ? rejectedCount : null,
     }));
@@ -62,6 +67,7 @@ function groupNavForModule(
   pathname: string,
   pendingCount: number,
   rejectedCount: number,
+  newLeadsCount: number,
 ): NavItem[] {
   const current = activePage(mod, pathname);
   return moduleGroups(mod)
@@ -70,12 +76,15 @@ function groupNavForModule(
     .map((g) => {
       const first = g.pages[0];
       const hasApprovals = g.pages.some((p) => p.href === "/finance/approvals");
+      // The CRM "Pipeline" group leads with /crm/leads — badge it with the
+      // signed-in BDE's count of fresh, not-yet-worked leads.
+      const hasNewLeads = g.pages.some((p) => p.href === "/crm/leads");
       return {
         href: first.href,
         label: g.name,
         icon: first.icon,
         active: !!current && g.pages.some((p) => p.href === current.href),
-        badgeCount: hasApprovals && canApprove(perms) ? pendingCount : null,
+        badgeCount: hasApprovals && canApprove(perms) ? pendingCount : hasNewLeads ? newLeadsCount : null,
         warningCount: hasApprovals && rejectedCount > 0 ? rejectedCount : null,
       };
     });
@@ -275,11 +284,13 @@ export function SideNav({
   perms,
   pendingCount,
   rejectedCount,
+  newLeadsCount,
 }: {
   user: { name?: string | null; email?: string | null };
   perms: Permissions;
   pendingCount: number;
   rejectedCount: number;
+  newLeadsCount: number;
 }) {
   const pathname = usePathname();
 
@@ -303,8 +314,8 @@ export function SideNav({
   // Grouped modules list their groups in the left bar (pages live in the top
   // tab strip); ungrouped modules keep the flat page list.
   const items = moduleHasGroups(activeModule)
-    ? groupNavForModule(activeModule, perms, pathname, pendingCount, rejectedCount)
-    : navForModule(activeModule, perms, pendingCount, rejectedCount);
+    ? groupNavForModule(activeModule, perms, pathname, pendingCount, rejectedCount, newLeadsCount)
+    : navForModule(activeModule, perms, pendingCount, rejectedCount, newLeadsCount);
 
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [mounted, setMounted] = useState(false);

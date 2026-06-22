@@ -151,6 +151,25 @@ export function getDuplicateStatus() {
   return prisma.crmLeadStatus.findUnique({ where: { code: "duplicate" } });
 }
 
+/**
+ * The status code that marks a freshly-assigned, not-yet-worked lead. A lead
+ * leaves this bucket the moment the BDE moves it forward, so "new leads
+ * assigned to me" is self-maintaining.
+ */
+export const NEW_LEAD_STATUS_CODE = "not_yet_started";
+
+/**
+ * Count of fresh leads currently assigned to `userId` (status "not_yet_started").
+ * Powers the CRM nav badge and the "My new leads" quick filter so a BDE knows
+ * when new leads land in their queue. Returns 0 on any error (badge is
+ * best-effort, must never break a page render).
+ */
+export async function countNewLeadsAssignedTo(userId: string): Promise<number> {
+  return prisma.lead
+    .count({ where: { assignedToId: userId, status: { code: NEW_LEAD_STATUS_CODE } } })
+    .catch(() => 0);
+}
+
 // ── Notes ───────────────────────────────────────────────────────────────────
 export const noteInclude = Prisma.validator<Prisma.LeadNoteInclude>()({
   author: { select: { id: true, username: true, leadPulseRole: { select: { displayName: true } } } },

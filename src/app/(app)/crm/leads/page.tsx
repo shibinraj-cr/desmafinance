@@ -11,6 +11,7 @@ import {
   leadRowInclude,
   serializeLead,
   getAssignableBdes,
+  countNewLeadsAssignedTo,
 } from "@/lib/crm-leads";
 import { isEmailConfigured } from "@/lib/mailer";
 import { LeadsToolbar, LeadsTable } from "./client";
@@ -107,6 +108,10 @@ export default async function LeadsPage({ searchParams }: { searchParams: SP }) 
     isEmailConfigured(),
   ]);
 
+  // Fresh leads assigned to the signed-in BDE — drives the "My new leads" chip
+  // count (only the BDE's own queue matters; 0 for non-assignees).
+  const newLeadsCount = access.isBde ? await countNewLeadsAssignedTo(userId) : 0;
+
   const masters = {
     statuses,
     sources,
@@ -124,6 +129,7 @@ export default async function LeadsPage({ searchParams }: { searchParams: SP }) 
     isAdmin: access.isAdmin,
     isBde: access.isBde,
     userId,
+    newLeadsCount,
   };
 
   return (
