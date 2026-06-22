@@ -448,6 +448,7 @@ const SORT_OPTIONS: { value: string; label: string }[] = [
   { value: "created_desc", label: "Newest first" },
   { value: "created_asc", label: "Oldest first" },
   { value: "activity_desc", label: "Recent activity" },
+  { value: "assigned_desc", label: "Recently assigned" },
   { value: "name_asc", label: "Name A–Z" },
 ];
 
@@ -455,7 +456,7 @@ const SORT_OPTIONS: { value: string; label: string }[] = [
 // fixed). Order is remembered per browser in localStorage.
 const LEADS_COL_ORDER_KEY = "crm.leads.columnOrder.v1";
 const LEADS_DEFAULT_COLUMNS = [
-  "created", "source", "campaign", "status", "candidate", "email", "phone", "service", "qualification", "consultant",
+  "created", "source", "campaign", "status", "candidate", "email", "phone", "service", "qualification", "consultant", "assigned",
 ] as const;
 
 export function LeadsTable({
@@ -593,6 +594,7 @@ export function LeadsTable({
     !!search.get("service") ||
     !!search.get("assignee") ||
     !!search.get("campaign") ||
+    !!search.get("assignedOn") ||
     !!search.get("q");
 
   // Export link mirrors the current filters (drop pagination — export all matches).
@@ -663,6 +665,12 @@ export function LeadsTable({
             )}
           </span>
         ),
+    },
+    {
+      id: "assigned",
+      label: "Assigned",
+      className: "whitespace-nowrap font-mono tabular-nums text-on-surface-variant",
+      render: (l) => (l.assignedAt ? fmtDateTime(l.assignedAt) : "—"),
     },
   ];
   const orderedColumns = colOrder
@@ -746,6 +754,22 @@ export function LeadsTable({
           ))}
         </select>
 
+        <label
+          className={selectClass + " inline-flex items-center gap-xs text-on-surface-variant"}
+          title="Show only leads assigned (to a consultant) on this date"
+        >
+          <span className="material-symbols-outlined" style={{ fontSize: 18 }}>
+            person_add
+          </span>
+          <span className="whitespace-nowrap">Assigned</span>
+          <input
+            type="date"
+            value={search.get("assignedOn") ?? ""}
+            onChange={(e) => update({ assignedOn: e.target.value || null })}
+            className="bg-transparent outline-none text-on-surface"
+          />
+        </label>
+
         {masters.campaigns.length > 0 && (
           <select className={selectClass} value={search.get("campaign") ?? ""} onChange={(e) => update({ campaign: e.target.value || null })}>
             <option value="">All campaigns</option>
@@ -768,7 +792,7 @@ export function LeadsTable({
         {anyFilter && (
           <button
             type="button"
-            onClick={() => update({ status: null, source: null, service: null, assignee: null, campaign: null, q: null })}
+            onClick={() => update({ status: null, source: null, service: null, assignee: null, campaign: null, assignedOn: null, q: null })}
             className="h-9 px-md rounded-lg border border-outline-variant text-label-sm text-on-surface-variant hover:text-on-surface hover:bg-surface-container-low transition"
           >
             Clear all

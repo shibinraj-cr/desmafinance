@@ -6,7 +6,7 @@ import { unauthorized, forbidden } from "@/lib/http-error";
 import { getCurrentUserAndPermissions } from "@/lib/permissions";
 import { getCrmAccess } from "@/lib/crm-rbac";
 import { parsePeriod, rangeFor } from "@/lib/period";
-import { buildLeadWhere, leadOrderBy } from "@/lib/crm-leads";
+import { buildLeadWhere, leadOrderBy, assignedDayRange } from "@/lib/crm-leads";
 
 export const dynamic = "force-dynamic";
 
@@ -27,6 +27,7 @@ export const GET = withApiHandler(async (req: Request) => {
   const range = rangeFor(
     parsePeriod({ period: sp.get("period") || undefined, from: sp.get("from") || undefined, to: sp.get("to") || undefined }),
   );
+  const assigned = assignedDayRange(sp.get("assignedOn") || undefined);
   const baseWhere = buildLeadWhere({
     status: sp.get("status") || undefined,
     source: sp.get("source") || undefined,
@@ -36,6 +37,8 @@ export const GET = withApiHandler(async (req: Request) => {
     q: sp.get("q") || undefined,
     from: range.from,
     to: range.to,
+    assignedFrom: assigned?.from,
+    assignedTo: assigned?.to,
   });
   // Emailable = matching AND has a non-empty email.
   const emailableWhere: Prisma.LeadWhereInput = {

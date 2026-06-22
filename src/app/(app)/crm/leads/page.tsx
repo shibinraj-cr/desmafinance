@@ -12,6 +12,7 @@ import {
   serializeLead,
   getAssignableBdes,
   countNewLeadsAssignedTo,
+  assignedDayRange,
 } from "@/lib/crm-leads";
 import { isEmailConfigured } from "@/lib/mailer";
 import { LeadsToolbar, LeadsTable } from "./client";
@@ -54,6 +55,8 @@ export default async function LeadsPage({ searchParams }: { searchParams: SP }) 
       to: str(searchParams, "to"),
     }),
   );
+  const assignedOn = str(searchParams, "assignedOn");
+  const assigned = assignedDayRange(assignedOn);
   const where = buildLeadWhere({
     status: str(searchParams, "status"),
     source: str(searchParams, "source"),
@@ -63,6 +66,8 @@ export default async function LeadsPage({ searchParams }: { searchParams: SP }) 
     q: str(searchParams, "q"),
     from: range.from,
     to: range.to,
+    assignedFrom: assigned?.from,
+    assignedTo: assigned?.to,
   });
 
   // Clamp the page against the result size so a stale `page` (e.g. left over
@@ -136,7 +141,11 @@ export default async function LeadsPage({ searchParams }: { searchParams: SP }) 
     <>
       <TopBar
         title="Leads"
-        subtitle={`${total} lead${total === 1 ? "" : "s"}`}
+        subtitle={
+          assigned
+            ? `${total} lead${total === 1 ? "" : "s"} assigned on ${assigned.from.toLocaleDateString("en-GB", { day: "2-digit", month: "short", year: "numeric" })}`
+            : `${total} lead${total === 1 ? "" : "s"}`
+        }
         action={
           <div className="flex items-center gap-base">
             <DateFilter />

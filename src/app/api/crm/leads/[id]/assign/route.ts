@@ -51,7 +51,9 @@ export const POST = withApiHandler(async (req: Request, { params }: { params: { 
 
   const updated = await prisma.lead.update({
     where: { id: params.id },
-    data: { assignedToId: target },
+    // Stamp the assignment moment (cleared on unassign) so the list can show an
+    // "Assigned" date and filter by it.
+    data: { assignedToId: target, assignedAt: target ? new Date() : null },
     include: leadRowInclude,
   });
 

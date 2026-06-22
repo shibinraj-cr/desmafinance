@@ -517,6 +517,9 @@ function SummaryCard({ lead, masters, canEdit }: { lead: LeadRow; masters: Detai
           <Row label="Service" value={lead.service?.name ?? "—"} />
           <Row label="Qualification" value={lead.qualification?.label ?? "—"} />
           <Row label="Consultant" value={lead.assignedTo?.name ?? "Unassigned"} />
+          {lead.assignedTo && lead.assignedAt && (
+            <Row label="Assigned on" value={fmtDateTime(lead.assignedAt)} />
+          )}
           <Row label="Created" value={fmtDateTime(lead.createdAt)} />
           {lead.extra &&
             Object.entries(lead.extra).map(([k, v]) => <Row key={k} label={k} value={String(v)} />)}
@@ -748,7 +751,12 @@ function AssignmentCard({ lead, masters, canAssign }: { lead: LeadRow; masters: 
       <h3 className="text-h3 text-on-surface">Consultant</h3>
       <div className="flex items-center gap-sm">
         <Avatar name={lead.assignedTo?.name ?? null} />
-        <span className="text-body-md text-on-surface font-medium">{lead.assignedTo?.name ?? "Unassigned"}</span>
+        <div className="flex flex-col">
+          <span className="text-body-md text-on-surface font-medium">{lead.assignedTo?.name ?? "Unassigned"}</span>
+          {lead.assignedTo && lead.assignedAt && (
+            <span className="text-label-sm text-on-surface-variant">Assigned {fmtDateTime(lead.assignedAt)}</span>
+          )}
+        </div>
       </div>
       {canAssign && (
         <Field label="Assign / reassign">
