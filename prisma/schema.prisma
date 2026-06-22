@@ -1822,6 +1822,10 @@ model Lead {
   // Assignment — the consultant (BDE) who owns this lead.
   assignedToId String?
   assignedTo   User?   @relation("LeadAssignee", fields: [assignedToId], references: [id], onDelete: SetNull)
+  // When the lead was assigned to its current consultant. Set on every
+  // assign/reassign; cleared (null) on unassign. Drives the "Assigned" column
+  // and the "assigned on <date>" filter.
+  assignedAt   DateTime?
 
   // Optional linkage to the canonical candidate record once enrolled.
   partyId String?
@@ -1869,6 +1873,7 @@ model Lead {
   tasks      CrmTask[]
 
   @@index([assignedToId])
+  @@index([assignedAt])
   @@index([statusId])
   @@index([sourceId])
   @@index([serviceId])

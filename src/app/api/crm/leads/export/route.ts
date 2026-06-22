@@ -6,7 +6,7 @@ import { unauthorized, forbidden } from "@/lib/http-error";
 import { getCurrentUserAndPermissions } from "@/lib/permissions";
 import { getCrmAccess } from "@/lib/crm-rbac";
 import { parsePeriod, rangeFor } from "@/lib/period";
-import { buildLeadWhere, leadOrderBy, leadRowInclude, serializeLead } from "@/lib/crm-leads";
+import { buildLeadWhere, leadOrderBy, leadRowInclude, serializeLead, assignedDayRange } from "@/lib/crm-leads";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs"; // xlsx + Buffer
@@ -30,6 +30,7 @@ export const GET = withApiHandler(async (req: Request) => {
       to: sp.get("to") || undefined,
     }),
   );
+  const assigned = assignedDayRange(sp.get("assignedOn") || undefined);
   const where = buildLeadWhere({
     status: sp.get("status") || undefined,
     source: sp.get("source") || undefined,
@@ -39,6 +40,8 @@ export const GET = withApiHandler(async (req: Request) => {
     q: sp.get("q") || undefined,
     from: range.from,
     to: range.to,
+    assignedFrom: assigned?.from,
+    assignedTo: assigned?.to,
   });
 
   const rows = await prisma.lead.findMany({
@@ -61,16 +64,17 @@ export const GET = withApiHandler(async (req: Request) => {
       Service: l.service?.name ?? "",
       Qualification: l.qualification?.label ?? "",
       Consultant: l.assignedTo?.name ?? "",
+      Assigned: l.assignedAt ? new Date(l.assignedAt).toLocaleString("en-IN") : "",
     };
   });
 
   const ws = XLSX.utils.json_to_sheet(data, {
-    header: ["Created", "Source", "Campaign", "Status", "Candidate", "Email", "Phone", "Service", "Qualification", "Consultant"],
+    header: ["Created", "Source", "Campaign", "Status", "Candidate", "Email", "Phone", "Service", "Qualification", "Consultant", "Assigned"],
   });
   // Reasonable column widths.
   ws["!cols"] = [
     { wch: 20 }, { wch: 14 }, { wch: 22 }, { wch: 14 }, { wch: 22 },
-    { wch: 26 }, { wch: 16 }, { wch: 22 }, { wch: 16 }, { wch: 18 },
+    { wch: 26 }, { wch: 16 }, { wch: 22 }, { wch: 16 }, { wch: 18 }, { wch: 20 },
   ];
   const wb = XLSX.utils.book_new();
   XLSX.utils.book_append_sheet(wb, ws, "Leads");

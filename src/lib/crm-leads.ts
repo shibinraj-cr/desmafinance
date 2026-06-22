@@ -30,6 +30,7 @@ export type LeadRow = {
   qualification: { id: string; label: string } | null;
   status: { id: string; code: string; label: string; kind: string; color: string | null };
   assignedTo: { id: string; name: string } | null;
+  assignedAt: string | null;
   party: { id: string; name: string } | null;
   campaign: string | null;
   expectedValue: number | null;
@@ -62,6 +63,7 @@ export function serializeLead(l: LeadWithRels): LeadRow {
     assignedTo: l.assignedTo
       ? { id: l.assignedTo.id, name: l.assignedTo.leadPulseRole?.displayName ?? l.assignedTo.username }
       : null,
+    assignedAt: l.assignedAt ? l.assignedAt.toISOString() : null,
     party: l.party ? { id: l.party.id, name: l.party.name } : null,
     campaign: l.campaign,
     expectedValue: l.expectedValue ? Number(l.expectedValue) : null,
@@ -83,7 +85,25 @@ export type LeadFilterParams = {
   /** Resolved half-open createdAt range (e.g. from `rangeFor(parsePeriod(...))`). `to` is exclusive. */
   from?: Date;
   to?: Date;
+  /** Half-open assignedAt range — "leads assigned on/within these dates". `assignedTo` is exclusive. */
+  assignedFrom?: Date;
+  assignedTo?: Date;
 };
+
+/**
+ * Half-open `[start, nextDay)` range for the local calendar day `YYYY-MM-DD`,
+ * used by the "assigned on <date>" filter. Returns null if unparseable.
+ * Built with the numeric Date constructor so the boundaries are server-local
+ * midnight — matching how the leads list renders assigned/created timestamps.
+ */
+export function assignedDayRange(day: string | undefined): { from: Date; to: Date } | null {
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec((day ?? "").trim());
+  if (!m) return null;
+  const from = new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3]));
+  if (Number.isNaN(from.getTime())) return null;
+  const to = new Date(from.getTime() + 24 * 60 * 60 * 1000);
+  return { from, to };
+}
 
 /** Build the Prisma `where` for the leads list. Shared by the list page and the GET API so they never drift. */
 export function buildLeadWhere(p: LeadFilterParams): Prisma.LeadWhereInput {
@@ -118,6 +138,12 @@ export function buildLeadWhere(p: LeadFilterParams): Prisma.LeadWhereInput {
     if (p.to) createdAt.lt = p.to;
     where.createdAt = createdAt;
   }
+  if (p.assignedFrom || p.assignedTo) {
+    const assignedAt: Prisma.DateTimeFilter = {};
+    if (p.assignedFrom) assignedAt.gte = p.assignedFrom;
+    if (p.assignedTo) assignedAt.lt = p.assignedTo;
+    where.assignedAt = assignedAt;
+  }
   return where;
 }
 
@@ -127,6 +153,9 @@ export function leadOrderBy(sort?: string): Prisma.LeadOrderByWithRelationInput 
       return { createdAt: "asc" };
     case "activity_desc":
       return { lastActivityAt: "desc" };
+    case "assigned_desc":
+      // Most-recently-assigned first; never-assigned leads sort last.
+      return { assignedAt: { sort: "desc", nulls: "last" } };
     case "name_asc":
       return { candidateName: "asc" };
     default:

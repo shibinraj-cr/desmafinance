@@ -16,6 +16,7 @@ import {
   buildLeadWhere,
   leadOrderBy,
   isActiveBde,
+  assignedDayRange,
 } from "@/lib/crm-leads";
 
 export const dynamic = "force-dynamic";
@@ -39,6 +40,7 @@ export const GET = withApiHandler(async (req: Request) => {
       to: sp.get("to") || undefined,
     }),
   );
+  const assigned = assignedDayRange(sp.get("assignedOn") || undefined);
   const where = buildLeadWhere({
     status: sp.get("status") || undefined,
     source: sp.get("source") || undefined,
@@ -48,6 +50,8 @@ export const GET = withApiHandler(async (req: Request) => {
     q: sp.get("q") || undefined,
     from: range.from,
     to: range.to,
+    assignedFrom: assigned?.from,
+    assignedTo: assigned?.to,
   });
   const orderBy = leadOrderBy(sp.get("sort") || undefined);
 
@@ -155,6 +159,7 @@ export const POST = withApiHandler(async (req: Request) => {
       qualificationId: data.qualificationId || null,
       statusId,
       assignedToId,
+      assignedAt: assignedToId ? new Date() : null,
       extra: data.extra ?? undefined,
       createdById: userId,
     },

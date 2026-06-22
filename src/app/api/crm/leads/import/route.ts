@@ -176,6 +176,8 @@ export const POST = withApiHandler(async (req: Request) => {
   let duplicateRows = 0;
   let insertedRows = 0;
   const toCreate: Prisma.LeadCreateManyInput[] = [];
+  // One timestamp for the whole batch: pre-assigned rows are "assigned on import".
+  const importedAt = new Date();
 
   for (const p of parsed) {
     const emailDup = !!p.emailKey && (existingEmailKeys.has(p.emailKey) || seenEmailKeys.has(p.emailKey));
@@ -197,6 +199,7 @@ export const POST = withApiHandler(async (req: Request) => {
       serviceId: p.serviceId,
       qualificationId: p.qualificationId,
       assignedToId: p.assignedToId,
+      assignedAt: p.assignedToId ? importedAt : null,
       statusId,
       extra: p.extra ?? Prisma.JsonNull,
       createdById: userId,
