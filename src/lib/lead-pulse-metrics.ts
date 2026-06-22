@@ -1214,6 +1214,35 @@ export async function getServiceConversionMatrix(
     bm.set(svc.name, (bm.get(svc.name) ?? 0) + 1);
     breakdownByCell.set(key, bm);
   }
+
+  // Also credit CRM enrollments: a "Set deal → Enroll" closes the lead's
+  // pipeline row (status=closed_won) WITHOUT going through the daily-entry
+  // form, so it has no linked daily close. Count those here, keyed on the
+  // pipeline's L2 owner + the enrolled service's group. The `dailyCloseId: null`
+  // filter is the de-dup guard: deals closed via the daily entry / pipeline page
+  // carry a dailyCloseId and are already counted in the loop above, so they're
+  // excluded here. This is the path that lets enrollment actuals flow straight
+  // from the CRM (and will be the sole source once daily entry is retired).
+  const enrollCloses = await prisma.leadPulsePipeline.findMany({
+    where: {
+      userId: { in: roles.map((r) => r.userId) },
+      status: "closed_won",
+      dailyCloseId: null,
+      closedDate: { gte: toPrismaDate(start), lte: toPrismaDate(end) },
+    },
+    select: { serviceId: true, userId: true },
+  });
+  for (const p of enrollCloses) {
+    const svc = serviceById.get(p.serviceId);
+    if (!svc || !svc.groupId) continue;
+    const key = `${p.userId}|${svc.groupId}`;
+    const cell = cells.get(key);
+    if (!cell) continue;
+    cell.actual += svc.weight ?? 1;
+    const bm = breakdownByCell.get(key) ?? new Map<string, number>();
+    bm.set(svc.name, (bm.get(svc.name) ?? 0) + 1);
+    breakdownByCell.set(key, bm);
+  }
   // Round to one decimal so the matrix doesn't render floats like 3.0000001.
   for (const [key, c] of cells) {
     c.actual = Math.round(c.actual * 10) / 10;
