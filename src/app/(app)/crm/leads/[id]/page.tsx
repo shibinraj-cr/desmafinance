@@ -77,7 +77,7 @@ export default async function LeadDetailPage({ params }: { params: { id: string 
     prisma.party.findMany({
       where: { group: "Candidate", isActive: true },
       orderBy: { name: "asc" },
-      select: { id: true, name: true },
+      select: { id: true, name: true, phone: true },
     }),
     isEmailConfigured(),
   ]);
@@ -130,7 +130,7 @@ export default async function LeadDetailPage({ params }: { params: { id: string 
     services: services.map((s) => ({ id: s.id, label: s.name })),
     qualifications,
     bdes,
-    parties: parties.map((p) => ({ id: p.id, label: p.name })),
+    parties: parties.map((p) => ({ id: p.id, label: p.name, phone: p.phone })),
   };
 
   return (
