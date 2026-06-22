@@ -8,13 +8,14 @@ import type { LeadRow, NoteRow, ActivityRow, TaskRow } from "@/lib/crm-leads";
 import { renderTemplate } from "@/lib/crm";
 import { StatusPill, type StatusOpt, type Opt, type BdeOpt } from "../client";
 
+export type PartyOpt = { id: string; label: string; phone: string | null };
 export type DetailMasters = {
   statuses: StatusOpt[];
   sources: Opt[];
   services: Opt[];
   qualifications: Opt[];
   bdes: BdeOpt[];
-  parties: Opt[];
+  parties: PartyOpt[];
 };
 export type DetailAccess = {
   isAdmin: boolean;
@@ -287,7 +288,7 @@ export function LeadDetail({
             </div>
             <div className="lg:col-span-1 space-y-lg">
               <AssignmentCard lead={lead} masters={masters} canAssign={access.canAssign} />
-              <LeadInfoCard lead={lead} masters={masters} isAdmin={access.isAdmin} />
+              <LeadInfoCard lead={lead} masters={masters} canEdit={canEdit} />
             </div>
           </div>
         </>
@@ -765,11 +766,14 @@ function AssignmentCard({ lead, masters, canAssign }: { lead: LeadRow; masters: 
 }
 
 // ── Lead info (right rail) ──────────────────────────────────────────────────
-function LeadInfoCard({ lead, masters, isAdmin }: { lead: LeadRow; masters: DetailMasters; isAdmin: boolean }) {
+// `canEdit` (admin OR the assigned consultant) may link/unlink the lead to an
+// existing candidate record — e.g. a husband's enquiry for his wife, whose
+// candidate record already exists, gets linked to her.
+function LeadInfoCard({ lead, masters, canEdit }: { lead: LeadRow; masters: DetailMasters; canEdit: boolean }) {
   const router = useRouter();
   const [busy, setBusy] = useState(false);
 
-  async function linkParty(value: string) {
+  async function linkParty(value: string | null) {
     setBusy(true);
     const res = await fetch(`/api/crm/leads/${lead.id}`, {
       method: "PATCH",
@@ -804,18 +808,112 @@ function LeadInfoCard({ lead, masters, isAdmin }: { lead: LeadRow; masters: Deta
           <span className="text-on-surface-variant">Linked candidate</span>
           <span className="text-on-surface font-medium">{lead.party?.name ?? "Not linked"}</span>
         </div>
-        {isAdmin && (
-          <div className="mt-sm">
-            <select className={inputCls} disabled={busy} value={lead.party?.id ?? ""} onChange={(e) => linkParty(e.target.value)}>
-              <option value="">Not linked</option>
-              {masters.parties.map((p) => (
-                <option key={p.id} value={p.id}>
-                  {p.label}
-                </option>
-              ))}
-            </select>
-          </div>
+        {canEdit && (
+          <CandidateLinkPicker
+            current={lead.party ? { id: lead.party.id, name: lead.party.name } : null}
+            parties={masters.parties}
+            busy={busy}
+            onLink={linkParty}
+          />
         )}
+      </div>
+    </div>
+  );
+}
+
+// Searchable candidate linker. Filters the (already-loaded) candidate list by
+// name or phone so a consultant can quickly find an existing record to link.
+function CandidateLinkPicker({
+  current,
+  parties,
+  busy,
+  onLink,
+}: {
+  current: { id: string; name: string } | null;
+  parties: PartyOpt[];
+  busy: boolean;
+  onLink: (id: string | null) => void | Promise<void>;
+  }) {
+  const [editing, setEditing] = useState(false);
+  const [query, setQuery] = useState("");
+
+  const matches = useMemo(() => {
+    const q = query.trim().toLowerCase();
+    if (!q) return parties.slice(0, 25);
+    const digits = q.replace(/\D/g, "");
+    return parties
+      .filter((p) => {
+        if (p.label.toLowerCase().includes(q)) return true;
+        return digits.length >= 3 && (p.phone ?? "").replace(/\D/g, "").includes(digits);
+      })
+      .slice(0, 25);
+  }, [query, parties]);
+
+  if (!editing) {
+    return (
+      <div className="mt-sm flex items-center gap-base">
+        <button
+          type="button"
+          className={secondaryBtn + " h-9 text-label-sm"}
+          disabled={busy}
+          onClick={() => {
+            setEditing(true);
+            setQuery("");
+          }}
+        >
+          {current ? "Change linked candidate" : "Link a candidate"}
+        </button>
+        {current && (
+          <button
+            type="button"
+            className="h-9 px-md text-label-sm text-error hover:underline disabled:opacity-60"
+            disabled={busy}
+            onClick={() => onLink(null)}
+          >
+            Unlink
+          </button>
+        )}
+      </div>
+    );
+  }
+
+  return (
+    <div className="mt-sm space-y-xs">
+      <input
+        autoFocus
+        className={inputCls}
+        placeholder="Search candidate by name or phone…"
+        value={query}
+        onChange={(e) => setQuery(e.target.value)}
+      />
+      <div className="max-h-56 overflow-auto rounded-lg border border-outline-variant divide-y divide-outline-variant/60">
+        {matches.length === 0 ? (
+          <p className="px-md py-sm text-label-sm text-on-surface-variant">No matching candidates.</p>
+        ) : (
+          matches.map((p) => (
+            <button
+              key={p.id}
+              type="button"
+              disabled={busy || p.id === current?.id}
+              onClick={async () => {
+                await onLink(p.id);
+                setEditing(false);
+              }}
+              className="w-full text-left px-md py-sm hover:bg-surface-container-low disabled:opacity-50 flex items-center justify-between gap-md"
+            >
+              <span className="text-body-md text-on-surface">
+                {p.label}
+                {p.id === current?.id && <span className="text-label-sm text-on-surface-variant"> · linked</span>}
+              </span>
+              {p.phone && <span className="text-label-sm text-on-surface-variant font-mono whitespace-nowrap">{p.phone}</span>}
+            </button>
+          ))
+        )}
+      </div>
+      <div className="flex justify-end">
+        <button type="button" className="text-label-sm text-on-surface-variant hover:text-on-surface" onClick={() => setEditing(false)}>
+          Cancel
+        </button>
       </div>
     </div>
   );
