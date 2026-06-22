@@ -6,6 +6,36 @@ import { Prisma } from "@prisma/client";
 import { prisma } from "./prisma";
 import { badRequest, HttpError } from "./http-error";
 import { recordLeadActivity } from "./crm-activity";
+import { monthCodeFromDate, flowFor } from "./catalog";
+
+/**
+ * Resolve a finance (category, subItem) for a revenue draft from the enrolled
+ * service: prefer a SubCategory explicitly mapped to the service, else the
+ * first active Revenue category + sub-item. Ganga can re-classify on review.
+ */
+async function resolveRevenueClassification(
+  serviceId: string,
+): Promise<{ category: string; subItem: string }> {
+  const mapped = await prisma.subCategory.findFirst({
+    where: {
+      serviceId,
+      isActive: true,
+      category: { isActive: true, OR: [{ type: "Revenue" }, { type: "Both" }] },
+    },
+    select: { name: true, category: { select: { name: true } } },
+  });
+  if (mapped) return { category: mapped.category.name, subItem: mapped.name };
+  const cat = await prisma.category.findFirst({
+    where: { isActive: true, OR: [{ type: "Revenue" }, { type: "Both" }] },
+    orderBy: { name: "asc" },
+    select: {
+      name: true,
+      subItems: { where: { isActive: true }, orderBy: { name: "asc" }, take: 1, select: { name: true } },
+    },
+  });
+  if (cat && cat.subItems[0]) return { category: cat.name, subItem: cat.subItems[0].name };
+  return { category: "Sales - Nursing Registrations", subItem: "Renewal Service Charge" };
+}
 
 /** A pipeline entry's owner must be an active L2 BDE (the forecast is per-L2). */
 export async function isActiveL2(userId: string | null | undefined): Promise<boolean> {
@@ -126,7 +156,10 @@ type DealArgs = {
 
 /** Set/update a lead's deal → upsert an OPEN pipeline entry (forecast). */
 export async function applyLeadDeal(args: DealArgs): Promise<{ pipelineId: string }> {
-  const lead = await prisma.lead.findUnique({ where: { id: args.leadId }, select: leadCoreSelect });
+  const lead = await prisma.lead.findUnique({
+    where: { id: args.leadId },
+    select: { ...leadCoreSelect, status: { select: { code: true, label: true } } },
+  });
   if (!lead) throw new HttpError(404, "Lead not found", "not_found");
 
   const serviceId = args.serviceId ?? lead.serviceId;
@@ -138,11 +171,25 @@ export async function applyLeadDeal(args: DealArgs): Promise<{ pipelineId: strin
 
   const deal = { serviceId, sourceId: lead.sourceId, ownerUserId, expectedValue: args.expectedValue, expectedCloseDate: args.expectedCloseDate };
 
+  // Setting a deal moves the lead to the action-only "Pipeline" stage — unless
+  // it's already enrolled (a won lead must not be downgraded).
+  const pipelineStatus =
+    lead.status.code === "enrolled"
+      ? null
+      : await prisma.crmLeadStatus.findFirst({ where: { code: "pipeline", active: true }, select: { id: true } });
+  const movedToPipeline = !!pipelineStatus && lead.status.code !== "pipeline";
+
   const pipelineId = await prisma.$transaction(async (tx) => {
     const pid = await upsertPipeline(tx, lead, deal, "open", lead.partyId);
     await tx.lead.update({
       where: { id: lead.id },
-      data: { serviceId, expectedValue: args.expectedValue, expectedCloseDate: args.expectedCloseDate, pipelineId: pid },
+      data: {
+        serviceId,
+        expectedValue: args.expectedValue,
+        expectedCloseDate: args.expectedCloseDate,
+        pipelineId: pid,
+        ...(pipelineStatus ? { statusId: pipelineStatus.id } : {}),
+      },
     });
     return pid;
   });
@@ -154,6 +201,15 @@ export async function applyLeadDeal(args: DealArgs): Promise<{ pipelineId: strin
     summary: `Deal set — expected ₹${args.expectedValue.toLocaleString("en-IN")} by ${args.expectedCloseDate.toISOString().slice(0, 10)}`,
     metadata: { serviceId, expectedValue: args.expectedValue, expectedCloseDate: args.expectedCloseDate, ownerUserId, pipelineId },
   });
+  if (movedToPipeline) {
+    await recordLeadActivity({
+      leadId: lead.id,
+      actorId: args.actorId,
+      type: "STATUS_CHANGED",
+      summary: `Status changed: ${lead.status.label} → Pipeline`,
+      metadata: { to: "pipeline" },
+    });
+  }
 
   return { pipelineId };
 }
@@ -169,7 +225,7 @@ type EnrollArgs = {
 
 /** Enroll: status → Enrolled, create/link the candidate (Party) for Finance,
  *  and flip the pipeline to closed_won. Returns the linked party + pipeline. */
-export async function enrollLead(args: EnrollArgs): Promise<{ partyId: string; pipelineId: string }> {
+export async function enrollLead(args: EnrollArgs): Promise<{ partyId: string; pipelineId: string; draftId: string | null }> {
   const lead = await prisma.lead.findUnique({
     where: { id: args.leadId },
     select: { ...leadCoreSelect, status: { select: { label: true } }, expectedValue: true, expectedCloseDate: true },
@@ -188,6 +244,12 @@ export async function enrollLead(args: EnrollArgs): Promise<{ partyId: string; p
 
   const enrolled = await prisma.crmLeadStatus.findFirst({ where: { code: "enrolled", active: true }, select: { id: true } });
   if (!enrolled) throw badRequest("No active 'Enrolled' status configured — run db:seed-crm.", "no_enrolled_status");
+
+  // Revenue draft target: the lone draft-first reviewer (Ganga). Resolved up
+  // front (read-only) so the draft is created atomically with the enrollment.
+  const reviewer = await prisma.user.findFirst({ where: { draftFirst: true }, select: { id: true, username: true } });
+  const classification = await resolveRevenueClassification(serviceId);
+  const draftDate = new Date();
 
   const deal = { serviceId, sourceId: lead.sourceId, ownerUserId, expectedValue, expectedCloseDate };
 
@@ -210,7 +272,30 @@ export async function enrollLead(args: EnrollArgs): Promise<{ partyId: string; p
         expectedCloseDate,
       },
     });
-    return { partyId, pipelineId };
+    // Hand the enrolled value to Finance as a Revenue draft in the reviewer's
+    // (Ganga's) My-Drafts queue. She completes the classification + EXP/DOM and
+    // submits it to the approval queue for the finance manager (Vishnu).
+    let draftId: string | null = null;
+    if (reviewer) {
+      const draft = await tx.transactionDraft.create({
+        data: {
+          submittedById: reviewer.id,
+          date: draftDate,
+          month: monthCodeFromDate(draftDate),
+          type: "Revenue",
+          category: classification.category,
+          subItem: classification.subItem,
+          description: `Enrollment — ${lead.candidateName} (review & complete)`,
+          paymentMode: "HDFC Bank",
+          amount: expectedValue,
+          flow: flowFor("Revenue"),
+          partyId,
+          expDom: null,
+        },
+      });
+      draftId = draft.id;
+    }
+    return { partyId, pipelineId, draftId };
   });
 
   await recordLeadActivity({
@@ -233,6 +318,15 @@ export async function enrollLead(args: EnrollArgs): Promise<{ partyId: string; p
     type: "ENROLLED",
     summary: `Enrolled — ₹${expectedValue.toLocaleString("en-IN")}`,
     metadata: { partyId: result.partyId, pipelineId: result.pipelineId, expectedValue, serviceId },
+  });
+  await recordLeadActivity({
+    leadId: lead.id,
+    actorId: args.actorId,
+    type: "REVENUE_DRAFTED",
+    summary: result.draftId
+      ? `Revenue draft ₹${expectedValue.toLocaleString("en-IN")} sent to ${reviewer?.username ?? "finance"} for review & approval`
+      : `Enrolled value ₹${expectedValue.toLocaleString("en-IN")} — no draft-review user configured; record the revenue transaction manually.`,
+    metadata: { draftId: result.draftId, amount: expectedValue, partyId: result.partyId, serviceId },
   });
 
   return result;

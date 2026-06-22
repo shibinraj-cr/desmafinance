@@ -163,6 +163,18 @@ export function leadOrderBy(sort?: string): Prisma.LeadOrderByWithRelationInput 
   }
 }
 
+/**
+ * Statuses that are set ONLY by an action, never the manual status dropdown or
+ * the stage bar: `pipeline` (via "Set deal"), `enrolled` (via "Enroll"), and
+ * `duplicate` (via the importer's dedup flagging). Enforced in the lead PATCH
+ * API and hidden from the detail UI's status picker.
+ */
+export const ACTION_ONLY_STATUS_CODES = ["pipeline", "enrolled", "duplicate"] as const;
+
+export function isActionOnlyStatus(code: string | null | undefined): boolean {
+  return !!code && (ACTION_ONLY_STATUS_CODES as readonly string[]).includes(code);
+}
+
 /** The status new leads start in: the explicit default, else the first active by order. */
 export async function resolveDefaultStatus() {
   const def = await prisma.crmLeadStatus.findFirst({

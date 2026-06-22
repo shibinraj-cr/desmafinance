@@ -10,13 +10,21 @@ import { PrismaClient } from "@prisma/client";
 
 const prisma = new PrismaClient();
 
+// The pipeline stage model. `kind`: 'active' shows on the stage bar; 'won' /
+// 'lost' are terminal pills. `pipeline` and `enrolled` are set ONLY by the
+// Set-deal / Enroll actions (see ACTION_ONLY_STATUS_CODES) — never the manual
+// dropdown. `duplicate` is kept for the importer's dedup flagging.
 const STATUSES = [
   { code: "not_yet_started", label: "Not Yet Started", kind: "active", displayOrder: 0, color: "#9aa0a6", isDefault: true },
   { code: "qualify", label: "Qualify", kind: "active", displayOrder: 1, color: "#3b82f6", isDefault: false },
-  { code: "follow_up", label: "Follow Up", kind: "active", displayOrder: 2, color: "#f59e0b", isDefault: false },
-  { code: "enrolled", label: "Enrolled", kind: "won", displayOrder: 3, color: "#16a34a", isDefault: false },
-  { code: "duplicate", label: "Duplicate", kind: "lost", displayOrder: 4, color: "#6b7280", isDefault: false },
-  { code: "not_interested", label: "Not Interested", kind: "lost", displayOrder: 5, color: "#ef4444", isDefault: false },
+  { code: "follow_up", label: "Follow-Up", kind: "active", displayOrder: 2, color: "#f59e0b", isDefault: false },
+  { code: "re_marketing", label: "Re-marketing", kind: "active", displayOrder: 3, color: "#a855f7", isDefault: false },
+  { code: "pipeline", label: "Pipeline", kind: "active", displayOrder: 4, color: "#6366f1", isDefault: false },
+  { code: "enrolled", label: "Enrolled", kind: "won", displayOrder: 5, color: "#16a34a", isDefault: false },
+  { code: "already_processing_elsewhere", label: "Already Processing Elsewhere", kind: "lost", displayOrder: 6, color: "#64748b", isDefault: false },
+  { code: "not_eligible", label: "Not Eligible", kind: "lost", displayOrder: 7, color: "#fb923c", isDefault: false },
+  { code: "not_interested", label: "Not Interested", kind: "lost", displayOrder: 8, color: "#ef4444", isDefault: false },
+  { code: "duplicate", label: "Duplicate", kind: "lost", displayOrder: 9, color: "#6b7280", isDefault: false },
 ];
 
 const QUALIFICATIONS = [
