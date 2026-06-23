@@ -88,7 +88,7 @@ async function upsertPipeline(
   status: "open" | "closed_won",
   partyId: string | null,
 ): Promise<string> {
-  const data = {
+  const base = {
     userId: deal.ownerUserId,
     candidateName: lead.candidateName,
     candidatePhone: lead.phone,
@@ -98,16 +98,23 @@ async function upsertPipeline(
     expectedCloseDate: deal.expectedCloseDate,
     expectedFirstInstallment: deal.expectedValue,
     status,
-    closedDate: status === "closed_won" ? new Date() : null,
   };
   if (lead.pipelineId) {
-    const exists = await tx.leadPulsePipeline.findUnique({ where: { id: lead.pipelineId }, select: { id: true } });
+    const exists = await tx.leadPulsePipeline.findUnique({
+      where: { id: lead.pipelineId },
+      select: { id: true, closedDate: true },
+    });
     if (exists) {
-      await tx.leadPulsePipeline.update({ where: { id: lead.pipelineId }, data });
+      // Keep an existing close date when staying/becoming won so editing a deal
+      // never re-stamps the enrollment date; clear it only when re-opening.
+      const closedDate = status === "closed_won" ? exists.closedDate ?? new Date() : null;
+      await tx.leadPulsePipeline.update({ where: { id: lead.pipelineId }, data: { ...base, closedDate } });
       return lead.pipelineId;
     }
   }
-  const created = await tx.leadPulsePipeline.create({ data });
+  const created = await tx.leadPulsePipeline.create({
+    data: { ...base, closedDate: status === "closed_won" ? new Date() : null },
+  });
   return created.id;
 }
 
@@ -173,14 +180,17 @@ export async function applyLeadDeal(args: DealArgs): Promise<{ pipelineId: strin
 
   // Setting a deal moves the lead to the action-only "Pipeline" stage — unless
   // it's already enrolled (a won lead must not be downgraded).
-  const pipelineStatus =
-    lead.status.code === "enrolled"
-      ? null
-      : await prisma.crmLeadStatus.findFirst({ where: { code: "pipeline", active: true }, select: { id: true } });
+  const alreadyEnrolled = lead.status.code === "enrolled";
+  const pipelineStatus = alreadyEnrolled
+    ? null
+    : await prisma.crmLeadStatus.findFirst({ where: { code: "pipeline", active: true }, select: { id: true } });
   const movedToPipeline = !!pipelineStatus && lead.status.code !== "pipeline";
 
   const pipelineId = await prisma.$transaction(async (tx) => {
-    const pid = await upsertPipeline(tx, lead, deal, "open", lead.partyId);
+    // Editing the deal on an already-enrolled lead must keep its pipeline
+    // closed_won — re-opening it would silently drop the enrollment from the
+    // CRM actuals. Non-enrolled leads get/keep an open (forecast) entry.
+    const pid = await upsertPipeline(tx, lead, deal, alreadyEnrolled ? "closed_won" : "open", lead.partyId);
     await tx.lead.update({
       where: { id: lead.id },
       data: {
