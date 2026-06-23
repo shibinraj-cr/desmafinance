@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { Prisma } from "@prisma/client";
 import { z } from "zod";
 import { prisma } from "@/lib/prisma";
 import { withApiHandler } from "@/lib/api";
@@ -6,19 +7,19 @@ import { unauthorized, forbidden, badRequest } from "@/lib/http-error";
 import { getCurrentUserAndPermissions } from "@/lib/permissions";
 import { getCrmAccess } from "@/lib/crm-rbac";
 import { recordLeadActivity } from "@/lib/crm-activity";
-import { normalizePhone, computeDedupeKey, emailKeyOf } from "@/lib/crm";
+import { normalizePhone, computeDedupeKey, emailKeyOf, phoneMatchKeys } from "@/lib/crm";
 import { parsePeriod, rangeFor } from "@/lib/period";
 import {
   leadRowInclude,
   serializeLead,
   resolveDefaultStatus,
-  getDuplicateStatus,
   buildLeadWhere,
   leadOrderBy,
   isActiveBde,
   assignedDayRange,
   resolveAssigneeFilter,
 } from "@/lib/crm-leads";
+import { recordReInquiry, resolveReInquiryContext, notifySupervisorOfReInquiries } from "@/lib/crm-reinquiry";
 
 export const dynamic = "force-dynamic";
 
@@ -76,6 +77,7 @@ const CreateSchema = z.object({
   candidateName: z.string().trim().min(1).max(200),
   email: z.string().trim().max(200).optional(),
   phone: z.string().trim().max(60).optional(),
+  altPhone: z.string().trim().max(60).optional(),
   sourceId: z.string().optional(),
   serviceId: z.string().optional(),
   qualificationId: z.string().optional(),
@@ -97,11 +99,14 @@ export const POST = withApiHandler(async (req: Request) => {
   const email = data.email || null;
   const phone = data.phone || null;
   const phoneE164 = normalizePhone(phone);
+  // Secondary number — normalised for tel/wa.me links, search, AND duplicate
+  // detection (its E.164 joins the phone identity set used for matching below).
+  const altPhone = data.altPhone || null;
+  const altPhoneE164 = normalizePhone(altPhone);
   const emailKey = emailKeyOf(email);
   const dedupeKey = computeDedupeKey(email, phoneE164); // legacy provenance key
 
-  // Resolve the starting status. Non-default unless an explicit valid status is
-  // provided; flipped to "Duplicate" below if a matching lead already exists.
+  // Resolve the starting status (explicit valid status, else the default).
   let statusId = data.statusId;
   if (statusId) {
     const exists = await prisma.crmLeadStatus.findFirst({ where: { id: statusId, active: true } });
@@ -112,16 +117,18 @@ export const POST = withApiHandler(async (req: Request) => {
     statusId = def.id;
   }
 
-  // Duplicate detection. We only treat the lead as "flagged duplicate" when the
-  // Duplicate status is actually applied, so the activity/response can't claim a
-  // flag that the visible status contradicts.
-  let duplicateOfId: string | null = null;
-  let duplicateFlagged = false;
-  // Match an existing lead on email OR phone, independently — either collision
-  // means the new lead is a likely duplicate.
-  const dupOr: ({ emailKey: string } | { phoneE164: string })[] = [];
+  // Re-inquiry: if this candidate already exists (email OR any phone), DON'T
+  // create a new row. Fold the submission onto the canonical lead (bump inquiry
+  // count, log RE_INQUIRY, revive if it was lost, raise tasks) and return it.
+  // Phones are matched as a set: this submission's primary/alternate numbers are
+  // checked against BOTH the existing leads' primary and alternate numbers.
+  const phoneKeys = phoneMatchKeys(phoneE164, altPhoneE164);
+  const dupOr: Prisma.LeadWhereInput[] = [];
   if (emailKey) dupOr.push({ emailKey });
-  if (phoneE164) dupOr.push({ phoneE164 });
+  if (phoneKeys.length) {
+    dupOr.push({ phoneE164: { in: phoneKeys } });
+    dupOr.push({ altPhoneE164: { in: phoneKeys } });
+  }
   if (dupOr.length) {
     const dup = await prisma.lead.findFirst({
       where: { OR: dupOr },
@@ -129,12 +136,14 @@ export const POST = withApiHandler(async (req: Request) => {
       orderBy: { createdAt: "asc" },
     });
     if (dup) {
-      duplicateOfId = dup.id;
-      const dupStatus = await getDuplicateStatus();
-      if (dupStatus && dupStatus.active) {
-        statusId = dupStatus.id;
-        duplicateFlagged = true;
-      }
+      const ctx = await resolveReInquiryContext();
+      const campaign = data.extra && typeof (data.extra as Record<string, unknown>).campaign === "string"
+        ? ((data.extra as Record<string, unknown>).campaign as string)
+        : null;
+      const outcome = await recordReInquiry({ leadId: dup.id, source: "Manual entry", campaign, actorId: userId }, ctx);
+      if (outcome) await notifySupervisorOfReInquiries([outcome], ctx, new URL(req.url).origin);
+      const existing = await prisma.lead.findUnique({ where: { id: dup.id }, include: leadRowInclude });
+      return NextResponse.json({ lead: serializeLead(existing!), reInquiry: true, duplicateOf: dup.id }, { status: 200 });
     }
   }
 
@@ -155,6 +164,8 @@ export const POST = withApiHandler(async (req: Request) => {
       email,
       phone,
       phoneE164,
+      altPhone,
+      altPhoneE164,
       emailKey,
       dedupeKey,
       sourceId: data.sourceId || null,
@@ -174,8 +185,7 @@ export const POST = withApiHandler(async (req: Request) => {
     leadId: created.id,
     actorId: userId,
     type: "LEAD_CREATED",
-    summary: duplicateFlagged ? "Lead created (flagged as duplicate)" : "Lead created",
-    metadata: duplicateOfId ? { duplicateOf: duplicateOfId, flaggedDuplicate: duplicateFlagged } : undefined,
+    summary: "Lead created",
   });
   if (assignedToId) {
     await recordLeadActivity({
@@ -188,7 +198,7 @@ export const POST = withApiHandler(async (req: Request) => {
   }
 
   return NextResponse.json(
-    { lead: serializeLead(created), duplicateOf: duplicateFlagged ? duplicateOfId : null },
+    { lead: serializeLead(created), duplicateOf: null },
     { status: 201 },
   );
 });

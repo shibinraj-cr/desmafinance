@@ -94,6 +94,7 @@ const ACTIVITY_ICON: Record<string, string> = {
   ASSIGNED: "person_add",
   REASSIGNED: "swap_horiz",
   UNASSIGNED: "person_remove",
+  RE_INQUIRY: "replay",
   NOTE_ADDED: "sticky_note_2",
   NOTE_EDITED: "edit_note",
   NOTE_DELETED: "delete",
@@ -447,6 +448,7 @@ function SummaryCard({ lead, masters, canEdit }: { lead: LeadRow; masters: Detai
     candidateName: lead.candidateName,
     email: lead.email ?? "",
     phone: lead.phone ?? "",
+    altPhone: lead.altPhone ?? "",
     sourceId: lead.source?.id ?? "",
     serviceId: lead.service?.id ?? "",
     qualificationId: lead.qualification?.id ?? "",
@@ -468,6 +470,7 @@ function SummaryCard({ lead, masters, canEdit }: { lead: LeadRow; masters: Detai
         candidateName: draft.candidateName.trim(),
         email: draft.email.trim(),
         phone: draft.phone.trim(),
+        altPhone: draft.altPhone.trim(),
         sourceId: draft.sourceId,
         serviceId: draft.serviceId,
         qualificationId: draft.qualificationId,
@@ -513,6 +516,9 @@ function SummaryCard({ lead, masters, canEdit }: { lead: LeadRow; masters: Detai
           </Field>
           <Field label="Phone">
             <input className={inputCls} value={draft.phone} onChange={(e) => setDraft({ ...draft, phone: e.target.value })} />
+          </Field>
+          <Field label="Alternative phone">
+            <input className={inputCls} value={draft.altPhone} onChange={(e) => setDraft({ ...draft, altPhone: e.target.value })} />
           </Field>
           <Field label="Source">
             <select className={inputCls} value={draft.sourceId} onChange={(e) => setDraft({ ...draft, sourceId: e.target.value })}>
@@ -590,6 +596,7 @@ function SummaryCard({ lead, masters, canEdit }: { lead: LeadRow; masters: Detai
           <Row label="Candidate" value={lead.candidateName} />
           <Row label="Email" value={lead.email ?? "—"} />
           <Row label="Phone" value={lead.phone ?? "—"} />
+          <Row label="Alt. phone" value={lead.altPhone ?? "—"} />
           <Row label="Source" value={lead.source?.label ?? "—"} />
           <Row label="Service" value={lead.service?.name ?? "—"} />
           <Row label="Qualification" value={lead.qualification?.label ?? "—"} />
@@ -1478,6 +1485,7 @@ const HISTORY_TYPES = [
   "ASSIGNED",
   "REASSIGNED",
   "UNASSIGNED",
+  "RE_INQUIRY",
   "NOTE_ADDED",
   "NOTE_EDITED",
   "NOTE_DELETED",

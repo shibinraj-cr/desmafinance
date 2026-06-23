@@ -6,8 +6,14 @@ import { withApiHandler } from "@/lib/api";
 import { unauthorized, forbidden, badRequest } from "@/lib/http-error";
 import { getCurrentUserAndPermissions } from "@/lib/permissions";
 import { getCrmAccess } from "@/lib/crm-rbac";
-import { normalizePhone, computeDedupeKey, emailKeyOf } from "@/lib/crm";
-import { resolveDefaultStatus, getDuplicateStatus, getAssignableBdes } from "@/lib/crm-leads";
+import { normalizePhone, computeDedupeKey, emailKeyOf, phoneMatchKeys } from "@/lib/crm";
+import { resolveDefaultStatus, getAssignableBdes } from "@/lib/crm-leads";
+import {
+  recordReInquiry,
+  resolveReInquiryContext,
+  notifySupervisorOfReInquiries,
+  type ReInquiryOutcome,
+} from "@/lib/crm-reinquiry";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs"; // xlsx + Buffer need the Node runtime
@@ -23,6 +29,22 @@ const HEADER_MAP: Record<string, string> = {
   "phone number": "phone",
   mobile: "phone",
   contact: "phone",
+  "alternative phone": "altPhone",
+  "alternate phone": "altPhone",
+  "alt phone": "altPhone",
+  "alternative number": "altPhone",
+  "alternate number": "altPhone",
+  "alt number": "altPhone",
+  "secondary phone": "altPhone",
+  "secondary number": "altPhone",
+  "alternative contact": "altPhone",
+  "alternate contact": "altPhone",
+  "alternative contact number": "altPhone",
+  "alternate contact number": "altPhone",
+  "alternative mobile": "altPhone",
+  "alternate mobile": "altPhone",
+  "phone 2": "altPhone",
+  phone2: "altPhone",
   source: "source",
   "lead source": "source",
   service: "service",
@@ -74,13 +96,12 @@ export const POST = withApiHandler(async (req: Request) => {
   }
 
   // Master lookups (lowercased label/name → id), and BDE displayName/username → userId.
-  const [sources, services, qualifications, bdes, defStatus, dupStatus] = await Promise.all([
+  const [sources, services, qualifications, bdes, defStatus] = await Promise.all([
     prisma.leadPulseSource.findMany({ where: { active: true }, select: { id: true, label: true } }),
     prisma.service.findMany({ where: { isActive: true }, select: { id: true, name: true } }),
     prisma.crmQualification.findMany({ where: { active: true }, select: { id: true, label: true } }),
     getAssignableBdes(),
     resolveDefaultStatus(),
-    getDuplicateStatus(),
   ]);
   if (!defStatus) throw badRequest("No lead statuses configured — run db:seed-crm", "no_status_configured");
 
@@ -103,6 +124,8 @@ export const POST = withApiHandler(async (req: Request) => {
     email: string | null;
     phone: string | null;
     phoneE164: string | null;
+    altPhone: string | null;
+    altPhoneE164: string | null;
     emailKey: string | null;
     dedupeKey: string | null;
     sourceId: string | null;
@@ -131,10 +154,14 @@ export const POST = withApiHandler(async (req: Request) => {
     const email = get(row, "email") || null;
     const phone = get(row, "phone") || null;
     const phoneE164 = normalizePhone(phone);
+    const altPhone = get(row, "altPhone") || null;
+    const altPhoneE164 = normalizePhone(altPhone);
     const emailKey = emailKeyOf(email);
     const dedupeKey = computeDedupeKey(email, phoneE164); // legacy provenance key
     if (emailKey) parsedEmailKeys.push(emailKey);
-    if (phoneE164) parsedPhones.push(phoneE164);
+    // Both the primary and the alternate number join the match pool, so an
+    // alternate colliding with another lead's primary (or vice-versa) is caught.
+    for (const ph of phoneMatchKeys(phoneE164, altPhoneE164)) parsedPhones.push(ph);
 
     const extra: Record<string, string> = {};
     const noteVal = get(row, "notes");
@@ -149,6 +176,8 @@ export const POST = withApiHandler(async (req: Request) => {
       email,
       phone,
       phoneE164,
+      altPhone,
+      altPhoneE164,
       emailKey,
       dedupeKey,
       sourceId: sourceMap.get(get(row, "source").toLowerCase()) ?? null,
@@ -159,40 +188,71 @@ export const POST = withApiHandler(async (req: Request) => {
     });
   }
 
-  // Existing leads that collide on email OR phone (matched independently).
+  // Existing leads that collide on email OR phone (matched independently). Keep
+  // ids (oldest = canonical) so a colliding row folds onto it as a re-inquiry
+  // instead of creating a duplicate row.
   const dupWhere: Prisma.LeadWhereInput[] = [];
   if (parsedEmailKeys.length) dupWhere.push({ emailKey: { in: parsedEmailKeys } });
-  if (parsedPhones.length) dupWhere.push({ phoneE164: { in: parsedPhones } });
+  if (parsedPhones.length) {
+    dupWhere.push({ phoneE164: { in: parsedPhones } });
+    dupWhere.push({ altPhoneE164: { in: parsedPhones } });
+  }
   const existing = dupWhere.length
-    ? await prisma.lead.findMany({ where: { OR: dupWhere }, select: { emailKey: true, phoneE164: true } })
+    ? await prisma.lead.findMany({
+        where: { OR: dupWhere },
+        select: { id: true, emailKey: true, phoneE164: true, altPhoneE164: true },
+        orderBy: { createdAt: "asc" },
+      })
     : [];
-  const existingEmailKeys = new Set(existing.map((e) => e.emailKey).filter(Boolean) as string[]);
-  const existingPhones = new Set(existing.map((e) => e.phoneE164).filter(Boolean) as string[]);
+  const existingByEmail = new Map<string, string>();
+  // Keyed by ANY of a lead's numbers (primary + alternate) → its id, so a row
+  // matching either field folds onto the same canonical lead.
+  const existingByPhone = new Map<string, string>();
+  for (const e of existing) {
+    if (e.emailKey && !existingByEmail.has(e.emailKey)) existingByEmail.set(e.emailKey, e.id);
+    for (const ph of phoneMatchKeys(e.phoneE164, e.altPhoneE164)) {
+      if (!existingByPhone.has(ph)) existingByPhone.set(ph, e.id);
+    }
+  }
 
-  // Decide new vs duplicate (collision on email OR phone, against the DB or an
-  // earlier row in this same file).
+  // Decide per row: matches an existing lead → re-inquiry on it; first sighting of
+  // a new person in this file → create; a later sighting in the SAME file →
+  // re-inquiry on the just-created lead (resolved after insert).
   const seenEmailKeys = new Set<string>();
   const seenPhones = new Set<string>();
-  let duplicateRows = 0;
   let insertedRows = 0;
   const toCreate: Prisma.LeadCreateManyInput[] = [];
+  const reInquiriesExisting: { leadId: string }[] = [];
+  const reInquiriesWithinFile: { emailKey: string | null; phoneE164: string | null; altPhoneE164: string | null }[] = [];
   // One timestamp for the whole batch: pre-assigned rows are "assigned on import".
   const importedAt = new Date();
 
   for (const p of parsed) {
-    const emailDup = !!p.emailKey && (existingEmailKeys.has(p.emailKey) || seenEmailKeys.has(p.emailKey));
-    const phoneDup = !!p.phoneE164 && (existingPhones.has(p.phoneE164) || seenPhones.has(p.phoneE164));
-    const isDup = emailDup || phoneDup;
+    const phoneKeys = phoneMatchKeys(p.phoneE164, p.altPhoneE164);
+    const existingId =
+      (p.emailKey && existingByEmail.get(p.emailKey)) ||
+      phoneKeys.map((ph) => existingByPhone.get(ph)).find(Boolean) ||
+      null;
+    if (existingId) {
+      reInquiriesExisting.push({ leadId: existingId });
+      continue;
+    }
+    const withinFileDup =
+      (!!p.emailKey && seenEmailKeys.has(p.emailKey)) || phoneKeys.some((ph) => seenPhones.has(ph));
+    if (withinFileDup) {
+      reInquiriesWithinFile.push({ emailKey: p.emailKey, phoneE164: p.phoneE164, altPhoneE164: p.altPhoneE164 });
+      continue;
+    }
     if (p.emailKey) seenEmailKeys.add(p.emailKey);
-    if (p.phoneE164) seenPhones.add(p.phoneE164);
-    const statusId = isDup && dupStatus && dupStatus.active ? dupStatus.id : defStatus.id;
-    if (isDup) duplicateRows++;
-    else insertedRows++;
+    for (const ph of phoneKeys) seenPhones.add(ph);
+    insertedRows++;
     toCreate.push({
       candidateName: p.candidateName,
       email: p.email,
       phone: p.phone,
       phoneE164: p.phoneE164,
+      altPhone: p.altPhone,
+      altPhoneE164: p.altPhoneE164,
       emailKey: p.emailKey,
       dedupeKey: p.dedupeKey,
       sourceId: p.sourceId,
@@ -200,11 +260,12 @@ export const POST = withApiHandler(async (req: Request) => {
       qualificationId: p.qualificationId,
       assignedToId: p.assignedToId,
       assignedAt: p.assignedToId ? importedAt : null,
-      statusId,
+      statusId: defStatus.id,
       extra: p.extra ?? Prisma.JsonNull,
       createdById: userId,
     });
   }
+  const duplicateRows = reInquiriesExisting.length + reInquiriesWithinFile.length;
 
   const totalRows = parsed.length + errorRows;
 
@@ -233,7 +294,7 @@ export const POST = withApiHandler(async (req: Request) => {
   // who became the owner at import time.
   const created = await prisma.lead.findMany({
     where: { importBatchId: batch.id },
-    select: { id: true, assignedToId: true },
+    select: { id: true, assignedToId: true, emailKey: true, phoneE164: true, altPhoneE164: true },
   });
   if (created.length) {
     const acts: Prisma.LeadActivityCreateManyInput[] = [];
@@ -257,11 +318,44 @@ export const POST = withApiHandler(async (req: Request) => {
     await prisma.leadActivity.createMany({ data: acts });
   }
 
+  // Fold re-inquiries onto their canonical leads (existing-DB matches + later
+  // sightings within this same file). Resolve the within-file ones against the
+  // leads we just created.
+  const reInquiryOutcomes: ReInquiryOutcome[] = [];
+  if (duplicateRows > 0) {
+    const ctx = await resolveReInquiryContext();
+    const createdByEmail = new Map<string, string>();
+    const createdByPhone = new Map<string, string>();
+    for (const l of created) {
+      if (l.emailKey && !createdByEmail.has(l.emailKey)) createdByEmail.set(l.emailKey, l.id);
+      for (const ph of phoneMatchKeys(l.phoneE164, l.altPhoneE164)) {
+        if (!createdByPhone.has(ph)) createdByPhone.set(ph, l.id);
+      }
+    }
+    const source = batch.fileName ? `Bulk upload: ${batch.fileName}` : "Bulk upload";
+    for (const r of reInquiriesExisting) {
+      const o = await recordReInquiry({ leadId: r.leadId, source, actorId: userId, occurredAt: importedAt }, ctx);
+      if (o) reInquiryOutcomes.push(o);
+    }
+    for (const r of reInquiriesWithinFile) {
+      const leadId =
+        (r.emailKey && createdByEmail.get(r.emailKey)) ||
+        phoneMatchKeys(r.phoneE164, r.altPhoneE164).map((ph) => createdByPhone.get(ph)).find(Boolean) ||
+        null;
+      if (!leadId) continue;
+      const o = await recordReInquiry({ leadId, source, actorId: userId, occurredAt: importedAt }, ctx);
+      if (o) reInquiryOutcomes.push(o);
+    }
+    await notifySupervisorOfReInquiries(reInquiryOutcomes, ctx, new URL(req.url).origin);
+  }
+
   return NextResponse.json({
     batchId: batch.id,
     totalRows,
     insertedRows,
     duplicateRows,
+    reInquiryRows: duplicateRows,
+    revivedRows: reInquiryOutcomes.filter((o) => o.revived).length,
     errorRows,
     errors,
   });

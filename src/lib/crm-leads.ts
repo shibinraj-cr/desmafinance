@@ -25,6 +25,8 @@ export type LeadRow = {
   email: string | null;
   phone: string | null;
   phoneE164: string | null;
+  altPhone: string | null;
+  altPhoneE164: string | null;
   source: { id: string; label: string } | null;
   service: { id: string; name: string } | null;
   qualification: { id: string; label: string } | null;
@@ -51,6 +53,8 @@ export function serializeLead(l: LeadWithRels): LeadRow {
     email: l.email,
     phone: l.phone,
     phoneE164: l.phoneE164,
+    altPhone: l.altPhone,
+    altPhoneE164: l.altPhoneE164,
     source: l.source ? { id: l.source.id, label: l.source.label } : null,
     service: l.service ? { id: l.service.id, name: l.service.name } : null,
     qualification: l.qualification ? { id: l.qualification.id, label: l.qualification.label } : null,
@@ -132,14 +136,19 @@ export function buildLeadWhere(p: LeadFilterParams): Prisma.LeadWhereInput {
       { email: { contains: q, mode: "insensitive" } },
       { phone: { contains: q } },
       { phoneE164: { contains: q } },
+      { altPhone: { contains: q } },
+      { altPhoneE164: { contains: q } },
     ];
     // Format-agnostic phone search: match the bare digits against the normalized
     // phoneE164 (and raw phone), so "+91 78142 95082" also finds a lead stored as
-    // "917814295082" / "7814295082" and vice-versa.
+    // "917814295082" / "7814295082" and vice-versa. The alternate number is
+    // searched the same way.
     const digits = q.replace(/\D/g, "");
     if (digits.length >= 4) {
       or.push({ phoneE164: { contains: digits } });
       or.push({ phone: { contains: digits } });
+      or.push({ altPhoneE164: { contains: digits } });
+      or.push({ altPhone: { contains: digits } });
     }
     where.OR = or;
   }

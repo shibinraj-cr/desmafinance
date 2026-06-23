@@ -34,5 +34,7 @@ export const POST = withApiHandler(async (req: Request) => {
 
   const { source, campaign, rows } = BodySchema.parse(await req.json().catch(() => null));
   const result = await ingestSheetLeads({ sourceKey: source, campaign, rows });
-  return NextResponse.json(result);
+  // `duplicatesFlagged` kept as a backward-compatible alias for the Apps Script
+  // logger; duplicates are now folded as re-inquiries rather than flagged rows.
+  return NextResponse.json({ ...result, duplicatesFlagged: result.reInquiries });
 });

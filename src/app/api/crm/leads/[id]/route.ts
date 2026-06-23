@@ -35,6 +35,7 @@ const PatchSchema = z.object({
   candidateName: z.string().trim().min(1).max(200).optional(),
   email: z.string().trim().max(200).nullable().optional(),
   phone: z.string().trim().max(60).nullable().optional(),
+  altPhone: z.string().trim().max(60).nullable().optional(),
   sourceId: z.string().nullable().optional(),
   serviceId: z.string().nullable().optional(),
   qualificationId: z.string().nullable().optional(),
@@ -48,6 +49,7 @@ const FIELD_LABELS: Record<string, string> = {
   candidateName: "Name",
   email: "Email",
   phone: "Phone",
+  altPhone: "Alternative phone",
   sourceId: "Source",
   serviceId: "Service",
   qualificationId: "Qualification",
@@ -89,6 +91,10 @@ export const PATCH = withApiHandler(async (req: Request, { params }: Ctx) => {
     update.phone = clean(d.phone);
     fieldDiff.phone = { from: existing.phone, to: clean(d.phone) };
   }
+  if (d.altPhone !== undefined && clean(d.altPhone) !== existing.altPhone) {
+    update.altPhone = clean(d.altPhone);
+    fieldDiff.altPhone = { from: existing.altPhone, to: clean(d.altPhone) };
+  }
   if (d.sourceId !== undefined && clean(d.sourceId) !== existing.sourceId) {
     update.sourceId = clean(d.sourceId);
     fieldDiff.sourceId = { from: existing.sourceId, to: clean(d.sourceId) };
@@ -123,6 +129,10 @@ export const PATCH = withApiHandler(async (req: Request, { params }: Ctx) => {
     update.phoneE164 = e164;
     update.emailKey = emailKeyOf(finalEmail);
     update.dedupeKey = computeDedupeKey(finalEmail, e164);
+  }
+  // Re-normalize the alternate number on change. It doesn't feed dedupe keys.
+  if ("altPhone" in update) {
+    update.altPhoneE164 = normalizePhone(update.altPhone as string | null);
   }
 
   // Party linkage.

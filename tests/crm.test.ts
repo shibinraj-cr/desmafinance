@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { normalizePhone, computeDedupeKey, emailKeyOf, renderTemplate } from "@/lib/crm";
+import { normalizePhone, computeDedupeKey, emailKeyOf, phoneMatchKeys, renderTemplate } from "@/lib/crm";
 
 describe("normalizePhone", () => {
   it("prefixes +91 for bare 10-digit Indian mobiles", () => {
@@ -55,6 +55,21 @@ describe("emailKeyOf", () => {
     // A lead with only a phone has no email key — it is matched on phoneE164.
     expect(emailKeyOf(null)).toBeNull();
     expect(computeDedupeKey(null, "+919876543210")).toBe("+919876543210");
+  });
+});
+
+describe("phoneMatchKeys", () => {
+  it("returns the primary then the alternate number", () => {
+    expect(phoneMatchKeys("+919876543210", "+919812345678")).toEqual(["+919876543210", "+919812345678"]);
+  });
+  it("drops blanks/nulls", () => {
+    expect(phoneMatchKeys("+919876543210", null)).toEqual(["+919876543210"]);
+    expect(phoneMatchKeys(null, "+919812345678")).toEqual(["+919812345678"]);
+    expect(phoneMatchKeys(null, null)).toEqual([]);
+    expect(phoneMatchKeys(undefined, undefined)).toEqual([]);
+  });
+  it("de-duplicates when primary and alternate are the same number", () => {
+    expect(phoneMatchKeys("+919876543210", "+919876543210")).toEqual(["+919876543210"]);
   });
 });
 

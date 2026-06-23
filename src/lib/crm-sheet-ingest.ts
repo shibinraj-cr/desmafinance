@@ -10,8 +10,14 @@ import { createHash } from "node:crypto";
 import { Prisma } from "@prisma/client";
 import { prisma } from "./prisma";
 import { badRequest, HttpError } from "./http-error";
-import { normalizePhone, emailKeyOf, computeDedupeKey } from "./crm";
-import { resolveDefaultStatus, getDuplicateStatus } from "./crm-leads";
+import { normalizePhone, emailKeyOf, computeDedupeKey, phoneMatchKeys } from "./crm";
+import { resolveDefaultStatus } from "./crm-leads";
+import {
+  recordReInquiry,
+  resolveReInquiryContext,
+  notifySupervisorOfReInquiries,
+  type ReInquiryOutcome,
+} from "./crm-reinquiry";
 
 const GENERIC_NAME = ["name", "full name", "candidate name", "candidate", "fullname"];
 const GENERIC_EMAIL = ["email", "email address", "e-mail", "mail", "email id"];
@@ -155,7 +161,10 @@ export function mapSheetRow(config: SheetSourceConfig, campaign: string, row: Sh
 export type IngestResult = {
   received: number;
   inserted: number;
-  duplicatesFlagged: number;
+  /** Existing candidates who re-submitted — folded onto their canonical lead. */
+  reInquiries: number;
+  /** How many of those re-inquiries revived a lost lead to Re-marketing. */
+  revived: number;
   skippedAlreadyImported: number;
   errorRows: number;
 };
@@ -182,12 +191,11 @@ export async function ingestSheetLeads(opts: {
     else mapped.push(m);
   }
   if (mapped.length === 0) {
-    return { received, inserted: 0, duplicatesFlagged: 0, skippedAlreadyImported: 0, errorRows };
+    return { received, inserted: 0, reInquiries: 0, revived: 0, skippedAlreadyImported: 0, errorRows };
   }
 
-  const [defStatus, dupStatus, source] = await Promise.all([
+  const [defStatus, source] = await Promise.all([
     resolveDefaultStatus(),
-    getDuplicateStatus(),
     prisma.leadPulseSource.findUnique({ where: { code: config.sourceCode }, select: { id: true } }),
   ]);
   if (!defStatus) throw new HttpError(500, "No lead statuses configured — run db:seed-crm", "no_status_configured");
@@ -196,26 +204,44 @@ export async function ingestSheetLeads(opts: {
   const emailKeys = mapped.map((m) => m.emailKey).filter(Boolean) as string[];
   const phones = mapped.map((m) => m.phoneE164).filter(Boolean) as string[];
 
+  // Incoming sheet rows only carry a primary number, but it must still match an
+  // existing lead's ALTERNATE number — so we look the incoming phones up against
+  // both phone fields, and register both of each existing lead's numbers.
   const dupWhere: Prisma.LeadWhereInput[] = [];
   if (emailKeys.length) dupWhere.push({ emailKey: { in: emailKeys } });
-  if (phones.length) dupWhere.push({ phoneE164: { in: phones } });
+  if (phones.length) {
+    dupWhere.push({ phoneE164: { in: phones } });
+    dupWhere.push({ altPhoneE164: { in: phones } });
+  }
 
   const [existingExt, existingDup] = await Promise.all([
     prisma.lead.findMany({ where: { externalKey: { in: externalKeys } }, select: { externalKey: true } }),
     dupWhere.length
-      ? prisma.lead.findMany({ where: { OR: dupWhere }, select: { emailKey: true, phoneE164: true } })
-      : Promise.resolve([] as { emailKey: string | null; phoneE164: string | null }[]),
+      ? prisma.lead.findMany({
+          where: { OR: dupWhere },
+          select: { id: true, emailKey: true, phoneE164: true, altPhoneE164: true },
+          orderBy: { createdAt: "asc" },
+        })
+      : Promise.resolve([] as { id: string; emailKey: string | null; phoneE164: string | null; altPhoneE164: string | null }[]),
   ]);
   const alreadyImported = new Set(existingExt.map((e) => e.externalKey).filter(Boolean) as string[]);
-  const existingEmailKeys = new Set(existingDup.map((e) => e.emailKey).filter(Boolean) as string[]);
-  const existingPhones = new Set(existingDup.map((e) => e.phoneE164).filter(Boolean) as string[]);
+  // Oldest existing lead per key = the canonical lead a re-inquiry folds onto.
+  const existingByEmail = new Map<string, string>();
+  const existingByPhone = new Map<string, string>();
+  for (const e of existingDup) {
+    if (e.emailKey && !existingByEmail.has(e.emailKey)) existingByEmail.set(e.emailKey, e.id);
+    for (const ph of phoneMatchKeys(e.phoneE164, e.altPhoneE164)) {
+      if (!existingByPhone.has(ph)) existingByPhone.set(ph, e.id);
+    }
+  }
 
   const seenExternal = new Set<string>();
   const seenEmail = new Set<string>();
   const seenPhone = new Set<string>();
   let skippedAlreadyImported = 0;
-  let duplicatesFlagged = 0;
   const toCreate: Prisma.LeadCreateManyInput[] = [];
+  const reInquiriesExisting: { leadId: string; occurredAt: Date | null }[] = [];
+  const reInquiriesWithinBatch: { emailKey: string | null; phoneE164: string | null; occurredAt: Date | null }[] = [];
 
   for (const m of mapped) {
     if (alreadyImported.has(m.externalKey) || seenExternal.has(m.externalKey)) {
@@ -224,12 +250,21 @@ export async function ingestSheetLeads(opts: {
     }
     seenExternal.add(m.externalKey);
 
-    const emailDup = !!m.emailKey && (existingEmailKeys.has(m.emailKey) || seenEmail.has(m.emailKey));
-    const phoneDup = !!m.phoneE164 && (existingPhones.has(m.phoneE164) || seenPhone.has(m.phoneE164));
-    const isDup = emailDup || phoneDup;
+    // Existing candidate → re-inquiry on their canonical lead (no new row).
+    const existingId =
+      (m.emailKey && existingByEmail.get(m.emailKey)) || (m.phoneE164 && existingByPhone.get(m.phoneE164)) || null;
+    if (existingId) {
+      reInquiriesExisting.push({ leadId: existingId, occurredAt: m.createdAt });
+      continue;
+    }
+    // Same person twice in this payload → re-inquiry on the row we're creating.
+    const withinBatchDup = (!!m.emailKey && seenEmail.has(m.emailKey)) || (!!m.phoneE164 && seenPhone.has(m.phoneE164));
+    if (withinBatchDup) {
+      reInquiriesWithinBatch.push({ emailKey: m.emailKey, phoneE164: m.phoneE164, occurredAt: m.createdAt });
+      continue;
+    }
     if (m.emailKey) seenEmail.add(m.emailKey);
     if (m.phoneE164) seenPhone.add(m.phoneE164);
-    if (isDup) duplicatesFlagged++;
 
     toCreate.push({
       candidateName: m.candidateName,
@@ -240,44 +275,80 @@ export async function ingestSheetLeads(opts: {
       dedupeKey: computeDedupeKey(m.email, m.phoneE164),
       externalKey: m.externalKey,
       sourceId: source?.id ?? null,
-      statusId: isDup && dupStatus && dupStatus.active ? dupStatus.id : defStatus.id,
+      statusId: defStatus.id,
       campaign: opts.campaign,
       extra: m.extra,
       ...(m.createdAt ? { createdAt: m.createdAt, lastActivityAt: m.createdAt } : {}),
     });
   }
 
-  if (toCreate.length === 0) {
-    return { received, inserted: 0, duplicatesFlagged: 0, skippedAlreadyImported, errorRows };
+  const reInquiryTotal = reInquiriesExisting.length + reInquiriesWithinBatch.length;
+  if (toCreate.length === 0 && reInquiryTotal === 0) {
+    return { received, inserted: 0, reInquiries: 0, revived: 0, skippedAlreadyImported, errorRows };
   }
-
-  const batch = await prisma.leadImportBatch.create({
-    data: {
-      fileName: `${config.label}: ${opts.campaign}`,
-      totalRows: received,
-      duplicateRows: duplicatesFlagged,
-      errorRows,
-      status: "completed",
-    },
-  });
 
   let inserted = 0;
-  const CHUNK = 500;
-  for (let i = 0; i < toCreate.length; i += CHUNK) {
-    const res = await prisma.lead.createMany({
-      data: toCreate.slice(i, i + CHUNK).map((d) => ({ ...d, importBatchId: batch.id })),
-      skipDuplicates: true, // race-safe against the unique externalKey
+  const createdByEmail = new Map<string, string>();
+  const createdByPhone = new Map<string, string>();
+  if (toCreate.length > 0) {
+    const batch = await prisma.leadImportBatch.create({
+      data: {
+        fileName: `${config.label}: ${opts.campaign}`,
+        totalRows: received,
+        duplicateRows: reInquiryTotal,
+        errorRows,
+        status: "completed",
+      },
     });
-    inserted += res.count;
+
+    const CHUNK = 500;
+    for (let i = 0; i < toCreate.length; i += CHUNK) {
+      const res = await prisma.lead.createMany({
+        data: toCreate.slice(i, i + CHUNK).map((d) => ({ ...d, importBatchId: batch.id })),
+        skipDuplicates: true, // race-safe against the unique externalKey
+      });
+      inserted += res.count;
+    }
+
+    const created = await prisma.lead.findMany({
+      where: { importBatchId: batch.id },
+      select: { id: true, emailKey: true, phoneE164: true },
+    });
+    if (created.length) {
+      await prisma.leadActivity.createMany({
+        data: created.map((l) => ({ leadId: l.id, type: "LEAD_IMPORTED", summary: `Imported from ${config.label} — ${opts.campaign}` })),
+      });
+    }
+    for (const l of created) {
+      if (l.emailKey && !createdByEmail.has(l.emailKey)) createdByEmail.set(l.emailKey, l.id);
+      if (l.phoneE164 && !createdByPhone.has(l.phoneE164)) createdByPhone.set(l.phoneE164, l.id);
+    }
+    await prisma.leadImportBatch.update({ where: { id: batch.id }, data: { insertedRows: inserted } });
   }
 
-  const created = await prisma.lead.findMany({ where: { importBatchId: batch.id }, select: { id: true } });
-  if (created.length) {
-    await prisma.leadActivity.createMany({
-      data: created.map((l) => ({ leadId: l.id, type: "LEAD_IMPORTED", summary: `Imported from ${config.label} — ${opts.campaign}` })),
-    });
+  // Fold the re-inquiries onto their canonical leads.
+  const outcomes: ReInquiryOutcome[] = [];
+  if (reInquiryTotal > 0) {
+    const ctx = await resolveReInquiryContext();
+    for (const r of reInquiriesExisting) {
+      const o = await recordReInquiry({ leadId: r.leadId, source: config.label, campaign: opts.campaign, occurredAt: r.occurredAt }, ctx);
+      if (o) outcomes.push(o);
+    }
+    for (const r of reInquiriesWithinBatch) {
+      const leadId = (r.emailKey && createdByEmail.get(r.emailKey)) || (r.phoneE164 && createdByPhone.get(r.phoneE164)) || null;
+      if (!leadId) continue;
+      const o = await recordReInquiry({ leadId, source: config.label, campaign: opts.campaign, occurredAt: r.occurredAt }, ctx);
+      if (o) outcomes.push(o);
+    }
+    await notifySupervisorOfReInquiries(outcomes, ctx, process.env.NEXTAUTH_URL);
   }
-  await prisma.leadImportBatch.update({ where: { id: batch.id }, data: { insertedRows: inserted } });
 
-  return { received, inserted, duplicatesFlagged, skippedAlreadyImported, errorRows };
+  return {
+    received,
+    inserted,
+    reInquiries: reInquiryTotal,
+    revived: outcomes.filter((o) => o.revived).length,
+    skippedAlreadyImported,
+    errorRows,
+  };
 }
