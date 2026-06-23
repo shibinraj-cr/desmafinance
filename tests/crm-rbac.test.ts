@@ -43,8 +43,12 @@ describe("canEditLead", () => {
     expect(canEditLead(access({ isBde: true }), { assignedToId: null }, "u1")).toBe(false);
   });
 
-  it("blocks non-admin non-BDE users (e.g. supervisors/viewers)", () => {
-    expect(canEditLead(access({ isSupervisor: true }), { assignedToId: "u1" }, "u1")).toBe(false);
+  it("lets a Lead Pulse supervisor edit any lead", () => {
+    expect(canEditLead(access({ isSupervisor: true }), { assignedToId: "someone-else" }, "u1")).toBe(true);
+    expect(canEditLead(access({ isSupervisor: true }), { assignedToId: null }, "u1")).toBe(true);
+  });
+
+  it("blocks plain viewers (no admin/supervisor/BDE rights)", () => {
     expect(canEditLead(access({}), { assignedToId: "u1" }, "u1")).toBe(false);
   });
 });
