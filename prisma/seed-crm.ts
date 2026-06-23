@@ -64,6 +64,25 @@ async function main() {
     console.log(`  ✓ ${q.label}`);
   }
 
+  // Default the re-inquiry supervisor to "suhaina" if not already configured, so
+  // re-inquiry oversight tasks + digests have a recipient out of the box. Never
+  // overwrites an explicit choice.
+  const SUPERVISOR_KEY = "crm_reinquiry_supervisor_user_id";
+  const existing = await prisma.appSetting.findUnique({ where: { key: SUPERVISOR_KEY }, select: { value: true } });
+  if (!existing?.value) {
+    const sup = await prisma.user.findFirst({ where: { username: "suhaina" }, select: { id: true } });
+    if (sup) {
+      await prisma.appSetting.upsert({
+        where: { key: SUPERVISOR_KEY },
+        create: { key: SUPERVISOR_KEY, value: sup.id },
+        update: { value: sup.id },
+      });
+      console.log(`\n  ✓ re-inquiry supervisor → suhaina (${sup.id})`);
+    } else {
+      console.log("\n  • no 'suhaina' user — set the re-inquiry supervisor on CRM → Settings.");
+    }
+  }
+
   console.log("\nDone.");
   console.log({
     statuses: await prisma.crmLeadStatus.count(),

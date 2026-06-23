@@ -4,6 +4,15 @@ import { prisma } from "./prisma";
 
 export const SHEET_LEADS_SECRET_KEY = "sheet_leads_webhook_secret";
 
+/**
+ * User id of the CRM/marketing supervisor who is notified (and owns the
+ * follow-up task for unassigned leads) whenever a re-inquiry is detected. Set on
+ * the CRM → Settings page; falls back to the CRM_REINQUIRY_SUPERVISOR_USER_ID
+ * env var. When unresolved, re-inquiry tasks on unassigned leads stay unassigned
+ * and the supervisor email is skipped (the in-app task still exists).
+ */
+export const REINQUIRY_SUPERVISOR_KEY = "crm_reinquiry_supervisor_user_id";
+
 export async function getSetting(key: string): Promise<string | null> {
   const row = await prisma.appSetting.findUnique({ where: { key }, select: { value: true } });
   return row?.value ?? null;

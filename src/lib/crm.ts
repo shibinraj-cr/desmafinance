@@ -59,6 +59,23 @@ export function emailKeyOf(email: string | null | undefined): string | null {
   return e ? e : null;
 }
 
+/**
+ * A lead's phone "identity set" for duplicate detection: the primary and
+ * alternate normalised E.164 numbers, de-duplicated with blanks dropped. Two
+ * records are the same candidate when these sets intersect — matched against
+ * BOTH phone fields on each side, so an alternate number colliding with another
+ * lead's primary (or vice-versa) is detected. Order-stable (primary first).
+ */
+export function phoneMatchKeys(
+  phoneE164: string | null | undefined,
+  altPhoneE164: string | null | undefined,
+): string[] {
+  const keys: string[] = [];
+  if (phoneE164) keys.push(phoneE164);
+  if (altPhoneE164 && altPhoneE164 !== phoneE164) keys.push(altPhoneE164);
+  return keys;
+}
+
 /** Fallback pill colour for a status with no explicit `color`. */
 export const DEFAULT_STATUS_COLOR = "#9aa0a6";
 

@@ -1819,6 +1819,13 @@ model Lead {
   // Raw phone as captured, plus a normalised E.164 used for wa.me / tel links.
   phone         String?
   phoneE164     String?
+  // Optional secondary contact number (same raw + normalised E.164 pair as the
+  // primary phone). Captured/displayed/searchable like `phone`, and ALSO part of
+  // duplicate detection: a lead's phone identity is the set {phoneE164,
+  // altPhoneE164}, matched against both fields on each side (so an alternate
+  // number colliding with another lead's primary, or vice-versa, is detected).
+  altPhone      String?
+  altPhoneE164  String?
 
   // Classification (FKs to reusable masters)
   sourceId        String?
@@ -1875,6 +1882,14 @@ model Lead {
   // column/filter and is shown/edited on the lead detail.
   country       String?
 
+  // Re-inquiry tracking. When a candidate who already exists submits again
+  // (a duplicate by email/phone), we DON'T create a new row — we fold the
+  // signal onto this canonical lead: bump `inquiryCount`, stamp `lastInquiryAt`,
+  // log a RE_INQUIRY activity, and (if the lead was in a lost status) revive it
+  // to Re-marketing. `inquiryCount` starts at 1 for the original submission.
+  inquiryCount  Int       @default(1)
+  lastInquiryAt DateTime?
+
   /// Free-form extras captured at import (region, campaign, city, age, …).
   /// JSON: Record<string, string>.
   extra Json?
@@ -1907,7 +1922,9 @@ model Lead {
   @@index([country])
   @@index([email])
   @@index([phoneE164])
+  @@index([altPhoneE164])
   @@index([expectedCloseDate])
+  @@index([lastInquiryAt])
 }
 
 // Admin-configurable pipeline stages / dispositions.

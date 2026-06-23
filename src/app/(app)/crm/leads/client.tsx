@@ -244,6 +244,7 @@ function NewLeadButton({ masters, access }: { masters: Masters; access: LeadsAcc
     candidateName: "",
     email: "",
     phone: "",
+    altPhone: "",
     sourceId: "",
     serviceId: "",
     qualificationId: "",
@@ -277,6 +278,7 @@ function NewLeadButton({ masters, access }: { masters: Masters; access: LeadsAcc
         candidateName: form.candidateName.trim(),
         email: form.email.trim() || undefined,
         phone: form.phone.trim() || undefined,
+        altPhone: form.altPhone.trim() || undefined,
         sourceId: form.sourceId || undefined,
         serviceId: form.serviceId || undefined,
         qualificationId: form.qualificationId || undefined,
@@ -295,6 +297,7 @@ function NewLeadButton({ masters, access }: { masters: Masters; access: LeadsAcc
       candidateName: "",
       email: "",
       phone: "",
+      altPhone: "",
       sourceId: "",
       serviceId: "",
       qualificationId: "",
@@ -357,6 +360,13 @@ function NewLeadButton({ masters, access }: { masters: Masters; access: LeadsAcc
                   />
                 </Field>
               </div>
+              <Field label="Alternative phone">
+                <input
+                  className={inputCls}
+                  value={form.altPhone}
+                  onChange={(e) => setForm({ ...form, altPhone: e.target.value })}
+                />
+              </Field>
               <div className="grid grid-cols-2 gap-md">
                 <Field label="Source">
                   <select

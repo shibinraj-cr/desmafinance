@@ -69,6 +69,7 @@ export const GET = withApiHandler(async (req: Request) => {
       Candidate: l.candidateName,
       Email: l.email ?? "",
       Phone: l.phone ?? "",
+      "Alt Phone": l.altPhone ?? "",
       Country: l.country ?? "",
       Service: l.service?.name ?? "",
       Qualification: l.qualification?.label ?? "",
@@ -78,12 +79,12 @@ export const GET = withApiHandler(async (req: Request) => {
   });
 
   const ws = XLSX.utils.json_to_sheet(data, {
-    header: ["Created", "Source", "Campaign", "Status", "Candidate", "Email", "Phone", "Country", "Service", "Qualification", "Consultant", "Assigned"],
+    header: ["Created", "Source", "Campaign", "Status", "Candidate", "Email", "Phone", "Alt Phone", "Country", "Service", "Qualification", "Consultant", "Assigned"],
   });
   // Reasonable column widths.
   ws["!cols"] = [
     { wch: 20 }, { wch: 14 }, { wch: 22 }, { wch: 14 }, { wch: 22 },
-    { wch: 26 }, { wch: 16 }, { wch: 16 }, { wch: 22 }, { wch: 16 }, { wch: 18 }, { wch: 20 },
+    { wch: 26 }, { wch: 16 }, { wch: 16 }, { wch: 16 }, { wch: 22 }, { wch: 16 }, { wch: 18 }, { wch: 20 },
   ];
   const wb = XLSX.utils.book_new();
   XLSX.utils.book_append_sheet(wb, ws, "Leads");
