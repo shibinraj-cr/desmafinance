@@ -285,6 +285,53 @@ input.lp-date-input::-webkit-calendar-picker-indicator:hover {
 }
 
 /* ════════════════════════════════════════════════════════
+   CRM enroll celebration — "Big party mode" overlay animations.
+   Used by EnrollCelebration.tsx (confetti is canvas-driven; these
+   keyframes drive the trophy card pop + idle float).
+   ════════════════════════════════════════════════════════ */
+@keyframes crmOverlayIn {
+  from {
+    opacity: 0;
+    transform: scale(0.9) translateY(10px);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1) translateY(0);
+  }
+}
+@keyframes crmTrophyPop {
+  0% {
+    transform: scale(0) rotate(-35deg);
+  }
+  60% {
+    transform: scale(1.28) rotate(10deg);
+  }
+  80% {
+    transform: scale(0.92) rotate(-4deg);
+  }
+  100% {
+    transform: scale(1) rotate(0deg);
+  }
+}
+@keyframes crmFloat {
+  0%,
+  100% {
+    transform: translateY(0);
+  }
+  50% {
+    transform: translateY(-7px);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  /* Keep the moment, lose the bounce: pop/float settle instantly. */
+  [style*="crmOverlayIn"],
+  [style*="crmTrophyPop"],
+  [style*="crmFloat"] {
+    animation: none !important;
+  }
+}
+
+/* ════════════════════════════════════════════════════════
    Shared shell — visual-only gold-glow pass (sidebar + tabs).
    Hook classes (`dg-rail`, `dg-tabs`) are added in SideNav.tsx
    and GroupTabs.tsx; no nav item, route, or badge logic changes.

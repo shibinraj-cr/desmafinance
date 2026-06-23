@@ -8,6 +8,7 @@ import type { LeadRow, NoteRow, ActivityRow, TaskRow } from "@/lib/crm-leads";
 import { isActionOnlyStatus } from "@/lib/crm-leads";
 import { renderTemplate } from "@/lib/crm";
 import { StatusPill, type StatusOpt, type Opt, type BdeOpt } from "../client";
+import { EnrollCelebration } from "@/components/EnrollCelebration";
 
 export type PartyOpt = { id: string; label: string; phone: string | null };
 export type DetailMasters = {
@@ -32,7 +33,10 @@ const primaryBtn =
   "h-10 px-lg rounded-lg bg-primary text-on-primary font-semibold hover:bg-primary-container transition disabled:opacity-60";
 const secondaryBtn =
   "h-10 px-lg rounded-lg border border-outline-variant text-on-surface-variant hover:bg-surface-container-low transition";
-const cardCls = "bg-surface-container-lowest border border-outline-variant rounded-xl shadow-sm p-lg space-y-md";
+const cardCls =
+  "relative bg-surface-container-lowest border border-outline-variant rounded-xl shadow-sm p-lg space-y-md " +
+  "before:content-[''] before:absolute before:left-5 before:right-5 before:top-0 before:h-[3px] before:rounded-full " +
+  "before:bg-gradient-to-r before:from-indigo-400 before:via-primary before:to-emerald-400";
 
 function Field({ label, children }: { label: string; children: React.ReactNode }) {
   return (
@@ -40,6 +44,21 @@ function Field({ label, children }: { label: string; children: React.ReactNode }
       <span className="block text-label-sm text-on-surface-variant mb-xs">{label}</span>
       {children}
     </label>
+  );
+}
+
+// Card heading with a colour-coded leading icon — gives each panel its own hue.
+function CardHeading({ icon, color, children }: { icon: string; color: string; children: React.ReactNode }) {
+  return (
+    <h3 className="text-h3 text-on-surface inline-flex items-center gap-xs">
+      <span
+        className="material-symbols-outlined grid place-items-center h-7 w-7 rounded-lg"
+        style={{ fontSize: 18, color, backgroundColor: `${color}1a` }}
+      >
+        {icon}
+      </span>
+      {children}
+    </h3>
   );
 }
 
@@ -334,6 +353,13 @@ function CommButton({ icon, label, onClick }: { icon: string; label: string; onC
 }
 
 // ── Stage bar (Dynamics BPF style) ──────────────────────────────────────────
+// Vivid fallback palette so stages without an explicit colour still read in
+// colour — cycles by position across the pipeline.
+const STAGE_PALETTE = ["#3b82f6", "#8b5cf6", "#ec4899", "#f59e0b", "#10b981", "#06b6d4", "#ef4444", "#14b8a6"];
+function stageColor(s: StatusOpt, idx: number): string {
+  return s.color || STAGE_PALETTE[idx % STAGE_PALETTE.length];
+}
+
 function StageBar({ lead, statuses, canEdit }: { lead: LeadRow; statuses: StatusOpt[]; canEdit: boolean }) {
   const router = useRouter();
   const [busy, setBusy] = useState(false);
@@ -357,9 +383,20 @@ function StageBar({ lead, statuses, canEdit }: { lead: LeadRow; statuses: Status
     <div className="bg-surface-container-lowest border border-outline-variant rounded-xl shadow-sm p-md flex flex-wrap items-center gap-xs">
       {active.map((s, i) => {
         const reached = !isEndState && currentIdx >= 0 && i <= currentIdx;
+        const isCurrent = !isEndState && i === currentIdx;
+        const color = stageColor(s, i);
         // "Pipeline" shows on the bar as a milestone but is set only by the
         // Set-deal action — never clickable.
         const locked = isActionOnlyStatus(s.code);
+        // Reached stages wear their stage colour; the current stage gets a
+        // brighter fill + glow ring; upcoming stages stay tinted-but-muted.
+        const style: React.CSSProperties = reached
+          ? {
+              backgroundColor: color,
+              color: "#fff",
+              boxShadow: isCurrent ? `0 0 0 3px ${color}40, 0 4px 12px ${color}55` : `0 2px 6px ${color}33`,
+            }
+          : { backgroundColor: `${color}14`, color, border: `1px solid ${color}40` };
         return (
           <button
             key={s.id}
@@ -368,12 +405,10 @@ function StageBar({ lead, statuses, canEdit }: { lead: LeadRow; statuses: Status
             onClick={() => {
               if (!locked) setStatus(s.id);
             }}
+            style={style}
             className={
-              "h-9 px-md text-label-sm font-semibold rounded-lg transition disabled:cursor-default " +
-              (reached
-                ? "bg-primary text-on-primary"
-                : "bg-surface-container-low text-on-surface-variant hover:bg-surface-container-high") +
-              (canEdit && !locked ? " cursor-pointer" : "")
+              "inline-flex items-center gap-xs h-9 px-md text-label-sm font-semibold rounded-lg transition disabled:cursor-default " +
+              (canEdit && !locked ? " cursor-pointer hover:brightness-105" : "")
             }
             title={
               locked
@@ -383,6 +418,11 @@ function StageBar({ lead, statuses, canEdit }: { lead: LeadRow; statuses: Status
                   : s.label
             }
           >
+            {reached && (
+              <span className="material-symbols-outlined" style={{ fontSize: 16 }}>
+                {isCurrent ? "radio_button_checked" : "check_circle"}
+              </span>
+            )}
             {i + 1}. {s.label}
           </button>
         );
@@ -444,7 +484,7 @@ function SummaryCard({ lead, masters, canEdit }: { lead: LeadRow; masters: Detai
   return (
     <div className={cardCls}>
       <div className="flex items-center justify-between">
-        <h3 className="text-h3 text-on-surface">Summary</h3>
+        <CardHeading icon="person" color="#6366f1">Summary</CardHeading>
         {canEdit && !editing && (
           <button
             type="button"
@@ -591,7 +631,7 @@ function Timeline({
 
   return (
     <div className={cardCls}>
-      <h3 className="text-h3 text-on-surface">Timeline</h3>
+      <CardHeading icon="timeline" color="#06b6d4">Timeline</CardHeading>
       {canEdit && <NoteComposer leadId={lead.id} />}
       {items.length === 0 ? (
         <p className="text-on-surface-variant text-body-md">No activity yet.</p>
@@ -772,7 +812,7 @@ function AssignmentCard({ lead, masters, canAssign }: { lead: LeadRow; masters: 
 
   return (
     <div className={cardCls}>
-      <h3 className="text-h3 text-on-surface">Consultant</h3>
+      <CardHeading icon="badge" color="#8b5cf6">Consultant</CardHeading>
       <div className="flex items-center gap-sm">
         <Avatar name={lead.assignedTo?.name ?? null} />
         <div className="flex flex-col">
@@ -813,14 +853,16 @@ function DealRow({ label, value }: { label: string; value: React.ReactNode }) {
 }
 
 function DealCard({ lead, masters, canEdit }: { lead: LeadRow; masters: DetailMasters; canEdit: boolean }) {
+  const router = useRouter();
   const [modal, setModal] = useState<null | "deal" | "enroll">(null);
+  const [celebrateName, setCelebrateName] = useState<string | null>(null);
   const isEnrolled = lead.status.code === "enrolled";
   const hasDeal = lead.expectedValue != null || lead.expectedCloseDate != null;
 
   return (
     <div className={cardCls}>
       <div className="flex items-center justify-between">
-        <h3 className="text-h3 text-on-surface">Deal</h3>
+        <CardHeading icon="handshake" color="#10b981">Deal</CardHeading>
         {lead.pipelineStatus && (
           <span
             className="px-xs py-[2px] rounded-full text-[10px] font-bold uppercase tracking-wider"
@@ -878,7 +920,28 @@ function DealCard({ lead, masters, canEdit }: { lead: LeadRow; masters: DetailMa
         </div>
       )}
 
-      {modal && <DealModal lead={lead} masters={masters} mode={modal} onClose={() => setModal(null)} />}
+      {modal && (
+        <DealModal
+          lead={lead}
+          masters={masters}
+          mode={modal}
+          onClose={() => setModal(null)}
+          onEnrolled={(name) => {
+            setModal(null);
+            setCelebrateName(name);
+          }}
+        />
+      )}
+
+      {celebrateName && (
+        <EnrollCelebration
+          name={celebrateName}
+          onDone={() => {
+            setCelebrateName(null);
+            router.refresh();
+          }}
+        />
+      )}
     </div>
   );
 }
@@ -888,11 +951,14 @@ function DealModal({
   masters,
   mode,
   onClose,
+  onEnrolled,
 }: {
   lead: LeadRow;
   masters: DetailMasters;
   mode: "deal" | "enroll";
   onClose: () => void;
+  /** Fired on a successful enroll — hands the candidate name to the celebration. */
+  onEnrolled?: (name: string) => void;
 }) {
   const router = useRouter();
   const l2Bdes = masters.bdes.filter((b) => b.role === "l2");
@@ -925,6 +991,12 @@ function DealModal({
     if (!res.ok) {
       const d = (await res.json().catch(() => ({}))) as { message?: string; error?: string };
       setError(d.message || d.error || "Could not save.");
+      return;
+    }
+    // Enroll → hand off to the celebration (it triggers the refresh once the
+    // party is done). Set deal → close + refresh immediately, as before.
+    if (mode === "enroll" && onEnrolled) {
+      onEnrolled(lead.candidateName);
       return;
     }
     onClose();
@@ -1001,7 +1073,7 @@ function LeadInfoCard({ lead, masters, canEdit }: { lead: LeadRow; masters: Deta
 
   return (
     <div className={cardCls}>
-      <h3 className="text-h3 text-on-surface">Lead detail</h3>
+      <CardHeading icon="info" color="#3b82f6">Lead detail</CardHeading>
       <dl className="space-y-sm text-body-md">
         <div className="flex justify-between gap-md">
           <dt className="text-on-surface-variant">Status</dt>
@@ -1441,7 +1513,7 @@ function HistoryPanel({ leadId, bdes }: { leadId: string; bdes: BdeOpt[] }) {
   return (
     <div className={cardCls}>
       <div className="flex items-center justify-between">
-        <h3 className="text-h3 text-on-surface">History</h3>
+        <CardHeading icon="history" color="#f59e0b">History</CardHeading>
         <span className="text-label-sm text-on-surface-variant">Full audit log (admin only)</span>
       </div>
       <div className="flex flex-wrap items-center gap-base">
@@ -1610,7 +1682,7 @@ function TasksPanel({
   return (
     <div className={cardCls}>
       <div className="flex items-center justify-between">
-        <h3 className="text-h3 text-on-surface">Tasks</h3>
+        <CardHeading icon="checklist" color="#ec4899">Tasks</CardHeading>
         <span className="text-label-sm text-on-surface-variant">
           {open.length} open · {done.length} completed
         </span>
