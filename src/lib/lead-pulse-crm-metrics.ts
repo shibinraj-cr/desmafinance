@@ -57,6 +57,8 @@ export async function getCrmFunnelByBde(year: number, month: number): Promise<Cr
   // batch, OR its assignedAt is meaningfully later than the batch was created
   // (= a genuine later re-assignment). Raw SQL because Prisma can't compare a
   // column to a related column. `lost` is the same set narrowed to lost-kind.
+  // Leads the CRM has flagged as duplicates (email/phone collision → `duplicate`
+  // status) are excluded so a re-assigned duplicate is never double-counted.
   const [rows, enrolled] = await Promise.all([
     prisma.$queryRaw<Array<{ userId: string; assigned: bigint; lost: bigint }>>(Prisma.sql`
       SELECT l."assignedToId" AS "userId",
@@ -68,6 +70,7 @@ export async function getCrmFunnelByBde(year: number, month: number): Promise<Cr
       WHERE l."assignedToId" IN (${Prisma.join(ids)})
         AND l."assignedAt" >= ${mStart} AND l."assignedAt" < ${mEnd}
         AND (l."importBatchId" IS NULL OR l."assignedAt" > b."createdAt" + interval '10 minutes')
+        AND st.code <> 'duplicate'
       GROUP BY l."assignedToId"
     `),
     prisma.leadPulsePipeline.groupBy({
@@ -209,6 +212,10 @@ function assignRange(start: string, end: string): { gte: Date; lt: Date } {
 }
 // SQL fragment: a lead counts as deliberately assigned (not bulk-import carryover).
 const DELIBERATE = Prisma.sql`(l."importBatchId" IS NULL OR l."assignedAt" > b."createdAt" + interval '10 minutes')`;
+// SQL fragment: exclude leads the CRM has flagged as duplicates (email/phone
+// collision → `duplicate` status) so a re-assigned duplicate is never
+// double-counted in "leads assigned". Requires a `CrmLeadStatus st` join.
+const NOT_DUPLICATE = Prisma.sql`st.code <> 'duplicate'`;
 
 export type CrmFunnel = { leadsAssigned: number; enrolled: number; conversionPct: number | null };
 
@@ -227,9 +234,10 @@ export async function getCrmFunnel(opts: {
       SELECT COUNT(*) AS n
       FROM "Lead" l
       LEFT JOIN "LeadImportBatch" b ON l."importBatchId" = b.id
+      JOIN "CrmLeadStatus" st ON l."statusId" = st.id
       WHERE l."assignedToId" IS NOT NULL
         AND l."assignedAt" >= ${gte} AND l."assignedAt" < ${lt}
-        ${userCond} ${srcCond} AND ${DELIBERATE}
+        ${userCond} ${srcCond} AND ${DELIBERATE} AND ${NOT_DUPLICATE}
     `),
     prisma.leadPulsePipeline.count({
       where: {
@@ -271,9 +279,10 @@ export async function getCrmFunnelBySource(opts: {
       SELECT l."sourceId" AS "sourceId", COUNT(*) AS n
       FROM "Lead" l
       LEFT JOIN "LeadImportBatch" b ON l."importBatchId" = b.id
+      JOIN "CrmLeadStatus" st ON l."statusId" = st.id
       WHERE l."assignedToId" IS NOT NULL
         AND l."assignedAt" >= ${gte} AND l."assignedAt" < ${lt}
-        ${userCond} AND ${DELIBERATE}
+        ${userCond} AND ${DELIBERATE} AND ${NOT_DUPLICATE}
       GROUP BY l."sourceId"
     `),
     prisma.leadPulsePipeline.groupBy({
@@ -332,9 +341,10 @@ export async function getCrmMonthlyMatrix(opts: {
           FROM "Lead" l
           LEFT JOIN "LeadImportBatch" b ON l."importBatchId" = b.id
           LEFT JOIN "LeadPulseSource" s ON l."sourceId" = s.id
+          JOIN "CrmLeadStatus" st ON l."statusId" = st.id
           WHERE l."assignedToId" IN (${Prisma.join(userIds)})
             AND l."assignedAt" >= ${gte} AND l."assignedAt" < ${lt}
-            ${sourceCodeCond} AND ${DELIBERATE}
+            ${sourceCodeCond} AND ${DELIBERATE} AND ${NOT_DUPLICATE}
           GROUP BY l."assignedToId", l."sourceId"
         `),
         prisma.leadPulsePipeline.groupBy({
