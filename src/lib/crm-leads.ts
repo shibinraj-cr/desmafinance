@@ -33,6 +33,7 @@ export type LeadRow = {
   assignedAt: string | null;
   party: { id: string; name: string } | null;
   campaign: string | null;
+  country: string | null;
   expectedValue: number | null;
   expectedCloseDate: string | null;
   pipelineStatus: string | null; // 'open' | 'closed_won' | 'lost' (from the linked pipeline)
@@ -66,6 +67,7 @@ export function serializeLead(l: LeadWithRels): LeadRow {
     assignedAt: l.assignedAt ? l.assignedAt.toISOString() : null,
     party: l.party ? { id: l.party.id, name: l.party.name } : null,
     campaign: l.campaign,
+    country: l.country,
     expectedValue: l.expectedValue ? Number(l.expectedValue) : null,
     expectedCloseDate: l.expectedCloseDate ? l.expectedCloseDate.toISOString() : null,
     pipelineStatus: l.pipeline?.status ?? null,
@@ -79,8 +81,15 @@ export type LeadFilterParams = {
   status?: string;
   source?: string;
   service?: string;
+  /**
+   * Consultant filter. A userId restricts to that BDE; `"unassigned"` matches
+   * leads with no consultant; `"all"` (or undefined) applies no assignee filter.
+   * Resolve the raw query value through {@link resolveAssigneeFilter} first so
+   * the BDE "my leads" default is applied consistently.
+   */
   assignee?: string;
   campaign?: string;
+  country?: string;
   q?: string;
   /** Resolved half-open createdAt range (e.g. from `rangeFor(parsePeriod(...))`). `to` is exclusive. */
   from?: Date;
@@ -111,9 +120,11 @@ export function buildLeadWhere(p: LeadFilterParams): Prisma.LeadWhereInput {
   if (p.status) where.statusId = p.status;
   if (p.source) where.sourceId = p.source;
   if (p.service) where.serviceId = p.service;
+  // "all" (the BDE "All leads" opt-out) applies no assignee filter.
   if (p.assignee === "unassigned") where.assignedToId = null;
-  else if (p.assignee) where.assignedToId = p.assignee;
+  else if (p.assignee && p.assignee !== "all") where.assignedToId = p.assignee;
   if (p.campaign) where.campaign = p.campaign;
+  if (p.country) where.country = p.country;
   const q = p.q?.trim();
   if (q) {
     const or: Prisma.LeadWhereInput[] = [
@@ -145,6 +156,24 @@ export function buildLeadWhere(p: LeadFilterParams): Prisma.LeadWhereInput {
     where.assignedAt = assignedAt;
   }
   return where;
+}
+
+/**
+ * Resolve the effective `assignee` filter from the raw query value, applying the
+ * BDE default: a BDE who hasn't picked an assignee sees their own queue, so the
+ * leads list lands on "my leads" by default. They can still view everyone by
+ * explicitly choosing "All leads" (the `"all"` sentinel) or another consultant.
+ * Non-BDEs (admins / CRM managers / supervisors) keep seeing all leads.
+ *
+ * Shared by the list page, the GET list API, and the export / ids endpoints so
+ * the default view never drifts between them.
+ */
+export function resolveAssigneeFilter(
+  raw: string | undefined,
+  opts: { isBde: boolean; userId: string },
+): string | undefined {
+  if (raw) return raw; // explicit choice: a userId, "unassigned", or "all"
+  return opts.isBde ? opts.userId : undefined;
 }
 
 export function leadOrderBy(sort?: string): Prisma.LeadOrderByWithRelationInput {

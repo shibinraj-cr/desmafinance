@@ -6,7 +6,7 @@ import { unauthorized, forbidden } from "@/lib/http-error";
 import { getCurrentUserAndPermissions } from "@/lib/permissions";
 import { getCrmAccess } from "@/lib/crm-rbac";
 import { parsePeriod, rangeFor } from "@/lib/period";
-import { buildLeadWhere, leadOrderBy, assignedDayRange } from "@/lib/crm-leads";
+import { buildLeadWhere, leadOrderBy, assignedDayRange, resolveAssigneeFilter } from "@/lib/crm-leads";
 
 export const dynamic = "force-dynamic";
 
@@ -32,8 +32,9 @@ export const GET = withApiHandler(async (req: Request) => {
     status: sp.get("status") || undefined,
     source: sp.get("source") || undefined,
     service: sp.get("service") || undefined,
-    assignee: sp.get("assignee") || undefined,
+    assignee: resolveAssigneeFilter(sp.get("assignee") || undefined, { isBde: access.isBde, userId }),
     campaign: sp.get("campaign") || undefined,
+    country: sp.get("country") || undefined,
     q: sp.get("q") || undefined,
     from: range.from,
     to: range.to,

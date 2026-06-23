@@ -13,6 +13,7 @@ import {
   getAssignableBdes,
   countNewLeadsAssignedTo,
   assignedDayRange,
+  resolveAssigneeFilter,
 } from "@/lib/crm-leads";
 import { isEmailConfigured } from "@/lib/mailer";
 import { LeadsToolbar, LeadsTable } from "./client";
@@ -61,8 +62,11 @@ export default async function LeadsPage({ searchParams }: { searchParams: SP }) 
     status: str(searchParams, "status"),
     source: str(searchParams, "source"),
     service: str(searchParams, "service"),
-    assignee: str(searchParams, "assignee"),
+    // BDEs default to their own queue ("my leads") until they pick a consultant
+    // or explicitly choose "All leads"; everyone else sees all leads.
+    assignee: resolveAssigneeFilter(str(searchParams, "assignee"), { isBde: access.isBde, userId }),
     campaign: str(searchParams, "campaign"),
+    country: str(searchParams, "country"),
     q: str(searchParams, "q"),
     from: range.from,
     to: range.to,
@@ -76,7 +80,7 @@ export default async function LeadsPage({ searchParams }: { searchParams: SP }) 
   const totalPages = Math.max(1, Math.ceil(total / PAGE_SIZE));
   const page = Math.min(requestedPage, totalPages);
 
-  const [rows, statuses, sources, services, qualifications, bdes, campaignGroups, emailConfigured] = await Promise.all([
+  const [rows, statuses, sources, services, qualifications, bdes, campaignGroups, countryGroups, emailConfigured] = await Promise.all([
     prisma.lead.findMany({
       where,
       orderBy: leadOrderBy(sort),
@@ -110,6 +114,11 @@ export default async function LeadsPage({ searchParams }: { searchParams: SP }) 
       where: { campaign: { not: null } },
       orderBy: { campaign: "asc" },
     }),
+    prisma.lead.groupBy({
+      by: ["country"],
+      where: { country: { not: null } },
+      orderBy: { country: "asc" },
+    }),
     isEmailConfigured(),
   ]);
 
@@ -124,6 +133,7 @@ export default async function LeadsPage({ searchParams }: { searchParams: SP }) 
     qualifications,
     bdes,
     campaigns: campaignGroups.map((g) => g.campaign).filter((c): c is string => !!c),
+    countries: countryGroups.map((g) => g.country).filter((c): c is string => !!c),
   };
   const accessProps = {
     canCreate: access.canCreateLeads,

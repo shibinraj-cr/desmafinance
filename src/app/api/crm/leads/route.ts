@@ -17,6 +17,7 @@ import {
   leadOrderBy,
   isActiveBde,
   assignedDayRange,
+  resolveAssigneeFilter,
 } from "@/lib/crm-leads";
 
 export const dynamic = "force-dynamic";
@@ -45,8 +46,9 @@ export const GET = withApiHandler(async (req: Request) => {
     status: sp.get("status") || undefined,
     source: sp.get("source") || undefined,
     service: sp.get("service") || undefined,
-    assignee: sp.get("assignee") || undefined,
+    assignee: resolveAssigneeFilter(sp.get("assignee") || undefined, { isBde: access.isBde, userId }),
     campaign: sp.get("campaign") || undefined,
+    country: sp.get("country") || undefined,
     q: sp.get("q") || undefined,
     from: range.from,
     to: range.to,
@@ -79,6 +81,7 @@ const CreateSchema = z.object({
   qualificationId: z.string().optional(),
   statusId: z.string().optional(),
   assignedToId: z.string().optional(),
+  country: z.string().trim().max(100).optional(),
   extra: z.record(z.string()).optional(),
 });
 
@@ -160,6 +163,7 @@ export const POST = withApiHandler(async (req: Request) => {
       statusId,
       assignedToId,
       assignedAt: assignedToId ? new Date() : null,
+      country: data.country || null,
       extra: data.extra ?? undefined,
       createdById: userId,
     },

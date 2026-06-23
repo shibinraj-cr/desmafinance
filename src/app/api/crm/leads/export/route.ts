@@ -6,7 +6,14 @@ import { unauthorized, forbidden } from "@/lib/http-error";
 import { getCurrentUserAndPermissions } from "@/lib/permissions";
 import { getCrmAccess } from "@/lib/crm-rbac";
 import { parsePeriod, rangeFor } from "@/lib/period";
-import { buildLeadWhere, leadOrderBy, leadRowInclude, serializeLead, assignedDayRange } from "@/lib/crm-leads";
+import {
+  buildLeadWhere,
+  leadOrderBy,
+  leadRowInclude,
+  serializeLead,
+  assignedDayRange,
+  resolveAssigneeFilter,
+} from "@/lib/crm-leads";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs"; // xlsx + Buffer
@@ -35,8 +42,9 @@ export const GET = withApiHandler(async (req: Request) => {
     status: sp.get("status") || undefined,
     source: sp.get("source") || undefined,
     service: sp.get("service") || undefined,
-    assignee: sp.get("assignee") || undefined,
+    assignee: resolveAssigneeFilter(sp.get("assignee") || undefined, { isBde: access.isBde, userId }),
     campaign: sp.get("campaign") || undefined,
+    country: sp.get("country") || undefined,
     q: sp.get("q") || undefined,
     from: range.from,
     to: range.to,
@@ -61,6 +69,7 @@ export const GET = withApiHandler(async (req: Request) => {
       Candidate: l.candidateName,
       Email: l.email ?? "",
       Phone: l.phone ?? "",
+      Country: l.country ?? "",
       Service: l.service?.name ?? "",
       Qualification: l.qualification?.label ?? "",
       Consultant: l.assignedTo?.name ?? "",
@@ -69,12 +78,12 @@ export const GET = withApiHandler(async (req: Request) => {
   });
 
   const ws = XLSX.utils.json_to_sheet(data, {
-    header: ["Created", "Source", "Campaign", "Status", "Candidate", "Email", "Phone", "Service", "Qualification", "Consultant", "Assigned"],
+    header: ["Created", "Source", "Campaign", "Status", "Candidate", "Email", "Phone", "Country", "Service", "Qualification", "Consultant", "Assigned"],
   });
   // Reasonable column widths.
   ws["!cols"] = [
     { wch: 20 }, { wch: 14 }, { wch: 22 }, { wch: 14 }, { wch: 22 },
-    { wch: 26 }, { wch: 16 }, { wch: 22 }, { wch: 16 }, { wch: 18 }, { wch: 20 },
+    { wch: 26 }, { wch: 16 }, { wch: 16 }, { wch: 22 }, { wch: 16 }, { wch: 18 }, { wch: 20 },
   ];
   const wb = XLSX.utils.book_new();
   XLSX.utils.book_append_sheet(wb, ws, "Leads");

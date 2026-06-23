@@ -6,6 +6,7 @@ import Link from "next/link";
 import { useRouter, usePathname, useSearchParams } from "next/navigation";
 import type { LeadRow } from "@/lib/crm-leads";
 import { DEFAULT_STATUS_COLOR, BULK_EMAIL_MERGE_FIELDS, fillTemplate } from "@/lib/crm";
+import { COUNTRIES } from "@/lib/countries";
 
 // ── Shared prop shapes ──────────────────────────────────────────────────────
 export type StatusOpt = { id: string; code: string; label: string; kind: string; color: string | null };
@@ -18,6 +19,8 @@ export type Masters = {
   qualifications: Opt[];
   bdes: BdeOpt[];
   campaigns: string[];
+  /** Distinct, non-empty country values present in the data (drives the filter). */
+  countries: string[];
 };
 export type LeadsAccess = {
   canCreate: boolean;
@@ -244,6 +247,7 @@ function NewLeadButton({ masters, access }: { masters: Masters; access: LeadsAcc
     sourceId: "",
     serviceId: "",
     qualificationId: "",
+    country: "",
     statusId: "",
     assignedToId: "",
   });
@@ -276,6 +280,7 @@ function NewLeadButton({ masters, access }: { masters: Masters; access: LeadsAcc
         sourceId: form.sourceId || undefined,
         serviceId: form.serviceId || undefined,
         qualificationId: form.qualificationId || undefined,
+        country: form.country || undefined,
         statusId: form.statusId || undefined,
         assignedToId: access.canAssign ? form.assignedToId || undefined : undefined,
       }),
@@ -293,6 +298,7 @@ function NewLeadButton({ masters, access }: { masters: Masters; access: LeadsAcc
       sourceId: "",
       serviceId: "",
       qualificationId: "",
+      country: "",
       statusId: "",
       assignedToId: "",
     });
@@ -411,6 +417,20 @@ function NewLeadButton({ masters, access }: { masters: Masters; access: LeadsAcc
                   </select>
                 </Field>
               </div>
+              <Field label="Country">
+                <select
+                  className={inputCls}
+                  value={form.country}
+                  onChange={(e) => setForm({ ...form, country: e.target.value })}
+                >
+                  <option value="">—</option>
+                  {COUNTRIES.map((c) => (
+                    <option key={c} value={c}>
+                      {c}
+                    </option>
+                  ))}
+                </select>
+              </Field>
               {access.canAssign && (
                 <Field label="Consultant (BDE)">
                   <select
@@ -456,7 +476,7 @@ const SORT_OPTIONS: { value: string; label: string }[] = [
 // fixed). Order is remembered per browser in localStorage.
 const LEADS_COL_ORDER_KEY = "crm.leads.columnOrder.v1";
 const LEADS_DEFAULT_COLUMNS = [
-  "created", "source", "campaign", "status", "candidate", "email", "phone", "service", "qualification", "consultant", "assigned",
+  "created", "source", "campaign", "status", "candidate", "email", "phone", "country", "service", "qualification", "consultant", "assigned",
 ] as const;
 
 export function LeadsTable({
@@ -588,12 +608,17 @@ export function LeadsTable({
   }
 
   const totalPages = Math.max(1, Math.ceil(total / pageSize));
+  // "all" is the BDE "All leads" opt-out, not a narrowing filter, so it doesn't
+  // count toward anyFilter (which gates the "Clear filters" affordance).
+  const rawAssignee = search.get("assignee");
+  const assigneeIsFilter = !!rawAssignee && rawAssignee !== "all";
   const anyFilter =
     !!search.get("status") ||
     !!search.get("source") ||
     !!search.get("service") ||
-    !!search.get("assignee") ||
+    assigneeIsFilter ||
     !!search.get("campaign") ||
+    !!search.get("country") ||
     !!search.get("assignedOn") ||
     !!search.get("q");
 
@@ -605,8 +630,13 @@ export function LeadsTable({
 
   // "My leads" / "My new leads" quick filters for BDEs. "New" = Not Yet Started
   // leads assigned to me (fresh, not-yet-worked).
+  // Effective assignee mirrors the server default: a BDE with no explicit
+  // assignee lands on their own queue, so the list opens on "my leads". Non-BDEs
+  // (and the explicit "All leads" / "all" choice) see everyone.
+  const effectiveAssignee = rawAssignee ?? (access.isBde ? access.userId : "all");
   const newStatusId = masters.statuses.find((s) => s.code === "not_yet_started")?.id ?? null;
-  const mineAssignee = search.get("assignee") === access.userId;
+  const mineAssignee = effectiveAssignee === access.userId;
+  const isAllLeads = effectiveAssignee === "all";
   const isMyNew = mineAssignee && !!newStatusId && search.get("status") === newStatusId;
   const isMyLeads = mineAssignee && !isMyNew;
   const showMine = access.isBde;
@@ -646,6 +676,19 @@ export function LeadsTable({
     },
     { id: "email", label: "Email", className: "whitespace-nowrap text-on-surface-variant", render: (l) => l.email ?? "—" },
     { id: "phone", label: "Phone", className: "whitespace-nowrap text-on-surface-variant", render: (l) => l.phone ?? "—" },
+    {
+      id: "country",
+      label: "Country",
+      className: "whitespace-nowrap text-on-surface-variant",
+      render: (l) =>
+        l.country ? (
+          <button type="button" onClick={() => update({ country: l.country })} className="hover:text-primary hover:underline" title={`Filter by ${l.country}`}>
+            {l.country}
+          </button>
+        ) : (
+          "—"
+        ),
+    },
     { id: "service", label: "Service", className: "whitespace-nowrap", render: (l) => l.service?.name ?? "—" },
     { id: "qualification", label: "Qualification", className: "whitespace-nowrap", render: (l) => l.qualification?.label ?? "—" },
     {
@@ -682,7 +725,7 @@ export function LeadsTable({
     <div className="space-y-md">
       {showMine && (
         <div className="flex flex-wrap items-center gap-xs">
-          <Chip label="All leads" active={!mineAssignee} onClick={() => update({ assignee: null, status: null })} />
+          <Chip label="All leads" active={isAllLeads} onClick={() => update({ assignee: "all", status: null })} />
           <Chip label="My leads" active={isMyLeads} onClick={() => update({ assignee: access.userId, status: null })} />
           <Chip
             label="My new leads"
@@ -744,8 +787,8 @@ export function LeadsTable({
           ))}
         </select>
 
-        <select className={selectClass} value={search.get("assignee") ?? ""} onChange={(e) => update({ assignee: e.target.value || null })}>
-          <option value="">All consultants</option>
+        <select className={selectClass} value={effectiveAssignee} onChange={(e) => update({ assignee: e.target.value })}>
+          <option value="all">All consultants</option>
           <option value="unassigned">Unassigned</option>
           {masters.bdes.map((b) => (
             <option key={b.userId} value={b.userId}>
@@ -781,6 +824,17 @@ export function LeadsTable({
           </select>
         )}
 
+        {masters.countries.length > 0 && (
+          <select className={selectClass} value={search.get("country") ?? ""} onChange={(e) => update({ country: e.target.value || null })}>
+            <option value="">All countries</option>
+            {masters.countries.map((c) => (
+              <option key={c} value={c}>
+                {c}
+              </option>
+            ))}
+          </select>
+        )}
+
         <select className={selectClass} value={search.get("sort") ?? "created_desc"} onChange={(e) => update({ sort: e.target.value })}>
           {SORT_OPTIONS.map((o) => (
             <option key={o.value} value={o.value}>
@@ -792,7 +846,7 @@ export function LeadsTable({
         {anyFilter && (
           <button
             type="button"
-            onClick={() => update({ status: null, source: null, service: null, assignee: null, campaign: null, assignedOn: null, q: null })}
+            onClick={() => update({ status: null, source: null, service: null, assignee: null, campaign: null, country: null, assignedOn: null, q: null })}
             className="h-9 px-md rounded-lg border border-outline-variant text-label-sm text-on-surface-variant hover:text-on-surface hover:bg-surface-container-low transition"
           >
             Clear all

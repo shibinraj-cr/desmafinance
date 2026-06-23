@@ -1857,6 +1857,11 @@ model Lead {
   // Promoted from extra.campaign so the leads list can filter & segment by it.
   campaign      String?
 
+  // Candidate's country (free-form name picked from the full country dropdown,
+  // e.g. "India", "Australia"). Optional — drives the leads list country
+  // column/filter and is shown/edited on the lead detail.
+  country       String?
+
   /// Free-form extras captured at import (region, campaign, city, age, …).
   /// JSON: Record<string, string>.
   extra Json?
@@ -1885,6 +1890,7 @@ model Lead {
   @@index([dedupeKey])
   @@index([emailKey])
   @@index([campaign])
+  @@index([country])
   @@index([email])
   @@index([phoneE164])
   @@index([expectedCloseDate])
