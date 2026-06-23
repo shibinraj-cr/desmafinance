@@ -12,8 +12,9 @@
  */
 import { Prisma } from "@prisma/client";
 import { prisma } from "./prisma";
+import { getSetting } from "./app-settings";
 import { toPrismaDate } from "./lead-pulse-dates";
-import { monthBounds, pct, type ServiceMatrix, type ServiceMatrixCell } from "./lead-pulse-metrics";
+import { monthBounds, pct, getServiceConversionMatrix, type ServiceMatrix, type ServiceMatrixCell } from "./lead-pulse-metrics";
 
 export type CrmBdeFunnel = {
   userId: string;
@@ -155,4 +156,33 @@ export async function getCrmServiceMatrix(year: number, month: number): Promise<
   }
 
   return { bdes: roles.map((r) => ({ userId: r.userId, displayName: r.displayName })), services: groups, cells };
+}
+
+// ── Metrics source flag ──────────────────────────────────────────────────────
+// Which data source the live Lead Pulse dashboards read from. Defaults to the
+// daily entry; a supervisor flips it to "crm" once every close is entered as a
+// CRM enrollment (validated on /marketing/lead-pulse/crm-metrics). Reversible.
+export const METRICS_SOURCE_KEY = "lead_pulse_metrics_source";
+export type MetricsSource = "daily_entry" | "crm";
+
+export async function getMetricsSource(): Promise<MetricsSource> {
+  const v = await getSetting(METRICS_SOURCE_KEY);
+  return v === "crm" ? "crm" : "daily_entry";
+}
+
+/**
+ * The service-conversion matrix from whichever source is active. Both branches
+ * return the identical `ServiceMatrix` shape, so consumers (Targets page,
+ * TargetAchievementCard) need no change — only this resolver in place of a
+ * direct `getServiceConversionMatrix` call.
+ */
+export async function resolveServiceMatrix(year: number, month: number): Promise<ServiceMatrix> {
+  const source = await getMetricsSource();
+  return source === "crm" ? getCrmServiceMatrix(year, month) : getServiceConversionMatrix(year, month);
+}
+
+/** Total CRM enrollments (closed_won pipelines) this month across all L2 BDEs. */
+export async function getCrmEnrolledTotal(year: number, month: number): Promise<number> {
+  const funnel = await getCrmFunnelByBde(year, month);
+  return funnel.reduce((sum, b) => sum + b.enrolled, 0);
 }

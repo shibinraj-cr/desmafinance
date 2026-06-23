@@ -9,13 +9,13 @@ import {
   getMonthsWithData,
   getHistoricalFunnel,
   getAvgMonthlyTotals,
-  getServiceConversionMatrix,
   generateInsightNarrative,
   monthBounds,
   type Matrix,
   type MatrixBdeRow,
   type MatrixCell,
 } from "@/lib/lead-pulse-metrics";
+import { resolveServiceMatrix } from "@/lib/lead-pulse-crm-metrics";
 import { todayIst } from "@/lib/lead-pulse-dates";
 import { HistoricalFunnelChart } from "../_charts";
 import { Kpi as LpKpi, TripletKpi, pctChange as lpPctChange } from "../_kpi";
@@ -122,7 +122,7 @@ export default async function MonthlyReportPage({
     getFunnelTotals({ start: prevEffStart, end: prevEffEnd, sourceId }),
     getHistoricalFunnel({ endYear: year, endMonth: month, monthsBack: 6 }),
     getAvgMonthlyTotals(year, month, 3),
-    getServiceConversionMatrix(year, month),
+    resolveServiceMatrix(year, month),
   ]);
 
   const totalLeads = totals.l1Leads + totals.l2Leads;
