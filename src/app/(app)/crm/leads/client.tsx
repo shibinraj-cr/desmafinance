@@ -876,7 +876,7 @@ export function LeadsTable({
       )}
 
       {/* Table */}
-      <div className="bg-surface-container-lowest border border-outline-variant rounded-xl shadow-sm overflow-hidden">
+      <div className="relative bg-surface-container-lowest border border-outline-variant rounded-xl shadow-sm overflow-hidden before:content-[''] before:absolute before:inset-x-0 before:top-0 before:h-1 before:z-20 before:bg-gradient-to-r before:from-indigo-400 before:via-primary before:to-emerald-400">
         <div className="overflow-auto scrollbar-thin max-h-[calc(100vh-240px)]">
           <table className="w-full text-body-md">
             <thead className="bg-surface-container-low text-on-surface-variant sticky top-0 z-10 shadow-[0_1px_0_0_var(--lp-outline-variant)]">
@@ -1033,13 +1033,21 @@ function CommLink({
       </span>
     );
   }
+  // Each channel keeps its familiar hue on hover (mail = blue, WhatsApp =
+  // green, call = indigo) so the action column reads at a glance.
+  const hoverColor =
+    icon === "chat"
+      ? "hover:text-emerald-600"
+      : icon === "mail"
+        ? "hover:text-blue-600"
+        : "hover:text-indigo-600";
   return (
     <a
       href={href}
       title={title}
       {...(external ? { target: "_blank", rel: "noopener noreferrer" } : {})}
       onClick={onClick}
-      className="inline-flex p-xs text-on-surface-variant hover:text-accent transition"
+      className={"inline-flex p-xs text-on-surface-variant transition " + hoverColor}
     >
       <span className="material-symbols-outlined" style={{ fontSize: 18 }}>
         {icon}
