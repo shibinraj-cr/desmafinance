@@ -10,8 +10,8 @@ import { getLeadPulseAccess } from "./lead-pulse-rbac";
  *   - Everyone with CRM view access sees ALL leads (the list is NOT filtered
  *     by assignee).
  *   - Edit (status / fields / notes / comms-logging) is allowed only when the
- *     lead is assigned to the current user — unless they are an admin. See
- *     `canEditLead`.
+ *     lead is assigned to the current user — unless they are a system admin or
+ *     a Lead Pulse supervisor, who may edit any lead. See `canEditLead`.
  *   - Assign / reassign, the full History tab, bulk import, and Settings need
  *     the CRM-admin tier (`canManageCrm`): system admins, plus any role that
  *     can see the CRM Settings page (the CRM control panel). This lets a
@@ -81,13 +81,18 @@ export async function getCrmAccess(
 
 /**
  * Whether the current user may MUTATE a given lead (status, fields, notes,
- * comms logging). Admins may edit any lead; BDEs may edit only leads assigned
- * to them. Enforced identically in the API and the UI.
+ * comms logging). System admins and Lead Pulse supervisors may edit any lead;
+ * BDEs may edit only leads assigned to them. Enforced identically in the API
+ * and the UI.
  */
 export function canEditLead(
   access: CrmAccess,
   lead: { assignedToId: string | null },
   userId: string,
 ): boolean {
-  return access.isAdmin || (access.isBde && lead.assignedToId === userId);
+  return (
+    access.isAdmin ||
+    access.isSupervisor ||
+    (access.isBde && lead.assignedToId === userId)
+  );
 }
