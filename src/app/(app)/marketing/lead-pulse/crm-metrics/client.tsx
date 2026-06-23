@@ -49,8 +49,9 @@ export function CrmMetricsCompare({
       >
         <strong style={{ color: "var(--lp-on-surface)" }}>Phase 1 — comparison only.</strong>{" "}
         The daily entry is still the source of truth for the live dashboards. <strong>CRM</strong> columns come from{" "}
-        <em>leads assigned</em> (assignment date) and <em>enrollments</em> (CRM Enroll → closed_won). Differences are expected
-        while not every close is entered as a CRM enrollment yet.
+        <em>leads assigned</em> and <em>enrollments</em> (CRM Enroll → closed_won). <em>Leads assigned</em> counts only{" "}
+        <strong>deliberate in-app assignments</strong> — the bulk-import carryover is excluded — so it reads low until leads
+        are assigned through the CRM. Differences are expected while not every close is entered as a CRM enrollment yet.
       </div>
 
       <form

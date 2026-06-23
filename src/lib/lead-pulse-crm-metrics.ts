@@ -10,6 +10,7 @@
  * `getServiceConversionMatrix` (same shape) but reads actuals from closed_won
  * pipelines instead of LeadPulseDailyClose.
  */
+import { Prisma } from "@prisma/client";
 import { prisma } from "./prisma";
 import { toPrismaDate } from "./lead-pulse-dates";
 import { monthBounds, pct, type ServiceMatrix, type ServiceMatrixCell } from "./lead-pulse-metrics";
@@ -39,17 +40,26 @@ export async function getCrmFunnelByBde(year: number, month: number): Promise<Cr
   const ids = roles.map((r) => r.userId);
   if (!ids.length) return [];
 
-  const [assigned, lost, enrolled] = await Promise.all([
-    prisma.lead.groupBy({
-      by: ["assignedToId"],
-      where: { assignedToId: { in: ids }, assignedAt: { gte: mStart, lt: mEnd } },
-      _count: true,
-    }),
-    prisma.lead.groupBy({
-      by: ["assignedToId"],
-      where: { assignedToId: { in: ids }, assignedAt: { gte: mStart, lt: mEnd }, status: { kind: "lost" } },
-      _count: true,
-    }),
+  // "Leads assigned" must count only DELIBERATE in-app assignments, never the
+  // bulk-import carryover. The importer stamps every imported lead's assignedAt
+  // to the batch's import time, which would otherwise dump thousands of leads
+  // onto the import month. A lead therefore counts only when it has no import
+  // batch, OR its assignedAt is meaningfully later than the batch was created
+  // (= a genuine later re-assignment). Raw SQL because Prisma can't compare a
+  // column to a related column. `lost` is the same set narrowed to lost-kind.
+  const [rows, enrolled] = await Promise.all([
+    prisma.$queryRaw<Array<{ userId: string; assigned: bigint; lost: bigint }>>(Prisma.sql`
+      SELECT l."assignedToId" AS "userId",
+             COUNT(*) AS assigned,
+             COUNT(*) FILTER (WHERE st.kind = 'lost') AS lost
+      FROM "Lead" l
+      LEFT JOIN "LeadImportBatch" b ON l."importBatchId" = b.id
+      JOIN "CrmLeadStatus" st ON l."statusId" = st.id
+      WHERE l."assignedToId" IN (${Prisma.join(ids)})
+        AND l."assignedAt" >= ${mStart} AND l."assignedAt" < ${mEnd}
+        AND (l."importBatchId" IS NULL OR l."assignedAt" > b."createdAt" + interval '10 minutes')
+      GROUP BY l."assignedToId"
+    `),
     prisma.leadPulsePipeline.groupBy({
       by: ["userId"],
       where: { userId: { in: ids }, status: "closed_won", closedDate: { gte: toPrismaDate(start), lte: toPrismaDate(end) } },
@@ -57,8 +67,8 @@ export async function getCrmFunnelByBde(year: number, month: number): Promise<Cr
     }),
   ]);
 
-  const aMap = new Map(assigned.map((a) => [a.assignedToId!, a._count]));
-  const lMap = new Map(lost.map((a) => [a.assignedToId!, a._count]));
+  const aMap = new Map(rows.map((r) => [r.userId, Number(r.assigned)]));
+  const lMap = new Map(rows.map((r) => [r.userId, Number(r.lost)]));
   const eMap = new Map(enrolled.map((e) => [e.userId, e._count]));
 
   return roles.map((r) => {
