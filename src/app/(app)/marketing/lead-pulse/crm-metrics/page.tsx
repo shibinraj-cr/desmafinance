@@ -7,7 +7,7 @@ import {
   monthBounds,
   pct,
 } from "@/lib/lead-pulse-metrics";
-import { getCrmFunnelByBde, getCrmServiceMatrix } from "@/lib/lead-pulse-crm-metrics";
+import { getCrmFunnelByBde, getCrmServiceMatrix, getMetricsSource } from "@/lib/lead-pulse-crm-metrics";
 import { todayIst } from "@/lib/lead-pulse-dates";
 import { CrmMetricsCompare } from "./client";
 
@@ -46,6 +46,7 @@ export default async function CrmMetricsPage({
     getCrmServiceMatrix(year, month),
     getServiceConversionMatrix(year, month),
   ]);
+  const source = await getMetricsSource();
 
   // Daily-entry per-BDE leads/won (pick the role-appropriate side of the funnel).
   const dailyFunnels = await Promise.all(
@@ -96,6 +97,7 @@ export default async function CrmMetricsPage({
       year={year}
       month={month}
       monthLabel={monthLabel}
+      source={source}
       funnelRows={funnelRows}
       services={crmMatrix.services}
       matrixRows={matrixRows}

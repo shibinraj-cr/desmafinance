@@ -16,10 +16,10 @@ import {
   getL2WeeklyYouTubeConversion,
   getL2WeeklyMetaConversion,
   getL2SourceLabels,
-  getServiceConversionMatrix,
   getPipelineForecast,
   monthBounds,
 } from "@/lib/lead-pulse-metrics";
+import { resolveServiceMatrix, getMetricsSource, getCrmEnrolledTotal } from "@/lib/lead-pulse-crm-metrics";
 import { todayIst } from "@/lib/lead-pulse-dates";
 import {
   LeadVolumeChart,
@@ -144,10 +144,16 @@ export default async function LeadPulseHomePage() {
     prisma.leadPulseRole.count({ where: { active: true, role: "l1" } }),
     prisma.leadPulseRole.count({ where: { active: true, role: "l2" } }),
     getSourceDisqualifiedAnalysis("meta", year, month, 6),
-    getServiceConversionMatrix(year, month),
+    resolveServiceMatrix(year, month),
     getPipelineForecast(year, month),
   ]);
   void convCompare;
+
+  // When the metrics source is flipped to CRM, the "Closed-Won" KPI reflects CRM
+  // enrollments (closed_won pipelines) this month rather than daily-entry closes.
+  const metricsSource = await getMetricsSource();
+  const closedWonValue =
+    metricsSource === "crm" ? await getCrmEnrolledTotal(year, month) : thisMonth.l2Won;
 
   // Auto-insight for the 30-day vs prior-30-day chart. Deterministic
   // narrative built from the same `daily` series the chart reads —
@@ -263,11 +269,11 @@ export default async function LeadPulseHomePage() {
         />
         <Kpi
           label="Closed-Won"
-          value={thisMonth.l2Won.toString()}
-          trend={pctChange(thisMonth.l2Won, paced.l2Won)}
+          value={closedWonValue.toString()}
+          trend={metricsSource === "crm" ? null : pctChange(thisMonth.l2Won, paced.l2Won)}
           icon="emoji_events"
-          subLabel={`Last MTD (${paceLabel})`}
-          subValue={paced.l2Won.toString()}
+          subLabel={metricsSource === "crm" ? "Source" : `Last MTD (${paceLabel})`}
+          subValue={metricsSource === "crm" ? "CRM enrollments" : paced.l2Won.toString()}
         />
         <Kpi
           label="Team Strength"

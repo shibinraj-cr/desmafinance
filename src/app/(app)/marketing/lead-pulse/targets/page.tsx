@@ -1,7 +1,7 @@
 import { redirect } from "next/navigation";
 import { getCurrentUserAndPermissions } from "@/lib/permissions";
 import { getLeadPulseAccess } from "@/lib/lead-pulse-rbac";
-import { getServiceConversionMatrix } from "@/lib/lead-pulse-metrics";
+import { resolveServiceMatrix } from "@/lib/lead-pulse-crm-metrics";
 import { todayIst } from "@/lib/lead-pulse-dates";
 import { TargetsMatrix } from "./client";
 
@@ -40,7 +40,7 @@ export default async function TargetsPage({
   const today = todayIst();
   const year = searchParams.year ? Number(searchParams.year) : Number(today.slice(0, 4));
   const month = searchParams.month ? Number(searchParams.month) : Number(today.slice(5, 7));
-  const matrix = await getServiceConversionMatrix(year, month);
+  const matrix = await resolveServiceMatrix(year, month);
 
   // Convert the cells Map into a plain payload the client can use.
   const cellsObj: Record<string, { target: number; actual: number; partyNames: string[] }> = {};

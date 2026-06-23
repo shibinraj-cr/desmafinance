@@ -1,5 +1,6 @@
-// Read-only comparison view: CRM-sourced metrics next to the daily-entry
-// numbers. Server-rendered (no client interactivity beyond the GET month form).
+// Comparison view: CRM-sourced metrics next to the daily-entry numbers, plus the
+// supervisor toggle that flips which source the LIVE dashboards read from.
+import { SourceToggle } from "./source-toggle";
 
 type FunnelRow = {
   displayName: string;
@@ -23,6 +24,7 @@ export function CrmMetricsCompare({
   year,
   month,
   monthLabel,
+  source,
   funnelRows,
   services,
   matrixRows,
@@ -30,6 +32,7 @@ export function CrmMetricsCompare({
   year: number;
   month: number;
   monthLabel: string;
+  source: "daily_entry" | "crm";
   funnelRows: FunnelRow[];
   services: Array<{ id: string; name: string }>;
   matrixRows: MatrixRow[];
@@ -42,6 +45,8 @@ export function CrmMetricsCompare({
           {monthLabel} · CRM-sourced numbers shown next to the daily entry, for validation before the cutover.
         </p>
       </header>
+
+      <SourceToggle source={source} />
 
       <div
         className="rounded-[12px] p-[12px] border text-[13px]"
