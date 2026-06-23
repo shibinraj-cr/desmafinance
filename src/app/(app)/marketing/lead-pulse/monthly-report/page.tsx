@@ -15,7 +15,7 @@ import {
   type MatrixBdeRow,
   type MatrixCell,
 } from "@/lib/lead-pulse-metrics";
-import { resolveServiceMatrix } from "@/lib/lead-pulse-crm-metrics";
+import { resolveServiceMatrix, getMetricsSource, getCrmMonthlyMatrix, getCrmFunnel } from "@/lib/lead-pulse-crm-metrics";
 import { todayIst } from "@/lib/lead-pulse-dates";
 import { HistoricalFunnelChart } from "../_charts";
 import { Kpi as LpKpi, TripletKpi, pctChange as lpPctChange } from "../_kpi";
@@ -109,21 +109,19 @@ export default async function MonthlyReportPage({
 
   const sourceId = sourceCode ? allSources.find((s) => s.code === sourceCode)?.id ?? null : null;
 
+  const metricsSource = await getMetricsSource();
   const [matrix, totals, prevTotals, history, avg3, serviceMatrix] = await Promise.all([
-    getMonthlyMatrix({
-      year,
-      month,
-      sourceCode,
-      region,
-      startDate: effStart,
-      endDate: effEnd,
-    }),
+    metricsSource === "crm"
+      ? getCrmMonthlyMatrix({ year, month, sourceCode, region, startDate: effStart, endDate: effEnd })
+      : getMonthlyMatrix({ year, month, sourceCode, region, startDate: effStart, endDate: effEnd }),
     getFunnelTotals({ start: effStart, end: effEnd, sourceId }),
     getFunnelTotals({ start: prevEffStart, end: prevEffEnd, sourceId }),
     getHistoricalFunnel({ endYear: year, endMonth: month, monthsBack: 6 }),
     getAvgMonthlyTotals(year, month, 3),
     resolveServiceMatrix(year, month),
   ]);
+  // CRM funnel totals for the simplified KPI row when the source is crm.
+  const crmTotals = metricsSource === "crm" ? await getCrmFunnel({ start: effStart, end: effEnd, sourceId }) : null;
 
   const totalLeads = totals.l1Leads + totals.l2Leads;
   const totalWon = totals.l2Won;
@@ -221,43 +219,59 @@ export default async function MonthlyReportPage({
       </form>
 
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-[16px]">
-        <TripletKpi
-          label="L1 Total Leads"
-          icon="alt_route"
-          thisMonth={totals.l1Leads}
-          lastMonth={prevTotals.l1Leads}
-          lastMonthLabel={`Last MTD (${prevEffStart.slice(5)}–${prevEffEnd.slice(8)})`}
-          avg={avg3.avgL1Leads}
-          avgLabel={`Avg ${avg3.months}-mo`}
-        />
-        <TripletKpi
-          label="L2 Total Leads"
-          icon="handshake"
-          thisMonth={totals.l2Leads}
-          lastMonth={prevTotals.l2Leads}
-          lastMonthLabel={`Last MTD (${prevEffStart.slice(5)}–${prevEffEnd.slice(8)})`}
-          avg={avg3.avgL2Leads}
-          avgLabel={`Avg ${avg3.months}-mo`}
-        />
-        <LpKpi
-          label="L1 → L2 %"
-          value={totals.l1ConversionPct == null ? "—" : `${totals.l1ConversionPct.toFixed(1)}%`}
-          trend={lpPctChange(totals.l1ConversionPct ?? 0, prevTotals.l1ConversionPct ?? 0)}
-          icon="trending_up"
-          target="Target: 60%"
-          subLabel={`Last MTD (${prevEffStart.slice(5)}–${prevEffEnd.slice(8)})`}
-          subValue={
-            prevTotals.l1ConversionPct == null ? "—" : `${prevTotals.l1ConversionPct.toFixed(1)}%`
-          }
-        />
-        <LpKpi
-          label="Closed-Won"
-          value={totalWon.toString()}
-          trend={lpPctChange(totalWon, prevTotals.l2Won)}
-          icon="emoji_events"
-          subLabel={`Last MTD (${prevEffStart.slice(5)}–${prevEffEnd.slice(8)})`}
-          subValue={prevTotals.l2Won.toString()}
-        />
+        {metricsSource === "crm" && crmTotals ? (
+          <>
+            <LpKpi label="Leads Assigned" value={crmTotals.leadsAssigned.toLocaleString("en-IN")} icon="person_add" subLabel="Source" subValue="CRM" />
+            <LpKpi label="Enrolled" value={crmTotals.enrolled.toLocaleString("en-IN")} icon="emoji_events" subLabel="Source" subValue="CRM closed-won" />
+            <LpKpi
+              label="Conversion"
+              value={crmTotals.conversionPct == null ? "—" : `${crmTotals.conversionPct.toFixed(1)}%`}
+              icon="trending_up"
+              subLabel="Enrolled / assigned"
+              subValue={`${crmTotals.enrolled} / ${crmTotals.leadsAssigned}`}
+            />
+          </>
+        ) : (
+          <>
+            <TripletKpi
+              label="L1 Total Leads"
+              icon="alt_route"
+              thisMonth={totals.l1Leads}
+              lastMonth={prevTotals.l1Leads}
+              lastMonthLabel={`Last MTD (${prevEffStart.slice(5)}–${prevEffEnd.slice(8)})`}
+              avg={avg3.avgL1Leads}
+              avgLabel={`Avg ${avg3.months}-mo`}
+            />
+            <TripletKpi
+              label="L2 Total Leads"
+              icon="handshake"
+              thisMonth={totals.l2Leads}
+              lastMonth={prevTotals.l2Leads}
+              lastMonthLabel={`Last MTD (${prevEffStart.slice(5)}–${prevEffEnd.slice(8)})`}
+              avg={avg3.avgL2Leads}
+              avgLabel={`Avg ${avg3.months}-mo`}
+            />
+            <LpKpi
+              label="L1 → L2 %"
+              value={totals.l1ConversionPct == null ? "—" : `${totals.l1ConversionPct.toFixed(1)}%`}
+              trend={lpPctChange(totals.l1ConversionPct ?? 0, prevTotals.l1ConversionPct ?? 0)}
+              icon="trending_up"
+              target="Target: 60%"
+              subLabel={`Last MTD (${prevEffStart.slice(5)}–${prevEffEnd.slice(8)})`}
+              subValue={
+                prevTotals.l1ConversionPct == null ? "—" : `${prevTotals.l1ConversionPct.toFixed(1)}%`
+              }
+            />
+            <LpKpi
+              label="Closed-Won"
+              value={totalWon.toString()}
+              trend={lpPctChange(totalWon, prevTotals.l2Won)}
+              icon="emoji_events"
+              subLabel={`Last MTD (${prevEffStart.slice(5)}–${prevEffEnd.slice(8)})`}
+              subValue={prevTotals.l2Won.toString()}
+            />
+          </>
+        )}
       </div>
 
       <PerformanceMatrix matrix={matrix} />
@@ -265,6 +279,7 @@ export default async function MonthlyReportPage({
       <TargetAchievementCard matrix={serviceMatrix} monthLabel={monthLabel} year={year} month={month} />
 
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-[16px]">
+        {metricsSource !== "crm" && (
         <Card title="Historical Funnel Trends">
           <HistoricalFunnelChart
             data={history.map((h) => ({
@@ -283,6 +298,7 @@ export default async function MonthlyReportPage({
             <Legend color="var(--lp-orange)" label="L2 conversion %" />
           </div>
         </Card>
+        )}
         <Card title="Quick Insight">
           <p className="text-[13px]" style={{ color: "var(--lp-on-surface)" }}>
             {insight || "No insight available yet — submit some entries to generate a narrative."}

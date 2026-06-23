@@ -19,7 +19,7 @@ import {
   getPipelineForecast,
   monthBounds,
 } from "@/lib/lead-pulse-metrics";
-import { resolveServiceMatrix, getMetricsSource, getCrmEnrolledTotal } from "@/lib/lead-pulse-crm-metrics";
+import { resolveServiceMatrix, getMetricsSource, getCrmFunnel, getCrmFunnelBySource } from "@/lib/lead-pulse-crm-metrics";
 import { todayIst } from "@/lib/lead-pulse-dates";
 import {
   LeadVolumeChart,
@@ -149,11 +149,12 @@ export default async function LeadPulseHomePage() {
   ]);
   void convCompare;
 
-  // When the metrics source is flipped to CRM, the "Closed-Won" KPI reflects CRM
-  // enrollments (closed_won pipelines) this month rather than daily-entry closes.
+  // When the metrics source is flipped to CRM, the funnel reads the simplified
+  // CRM funnel (leads assigned → enrolled). Fetched only in CRM mode.
   const metricsSource = await getMetricsSource();
-  const closedWonValue =
-    metricsSource === "crm" ? await getCrmEnrolledTotal(year, month) : thisMonth.l2Won;
+  const crmTotals = metricsSource === "crm" ? await getCrmFunnel({ start: monthStart, end: monthEnd }) : null;
+  const crmBySource = metricsSource === "crm" ? await getCrmFunnelBySource({ start: monthStart, end: monthEnd }) : null;
+  const closedWonValue = crmTotals ? crmTotals.enrolled : thisMonth.l2Won;
 
   // Auto-insight for the 30-day vs prior-30-day chart. Deterministic
   // narrative built from the same `daily` series the chart reads —
@@ -240,49 +241,93 @@ export default async function LeadPulseHomePage() {
       </header>
 
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-[16px]">
-        <TripletKpi
-          label="L1 Total Leads"
-          icon="alt_route"
-          thisMonth={thisMonth.l1Leads}
-          lastMonth={paced.l1Leads}
-          lastMonthLabel={`Last MTD (${paceLabel})`}
-          avg={avg3.avgL1Leads}
-          avgLabel={`Avg ${avg3.months}-mo`}
-        />
-        <TripletKpi
-          label="L2 Total Leads"
-          icon="handshake"
-          thisMonth={thisMonth.l2Leads}
-          lastMonth={paced.l2Leads}
-          lastMonthLabel={`Last MTD (${paceLabel})`}
-          avg={avg3.avgL2Leads}
-          avgLabel={`Avg ${avg3.months}-mo`}
-        />
-        <Kpi
-          label="L1 → L2 %"
-          value={thisMonth.l1ConversionPct == null ? "—" : `${thisMonth.l1ConversionPct.toFixed(1)}%`}
-          trend={pctChange(thisMonth.l1ConversionPct ?? 0, paced.l1ConversionPct ?? 0)}
-          icon="trending_up"
-          subLabel={`Last MTD (${paceLabel})`}
-          subValue={paced.l1ConversionPct == null ? "—" : `${paced.l1ConversionPct.toFixed(1)}%`}
-          target="Target: 60%"
-        />
-        <Kpi
-          label="Closed-Won"
-          value={closedWonValue.toString()}
-          trend={metricsSource === "crm" ? null : pctChange(thisMonth.l2Won, paced.l2Won)}
-          icon="emoji_events"
-          subLabel={metricsSource === "crm" ? "Source" : `Last MTD (${paceLabel})`}
-          subValue={metricsSource === "crm" ? "CRM enrollments" : paced.l2Won.toString()}
-        />
-        <Kpi
-          label="Team Strength"
-          value={`L1: ${l1Count} · L2: ${l2Count}`}
-          icon="groups"
-          subLabel={"Submitted today"}
-          subValue={`${submittedToday}/${activeRoles}`}
-        />
+        {metricsSource === "crm" && crmTotals ? (
+          <>
+            <Kpi
+              label="Leads Assigned"
+              value={crmTotals.leadsAssigned.toLocaleString("en-IN")}
+              icon="person_add"
+              subLabel="Source"
+              subValue="CRM · this month"
+            />
+            <Kpi
+              label="Enrolled"
+              value={crmTotals.enrolled.toLocaleString("en-IN")}
+              icon="emoji_events"
+              subLabel="Source"
+              subValue="CRM closed-won"
+            />
+            <Kpi
+              label="Conversion"
+              value={crmTotals.conversionPct == null ? "—" : `${crmTotals.conversionPct.toFixed(1)}%`}
+              icon="trending_up"
+              subLabel="Enrolled / assigned"
+              subValue={`${crmTotals.enrolled} / ${crmTotals.leadsAssigned}`}
+            />
+            <Kpi
+              label="Closed-Won"
+              value={closedWonValue.toString()}
+              icon="military_tech"
+              subLabel="Source"
+              subValue="CRM enrollments"
+            />
+            <Kpi
+              label="Team Strength"
+              value={`L1: ${l1Count} · L2: ${l2Count}`}
+              icon="groups"
+              subLabel="Active BDEs"
+              subValue={`${activeRoles}`}
+            />
+          </>
+        ) : (
+          <>
+            <TripletKpi
+              label="L1 Total Leads"
+              icon="alt_route"
+              thisMonth={thisMonth.l1Leads}
+              lastMonth={paced.l1Leads}
+              lastMonthLabel={`Last MTD (${paceLabel})`}
+              avg={avg3.avgL1Leads}
+              avgLabel={`Avg ${avg3.months}-mo`}
+            />
+            <TripletKpi
+              label="L2 Total Leads"
+              icon="handshake"
+              thisMonth={thisMonth.l2Leads}
+              lastMonth={paced.l2Leads}
+              lastMonthLabel={`Last MTD (${paceLabel})`}
+              avg={avg3.avgL2Leads}
+              avgLabel={`Avg ${avg3.months}-mo`}
+            />
+            <Kpi
+              label="L1 → L2 %"
+              value={thisMonth.l1ConversionPct == null ? "—" : `${thisMonth.l1ConversionPct.toFixed(1)}%`}
+              trend={pctChange(thisMonth.l1ConversionPct ?? 0, paced.l1ConversionPct ?? 0)}
+              icon="trending_up"
+              subLabel={`Last MTD (${paceLabel})`}
+              subValue={paced.l1ConversionPct == null ? "—" : `${paced.l1ConversionPct.toFixed(1)}%`}
+              target="Target: 60%"
+            />
+            <Kpi
+              label="Closed-Won"
+              value={closedWonValue.toString()}
+              trend={pctChange(thisMonth.l2Won, paced.l2Won)}
+              icon="emoji_events"
+              subLabel={`Last MTD (${paceLabel})`}
+              subValue={paced.l2Won.toString()}
+            />
+            <Kpi
+              label="Team Strength"
+              value={`L1: ${l1Count} · L2: ${l2Count}`}
+              icon="groups"
+              subLabel={"Submitted today"}
+              subValue={`${submittedToday}/${activeRoles}`}
+            />
+          </>
+        )}
       </div>
+      {metricsSource !== "crm" ? (
+      <>
       {/* keep the pace numbers reachable for future tiles */}
       <p className="text-[11px]" style={{ color: "var(--lp-on-surface-variant)" }}>
         Same-window pace: {paceLabel} · {paceLeadsLastMonth.toLocaleString("en-IN")}
@@ -607,13 +652,40 @@ export default async function LeadPulseHomePage() {
           )}
         </Card>
       </div>
-
+      </>
+      ) : (
+        <Card title="Leads & Enrollments by Source (CRM)">
+          <div className="overflow-x-auto">
+            <table className="w-full text-[13px]">
+              <thead>
+                <tr style={{ color: "var(--lp-on-surface-variant)" }}>
+                  <th className="text-left px-[10px] py-[6px]">Source</th>
+                  <th className="text-right px-[10px] py-[6px]">Leads assigned</th>
+                  <th className="text-right px-[10px] py-[6px]">Enrolled</th>
+                  <th className="text-right px-[10px] py-[6px]">Conv %</th>
+                </tr>
+              </thead>
+              <tbody>
+                {(crmBySource ?? []).filter((s) => s.leadsAssigned || s.enrolled).map((s) => (
+                  <tr key={s.sourceId} style={{ borderTop: "1px solid var(--lp-outline-variant)" }}>
+                    <td className="px-[10px] py-[6px]">{s.sourceLabel}</td>
+                    <td className="px-[10px] py-[6px] text-right">{s.leadsAssigned}</td>
+                    <td className="px-[10px] py-[6px] text-right">{s.enrolled}</td>
+                    <td className="px-[10px] py-[6px] text-right">{s.conversionPct == null ? "—" : `${s.conversionPct}%`}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </Card>
+      )}
 
       {/* Monthly target achievement — shared component, mirrors Monthly Report. */}
       <TargetAchievementCard matrix={serviceMatrix} monthLabel={monthLabel} year={year} month={month} />
 
       <PipelineForecastCard data={pipelineForecast} monthLabel={monthLabel} />
 
+      {metricsSource !== "crm" && (
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-[16px]">
         <div className="lg:col-span-2">
           <Card title={`Recent Submissions (anchor: ${lastWorkingDay})`}>
@@ -711,6 +783,7 @@ export default async function LeadPulseHomePage() {
           )}
         </Card>
       </div>
+      )}
     </div>
   );
 }
