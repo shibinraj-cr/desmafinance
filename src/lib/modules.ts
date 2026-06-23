@@ -194,6 +194,22 @@ export const MODULES: AppModule[] = [
     ],
   },
   {
+    id: "operations",
+    name: "Operations",
+    icon: "fact_check",
+    basePath: "/operations",
+    status: "active",
+    pages: [
+      {
+        href: "/operations/templates",
+        label: "Process Templates",
+        icon: "checklist",
+        group: "SETUP",
+        adminOnly: true,
+      },
+    ],
+  },
+  {
     id: "hr",
     name: "HR",
     icon: "badge",

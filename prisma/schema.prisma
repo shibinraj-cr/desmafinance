@@ -82,6 +82,15 @@ model User {
   crmTasksCompleted      CrmTask[]            @relation("CrmTaskCompletedBy")
   appSettings            AppSetting[]         @relation("AppSettingEditor")
 
+  // Operations relations
+  opsTemplatesCreated    ProcessTemplate[]    @relation("OpsTemplateCreatedBy")
+  opsProjectsAssigned    OpsProject[]         @relation("OpsProjectAssignee")
+  opsProjectsCreated     OpsProject[]         @relation("OpsProjectCreatedBy")
+  opsTasksAssigned       OpsTask[]            @relation("OpsTaskAssignee")
+  opsTasksCompleted      OpsTask[]            @relation("OpsTaskCompletedBy")
+  opsDocumentsUploaded   OpsDocument[]        @relation("OpsDocUploadedBy")
+  opsActivities          OpsTaskActivity[]    @relation("OpsActivityActor")
+
   @@index([roleId])
 }
 
@@ -211,6 +220,8 @@ model Service {
   leadPulsePipeline LeadPulsePipeline[]
   collectionPlans   CollectionPlan[]
   leads             Lead[]
+  processTemplates  ProcessTemplate[]
+  opsProjects       OpsProject[]
 
   @@index([isActive])
   @@index([groupId])
@@ -249,6 +260,7 @@ model PartyService {
   notes       String?
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
+  opsProject  OpsProject?
 
   @@unique([partyId, serviceId])
   @@index([partyId])
@@ -615,6 +627,7 @@ model Party {
   pipelineRows      LeadPulsePipeline[] @relation("PartyPipeline")
   collectionPlans   CollectionPlan[]
   leads             Lead[]              @relation("LeadParty")
+  opsProjects       OpsProject[]
 
   @@index([group])
   @@index([isActive])
@@ -1876,6 +1889,7 @@ model Lead {
   notes      LeadNote[]
   activities LeadActivity[]
   tasks      CrmTask[]
+  opsProjects OpsProject[] @relation("OpsProjectLead")
 
   @@index([assignedToId])
   @@index([assignedAt])
@@ -2032,4 +2046,193 @@ model AppSetting {
   updatedAt   DateTime @updatedAt
 
   @@index([updatedById])
+}
+
+// ──────────────────────────────────────────────────────────────────────
+// Operations / Documentation module
+//
+// Tracks the documentation/process work Desma performs for an enrolled
+// candidate. A "process" is the set of predefined steps for a Service
+// (the TEMPLATE layer: ProcessTemplate + ProcessTemplateStep). When a
+// candidate is enrolled in the CRM against a Service, the steps are
+// snapshotted into a per-candidate project (the INSTANCE layer:
+// OpsProject + OpsTask). An operations user is assigned to the project
+// and completes the tasks. See src/lib/ops-rbac.ts + src/lib/ops-templates.ts.
+// ──────────────────────────────────────────────────────────────────────
+
+/// The reusable, admin-authored definition of a service's process. Exactly
+/// one *active* template per Service; publishing a revision bumps `version`
+/// and old versions are retained so historical OpsProject.templateId stays
+/// valid. Authored on /operations/templates.
+model ProcessTemplate {
+  id          String                @id @default(cuid())
+  serviceId   String
+  service     Service               @relation(fields: [serviceId], references: [id], onDelete: Restrict)
+  name        String
+  description String?
+  isActive    Boolean               @default(true)
+  version     Int                   @default(1)
+  isSystem    Boolean               @default(false)
+  createdById String?
+  createdBy   User?                 @relation("OpsTemplateCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
+  steps       ProcessTemplateStep[]
+  projects    OpsProject[]
+  createdAt   DateTime              @default(now())
+  updatedAt   DateTime              @updatedAt
+
+  @@unique([serviceId, version])
+  @@index([serviceId, isActive])
+}
+
+/// One predefined step in a process template, ordered by `seq`. `phase` is an
+/// optional grouping label (e.g. "Initial" / "Mid" / "Final"). `slaDays` is
+/// the business-day budget from project start, snapshotted onto each task.
+model ProcessTemplateStep {
+  id          String          @id @default(cuid())
+  templateId  String
+  template    ProcessTemplate @relation(fields: [templateId], references: [id], onDelete: Cascade)
+  seq         Int
+  name        String
+  description String?
+  phase       String?
+  isRequired  Boolean         @default(true)
+  slaDays     Int?
+  tasks       OpsTask[]
+  createdAt   DateTime        @default(now())
+  updatedAt   DateTime        @updatedAt
+
+  @@unique([templateId, seq])
+  @@index([templateId])
+}
+
+/// A per-candidate process instance — one per enrolled (candidate, service).
+/// Keyed 1:1 on PartyService (the canonical "candidate enrolled with service"
+/// row) so the CRM-enroll hook gets a natural idempotency key.
+model OpsProject {
+  id             String           @id @default(cuid())
+  partyServiceId String           @unique
+  partyService   PartyService     @relation(fields: [partyServiceId], references: [id], onDelete: Cascade)
+  partyId        String
+  party          Party            @relation(fields: [partyId], references: [id], onDelete: Cascade)
+  serviceId      String
+  service        Service          @relation(fields: [serviceId], references: [id], onDelete: Restrict)
+  templateId     String?
+  template       ProcessTemplate? @relation(fields: [templateId], references: [id], onDelete: SetNull)
+  leadId         String?
+  lead           Lead?            @relation("OpsProjectLead", fields: [leadId], references: [id], onDelete: SetNull)
+
+  // Assignment — the operations user who owns this project.
+  assignedToId   String?
+  assignedTo     User?            @relation("OpsProjectAssignee", fields: [assignedToId], references: [id], onDelete: SetNull)
+  assignedAt     DateTime?
+
+  // 'active' | 'on_hold' | 'completed' | 'cancelled'
+  status         String           @default("active")
+  startedAt      DateTime         @default(now())
+  dueAt          DateTime?
+  completedAt    DateTime?
+  createdById    String?
+  createdBy      User?            @relation("OpsProjectCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
+  lastActivityAt DateTime         @default(now())
+
+  // Provenance for one-time Odoo import; null for enroll-created projects.
+  externalSource String?
+  externalId     String?
+
+  tasks          OpsTask[]
+  activities     OpsTaskActivity[]
+  createdAt      DateTime         @default(now())
+  updatedAt      DateTime         @updatedAt
+
+  @@unique([externalSource, externalId])
+  @@index([assignedToId, status])
+  @@index([status, dueAt])
+  @@index([partyId])
+  @@index([serviceId])
+  @@index([templateId])
+}
+
+/// A single unit of work the operations user completes. Created by snapshotting
+/// a ProcessTemplateStep at enroll (or imported from Odoo). The snapshot of
+/// seq/name/phase/isRequired/slaDays freezes the task against later template
+/// edits — the precondition for trustworthy performance analytics.
+model OpsTask {
+  id             String               @id @default(cuid())
+  projectId      String
+  project        OpsProject           @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  templateStepId String?
+  templateStep   ProcessTemplateStep? @relation(fields: [templateStepId], references: [id], onDelete: SetNull)
+
+  seq            Int
+  name           String
+  description    String?
+  phase          String?
+  isRequired     Boolean              @default(true)
+  slaDays        Int?
+
+  // 'pending' | 'in_progress' | 'completed' | 'blocked' | 'skipped'
+  status         String               @default("pending")
+  assignedToId   String?
+  assignedTo     User?                @relation("OpsTaskAssignee", fields: [assignedToId], references: [id], onDelete: SetNull)
+  dueAt          DateTime?
+  startedAt      DateTime?
+  completedAt    DateTime?
+  completedById  String?
+  completedBy    User?                @relation("OpsTaskCompletedBy", fields: [completedById], references: [id], onDelete: SetNull)
+  blockedReason  String?
+  notes          String?
+  // Odoo task id for one-time import idempotency; null for enroll-created tasks.
+  externalId     String?
+
+  documents      OpsDocument[]
+  activities     OpsTaskActivity[]
+  createdAt      DateTime             @default(now())
+  updatedAt      DateTime             @updatedAt
+
+  @@unique([projectId, seq])
+  @@unique([externalId])
+  @@index([assignedToId, status, dueAt])
+  @@index([status, completedAt])
+  @@index([projectId])
+}
+
+/// Evidence attached to a task. Stores only a reference (URL/key), not a blob.
+/// The upload UI / storage backend is deferred (see the module plan).
+model OpsDocument {
+  id           String   @id @default(cuid())
+  taskId       String
+  task         OpsTask  @relation(fields: [taskId], references: [id], onDelete: Cascade)
+  fileName     String
+  fileUrl      String
+  mimeType     String?
+  sizeBytes    Int?
+  uploadedById String?
+  uploadedBy   User?    @relation("OpsDocUploadedBy", fields: [uploadedById], references: [id], onDelete: SetNull)
+  createdAt    DateTime @default(now())
+
+  @@index([taskId])
+}
+
+/// Per-project/-task timeline + audit. Clone of LeadActivity. Performance
+/// analytics attribute work via `actorId` (who actually did it), never the
+/// current project assignee.
+model OpsTaskActivity {
+  id         String     @id @default(cuid())
+  projectId  String
+  project    OpsProject @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  taskId     String?
+  task       OpsTask?   @relation(fields: [taskId], references: [id], onDelete: SetNull)
+  actorId    String?
+  actor      User?      @relation("OpsActivityActor", fields: [actorId], references: [id], onDelete: SetNull)
+  // PROJECT_CREATED | ASSIGNED | REASSIGNED | STEP_STARTED | STEP_COMPLETED |
+  // STEP_BLOCKED | STEP_SKIPPED | DOCUMENT_ADDED | NOTE_ADDED |
+  // PROJECT_COMPLETED | IMPORTED
+  type       String
+  summary    String?
+  metadata   Json?
+  occurredAt DateTime   @default(now())
+
+  @@index([projectId, occurredAt])
+  @@index([actorId, type, occurredAt])
+  @@index([type])
 }
