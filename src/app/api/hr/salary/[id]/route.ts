@@ -32,32 +32,19 @@ export async function POST(req: Request, { params }: { params: { id: string } })
   if (!parsed.success) {
     return NextResponse.json({ error: "invalid", issues: parsed.error.issues }, { status: 400 });
   }
-  const run = await prisma.hrSalaryRun.findUnique({ where: { id: params.id }, include: { lines: true } });
+  const run = await prisma.hrSalaryRun.findUnique({ where: { id: params.id } });
   if (!run) return NextResponse.json({ error: "not found" }, { status: 404 });
   if (run.status !== "draft") {
     return NextResponse.json({ error: "already approved or paid" }, { status: 400 });
   }
 
-  const [yearStr] = run.monthKey.split("-");
-  const year = +yearStr;
-  for (const line of run.lines) {
-    const paidPortion = Math.max(0, Number(line.paidLeave) - Math.max(0, Number(line.unpaidLeave) - Number(line.paidLeave)));
-    const usedDelta = paidPortion > 0 ? paidPortion : 0;
-    if (usedDelta > 0) {
-      const bal = await prisma.hrLeaveBalance.findUnique({
-        where: { employeeId_year: { employeeId: line.employeeId, year } },
-      });
-      if (bal) {
-        const usedNow = Number(bal.used) + usedDelta;
-        const balanceNow = Number(bal.opening) + Number(bal.accrued) - usedNow;
-        await prisma.hrLeaveBalance.update({
-          where: { id: bal.id },
-          data: { used: usedNow, balance: balanceNow },
-        });
-      }
-    }
-  }
-
+  // Note: approval no longer mutates HrLeaveBalance. The canonical leave engine
+  // (src/lib/hr-leave-balance.ts) is the single source of truth and already
+  // counts decided attendance leave as `used` the moment it's recorded. The old
+  // approval-time decrement here was a leftover "drifting path" that double-
+  // deducted those same days — pushing balances negative until the next
+  // canonical recompute reset them. Salary approval changes no leave facts, so
+  // it must not touch balances.
   const approved = await prisma.hrSalaryRun.update({
     where: { id: run.id },
     data: { status: "hr_approved", approvedById: userId, approvedAt: new Date() },

@@ -24,6 +24,7 @@ import {
   isTraineeDesignation,
   isOwnerDesignation,
   bucketAttendance,
+  leaveUsedInYear,
   calcLine,
   DEFAULT_ALLOWANCE_PCTS,
   ESI_EMPLOYEE_RATE,
@@ -233,6 +234,96 @@ describe("bucketAttendance", () => {
       ],
     );
     expect(buckets).toEqual({ daysPresent: 4, daysAbsent: 1, daysHalfDay: 2, daysPaidLeave: 1 });
+  });
+});
+
+describe("leaveUsedInYear", () => {
+  it("counts LV as 1.0 and HD as 0.5 for dates in the given year", () => {
+    const days = [
+      { date: new Date(Date.UTC(2026, 3, 2)), status: "LV" },
+      { date: new Date(Date.UTC(2026, 3, 11)), status: "LV" },
+      { date: new Date(Date.UTC(2026, 3, 20)), status: "HD" },
+      { date: new Date(Date.UTC(2026, 3, 12)), status: "A" }, // absence — not paid leave
+      { date: new Date(Date.UTC(2026, 3, 1)), status: "P" }, // present — ignored
+    ];
+    expect(leaveUsedInYear(days, 2026)).toBe(2.5); // 1 + 1 + 0.5
+  });
+
+  it("excludes leave that falls in a different calendar year (Dec→Jan cycle)", () => {
+    // A January cycle spans 26 Dec (prev year) → 25 Jan. December leave belongs
+    // to the previous year's balance, so it must not be added back to this year.
+    const days = [
+      { date: new Date(Date.UTC(2025, 11, 29)), status: "LV" }, // Dec 2025 — excluded
+      { date: new Date(Date.UTC(2026, 0, 5)), status: "LV" }, // Jan 2026 — counted
+      { date: new Date(Date.UTC(2026, 0, 10)), status: "HD" }, // Jan 2026 — counted
+    ];
+    expect(leaveUsedInYear(days, 2026)).toBe(1.5);
+  });
+});
+
+describe("calcLine — paid-leave double-count regression (Sivapriya, Apr 2026)", () => {
+  // Sivapriya accrued 4 leave days for 2026 (1/mo) and took exactly 4 LV in the
+  // April cycle, plus 1 genuine absence. The canonical leave engine had already
+  // deducted those 4 from her balance (accrued 4 − used 4 = 0), so the salary
+  // run read balance 0 and re-charged all 4 LV as LOP → LOP 5 instead of 1.
+  //
+  // The fix lives in computeSalaryRun (DB-coupled): it reconstructs the
+  // before-cycle balance as `storedBalance + leaveUsedInYear(cycle)`. Here we
+  // reproduce that arithmetic against the pure calcLine to pin the behaviour.
+  it("covers leave earned-and-taken in the same year: only the absence is LOP", () => {
+    const storedBalance = 0; // accrued 4 − used 4 (the 4 April LV days)
+    const cycleDays = [
+      { date: new Date(Date.UTC(2026, 3, 2)), status: "LV" },
+      { date: new Date(Date.UTC(2026, 3, 11)), status: "LV" },
+      { date: new Date(Date.UTC(2026, 3, 13)), status: "LV" },
+      { date: new Date(Date.UTC(2026, 3, 20)), status: "LV" },
+      { date: new Date(Date.UTC(2026, 3, 12)), status: "A" },
+    ];
+    const carriedBefore = storedBalance + leaveUsedInYear(cycleDays, 2026); // 0 + 4
+    expect(carriedBefore).toBe(4);
+
+    const c = calcLine({
+      workingDaysBase: 30,
+      basic: 13000,
+      esiApplicable: false,
+      pfApplicable: true,
+      professionalTax: 125,
+      daysPresent: 20,
+      daysHalfDay: 0,
+      daysAbsent: 1,
+      daysPaidLeave: 4,
+      carriedBalanceBefore: carriedBefore,
+    });
+    expect(c.totalLeaveForLop).toBe(1); // just the absence — NOT 5
+    expect(c.unpaidLeave).toBe(1);
+    expect(c.paidLeave).toBe(4);
+    expect(c.daysAttended).toBe(29);
+  });
+
+  it("still charges paid leave taken beyond the year's entitlement", () => {
+    // Took 4 LV but only 1 day of entitlement remained before the cycle
+    // (storedBalance −3 + 4 added back = 1 available) → 3 of the 4 are LOP.
+    const storedBalance = -3;
+    const cycleDays = [
+      { date: new Date(Date.UTC(2026, 3, 2)), status: "LV" },
+      { date: new Date(Date.UTC(2026, 3, 11)), status: "LV" },
+      { date: new Date(Date.UTC(2026, 3, 13)), status: "LV" },
+      { date: new Date(Date.UTC(2026, 3, 20)), status: "LV" },
+    ];
+    const carriedBefore = storedBalance + leaveUsedInYear(cycleDays, 2026); // 1
+    const c = calcLine({
+      workingDaysBase: 30,
+      basic: 13000,
+      esiApplicable: false,
+      pfApplicable: true,
+      professionalTax: 125,
+      daysPresent: 26,
+      daysHalfDay: 0,
+      daysAbsent: 0,
+      daysPaidLeave: 4,
+      carriedBalanceBefore: carriedBefore,
+    });
+    expect(c.totalLeaveForLop).toBe(3); // 4 taken − 1 covered
   });
 });
 
