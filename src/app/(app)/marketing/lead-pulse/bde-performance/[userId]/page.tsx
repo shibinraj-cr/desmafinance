@@ -13,6 +13,7 @@ import {
   getFunnelBySource,
   monthBounds,
 } from "@/lib/lead-pulse-metrics";
+import { getMetricsSource, getCrmFunnel, getCrmFunnelBySource } from "@/lib/lead-pulse-crm-metrics";
 import { addDays, todayIst, fromPrismaDate, toPrismaDate } from "@/lib/lead-pulse-dates";
 import { PerformanceOverTimeChart } from "../../_charts";
 import { BdeInsightCard } from "./_bde-insight-card";
@@ -164,6 +165,43 @@ export default async function BdePerformanceDetail({
     }),
   );
 
+  // ── CRM source branch ──
+  const metricsSource = await getMetricsSource();
+  let crmOwn: { leadsAssigned: number; enrolled: number; conversionPct: number | null } | null = null;
+  let crmVsTeam: number | null = null;
+  let crmPerSource:
+    | { sourceLabel: string; leads: number; won: number; conversionPct: number | null; vsTeam: number | null }[]
+    | null = null;
+  if (metricsSource === "crm") {
+    const [own, team, ownSrc, teamSrc] = await Promise.all([
+      getCrmFunnel({ start, end, userId }),
+      getCrmFunnel({ start, end }),
+      getCrmFunnelBySource({ start, end, userId }),
+      getCrmFunnelBySource({ start, end }),
+    ]);
+    crmOwn = own;
+    crmVsTeam = own.conversionPct != null && team.conversionPct != null ? own.conversionPct - team.conversionPct : null;
+    const teamPctBySource = new Map(teamSrc.map((t) => [t.sourceId, t.conversionPct]));
+    crmPerSource = ownSrc
+      .filter((s) => s.leadsAssigned || s.enrolled)
+      .map((s) => {
+        const teamPct = teamPctBySource.get(s.sourceId) ?? null;
+        return {
+          sourceLabel: s.sourceLabel,
+          leads: s.leadsAssigned,
+          won: s.enrolled,
+          conversionPct: s.conversionPct,
+          vsTeam: s.conversionPct != null && teamPct != null ? s.conversionPct - teamPct : null,
+        };
+      });
+  }
+  // Display values branch on the active source.
+  const dispLeads = crmOwn ? crmOwn.leadsAssigned : totalLeads;
+  const dispWon = crmOwn ? crmOwn.enrolled : totalWon;
+  const dispConv = crmOwn ? crmOwn.conversionPct : totalConv;
+  const dispVsTeam = crmOwn ? crmVsTeam : vsTeam;
+  const dispPerSource = crmPerSource ?? ownPerSource;
+
   return (
     <div className="px-[24px] py-[24px] space-y-[16px]">
       <header className="flex flex-wrap items-end justify-between gap-[16px]">
@@ -200,16 +238,20 @@ export default async function BdePerformanceDetail({
       </header>
 
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-[16px]">
-        <Kpi label="Total Leads" value={totalLeads.toString()} />
+        <Kpi label={metricsSource === "crm" ? "Leads Assigned" : "Total Leads"} value={dispLeads.toString()} />
         <Kpi
-          label={role === "l1" ? "L1 Conversion" : "L2 Conversion"}
-          value={totalConv == null ? "—" : `${totalConv.toFixed(1)}%`}
+          label={metricsSource === "crm" ? "Conversion" : role === "l1" ? "L1 Conversion" : "L2 Conversion"}
+          value={dispConv == null ? "—" : `${dispConv.toFixed(1)}%`}
         />
-        <Kpi label="Days Active" value={distinctDays.toString()} />
+        {metricsSource === "crm" ? (
+          <Kpi label="Enrolled" value={dispWon.toString()} />
+        ) : (
+          <Kpi label="Days Active" value={distinctDays.toString()} />
+        )}
         <Kpi
           label="vs Team Avg"
-          value={vsTeam == null ? "—" : `${vsTeam >= 0 ? "+" : ""}${vsTeam.toFixed(1)} pp`}
-          tone={vsTeam == null ? "neutral" : vsTeam >= 0 ? "positive" : "negative"}
+          value={dispVsTeam == null ? "—" : `${dispVsTeam >= 0 ? "+" : ""}${dispVsTeam.toFixed(1)} pp`}
+          tone={dispVsTeam == null ? "neutral" : dispVsTeam >= 0 ? "positive" : "negative"}
         />
       </div>
 
@@ -240,9 +282,11 @@ export default async function BdePerformanceDetail({
         month={range === "month" ? pickMonth : monthNow}
       />
 
-      <Card title="Performance Over Time">
-        <PerformanceOverTimeChart data={series} role={role} />
-      </Card>
+      {metricsSource !== "crm" && (
+        <Card title="Performance Over Time">
+          <PerformanceOverTimeChart data={series} role={role} />
+        </Card>
+      )}
 
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-[16px]">
         <Card title="Performance by Source">
@@ -257,7 +301,7 @@ export default async function BdePerformanceDetail({
               </tr>
             </thead>
             <tbody>
-              {ownPerSource.map((s) => (
+              {dispPerSource.map((s) => (
                 <tr key={s.sourceLabel} className="border-t" style={{ borderColor: "var(--lp-outline-variant)" }}>
                   <td className="px-[16px] py-[8px]">{s.sourceLabel}</td>
                   <td className="px-[16px] py-[8px] text-right tabular-nums">{s.leads}</td>
@@ -287,6 +331,7 @@ export default async function BdePerformanceDetail({
           </table>
         </Card>
 
+        {metricsSource !== "crm" && (
         <Card title="Recent Daily Entries">
           <table className="w-full text-[13px]">
             <thead>
@@ -326,6 +371,7 @@ export default async function BdePerformanceDetail({
             </tbody>
           </table>
         </Card>
+        )}
       </div>
     </div>
   );

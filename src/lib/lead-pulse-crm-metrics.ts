@@ -14,7 +14,16 @@ import { Prisma } from "@prisma/client";
 import { prisma } from "./prisma";
 import { getSetting } from "./app-settings";
 import { toPrismaDate } from "./lead-pulse-dates";
-import { monthBounds, pct, getServiceConversionMatrix, type ServiceMatrix, type ServiceMatrixCell } from "./lead-pulse-metrics";
+import {
+  monthBounds,
+  pct,
+  getServiceConversionMatrix,
+  type ServiceMatrix,
+  type ServiceMatrixCell,
+  type Matrix,
+  type MatrixBdeRow,
+  type MatrixCell,
+} from "./lead-pulse-metrics";
 
 export type CrmBdeFunnel = {
   userId: string;
@@ -185,4 +194,219 @@ export async function resolveServiceMatrix(year: number, month: number): Promise
 export async function getCrmEnrolledTotal(year: number, month: number): Promise<number> {
   const funnel = await getCrmFunnelByBde(year, month);
   return funnel.reduce((sum, b) => sum + b.enrolled, 0);
+}
+
+// ── Simplified CRM funnel (Phase 2b) ─────────────────────────────────────────
+// Leads assigned (deliberate, import carryover excluded) → enrollments (won) →
+// conversion, for arbitrary date ranges. Powers the dashboard / monthly report /
+// BDE performance pages when the metrics source is "crm".
+
+/** assignedAt is a DateTime → half-open [start 00:00, end+1day 00:00) in UTC. */
+function assignRange(start: string, end: string): { gte: Date; lt: Date } {
+  const gte = new Date(`${start}T00:00:00.000Z`);
+  const lt = new Date(new Date(`${end}T00:00:00.000Z`).getTime() + 24 * 60 * 60 * 1000);
+  return { gte, lt };
+}
+// SQL fragment: a lead counts as deliberately assigned (not bulk-import carryover).
+const DELIBERATE = Prisma.sql`(l."importBatchId" IS NULL OR l."assignedAt" > b."createdAt" + interval '10 minutes')`;
+
+export type CrmFunnel = { leadsAssigned: number; enrolled: number; conversionPct: number | null };
+
+/** Team-wide (or per-user / per-source) CRM funnel for a date range. */
+export async function getCrmFunnel(opts: {
+  start: string;
+  end: string;
+  userId?: string | null;
+  sourceId?: string | null;
+}): Promise<CrmFunnel> {
+  const { gte, lt } = assignRange(opts.start, opts.end);
+  const userCond = opts.userId ? Prisma.sql`AND l."assignedToId" = ${opts.userId}` : Prisma.empty;
+  const srcCond = opts.sourceId ? Prisma.sql`AND l."sourceId" = ${opts.sourceId}` : Prisma.empty;
+  const [leadRows, enrolled] = await Promise.all([
+    prisma.$queryRaw<Array<{ n: bigint }>>(Prisma.sql`
+      SELECT COUNT(*) AS n
+      FROM "Lead" l
+      LEFT JOIN "LeadImportBatch" b ON l."importBatchId" = b.id
+      WHERE l."assignedToId" IS NOT NULL
+        AND l."assignedAt" >= ${gte} AND l."assignedAt" < ${lt}
+        ${userCond} ${srcCond} AND ${DELIBERATE}
+    `),
+    prisma.leadPulsePipeline.count({
+      where: {
+        status: "closed_won",
+        closedDate: { gte: toPrismaDate(opts.start), lte: toPrismaDate(opts.end) },
+        ...(opts.userId ? { userId: opts.userId } : {}),
+        ...(opts.sourceId ? { sourceId: opts.sourceId } : {}),
+      },
+    }),
+  ]);
+  const leadsAssigned = Number(leadRows[0]?.n ?? 0);
+  return { leadsAssigned, enrolled, conversionPct: pct(enrolled, leadsAssigned) };
+}
+
+export type CrmSourceFunnel = {
+  sourceId: string;
+  sourceCode: string;
+  sourceLabel: string;
+  leadsAssigned: number;
+  enrolled: number;
+  conversionPct: number | null;
+};
+
+/** Per-source CRM funnel (team-wide, or for one BDE). */
+export async function getCrmFunnelBySource(opts: {
+  start: string;
+  end: string;
+  userId?: string | null;
+}): Promise<CrmSourceFunnel[]> {
+  const { gte, lt } = assignRange(opts.start, opts.end);
+  const userCond = opts.userId ? Prisma.sql`AND l."assignedToId" = ${opts.userId}` : Prisma.empty;
+  const [sources, leadRows, enrolledRows] = await Promise.all([
+    prisma.leadPulseSource.findMany({
+      where: { active: true },
+      orderBy: [{ displayOrder: "asc" }, { label: "asc" }],
+      select: { id: true, code: true, label: true },
+    }),
+    prisma.$queryRaw<Array<{ sourceId: string | null; n: bigint }>>(Prisma.sql`
+      SELECT l."sourceId" AS "sourceId", COUNT(*) AS n
+      FROM "Lead" l
+      LEFT JOIN "LeadImportBatch" b ON l."importBatchId" = b.id
+      WHERE l."assignedToId" IS NOT NULL
+        AND l."assignedAt" >= ${gte} AND l."assignedAt" < ${lt}
+        ${userCond} AND ${DELIBERATE}
+      GROUP BY l."sourceId"
+    `),
+    prisma.leadPulsePipeline.groupBy({
+      by: ["sourceId"],
+      where: {
+        status: "closed_won",
+        closedDate: { gte: toPrismaDate(opts.start), lte: toPrismaDate(opts.end) },
+        ...(opts.userId ? { userId: opts.userId } : {}),
+      },
+      _count: true,
+    }),
+  ]);
+  const lMap = new Map(leadRows.map((r) => [r.sourceId, Number(r.n)]));
+  const eMap = new Map(enrolledRows.map((e) => [e.sourceId, e._count]));
+  return sources.map((s) => {
+    const leadsAssigned = lMap.get(s.id) ?? 0;
+    const enrolled = eMap.get(s.id) ?? 0;
+    return { sourceId: s.id, sourceCode: s.code, sourceLabel: s.label, leadsAssigned, enrolled, conversionPct: pct(enrolled, leadsAssigned) };
+  });
+}
+
+/**
+ * CRM twin of `getMonthlyMatrix` — returns the identical `Matrix` shape so the
+ * monthly-report `PerformanceMatrix` renders unchanged. `cell.leads` = leads
+ * assigned, `cell.won` = enrollments. (L1 BDEs have won = 0 — enrollments only
+ * attribute to L2 pipeline owners.)
+ */
+export async function getCrmMonthlyMatrix(opts: {
+  year: number;
+  month: number;
+  sourceCode?: string | null;
+  region?: string | null;
+  startDate?: string | null;
+  endDate?: string | null;
+}): Promise<Matrix> {
+  const fb = monthBounds(opts.year, opts.month);
+  const start = opts.startDate || fb.start;
+  const end = opts.endDate || fb.end;
+  const { gte, lt } = assignRange(start, end);
+
+  const sources = await prisma.leadPulseSource.findMany({
+    where: { active: true, ...(opts.sourceCode ? { code: opts.sourceCode } : {}) },
+    orderBy: [{ displayOrder: "asc" }, { label: "asc" }],
+  });
+  const roleRows = await prisma.leadPulseRole.findMany({
+    where: { role: { in: ["l1", "l2"] }, ...(opts.region ? { regionFocus: { has: opts.region } } : {}) },
+    orderBy: [{ role: "asc" }, { displayName: "asc" }],
+  });
+  const userIds = roleRows.map((r) => r.userId);
+  const sourceCodeCond = opts.sourceCode ? Prisma.sql`AND s.code = ${opts.sourceCode}` : Prisma.empty;
+
+  const [leadRows, enrolledRows] = userIds.length
+    ? await Promise.all([
+        prisma.$queryRaw<Array<{ userId: string; sourceId: string | null; n: bigint }>>(Prisma.sql`
+          SELECT l."assignedToId" AS "userId", l."sourceId" AS "sourceId", COUNT(*) AS n
+          FROM "Lead" l
+          LEFT JOIN "LeadImportBatch" b ON l."importBatchId" = b.id
+          LEFT JOIN "LeadPulseSource" s ON l."sourceId" = s.id
+          WHERE l."assignedToId" IN (${Prisma.join(userIds)})
+            AND l."assignedAt" >= ${gte} AND l."assignedAt" < ${lt}
+            ${sourceCodeCond} AND ${DELIBERATE}
+          GROUP BY l."assignedToId", l."sourceId"
+        `),
+        prisma.leadPulsePipeline.groupBy({
+          by: ["userId", "sourceId"],
+          where: {
+            userId: { in: userIds },
+            status: "closed_won",
+            closedDate: { gte: toPrismaDate(start), lte: toPrismaDate(end) },
+            ...(opts.sourceCode ? { source: { code: opts.sourceCode } } : {}),
+          },
+          _count: true,
+        }),
+      ])
+    : [[], []];
+
+  const sourceById = new Map(sources.map((s) => [s.id, s]));
+  const newCell = (): MatrixCell => ({ leads: 0, won: 0, conversionPct: null });
+  const rowByUser = new Map<string, MatrixBdeRow>();
+  for (const r of roleRows) {
+    const perSource = new Map<string, MatrixCell>();
+    for (const s of sources) perSource.set(s.code, newCell());
+    rowByUser.set(r.userId, { userId: r.userId, displayName: r.displayName, role: r.role as "l1" | "l2", perSource, total: newCell() });
+  }
+  for (const lr of leadRows) {
+    const row = rowByUser.get(lr.userId);
+    const src = lr.sourceId ? sourceById.get(lr.sourceId) : undefined;
+    if (!row || !src) continue;
+    const cell = row.perSource.get(src.code);
+    if (cell) cell.leads += Number(lr.n);
+  }
+  for (const er of enrolledRows) {
+    const row = rowByUser.get(er.userId);
+    const src = er.sourceId ? sourceById.get(er.sourceId) : undefined;
+    if (!row || !src) continue;
+    const cell = row.perSource.get(src.code);
+    if (cell) cell.won += er._count;
+  }
+  for (const row of rowByUser.values()) {
+    let tl = 0;
+    let tw = 0;
+    for (const cell of row.perSource.values()) {
+      cell.conversionPct = pct(cell.won, cell.leads);
+      tl += cell.leads;
+      tw += cell.won;
+    }
+    row.total = { leads: tl, won: tw, conversionPct: pct(tw, tl) };
+  }
+  const l1Rows = Array.from(rowByUser.values()).filter((r) => r.role === "l1");
+  const l2Rows = Array.from(rowByUser.values()).filter((r) => r.role === "l2");
+  function subtotal(rows: MatrixBdeRow[]): { perSource: Map<string, MatrixCell>; total: MatrixCell } {
+    const perSource = new Map<string, MatrixCell>();
+    for (const s of sources) perSource.set(s.code, newCell());
+    let tl = 0;
+    let tw = 0;
+    for (const r of rows) {
+      for (const [code, cell] of r.perSource) {
+        const acc = perSource.get(code)!;
+        acc.leads += cell.leads;
+        acc.won += cell.won;
+      }
+      tl += r.total.leads;
+      tw += r.total.won;
+    }
+    for (const cell of perSource.values()) cell.conversionPct = pct(cell.won, cell.leads);
+    return { perSource, total: { leads: tl, won: tw, conversionPct: pct(tw, tl) } };
+  }
+  return {
+    sources: sources.map((s) => ({ id: s.id, code: s.code, label: s.label })),
+    l1Rows,
+    l2Rows,
+    l1Subtotal: subtotal(l1Rows),
+    l2Subtotal: subtotal(l2Rows),
+    globalTotal: subtotal([...l1Rows, ...l2Rows]),
+  };
 }
