@@ -1,0 +1,674 @@
+/**
+ * Team Activity Monitor — the CRM supervision surface behind `/crm/team`.
+ *
+ * Answers the manager's daily question: *is each BDE actually working their
+ * leads, and where are leads rotting?* It is deliberately separate from the
+ * pipeline-operations metrics in `lead-pulse-crm-metrics.ts`: those report
+ * conversion/funnel health; this reports **people and freshness**.
+ *
+ * Design notes:
+ *   - All decision logic (SLA thresholds, the "touch" definition, staleness
+ *     classification, on-time, role scope, first-response) lives in the pure
+ *     exported helpers below so it can be unit-tested without a DB. The DB
+ *     functions only query and delegate.
+ *   - "Touched" = ANY meaningful activity EXCEPT a bulk-email send. This mirrors
+ *     `lastActivityAt` (which already ignores the passive `LEAD_OPENED`) minus
+ *     bulk email — bulk email bumps `lastActivityAt` (crm bulk-email route) and
+ *     would otherwise make a mass-emailed lead look freshly worked. Bulk sends
+ *     are tagged `metadata.bulk = true` on their `EMAIL_SENT` activity, so the
+ *     carve-out is exact.
+ *   - "Conversion" reuses `getCrmFunnelByBde` (current month, carryover-safe);
+ *     activity/first-response metrics use the page's selected date range;
+ *     attention buckets (SLA breach / abandoned / no-task / stuck) are
+ *     point-in-time snapshots that ignore the range. Each is labelled in the UI.
+ */
+import { Prisma } from "@prisma/client";
+import { prisma } from "./prisma";
+import { getAssignableBdes, REINQUIRY_TASK_SUBJECT_NEEDLE } from "./crm-leads";
+import { getCrmFunnelByBde } from "./lead-pulse-crm-metrics";
+
+// ── Policy constants ─────────────────────────────────────────────────────────
+
+/**
+ * Per active-status SLA: a lead untouched for MORE than this many days is
+ * "breaching" its stage SLA. Keyed by `CrmLeadStatus.code`. Active statuses not
+ * listed here (none today) are not SLA-monitored. Won/lost statuses are excluded
+ * by construction — only `kind = 'active'` leads are ever classified.
+ */
+export const SLA_THRESHOLD_DAYS: Record<string, number> = {
+  not_yet_started: 1,
+  qualify: 3,
+  follow_up: 2,
+  re_marketing: 7,
+  pipeline: 3,
+};
+
+/** Any active lead untouched this long is "abandoned" regardless of stage. */
+export const ABANDONED_DAYS = 30;
+
+/** An active lead in the same status this long (no STATUS_CHANGED since) is "stuck". */
+export const STUCK_DAYS = 14;
+
+/** A freshly-assigned lead should get a first outbound contact within this window. */
+export const FIRST_RESPONSE_SLA_HOURS = 24;
+
+/** Cap on how many rows each attention list returns (worst-first); UI links to the full set. */
+export const ATTENTION_LIST_LIMIT = 12;
+
+/**
+ * Passive activity types that never count as a "touch" — kept in sync with
+ * `NON_BUMPING_TYPES` in crm-activity.ts (a merely-viewed lead must not look
+ * worked).
+ */
+export const PASSIVE_ACTIVITY_TYPES = ["LEAD_OPENED"] as const;
+
+/** Outbound-contact activity types — the "reach-out" actions behind the leaderboard and first-response. */
+export const OUTBOUND_CONTACT_TYPES = ["CALL_LOGGED", "EMAIL_SENT", "WHATSAPP_SENT"] as const;
+
+// ── Pure helpers (unit-tested) ───────────────────────────────────────────────
+
+/**
+ * Prisma `where` selecting the `LeadActivity` rows that count as a real "touch":
+ * any activity EXCEPT a passive view (`LEAD_OPENED`) and EXCEPT a bulk-email send
+ * (`EMAIL_SENT` with `metadata.bulk === true`). This is the "any activity except
+ * bulk email" rule used everywhere a lead's last-worked time is computed.
+ */
+export function touchActivityWhere(): Prisma.LeadActivityWhereInput {
+  return {
+    type: { notIn: [...PASSIVE_ACTIVITY_TYPES] },
+    NOT: { type: "EMAIL_SENT", metadata: { path: ["bulk"], equals: true } },
+  };
+}
+
+/** Prisma `where` selecting outbound contacts (calls/emails/whatsapp), excluding bulk emails. */
+export function outboundContactWhere(): Prisma.LeadActivityWhereInput {
+  return {
+    type: { in: [...OUTBOUND_CONTACT_TYPES] },
+    NOT: { type: "EMAIL_SENT", metadata: { path: ["bulk"], equals: true } },
+  };
+}
+
+/** Fractional days between two instants (`now - then`). Negative if `then` is in the future. */
+export function ageInDays(now: Date, then: Date): number {
+  return (now.getTime() - then.getTime()) / 86_400_000;
+}
+
+export type StalenessVerdict = {
+  /** Days since the lead was last touched. */
+  ageDays: number;
+  /** This status's SLA in days, or null when the status isn't SLA-monitored. */
+  slaDays: number | null;
+  /** True when `ageDays` exceeds the status SLA. */
+  breached: boolean;
+  /** True when `ageDays` exceeds the global abandoned threshold. */
+  abandoned: boolean;
+};
+
+/** Classify one active lead's freshness against its per-status SLA and the abandoned threshold. */
+export function classifyStaleness(opts: {
+  statusCode: string;
+  lastTouchAt: Date;
+  now: Date;
+}): StalenessVerdict {
+  const ageDays = ageInDays(opts.now, opts.lastTouchAt);
+  const slaDays = SLA_THRESHOLD_DAYS[opts.statusCode] ?? null;
+  return {
+    ageDays,
+    slaDays,
+    breached: slaDays !== null && ageDays > slaDays,
+    abandoned: ageDays > ABANDONED_DAYS,
+  };
+}
+
+/** Local midnight at the start of `d`'s calendar day (matches the task board's day boundaries). */
+export function startOfLocalDay(d: Date): Date {
+  return new Date(d.getFullYear(), d.getMonth(), d.getDate());
+}
+
+/** Local midnight at the start of the day AFTER `d`. */
+export function startOfNextLocalDay(d: Date): Date {
+  return new Date(d.getFullYear(), d.getMonth(), d.getDate() + 1);
+}
+
+/**
+ * A completed task is "on time" when it was finished on or before the end of its
+ * due day — consistent with the task board, where a task is overdue only once
+ * its due day has fully passed. A task with no due date has no SLA to miss (on
+ * time); an uncompleted task is never on time.
+ */
+export function isTaskOnTime(t: { completedAt: Date | null; dueAt: Date | null }): boolean {
+  if (!t.completedAt) return false;
+  if (!t.dueAt) return true;
+  return t.completedAt.getTime() < startOfNextLocalDay(t.dueAt).getTime();
+}
+
+/**
+ * Grace window for telling a deliberate in-app assignment from bulk-import
+ * carryover: the importer stamps every imported lead's `assignedAt` to the
+ * batch's import time, so a lead only counts as genuinely assigned when it has
+ * no import batch OR was (re)assigned meaningfully later. Mirrors the 10-minute
+ * rule in `getCrmFunnelByBde` so the team monitor agrees with CRM Metrics.
+ */
+export const IMPORT_CARRYOVER_GRACE_MS = 10 * 60 * 1000;
+
+/**
+ * True when a lead is genuinely owned by a consultant — assigned, and not merely
+ * carried over by a bulk import. Used to scope every accountability metric so the
+ * unassigned/imported backlog (its own separate tile) never inflates a BDE's
+ * SLA-breach / no-task / stuck / first-response numbers.
+ */
+export function isDeliberateAssignment(lead: {
+  assignedToId: string | null;
+  assignedAt: Date | null;
+  importBatchCreatedAt: Date | null;
+}): boolean {
+  if (!lead.assignedToId || !lead.assignedAt) return false;
+  if (!lead.importBatchCreatedAt) return true;
+  return lead.assignedAt.getTime() > lead.importBatchCreatedAt.getTime() + IMPORT_CARRYOVER_GRACE_MS;
+}
+
+export type TeamScope = {
+  /** When set, every query is restricted to this user's own leads/work (BDE self-view). */
+  restrictToUserId: string | null;
+  /** True for managers (admin / CRM-admin / supervisor) who see the whole team. */
+  teamWide: boolean;
+};
+
+/**
+ * Resolve who the Team Activity page shows: managers (system admin, CRM-admin
+ * tier, or Lead Pulse supervisor) see the whole team; everyone else (a plain
+ * BDE) sees only their own numbers. Unlike the leads list this is NOT
+ * overridable — the page is a fixed team-vs-self surface.
+ */
+export function resolveTeamScope(access: {
+  isAdmin: boolean;
+  isSupervisor: boolean;
+  canManageCrm: boolean;
+  userId: string;
+}): TeamScope {
+  const teamWide = access.isAdmin || access.isSupervisor || access.canManageCrm;
+  return teamWide
+    ? { restrictToUserId: null, teamWide: true }
+    : { restrictToUserId: access.userId, teamWide: false };
+}
+
+/** Median of a numeric list, or null when empty. Does not mutate the input. */
+export function median(xs: number[]): number | null {
+  if (xs.length === 0) return null;
+  const s = [...xs].sort((a, b) => a - b);
+  const mid = Math.floor(s.length / 2);
+  return s.length % 2 === 1 ? s[mid] : (s[mid - 1] + s[mid]) / 2;
+}
+
+/**
+ * For each assignment, the earliest outbound contact that happened at or after
+ * the lead was assigned (a contact logged before assignment doesn't count as a
+ * response to it). Pure so first-response stats are unit-testable.
+ */
+export function firstContactAfterAssignment(
+  assignments: Array<{ leadId: string; assignedAt: Date }>,
+  contacts: Array<{ leadId: string; occurredAt: Date }>,
+): Map<string, Date> {
+  const assignedAtByLead = new Map(assignments.map((a) => [a.leadId, a.assignedAt]));
+  const out = new Map<string, Date>();
+  for (const c of contacts) {
+    const assignedAt = assignedAtByLead.get(c.leadId);
+    if (!assignedAt) continue;
+    if (c.occurredAt.getTime() < assignedAt.getTime()) continue;
+    const cur = out.get(c.leadId);
+    if (!cur || c.occurredAt.getTime() < cur.getTime()) out.set(c.leadId, c.occurredAt);
+  }
+  return out;
+}
+
+export type FirstResponseStats = {
+  /** Median hours from assignment to first outbound contact, over responded leads. */
+  medianHours: number | null;
+  /** Assigned-in-range leads not yet contacted at all. */
+  pending: number;
+  /** Leads contacted later than the SLA, plus pending leads already past the SLA. */
+  breached: number;
+};
+
+/** First-response summary for one set of assignments + their first-contact map. */
+export function computeFirstResponseStats(opts: {
+  assignments: Array<{ leadId: string; assignedAt: Date }>;
+  firstContactByLead: Map<string, Date>;
+  now: Date;
+}): FirstResponseStats {
+  const hours: number[] = [];
+  let pending = 0;
+  let breached = 0;
+  for (const a of opts.assignments) {
+    const contact = opts.firstContactByLead.get(a.leadId);
+    if (contact) {
+      const h = (contact.getTime() - a.assignedAt.getTime()) / 3_600_000;
+      hours.push(h);
+      if (h > FIRST_RESPONSE_SLA_HOURS) breached++;
+    } else {
+      pending++;
+      if ((opts.now.getTime() - a.assignedAt.getTime()) / 3_600_000 > FIRST_RESPONSE_SLA_HOURS) breached++;
+    }
+  }
+  return { medianHours: median(hours), pending, breached };
+}
+
+/** Bucket dated rows into the last `days` local calendar days, oldest→newest (index `days-1` is today). */
+export function bucketByLocalDay(
+  rows: Array<{ at: Date }>,
+  now: Date,
+  days: number,
+): number[] {
+  const todayStart = startOfLocalDay(now).getTime();
+  const out = new Array<number>(days).fill(0);
+  for (const r of rows) {
+    const dayStart = startOfLocalDay(r.at).getTime();
+    const idx = days - 1 - Math.round((todayStart - dayStart) / 86_400_000);
+    if (idx >= 0 && idx < days) out[idx]++;
+  }
+  return out;
+}
+
+// ── DB query layer ───────────────────────────────────────────────────────────
+
+/** Build a half-open `[from, to)` DateTime filter, or undefined when the range is unbounded. */
+function dateRangeFilter(range: { from?: Date; to?: Date }): Prisma.DateTimeFilter | undefined {
+  if (!range.from && !range.to) return undefined;
+  const f: Prisma.DateTimeFilter = {};
+  if (range.from) f.gte = range.from;
+  if (range.to) f.lt = range.to;
+  return f;
+}
+
+export type TeamBdeRow = {
+  userId: string;
+  displayName: string;
+  role: string;
+  // Conversion (current calendar month, via getCrmFunnelByBde).
+  assignedMonth: number;
+  enrolledMonth: number;
+  conversionPct: number | null;
+  // Activity (selected range).
+  assignedRange: number;
+  calls: number;
+  emails: number;
+  whatsapp: number;
+  contacts: number;
+  tasksCompleted: number;
+  tasksOnTime: number;
+  // First response (selected range).
+  firstResponseMedianHours: number | null;
+  firstResponsePending: number;
+  firstResponseBreached: number;
+  // Attention (point-in-time / now).
+  slaBreaches: number;
+  abandoned: number;
+  noTask: number;
+  stuck: number;
+  openReinquiry: number;
+};
+
+export type TeamLeadRef = {
+  id: string;
+  name: string;
+  statusLabel: string;
+  statusColor: string | null;
+  assigneeId: string | null;
+  assigneeName: string | null;
+  ageDays: number;
+};
+
+export type TeamActivity = {
+  scopeTeamWide: boolean;
+  totals: {
+    newLeadsToday: number;
+    newLeadsRange: number;
+    assignedRange: number;
+    contacts: number;
+    tasksCompleted: number;
+    tasksOnTime: number;
+    slaBreaches: number;
+    abandoned: number;
+    noTask: number;
+    stuck: number;
+    openReinquiry: number;
+    firstResponsePending: number;
+    firstResponseBreached: number;
+    unassignedActive: number;
+  };
+  /** New-leads-per-day sparkline for the last 14 local days (oldest→newest). */
+  newLeadTrend: number[];
+  bdeRows: TeamBdeRow[];
+  attention: {
+    slaBreaches: TeamLeadRef[];
+    abandoned: TeamLeadRef[];
+    noTask: TeamLeadRef[];
+    stuck: TeamLeadRef[];
+  };
+};
+
+type ActiveLeadLite = {
+  id: string;
+  candidateName: string;
+  assignedToId: string | null;
+  createdAt: Date;
+  status: { code: string; label: string; color: string | null };
+};
+
+/** Assemble the full Team Activity payload for one scope + date range. */
+export async function getTeamActivity(opts: {
+  scope: TeamScope;
+  range: { from?: Date; to?: Date };
+  now: Date;
+}): Promise<TeamActivity> {
+  const { scope, range, now } = opts;
+  const self = scope.restrictToUserId;
+  const scopeLeadWhere: Prisma.LeadWhereInput = self ? { assignedToId: self } : {};
+  const occurredAt = dateRangeFilter(range);
+
+  // Roster — every active L1/L2 BDE, narrowed to self for a BDE's own view.
+  const roster = (await getAssignableBdes()).filter((b) => !self || b.userId === self);
+  const ids = roster.map((b) => b.userId);
+
+  const TREND_DAYS = 14;
+  const trendFrom = new Date(startOfNextLocalDay(now).getTime() - TREND_DAYS * 86_400_000);
+
+  const [
+    funnel,
+    activeAssignedRaw,
+    reinquiryByBde,
+    contactGroups,
+    completedTasks,
+    assignedRaw,
+    trendLeads,
+    newLeadsRange,
+    unassignedActive,
+  ] = await Promise.all([
+    // Conversion (current month, carryover-safe). Narrowed to self below.
+    getCrmFunnelByBde(now.getFullYear(), now.getMonth() + 1),
+    // Assigned active leads — the population for staleness / stuck / no-task. Only
+    // OWNED leads (assignedToId set); the deliberate-assignment filter below drops
+    // bulk-import carryover so the unassigned/imported backlog can't inflate counts.
+    prisma.lead.findMany({
+      where: { status: { kind: "active" }, assignedToId: self ? self : { not: null } },
+      select: {
+        id: true,
+        candidateName: true,
+        assignedToId: true,
+        assignedAt: true,
+        createdAt: true,
+        importBatch: { select: { createdAt: true } },
+        status: { select: { code: true, label: true, color: true } },
+      },
+    }),
+    // Open re-inquiry follow-up tasks, per assignee (subject rule shared with the task board).
+    prisma.crmTask.groupBy({
+      by: ["assignedToId"],
+      where: {
+        status: "open",
+        subject: { contains: REINQUIRY_TASK_SUBJECT_NEEDLE, mode: "insensitive" },
+        ...(self ? { assignedToId: self } : {}),
+      },
+      _count: { _all: true },
+    }),
+    // Outbound-contact volume per BDE per channel, in the selected range.
+    ids.length
+      ? prisma.leadActivity.groupBy({
+          by: ["actorId", "type"],
+          where: { actorId: { in: ids }, ...outboundContactWhere(), ...(occurredAt ? { occurredAt } : {}) },
+          _count: { _all: true },
+        })
+      : Promise.resolve([] as Array<{ actorId: string | null; type: string; _count: { _all: number } }>),
+    // Tasks completed in the range (for completion + on-time %).
+    prisma.crmTask.findMany({
+      where: {
+        status: "done",
+        completedAt: occurredAt ?? { not: null },
+        ...(self ? { assignedToId: self } : { assignedToId: { in: ids } }),
+      },
+      select: { assignedToId: true, completedAt: true, dueAt: true },
+    }),
+    // Leads assigned in the range (assignedRange counts + first-response population).
+    // Carryover-filtered below so imports stamped at import time aren't counted.
+    prisma.lead.findMany({
+      where: { assignedToId: self ? self : { in: ids }, assignedAt: occurredAt ?? { not: null } },
+      select: { id: true, assignedToId: true, assignedAt: true, importBatch: { select: { createdAt: true } } },
+    }),
+    // New leads in the last 14 days, for the trend sparkline + "today".
+    prisma.lead.findMany({
+      where: { createdAt: { gte: trendFrom }, ...scopeLeadWhere },
+      select: { createdAt: true },
+    }),
+    // New leads created in the selected range.
+    prisma.lead.count({ where: { ...(occurredAt ? { createdAt: occurredAt } : {}), ...scopeLeadWhere } }),
+    // Unassigned active leads (managers only; 0 for a self-view).
+    self ? Promise.resolve(0) : prisma.lead.count({ where: { status: { kind: "active" }, assignedToId: null } }),
+  ]);
+
+  // Carryover-exclude: keep only genuinely-owned leads (drops bulk-import dumps),
+  // so the unassigned/imported backlog never inflates a consultant's numbers.
+  const attentionLeads = activeAssignedRaw.filter((l) =>
+    isDeliberateAssignment({
+      assignedToId: l.assignedToId,
+      assignedAt: l.assignedAt,
+      importBatchCreatedAt: l.importBatch?.createdAt ?? null,
+    }),
+  );
+  const attentionLeadIds = attentionLeads.map((l) => l.id);
+
+  const assignments = assignedRaw
+    .filter((l) =>
+      isDeliberateAssignment({
+        assignedToId: l.assignedToId,
+        assignedAt: l.assignedAt,
+        importBatchCreatedAt: l.importBatch?.createdAt ?? null,
+      }),
+    )
+    .map((l) => ({ leadId: l.id, assignedToId: l.assignedToId, assignedAt: l.assignedAt as Date }));
+  const assignedLeadIds = assignments.map((a) => a.leadId);
+
+  // Per-lead last touch + last status change over the owned set, which owned leads
+  // already have an open task, and the first-response contacts for assigned leads.
+  const [leadsWithOpenTaskGroups, touchGroups, statusChangeGroups, firstResponseContacts] = await Promise.all([
+    attentionLeadIds.length
+      ? prisma.crmTask.groupBy({ by: ["leadId"], where: { status: "open", leadId: { in: attentionLeadIds } } })
+      : Promise.resolve([] as Array<{ leadId: string }>),
+    attentionLeadIds.length
+      ? prisma.leadActivity.groupBy({
+          by: ["leadId"],
+          where: { leadId: { in: attentionLeadIds }, ...touchActivityWhere() },
+          _max: { occurredAt: true },
+        })
+      : Promise.resolve([] as Array<{ leadId: string; _max: { occurredAt: Date | null } }>),
+    attentionLeadIds.length
+      ? prisma.leadActivity.groupBy({
+          by: ["leadId"],
+          where: { leadId: { in: attentionLeadIds }, type: "STATUS_CHANGED" },
+          _max: { occurredAt: true },
+        })
+      : Promise.resolve([] as Array<{ leadId: string; _max: { occurredAt: Date | null } }>),
+    assignedLeadIds.length
+      ? prisma.leadActivity.findMany({
+          where: { leadId: { in: assignedLeadIds }, ...outboundContactWhere() },
+          select: { leadId: true, occurredAt: true },
+        })
+      : Promise.resolve([] as Array<{ leadId: string; occurredAt: Date }>),
+  ]);
+
+  const touchByLead = new Map(touchGroups.map((g) => [g.leadId, g._max.occurredAt]));
+  const statusChangeByLead = new Map(statusChangeGroups.map((g) => [g.leadId, g._max.occurredAt]));
+  const leadsWithOpenTask = new Set(leadsWithOpenTaskGroups.map((g) => g.leadId));
+
+  // ── Per-BDE accumulators ──
+  const blank = (): Omit<TeamBdeRow, "userId" | "displayName" | "role"> => ({
+    assignedMonth: 0,
+    enrolledMonth: 0,
+    conversionPct: null,
+    assignedRange: 0,
+    calls: 0,
+    emails: 0,
+    whatsapp: 0,
+    contacts: 0,
+    tasksCompleted: 0,
+    tasksOnTime: 0,
+    firstResponseMedianHours: null,
+    firstResponsePending: 0,
+    firstResponseBreached: 0,
+    slaBreaches: 0,
+    abandoned: 0,
+    noTask: 0,
+    stuck: 0,
+    openReinquiry: 0,
+  });
+  const acc = new Map(roster.map((b) => [b.userId, blank()]));
+
+  // Conversion (month).
+  const funnelById = new Map(funnel.map((f) => [f.userId, f]));
+  for (const b of roster) {
+    const f = funnelById.get(b.userId);
+    const a = acc.get(b.userId)!;
+    if (f) {
+      a.assignedMonth = f.leadsAssigned;
+      a.enrolledMonth = f.enrolled;
+      a.conversionPct = f.conversionPct;
+    }
+  }
+
+  // Outbound-contact leaderboard (range).
+  for (const g of contactGroups) {
+    const a = g.actorId ? acc.get(g.actorId) : undefined;
+    if (!a) continue;
+    const n = g._count._all;
+    a.contacts += n;
+    if (g.type === "CALL_LOGGED") a.calls += n;
+    else if (g.type === "EMAIL_SENT") a.emails += n;
+    else if (g.type === "WHATSAPP_SENT") a.whatsapp += n;
+  }
+
+  // Tasks completed + on-time (range).
+  for (const t of completedTasks) {
+    const a = t.assignedToId ? acc.get(t.assignedToId) : undefined;
+    if (!a) continue;
+    a.tasksCompleted++;
+    if (isTaskOnTime(t)) a.tasksOnTime++;
+  }
+
+  // Assigned-in-range counts (carryover-excluded).
+  for (const a of assignments) {
+    const row = a.assignedToId ? acc.get(a.assignedToId) : undefined;
+    if (row) row.assignedRange++;
+  }
+
+  // First response (range), per BDE.
+  const firstContactByLead = firstContactAfterAssignment(assignments, firstResponseContacts);
+  const assignmentsByBde = new Map<string, Array<{ leadId: string; assignedAt: Date }>>();
+  for (const a of assignments) {
+    if (!a.assignedToId || !acc.has(a.assignedToId)) continue;
+    const list = assignmentsByBde.get(a.assignedToId) ?? [];
+    list.push({ leadId: a.leadId, assignedAt: a.assignedAt });
+    assignmentsByBde.set(a.assignedToId, list);
+  }
+  for (const [userId, assignments] of assignmentsByBde) {
+    const stats = computeFirstResponseStats({ assignments, firstContactByLead, now });
+    const a = acc.get(userId)!;
+    a.firstResponseMedianHours = stats.medianHours;
+    a.firstResponsePending = stats.pending;
+    a.firstResponseBreached = stats.breached;
+  }
+
+  // Re-inquiry open tasks (now).
+  for (const g of reinquiryByBde) {
+    const a = g.assignedToId ? acc.get(g.assignedToId) : undefined;
+    if (a) a.openReinquiry += g._count._all;
+  }
+
+  // ── Attention buckets (point-in-time) ──
+  const slaList: TeamLeadRef[] = [];
+  const abandonedList: TeamLeadRef[] = [];
+  const noTaskList: TeamLeadRef[] = [];
+  const stuckList: TeamLeadRef[] = [];
+  const nameById = new Map(roster.map((b) => [b.userId, b.displayName]));
+
+  const toRef = (l: ActiveLeadLite, ageDays: number): TeamLeadRef => ({
+    id: l.id,
+    name: l.candidateName,
+    statusLabel: l.status.label,
+    statusColor: l.status.color,
+    assigneeId: l.assignedToId,
+    assigneeName: l.assignedToId ? nameById.get(l.assignedToId) ?? null : null,
+    ageDays,
+  });
+
+  for (const l of attentionLeads) {
+    const a = l.assignedToId ? acc.get(l.assignedToId) : undefined;
+    const lastTouchAt = touchByLead.get(l.id) ?? l.createdAt;
+    const verdict = classifyStaleness({ statusCode: l.status.code, lastTouchAt, now });
+
+    if (verdict.breached) {
+      if (a) a.slaBreaches++;
+      slaList.push(toRef(l, verdict.ageDays));
+    }
+    if (verdict.abandoned) {
+      if (a) a.abandoned++;
+      abandonedList.push(toRef(l, verdict.ageDays));
+    }
+    if (!leadsWithOpenTask.has(l.id)) {
+      if (a) a.noTask++;
+      noTaskList.push(toRef(l, verdict.ageDays));
+    }
+    const stuckSince = statusChangeByLead.get(l.id) ?? l.createdAt;
+    const stuckDays = ageInDays(now, stuckSince);
+    if (stuckDays > STUCK_DAYS) {
+      if (a) a.stuck++;
+      stuckList.push(toRef(l, stuckDays));
+    }
+  }
+
+  const worstFirst = (a: TeamLeadRef, b: TeamLeadRef) => b.ageDays - a.ageDays;
+  const cap = (xs: TeamLeadRef[]) => xs.sort(worstFirst).slice(0, ATTENTION_LIST_LIMIT);
+
+  // ── Totals ──
+  const sum = (pick: (r: ReturnType<typeof blank>) => number) =>
+    [...acc.values()].reduce((s, r) => s + pick(r), 0);
+
+  const newLeadTrend = bucketByLocalDay(
+    trendLeads.map((l) => ({ at: l.createdAt })),
+    now,
+    TREND_DAYS,
+  );
+
+  const bdeRows: TeamBdeRow[] = roster.map((b) => ({
+    userId: b.userId,
+    displayName: b.displayName,
+    role: b.role,
+    ...acc.get(b.userId)!,
+  }));
+
+  return {
+    scopeTeamWide: scope.teamWide,
+    totals: {
+      newLeadsToday: newLeadTrend[newLeadTrend.length - 1] ?? 0,
+      newLeadsRange: newLeadsRange,
+      assignedRange: assignments.length,
+      contacts: sum((r) => r.contacts),
+      tasksCompleted: sum((r) => r.tasksCompleted),
+      tasksOnTime: sum((r) => r.tasksOnTime),
+      slaBreaches: slaList.length,
+      abandoned: abandonedList.length,
+      noTask: noTaskList.length,
+      stuck: stuckList.length,
+      openReinquiry: sum((r) => r.openReinquiry),
+      firstResponsePending: sum((r) => r.firstResponsePending),
+      firstResponseBreached: sum((r) => r.firstResponseBreached),
+      unassignedActive,
+    },
+    newLeadTrend,
+    bdeRows,
+    attention: {
+      slaBreaches: cap(slaList),
+      abandoned: cap(abandonedList),
+      noTask: cap(noTaskList),
+      stuck: cap(stuckList),
+    },
+  };
+}

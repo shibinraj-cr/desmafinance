@@ -173,6 +173,12 @@ export const MODULES: AppModule[] = [
     status: "active",
     pages: [
       {
+        href: "/crm/team",
+        label: "Team Activity",
+        icon: "insights",
+        group: "PIPELINE",
+      },
+      {
         href: "/crm/leads",
         label: "Leads",
         icon: "groups",
