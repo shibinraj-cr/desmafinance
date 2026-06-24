@@ -27,14 +27,12 @@ export type OpsAccess = {
   canAssign: boolean;
 };
 
-// The page whose grant promotes a role to the Operations-manager tier. In
-// Phase 1 the only Operations page is Process Templates, so it doubles as the
-// manager anchor; when /operations/settings ships (Phase 3) the anchor moves
-// there and Templates becomes a normal manager page.
-const OPS_MANAGER_ANCHOR = "/operations/templates";
-// The page that marks a role as an operations user (the day-to-day workspace).
-// Ships in Phase 3; until then no non-admin qualifies, which is intended.
-const OPS_USER_ANCHOR = "/operations/projects";
+// Granting a role the Settings page promotes it to the Operations-manager tier
+// (assignment, template authoring, settings) — the same trick as `canManageCrm`
+// keyed on `/crm/settings`. No code change needed to mint future ops managers.
+const OPS_MANAGER_ANCHOR = "/operations/settings";
+// Either workspace page marks a role as an operations user (day-to-day worker).
+const OPS_USER_ANCHORS = ["/operations/projects", "/operations/my-work"];
 
 /**
  * Pure function of (userId, perms) — no DB. Operations access derives entirely
@@ -44,7 +42,8 @@ const OPS_USER_ANCHOR = "/operations/projects";
 export function getOpsAccess(userId: string, perms: Permissions | null): OpsAccess {
   const admin = isAdmin(perms ?? null);
   const isOpsManager = admin || (perms ? canSeePage(perms, OPS_MANAGER_ANCHOR) : false);
-  const isOpsUser = isOpsManager || (perms ? canSeePage(perms, OPS_USER_ANCHOR) : false);
+  const isOpsUser =
+    isOpsManager || (perms ? OPS_USER_ANCHORS.some((p) => canSeePage(perms, p)) : false);
 
   return {
     userId,

@@ -200,10 +200,19 @@ export const MODULES: AppModule[] = [
     basePath: "/operations",
     status: "active",
     pages: [
+      { href: "/operations/my-work", label: "My Work", icon: "task_alt", group: "WORK" },
+      { href: "/operations/projects", label: "Projects", icon: "folder_managed", group: "WORK" },
       {
         href: "/operations/templates",
         label: "Process Templates",
         icon: "checklist",
+        group: "SETUP",
+        adminOnly: true,
+      },
+      {
+        href: "/operations/settings",
+        label: "Settings",
+        icon: "tune",
         group: "SETUP",
         adminOnly: true,
       },

@@ -12,6 +12,9 @@ const prisma = new PrismaClient();
 
 const HR_PAGES = MODULES.find((m) => m.id === "hr")?.pages.map((p) => p.href) ?? [];
 const ME_PAGES = MODULES.find((m) => m.id === "me")?.pages.map((p) => p.href) ?? [];
+const OPS_PAGES = MODULES.find((m) => m.id === "operations")?.pages.map((p) => p.href) ?? [];
+// Day-to-day operations worker: the workspace only (no templates/settings).
+const OPS_USER_PAGES = ["/operations/my-work", "/operations/projects"];
 
 // System roles seed shape. The name is the *initial* name on first run; admins
 // can rename in the UI later (e.g. "Manager" → "Finance Manager"). On re-run,
@@ -76,6 +79,26 @@ const SYSTEM_ROLES = [
     canApprove: false,
     needsApproval: true,
     pages: ME_PAGES,
+    isSystem: true,
+  },
+  {
+    name: "Operations Manager",
+    aliases: ["Operations Manager"],
+    description: "Runs the Operations module: authors process templates, assigns projects, sees all candidate projects.",
+    isAdmin: false,
+    canApprove: false,
+    needsApproval: true,
+    pages: [...OPS_PAGES, ...ME_PAGES],
+    isSystem: true,
+  },
+  {
+    name: "Operations User",
+    aliases: ["Operations User"],
+    description: "Operations team member: works the candidate projects assigned to them (My Work + Projects).",
+    isAdmin: false,
+    canApprove: false,
+    needsApproval: true,
+    pages: [...OPS_USER_PAGES, ...ME_PAGES],
     isSystem: true,
   },
 ];

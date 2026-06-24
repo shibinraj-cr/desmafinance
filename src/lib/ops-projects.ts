@@ -96,7 +96,7 @@ export async function createProjectForEnrollment(
     partyServiceId: string;
     partyId: string;
     serviceId: string;
-    leadId: string;
+    leadId: string | null;
     actorId: string | null;
     template: TemplateForInstantiation | null;
     holidays: ReadonlySet<string>;
