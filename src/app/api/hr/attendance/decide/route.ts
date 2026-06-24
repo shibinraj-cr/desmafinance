@@ -6,6 +6,7 @@ import { canApproveHr } from "@/lib/hr-rbac";
 import { applySandwichRule } from "@/lib/hr-sandwich";
 import { cycleWindowForMonth, cycleMonthForDate } from "@/lib/hr-data";
 import { recomputeLeaveBalance } from "@/lib/hr-leave-balance";
+import { leaveStatusBlockedByPunch } from "@/lib/hr-attendance-status";
 
 const Schema = z.object({
   /// Either a single attendance-day id or a batch of ids.
@@ -35,7 +36,7 @@ export async function POST(req: Request) {
 
   const days = await prisma.hrAttendanceDay.findMany({
     where: { id: { in: dayIds } },
-    select: { id: true, status: true, rawStatus: true, date: true, employeeId: true },
+    select: { id: true, status: true, rawStatus: true, date: true, employeeId: true, inTime: true, outTime: true },
   });
   if (days.length === 0) return NextResponse.json({ error: "no matching days" }, { status: 404 });
 
@@ -68,6 +69,25 @@ export async function POST(req: Request) {
         break;
     }
     updates.push({ id: d.id, newStatus });
+  }
+
+  // Guardrail: a day with punch-ins is a worked day (P/HD) and can never be
+  // reclassified as paid leave (LV) or full absence (A) — that override is what
+  // let worked half-days get marked as paid leave. Reject the batch (rather than
+  // silently skipping) so HR notices and fixes a wrong punch via Regularization.
+  const punchViolations = days.filter((d, i) =>
+    leaveStatusBlockedByPunch(updates[i].newStatus, d.inTime, d.outTime),
+  );
+  if (punchViolations.length > 0) {
+    return NextResponse.json(
+      {
+        error:
+          `${punchViolations.length} day(s) have punch-ins, so they're present (P) or half-day (HD) and can't be marked as ${decision === "paid" ? "paid leave" : "absent"}. ` +
+          `If a punch is wrong, correct it via Regularization instead.`,
+        dayIds: punchViolations.map((d) => d.id),
+      },
+      { status: 400 },
+    );
   }
 
   const now = new Date();
