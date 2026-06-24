@@ -69,17 +69,21 @@ export async function PATCH(req: Request, { params }: { params: { id: string } }
       },
     });
     if (parsed.data.decision === "approve") {
-      // Apply correction to the attendance day. If no row exists for
-      // that date yet, create a minimal one tied to the most recent
-      // upload (if any), or skip — HR can re-upload later.
-      const inTime = parsed.data.finalIn ?? reg.proposedIn ?? null;
-      const outTime = parsed.data.finalOut ?? reg.proposedOut ?? null;
-      const workMinutes = grossWorkMinutes(inTime, outTime);
+      // Punch request → corrected punches resolve to the HR-chosen P/HD.
+      // Leave request → the day becomes paid leave (LV); no punch is involved.
+      const isLeave = reg.requestType === "leave";
+      const inTime = isLeave ? null : parsed.data.finalIn ?? reg.proposedIn ?? null;
+      const outTime = isLeave ? null : parsed.data.finalOut ?? reg.proposedOut ?? null;
+      const workMinutes = isLeave ? null : grossWorkMinutes(inTime, outTime);
+      const targetStatus = isLeave ? "LV" : parsed.data.finalStatus;
+      const note = isLeave
+        ? `Leave approved · ${parsed.data.reviewNote ?? ""}`.trim()
+        : `Regularized · ${parsed.data.reviewNote ?? ""}`.trim();
       if (reg.attendanceDayId) {
         await tx.hrAttendanceDay.update({
           where: { id: reg.attendanceDayId },
           data: {
-            status: parsed.data.finalStatus,
+            status: targetStatus,
             inTime,
             outTime,
             // Rederive worked minutes from the corrected punches (OT folded in)
@@ -88,7 +92,7 @@ export async function PATCH(req: Request, { params }: { params: { id: string } }
             otMinutes: 0,
             decidedById: userId ?? null,
             decidedAt: now,
-            decisionNote: `Regularized · ${parsed.data.reviewNote ?? ""}`.trim(),
+            decisionNote: note,
           },
         });
       } else {
@@ -106,7 +110,7 @@ export async function PATCH(req: Request, { params }: { params: { id: string } }
               uploadId: upload.id,
               employeeId: reg.employee.id,
               date: reg.date,
-              status: parsed.data.finalStatus,
+              status: targetStatus,
               rawStatus: "REG",
               inTime,
               outTime,
@@ -115,7 +119,7 @@ export async function PATCH(req: Request, { params }: { params: { id: string } }
               otMinutes: 0,
               lateMinutes: null,
               earlyOutMinutes: null,
-              remark: `Regularized · ${reg.reasonType}`,
+              remark: isLeave ? "Leave (regularization)" : `Regularized · ${reg.reasonType}`,
               decidedById: userId ?? null,
               decidedAt: now,
               decisionNote: parsed.data.reviewNote ?? null,

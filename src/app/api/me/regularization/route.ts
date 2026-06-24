@@ -15,7 +15,11 @@ const REASON_CODES = REGULARIZATION_REASONS.map((r) => r.code) as [string, ...st
 
 const Schema = z.object({
   date: z.string().regex(DATE_RE),
-  reasonType: z.enum(REASON_CODES),
+  // 'punch' (correct a missing/wrong punch) or 'leave' (request paid leave for
+  // an absence). Punch requests carry a punch reasonType + proposed times; leave
+  // requests carry just a reason.
+  requestType: z.enum(["punch", "leave"]).default("punch"),
+  reasonType: z.string().max(40).optional(),
   reason: z.string().min(5).max(500),
   proposedIn: z.string().regex(TIME_RE).nullable().optional(),
   proposedOut: z.string().regex(TIME_RE).nullable().optional(),
@@ -49,6 +53,15 @@ export async function POST(req: Request) {
   if (!parsed.success) {
     return NextResponse.json({ error: "invalid", issues: parsed.error.issues }, { status: 400 });
   }
+  const isLeave = parsed.data.requestType === "leave";
+  // Punch requests must name a valid punch reason; leave requests are tagged
+  // 'leave' and never carry proposed punch times.
+  const reasonType = isLeave ? "leave" : parsed.data.reasonType ?? "";
+  if (!isLeave && !REASON_CODES.includes(reasonType)) {
+    return NextResponse.json({ error: "invalid reasonType for a punch request" }, { status: 400 });
+  }
+  const proposedIn = isLeave ? null : parsed.data.proposedIn ?? null;
+  const proposedOut = isLeave ? null : parsed.data.proposedOut ?? null;
   const date = new Date(parsed.data.date);
   const inWindow = await isWithinRegularizationWindow(date);
   if (!inWindow) {
@@ -82,10 +95,11 @@ export async function POST(req: Request) {
       employeeId: emp.id,
       attendanceDayId: day?.id ?? null,
       date,
-      reasonType: parsed.data.reasonType,
+      requestType: parsed.data.requestType,
+      reasonType,
       reason: parsed.data.reason,
-      proposedIn: parsed.data.proposedIn ?? null,
-      proposedOut: parsed.data.proposedOut ?? null,
+      proposedIn,
+      proposedOut,
       attachmentUrl: parsed.data.attachmentUrl ?? null,
       status: "pending",
     },
@@ -100,7 +114,8 @@ export async function POST(req: Request) {
       metadata: {
         employeeId: emp.id,
         date: parsed.data.date,
-        reasonType: parsed.data.reasonType,
+        requestType: parsed.data.requestType,
+        reasonType,
       },
     },
   });
