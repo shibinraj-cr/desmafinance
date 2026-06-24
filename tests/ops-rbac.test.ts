@@ -36,18 +36,22 @@ describe("getOpsAccess", () => {
     expect(a.canAssign).toBe(true);
   });
 
-  it("promotes a role granted the templates page to ops manager", () => {
-    const a = getOpsAccess("u1", perms({ pages: ["/operations/templates"] }));
+  it("promotes a role granted the settings page to ops manager", () => {
+    const a = getOpsAccess("u1", perms({ pages: ["/operations/settings"] }));
     expect(a.isOpsManager).toBe(true);
     expect(a.canManageTemplates).toBe(true);
+    expect(a.canAssign).toBe(true);
   });
 
-  it("treats a role granted only the projects page as an ops user, not a manager", () => {
-    const a = getOpsAccess("u1", perms({ pages: ["/operations/projects"] }));
-    expect(a.isOpsUser).toBe(true);
-    expect(a.canViewProjects).toBe(true);
-    expect(a.isOpsManager).toBe(false);
-    expect(a.canManageTemplates).toBe(false);
+  it("treats a role granted a workspace page as an ops user, not a manager", () => {
+    for (const page of ["/operations/projects", "/operations/my-work"]) {
+      const a = getOpsAccess("u1", perms({ pages: [page] }));
+      expect(a.isOpsUser).toBe(true);
+      expect(a.canViewProjects).toBe(true);
+      expect(a.isOpsManager).toBe(false);
+      expect(a.canManageTemplates).toBe(false);
+      expect(a.canAssign).toBe(false);
+    }
   });
 
   it("grants nothing to a role with no operations pages", () => {
