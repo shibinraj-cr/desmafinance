@@ -45,6 +45,7 @@ export const GET = withApiHandler(async (req: Request) => {
     assignee: resolveAssigneeFilter(sp.get("assignee") || undefined, { isBde: access.isBde, userId }),
     campaign: sp.get("campaign") || undefined,
     country: sp.get("country") || undefined,
+    studyDestination: sp.get("studyDestination") || undefined,
     q: sp.get("q") || undefined,
     from: range.from,
     to: range.to,
@@ -71,6 +72,7 @@ export const GET = withApiHandler(async (req: Request) => {
       Phone: l.phone ?? "",
       "Alt Phone": l.altPhone ?? "",
       Country: l.country ?? "",
+      "Study Destination": l.studyDestination ?? "",
       Service: l.service?.name ?? "",
       Qualification: l.qualification?.label ?? "",
       Consultant: l.assignedTo?.name ?? "",
@@ -79,12 +81,12 @@ export const GET = withApiHandler(async (req: Request) => {
   });
 
   const ws = XLSX.utils.json_to_sheet(data, {
-    header: ["Created", "Source", "Campaign", "Status", "Candidate", "Email", "Phone", "Alt Phone", "Country", "Service", "Qualification", "Consultant", "Assigned"],
+    header: ["Created", "Source", "Campaign", "Status", "Candidate", "Email", "Phone", "Alt Phone", "Country", "Study Destination", "Service", "Qualification", "Consultant", "Assigned"],
   });
   // Reasonable column widths.
   ws["!cols"] = [
     { wch: 20 }, { wch: 14 }, { wch: 22 }, { wch: 14 }, { wch: 22 },
-    { wch: 26 }, { wch: 16 }, { wch: 16 }, { wch: 16 }, { wch: 22 }, { wch: 16 }, { wch: 18 }, { wch: 20 },
+    { wch: 26 }, { wch: 16 }, { wch: 16 }, { wch: 16 }, { wch: 18 }, { wch: 22 }, { wch: 16 }, { wch: 18 }, { wch: 20 },
   ];
   const wb = XLSX.utils.book_new();
   XLSX.utils.book_append_sheet(wb, ws, "Leads");

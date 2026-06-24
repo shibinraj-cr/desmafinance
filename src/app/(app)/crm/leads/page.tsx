@@ -67,6 +67,7 @@ export default async function LeadsPage({ searchParams }: { searchParams: SP }) 
     assignee: resolveAssigneeFilter(str(searchParams, "assignee"), { isBde: access.isBde, userId }),
     campaign: str(searchParams, "campaign"),
     country: str(searchParams, "country"),
+    studyDestination: str(searchParams, "studyDestination"),
     q: str(searchParams, "q"),
     from: range.from,
     to: range.to,
@@ -80,7 +81,7 @@ export default async function LeadsPage({ searchParams }: { searchParams: SP }) 
   const totalPages = Math.max(1, Math.ceil(total / PAGE_SIZE));
   const page = Math.min(requestedPage, totalPages);
 
-  const [rows, statuses, sources, services, qualifications, bdes, campaignGroups, countryGroups, emailConfigured] = await Promise.all([
+  const [rows, statuses, sources, services, qualifications, bdes, campaignGroups, countryGroups, destinationGroups, emailConfigured] = await Promise.all([
     prisma.lead.findMany({
       where,
       orderBy: leadOrderBy(sort),
@@ -119,6 +120,11 @@ export default async function LeadsPage({ searchParams }: { searchParams: SP }) 
       where: { country: { not: null } },
       orderBy: { country: "asc" },
     }),
+    prisma.lead.groupBy({
+      by: ["studyDestination"],
+      where: { studyDestination: { not: null } },
+      orderBy: { studyDestination: "asc" },
+    }),
     isEmailConfigured(),
   ]);
 
@@ -134,6 +140,7 @@ export default async function LeadsPage({ searchParams }: { searchParams: SP }) 
     bdes,
     campaigns: campaignGroups.map((g) => g.campaign).filter((c): c is string => !!c),
     countries: countryGroups.map((g) => g.country).filter((c): c is string => !!c),
+    studyDestinations: destinationGroups.map((g) => g.studyDestination).filter((c): c is string => !!c),
   };
   const accessProps = {
     canCreate: access.canCreateLeads,

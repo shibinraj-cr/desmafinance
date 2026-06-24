@@ -1501,8 +1501,12 @@ model HrAttendanceRegularization {
   /// no attendance row was uploaded yet for this date.
   attendanceDayId String?
   date            DateTime         @db.Date
-  /// 'missing_punch' | 'wrong_in_time' | 'wrong_out_time' |
-  /// 'biometric_sync' | 'forgot_punch' | 'other'
+  /// What the employee is asking for:
+  ///   'punch' → correct a missing/wrong punch (approval → P/HD)
+  ///   'leave' → mark an absence as paid leave (approval → LV)
+  requestType     String           @default("punch")
+  /// For punch requests: 'missing_punch' | 'wrong_in_time' | 'wrong_out_time'
+  /// | 'biometric_sync' | 'forgot_punch' | 'other'. For leave requests: 'leave'.
   reasonType      String
   reason          String
   proposedIn      String?
@@ -1882,6 +1886,13 @@ model Lead {
   // column/filter and is shown/edited on the lead detail.
   country       String?
 
+  // Preferred study-abroad DESTINATION (the country the candidate wants to study
+  // in — e.g. "Australia", "United Kingdom"). Distinct from `country` (their home
+  // country). Relevant only for the Study Abroad service; the lead form only
+  // surfaces it for that service, but it's a plain column so the list can filter
+  // & segment by it. Same free-form name from the country dropdown.
+  studyDestination String?
+
   // Re-inquiry tracking. When a candidate who already exists submits again
   // (a duplicate by email/phone), we DON'T create a new row — we fold the
   // signal onto this canonical lead: bump `inquiryCount`, stamp `lastInquiryAt`,
@@ -1920,6 +1931,7 @@ model Lead {
   @@index([emailKey])
   @@index([campaign])
   @@index([country])
+  @@index([studyDestination])
   @@index([email])
   @@index([phoneE164])
   @@index([altPhoneE164])

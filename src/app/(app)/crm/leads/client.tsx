@@ -4,7 +4,7 @@ import { useEffect, useMemo, useRef, useState, useTransition } from "react";
 import { createPortal } from "react-dom";
 import Link from "next/link";
 import { useRouter, usePathname, useSearchParams } from "next/navigation";
-import type { LeadRow } from "@/lib/crm-leads";
+import { type LeadRow, isActionOnlyStatus } from "@/lib/crm-leads";
 import { DEFAULT_STATUS_COLOR, BULK_EMAIL_MERGE_FIELDS, fillTemplate } from "@/lib/crm";
 import { COUNTRIES } from "@/lib/countries";
 
@@ -21,6 +21,8 @@ export type Masters = {
   campaigns: string[];
   /** Distinct, non-empty country values present in the data (drives the filter). */
   countries: string[];
+  /** Distinct, non-empty study-destination values present in the data (drives the filter). */
+  studyDestinations: string[];
 };
 export type LeadsAccess = {
   canCreate: boolean;
@@ -249,9 +251,14 @@ function NewLeadButton({ masters, access }: { masters: Masters; access: LeadsAcc
     serviceId: "",
     qualificationId: "",
     country: "",
+    studyDestination: "",
     statusId: "",
     assignedToId: "",
   });
+
+  // The study-destination field only applies to the Study Abroad service.
+  const selectedServiceLabel = masters.services.find((s) => s.id === form.serviceId)?.label ?? "";
+  const isStudyAbroad = /study abroad/i.test(selectedServiceLabel);
 
   useEffect(() => setMounted(true), []);
   useEffect(() => {
@@ -283,6 +290,7 @@ function NewLeadButton({ masters, access }: { masters: Masters; access: LeadsAcc
         serviceId: form.serviceId || undefined,
         qualificationId: form.qualificationId || undefined,
         country: form.country || undefined,
+        studyDestination: isStudyAbroad ? form.studyDestination || undefined : undefined,
         statusId: form.statusId || undefined,
         assignedToId: access.canAssign ? form.assignedToId || undefined : undefined,
       }),
@@ -302,6 +310,7 @@ function NewLeadButton({ masters, access }: { masters: Masters; access: LeadsAcc
       serviceId: "",
       qualificationId: "",
       country: "",
+      studyDestination: "",
       statusId: "",
       assignedToId: "",
     });
@@ -419,11 +428,15 @@ function NewLeadButton({ masters, access }: { masters: Masters; access: LeadsAcc
                     onChange={(e) => setForm({ ...form, statusId: e.target.value })}
                   >
                     <option value="">Default</option>
-                    {masters.statuses.map((s) => (
-                      <option key={s.id} value={s.id}>
-                        {s.label}
-                      </option>
-                    ))}
+                    {/* Pipeline & Enrolled are set by actions (Set deal / Enroll), not at
+                        creation — exclude them here (server also rejects them). */}
+                    {masters.statuses
+                      .filter((s) => !isActionOnlyStatus(s.code))
+                      .map((s) => (
+                        <option key={s.id} value={s.id}>
+                          {s.label}
+                        </option>
+                      ))}
                   </select>
                 </Field>
               </div>
@@ -441,6 +454,22 @@ function NewLeadButton({ masters, access }: { masters: Masters; access: LeadsAcc
                   ))}
                 </select>
               </Field>
+              {isStudyAbroad && (
+                <Field label="Study Destination">
+                  <select
+                    className={inputCls}
+                    value={form.studyDestination}
+                    onChange={(e) => setForm({ ...form, studyDestination: e.target.value })}
+                  >
+                    <option value="">—</option>
+                    {COUNTRIES.map((c) => (
+                      <option key={c} value={c}>
+                        {c}
+                      </option>
+                    ))}
+                  </select>
+                </Field>
+              )}
               {access.canAssign && (
                 <Field label="Consultant (BDE)">
                   <select
@@ -486,7 +515,7 @@ const SORT_OPTIONS: { value: string; label: string }[] = [
 // fixed). Order is remembered per browser in localStorage.
 const LEADS_COL_ORDER_KEY = "crm.leads.columnOrder.v1";
 const LEADS_DEFAULT_COLUMNS = [
-  "created", "source", "campaign", "status", "candidate", "email", "phone", "country", "service", "qualification", "consultant", "assigned",
+  "created", "source", "campaign", "status", "candidate", "email", "phone", "country", "studyDestination", "service", "qualification", "consultant", "assigned",
 ] as const;
 
 export function LeadsTable({
@@ -629,6 +658,7 @@ export function LeadsTable({
     assigneeIsFilter ||
     !!search.get("campaign") ||
     !!search.get("country") ||
+    !!search.get("studyDestination") ||
     !!search.get("assignedOn") ||
     !!search.get("q");
 
@@ -694,6 +724,19 @@ export function LeadsTable({
         l.country ? (
           <button type="button" onClick={() => update({ country: l.country })} className="hover:text-primary hover:underline" title={`Filter by ${l.country}`}>
             {l.country}
+          </button>
+        ) : (
+          "—"
+        ),
+    },
+    {
+      id: "studyDestination",
+      label: "Study Destination",
+      className: "whitespace-nowrap text-on-surface-variant",
+      render: (l) =>
+        l.studyDestination ? (
+          <button type="button" onClick={() => update({ studyDestination: l.studyDestination })} className="hover:text-primary hover:underline" title={`Filter by ${l.studyDestination}`}>
+            {l.studyDestination}
           </button>
         ) : (
           "—"
@@ -845,6 +888,17 @@ export function LeadsTable({
           </select>
         )}
 
+        {masters.studyDestinations.length > 0 && (
+          <select className={selectClass} value={search.get("studyDestination") ?? ""} onChange={(e) => update({ studyDestination: e.target.value || null })}>
+            <option value="">All destinations</option>
+            {masters.studyDestinations.map((c) => (
+              <option key={c} value={c}>
+                {c}
+              </option>
+            ))}
+          </select>
+        )}
+
         <select className={selectClass} value={search.get("sort") ?? "created_desc"} onChange={(e) => update({ sort: e.target.value })}>
           {SORT_OPTIONS.map((o) => (
             <option key={o.value} value={o.value}>
@@ -856,7 +910,7 @@ export function LeadsTable({
         {anyFilter && (
           <button
             type="button"
-            onClick={() => update({ status: null, source: null, service: null, assignee: null, campaign: null, country: null, assignedOn: null, q: null })}
+            onClick={() => update({ status: null, source: null, service: null, assignee: null, campaign: null, country: null, studyDestination: null, assignedOn: null, q: null })}
             className="h-9 px-md rounded-lg border border-outline-variant text-label-sm text-on-surface-variant hover:text-on-surface hover:bg-surface-container-low transition"
           >
             Clear all
