@@ -1748,6 +1748,10 @@ function TasksPanel({
   );
 }
 
+// Fixed task types for the lead task composer — a closed list keeps subjects
+// consistent so they read cleanly on the board and in the tasks export.
+const TASK_TYPES = ["Follow-up Call", "WhatsApp Message", "Document Request", "Payment Request"] as const;
+
 function TaskComposer({
   leadId,
   bdes,
@@ -1791,12 +1795,14 @@ function TaskComposer({
 
   return (
     <div className="rounded-lg border border-outline-variant bg-surface-container-low p-md space-y-sm">
-      <input
-        value={subject}
-        onChange={(e) => setSubject(e.target.value)}
-        placeholder="Add a task (e.g. Follow-up call about documents)…"
-        className={inputCls}
-      />
+      <select value={subject} onChange={(e) => setSubject(e.target.value)} className={inputCls}>
+        <option value="">Select a task…</option>
+        {TASK_TYPES.map((t) => (
+          <option key={t} value={t}>
+            {t}
+          </option>
+        ))}
+      </select>
       <div className="grid grid-cols-1 sm:grid-cols-3 gap-base">
         <Field label="Due date">
           <input type="date" value={due} onChange={(e) => setDue(e.target.value)} className={inputCls} />
