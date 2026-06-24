@@ -77,7 +77,7 @@ export function RegularizationReviewClient({
             {STATUSES.map((s) => (
               <Link
                 key={s}
-                href={`/hr/regularization?status=${s}`}
+                href={`/hr/regularization?tab=requests&status=${s}`}
                 className={`px-sm py-xs rounded-lg text-label-sm capitalize ${s === status ? "bg-primary text-on-primary font-semibold" : "bg-surface-container text-on-surface-variant"}`}
               >
                 {s}
