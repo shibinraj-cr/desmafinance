@@ -4,7 +4,7 @@ import { describe, it, expect, vi } from "vitest";
 // mock prisma to avoid constructing a real DB client when the module loads.
 vi.mock("@/lib/prisma", () => ({ prisma: {} }));
 
-import { resolveAssigneeFilter, buildLeadWhere } from "@/lib/crm-leads";
+import { resolveAssigneeFilter, buildLeadWhere, buildCrmTaskWhere } from "@/lib/crm-leads";
 
 describe("resolveAssigneeFilter", () => {
   it("defaults a BDE with no explicit choice to their own queue", () => {
@@ -53,5 +53,27 @@ describe("buildLeadWhere — country", () => {
 
   it("omits the country filter when not provided", () => {
     expect(buildLeadWhere({}).country).toBeUndefined();
+  });
+});
+
+describe("buildCrmTaskWhere — re-inquiry kind", () => {
+  it("matches re-inquiry follow-ups by subject (case-insensitive)", () => {
+    // Catches every creator: 'Re-inquiry — …', 'Re-inquiry oversight — …', and
+    // the rescue script's 'Re-engage — re-inquiry via …'.
+    expect(buildCrmTaskWhere({ kind: "reinquiry" }).subject).toEqual({
+      contains: "re-inquiry",
+      mode: "insensitive",
+    });
+  });
+
+  it("applies no subject filter for other kinds", () => {
+    expect(buildCrmTaskWhere({}).subject).toBeUndefined();
+    expect(buildCrmTaskWhere({ kind: "other" }).subject).toBeUndefined();
+  });
+
+  it("combines the re-inquiry kind with the default open status", () => {
+    const where = buildCrmTaskWhere({ kind: "reinquiry", status: "open" });
+    expect(where.status).toBe("open");
+    expect(where.subject).toEqual({ contains: "re-inquiry", mode: "insensitive" });
   });
 });

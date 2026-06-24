@@ -424,10 +424,17 @@ export type CrmTaskFilterParams = {
   assignee?: string; // userId | 'unassigned'
   priority?: string; // 'low' | 'normal' | 'high'
   due?: string; // 'overdue' | 'today' | 'week' | 'no_date'
+  kind?: string; // 'reinquiry' — re-inquiry / re-engage follow-ups
   q?: string; // matches task subject OR lead name
   /** Injected "now" so date math is stable within a request. */
   now?: Date;
 };
+
+// Re-inquiry follow-up tasks have no dedicated column — they're identified by a
+// "re-inquiry" subject, shared by every creator: the live action + oversight
+// tasks (`Re-inquiry — …` / `Re-inquiry oversight — …`) and the rescue script's
+// `Re-engage — re-inquiry via …`. Same needle the rescue script counts on.
+export const REINQUIRY_TASK_SUBJECT_NEEDLE = "re-inquiry";
 
 /** Midnight (local) at the start of `d`. */
 function startOfDay(d: Date): Date {
@@ -442,6 +449,9 @@ export function buildCrmTaskWhere(p: CrmTaskFilterParams): Prisma.CrmTaskWhereIn
   else if (p.assignee) where.assignedToId = p.assignee;
   if (p.priority === "low" || p.priority === "normal" || p.priority === "high") {
     where.priority = p.priority;
+  }
+  if (p.kind === "reinquiry") {
+    where.subject = { contains: REINQUIRY_TASK_SUBJECT_NEEDLE, mode: "insensitive" };
   }
 
   const today = startOfDay(p.now ?? new Date());

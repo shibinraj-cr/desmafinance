@@ -9,6 +9,7 @@ import {
   crmTaskListOrderBy,
   serializeCrmTaskListRow,
   getAssignableBdes,
+  REINQUIRY_TASK_SUBJECT_NEEDLE,
 } from "@/lib/crm-leads";
 import { TasksBoard } from "./client";
 
@@ -51,6 +52,7 @@ export default async function TasksPage({ searchParams }: { searchParams: SP }) 
     assignee: str(searchParams, "assignee"),
     priority: str(searchParams, "priority"),
     due: str(searchParams, "due"),
+    kind: str(searchParams, "kind"),
     q: str(searchParams, "q"),
     now,
   };
@@ -65,7 +67,7 @@ export default async function TasksPage({ searchParams }: { searchParams: SP }) 
   const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
   const tomorrow = new Date(today.getTime() + 24 * 60 * 60 * 1000);
 
-  const [rows, bdes, openCount, overdueCount, dueTodayCount, unassignedOpenCount] = await Promise.all([
+  const [rows, bdes, openCount, overdueCount, dueTodayCount, unassignedOpenCount, reinquiryCount] = await Promise.all([
     prisma.crmTask.findMany({
       where,
       orderBy: crmTaskListOrderBy(sort),
@@ -78,6 +80,7 @@ export default async function TasksPage({ searchParams }: { searchParams: SP }) 
     prisma.crmTask.count({ where: { status: "open", dueAt: { lt: today } } }),
     prisma.crmTask.count({ where: { status: "open", dueAt: { gte: today, lt: tomorrow } } }),
     prisma.crmTask.count({ where: { status: "open", assignedToId: null } }),
+    prisma.crmTask.count({ where: { status: "open", subject: { contains: REINQUIRY_TASK_SUBJECT_NEEDLE, mode: "insensitive" } } }),
   ]);
 
   const counts = {
@@ -85,6 +88,7 @@ export default async function TasksPage({ searchParams }: { searchParams: SP }) 
     overdue: overdueCount,
     dueToday: dueTodayCount,
     unassignedOpen: unassignedOpenCount,
+    reinquiry: reinquiryCount,
   };
   const accessProps = { isAdmin: access.isAdmin, isBde: access.isBde, userId };
 

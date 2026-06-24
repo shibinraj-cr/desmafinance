@@ -37,6 +37,7 @@ export const GET = withApiHandler(async (req: Request) => {
     assignee: sp.get("assignee") || undefined,
     priority: sp.get("priority") || undefined,
     due: sp.get("due") || undefined,
+    kind: sp.get("kind") || undefined,
     q: sp.get("q") || undefined,
     now: new Date(),
   });
