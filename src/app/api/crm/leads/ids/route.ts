@@ -35,6 +35,7 @@ export const GET = withApiHandler(async (req: Request) => {
     assignee: resolveAssigneeFilter(sp.get("assignee") || undefined, { isBde: access.isBde, userId }),
     campaign: sp.get("campaign") || undefined,
     country: sp.get("country") || undefined,
+    studyDestination: sp.get("studyDestination") || undefined,
     q: sp.get("q") || undefined,
     from: range.from,
     to: range.to,

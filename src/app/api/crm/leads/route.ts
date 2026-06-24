@@ -51,6 +51,7 @@ export const GET = withApiHandler(async (req: Request) => {
     assignee: resolveAssigneeFilter(sp.get("assignee") || undefined, { isBde: access.isBde, userId }),
     campaign: sp.get("campaign") || undefined,
     country: sp.get("country") || undefined,
+    studyDestination: sp.get("studyDestination") || undefined,
     q: sp.get("q") || undefined,
     from: range.from,
     to: range.to,
@@ -85,6 +86,7 @@ const CreateSchema = z.object({
   statusId: z.string().optional(),
   assignedToId: z.string().optional(),
   country: z.string().trim().max(100).optional(),
+  studyDestination: z.string().trim().max(100).optional(),
   extra: z.record(z.string()).optional(),
 });
 
@@ -185,6 +187,7 @@ export const POST = withApiHandler(async (req: Request) => {
       assignedToId,
       assignedAt: assignedToId ? new Date() : null,
       country: data.country || null,
+      studyDestination: data.studyDestination || null,
       extra: data.extra ?? undefined,
       createdById: userId,
     },

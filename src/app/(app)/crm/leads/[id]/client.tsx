@@ -453,8 +453,13 @@ function SummaryCard({ lead, masters, canEdit }: { lead: LeadRow; masters: Detai
     serviceId: lead.service?.id ?? "",
     qualificationId: lead.qualification?.id ?? "",
     country: lead.country ?? "",
+    studyDestination: lead.studyDestination ?? "",
     statusId: lead.status.id,
   });
+
+  // Study destination only applies to the Study Abroad service.
+  const selectedServiceLabel = masters.services.find((s) => s.id === draft.serviceId)?.label ?? "";
+  const isStudyAbroad = /study abroad/i.test(selectedServiceLabel);
 
   async function save() {
     setError(null);
@@ -475,6 +480,7 @@ function SummaryCard({ lead, masters, canEdit }: { lead: LeadRow; masters: Detai
         serviceId: draft.serviceId,
         qualificationId: draft.qualificationId,
         country: draft.country,
+        studyDestination: isStudyAbroad ? draft.studyDestination : undefined,
         statusId: draft.statusId,
       }),
     });
@@ -564,6 +570,18 @@ function SummaryCard({ lead, masters, canEdit }: { lead: LeadRow; masters: Detai
               ))}
             </select>
           </Field>
+          {isStudyAbroad && (
+            <Field label="Study Destination">
+              <select className={inputCls} value={draft.studyDestination} onChange={(e) => setDraft({ ...draft, studyDestination: e.target.value })}>
+                <option value="">—</option>
+                {COUNTRIES.map((c) => (
+                  <option key={c} value={c}>
+                    {c}
+                  </option>
+                ))}
+              </select>
+            </Field>
+          )}
           <Field label="Status">
             <select className={inputCls} value={draft.statusId} onChange={(e) => setDraft({ ...draft, statusId: e.target.value })}>
               {/* Pipeline & Enrolled are set by actions (Set deal / Enroll), not here.
@@ -601,6 +619,9 @@ function SummaryCard({ lead, masters, canEdit }: { lead: LeadRow; masters: Detai
           <Row label="Service" value={lead.service?.name ?? "—"} />
           <Row label="Qualification" value={lead.qualification?.label ?? "—"} />
           <Row label="Country" value={lead.country ?? "—"} />
+          {(/study abroad/i.test(lead.service?.name ?? "") || lead.studyDestination) && (
+            <Row label="Study Destination" value={lead.studyDestination ?? "—"} />
+          )}
           <Row label="Consultant" value={lead.assignedTo?.name ?? "Unassigned"} />
           {lead.assignedTo && lead.assignedAt && (
             <Row label="Assigned on" value={fmtDateTime(lead.assignedAt)} />

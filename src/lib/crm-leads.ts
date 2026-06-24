@@ -36,6 +36,7 @@ export type LeadRow = {
   party: { id: string; name: string } | null;
   campaign: string | null;
   country: string | null;
+  studyDestination: string | null;
   expectedValue: number | null;
   expectedCloseDate: string | null;
   pipelineStatus: string | null; // 'open' | 'closed_won' | 'lost' (from the linked pipeline)
@@ -72,6 +73,7 @@ export function serializeLead(l: LeadWithRels): LeadRow {
     party: l.party ? { id: l.party.id, name: l.party.name } : null,
     campaign: l.campaign,
     country: l.country,
+    studyDestination: l.studyDestination,
     expectedValue: l.expectedValue ? Number(l.expectedValue) : null,
     expectedCloseDate: l.expectedCloseDate ? l.expectedCloseDate.toISOString() : null,
     pipelineStatus: l.pipeline?.status ?? null,
@@ -94,6 +96,7 @@ export type LeadFilterParams = {
   assignee?: string;
   campaign?: string;
   country?: string;
+  studyDestination?: string;
   q?: string;
   /** Resolved half-open createdAt range (e.g. from `rangeFor(parsePeriod(...))`). `to` is exclusive. */
   from?: Date;
@@ -129,6 +132,7 @@ export function buildLeadWhere(p: LeadFilterParams): Prisma.LeadWhereInput {
   else if (p.assignee && p.assignee !== "all") where.assignedToId = p.assignee;
   if (p.campaign) where.campaign = p.campaign;
   if (p.country) where.country = p.country;
+  if (p.studyDestination) where.studyDestination = p.studyDestination;
   const q = p.q?.trim();
   if (q) {
     const or: Prisma.LeadWhereInput[] = [
@@ -445,8 +449,10 @@ function startOfDay(d: Date): Date {
 export function buildCrmTaskWhere(p: CrmTaskFilterParams): Prisma.CrmTaskWhereInput {
   const where: Prisma.CrmTaskWhereInput = {};
   if (p.status === "open" || p.status === "done") where.status = p.status;
+  // "all" is the BDE "All tasks" opt-out (not a narrowing filter), so it applies
+  // no assignee restriction — mirrors buildLeadWhere.
   if (p.assignee === "unassigned") where.assignedToId = null;
-  else if (p.assignee) where.assignedToId = p.assignee;
+  else if (p.assignee && p.assignee !== "all") where.assignedToId = p.assignee;
   if (p.priority === "low" || p.priority === "normal" || p.priority === "high") {
     where.priority = p.priority;
   }

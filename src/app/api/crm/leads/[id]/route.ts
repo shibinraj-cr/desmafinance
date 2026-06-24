@@ -42,6 +42,7 @@ const PatchSchema = z.object({
   statusId: z.string().optional(),
   partyId: z.string().nullable().optional(),
   country: z.string().trim().max(100).nullable().optional(),
+  studyDestination: z.string().trim().max(100).nullable().optional(),
   extra: z.record(z.string()).nullable().optional(),
 });
 
@@ -54,6 +55,7 @@ const FIELD_LABELS: Record<string, string> = {
   serviceId: "Service",
   qualificationId: "Qualification",
   country: "Country",
+  studyDestination: "Study Destination",
   extra: "Extra info",
 };
 
@@ -110,6 +112,10 @@ export const PATCH = withApiHandler(async (req: Request, { params }: Ctx) => {
   if (d.country !== undefined && clean(d.country) !== existing.country) {
     update.country = clean(d.country);
     fieldDiff.country = { from: existing.country, to: clean(d.country) };
+  }
+  if (d.studyDestination !== undefined && clean(d.studyDestination) !== existing.studyDestination) {
+    update.studyDestination = clean(d.studyDestination);
+    fieldDiff.studyDestination = { from: existing.studyDestination, to: clean(d.studyDestination) };
   }
   if (d.extra !== undefined) {
     const next = d.extra ?? null;

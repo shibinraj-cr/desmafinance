@@ -174,9 +174,9 @@ export const MODULES: AppModule[] = [
     pages: [
       {
         href: "/crm/team",
-        label: "Team Activity",
+        label: "Dashboard",
         icon: "insights",
-        group: "PIPELINE",
+        group: "TEAM ACTIVITY",
       },
       {
         href: "/crm/leads",
