@@ -3,6 +3,15 @@ import { isAdmin, canSeePage } from "./rbac";
 import { getLeadPulseAccess } from "./lead-pulse-rbac";
 
 /**
+ * Capability marker (NOT a real route) granting VIEW-ONLY access to the whole
+ * team's CRM Team Activity dashboard. A role gets it to mark a sales-team lead
+ * who oversees the team while staying a normal BDE — without the CRM-admin
+ * powers (assign / import / settings) that `canManageCrm` carries. The nav never
+ * renders it (it isn't in MODULES); it's purely a permission flag.
+ */
+export const CRM_TEAM_LEAD_PAGE = "/crm/team-all";
+
+/**
  * Resolved CRM capabilities for the current user. Mirrors the shape of
  * `LeadPulseAccess` — a single object the page/API layers branch on.
  *
@@ -25,6 +34,13 @@ export type CrmAccess = {
   isBde: boolean;
   /** True when the user's Lead Pulse role is supervisor. */
   isSupervisor: boolean;
+  /**
+   * View-only CRM team lead — may see the WHOLE team's Team Activity dashboard
+   * without the CRM-admin powers of `canManageCrm`. Granted via the
+   * {@link CRM_TEAM_LEAD_PAGE} capability marker, so a sales-team head can
+   * oversee the team while remaining a normal BDE.
+   */
+  isCrmTeamLead: boolean;
   /**
    * CRM-admin tier — broader than CRM viewing, narrower than system admin.
    * True for system admins and for any role granted the `/crm/settings` page.
@@ -57,6 +73,7 @@ export async function getCrmAccess(
   const isSupervisor = lp.role === "supervisor";
   // Custom (non-built-in) roles can be granted /crm/leads explicitly.
   const hasPage = perms ? canSeePage(perms, "/crm/leads") : false;
+  const isCrmTeamLead = perms ? canSeePage(perms, CRM_TEAM_LEAD_PAGE) : false;
   // CRM-admin tier: system admins, plus anyone whose role can see the CRM
   // Settings page. Granting a role `/crm/settings` therefore promotes it to
   // CRM admin — no code change needed for future CRM admins.
@@ -67,9 +84,10 @@ export async function getCrmAccess(
     isAdmin: admin,
     isBde,
     isSupervisor,
+    isCrmTeamLead,
     canManageCrm,
     bdeDisplayName: lp.displayName,
-    canViewLeads: admin || isBde || isSupervisor || hasPage,
+    canViewLeads: admin || isBde || isSupervisor || isCrmTeamLead || hasPage,
     canCreateLeads: canManageCrm || isBde,
     canBulkImport: canManageCrm,
     canBulkEmail: canManageCrm,

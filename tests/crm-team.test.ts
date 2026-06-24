@@ -159,17 +159,63 @@ describe("isDeliberateAssignment", () => {
 
 describe("resolveTeamScope", () => {
   const base = { isAdmin: false, isSupervisor: false, canManageCrm: false, userId: "u1" };
-  it("gives system admins the whole team", () => {
-    expect(resolveTeamScope({ ...base, isAdmin: true })).toEqual({ restrictToUserId: null, teamWide: true });
+
+  it("lets a system admin see the whole team by default", () => {
+    expect(resolveTeamScope({ ...base, isAdmin: true })).toEqual({
+      restrictToUserId: null,
+      teamWide: true,
+      canViewWholeTeam: true,
+      selfUserId: "u1",
+    });
   });
-  it("gives supervisors the whole team", () => {
+
+  it("lets a supervisor and the CRM-admin tier see the whole team", () => {
     expect(resolveTeamScope({ ...base, isSupervisor: true }).teamWide).toBe(true);
-  });
-  it("gives the CRM-admin tier the whole team", () => {
     expect(resolveTeamScope({ ...base, canManageCrm: true }).teamWide).toBe(true);
   });
-  it("restricts a plain BDE to their own numbers", () => {
-    expect(resolveTeamScope(base)).toEqual({ restrictToUserId: "u1", teamWide: false });
+
+  it("locks a plain BDE to their own numbers with no toggle", () => {
+    expect(resolveTeamScope(base)).toEqual({
+      restrictToUserId: "u1",
+      teamWide: false,
+      canViewWholeTeam: false,
+      selfUserId: "u1",
+    });
+  });
+
+  it("ignores a 'me' request from a plain BDE (they are already self)", () => {
+    const s = resolveTeamScope(base, "me");
+    expect(s.restrictToUserId).toBe("u1");
+    expect(s.canViewWholeTeam).toBe(false);
+  });
+
+  it("lets a team-wide user flip to their own activity with scope=me", () => {
+    expect(resolveTeamScope({ ...base, canManageCrm: true }, "me")).toEqual({
+      restrictToUserId: "u1",
+      teamWide: false,
+      canViewWholeTeam: true,
+      selfUserId: "u1",
+    });
+  });
+
+  it("keeps a team-wide user on the team view for any non-'me' request", () => {
+    expect(resolveTeamScope({ ...base, isAdmin: true }, "team").teamWide).toBe(true);
+    expect(resolveTeamScope({ ...base, isAdmin: true }).teamWide).toBe(true);
+  });
+
+  it("lets a view-only team lead see the whole team with the toggle", () => {
+    const s = resolveTeamScope({ ...base, isCrmTeamLead: true });
+    expect(s.teamWide).toBe(true);
+    expect(s.canViewWholeTeam).toBe(true);
+  });
+
+  it("lets a team lead flip to just their own activity", () => {
+    expect(resolveTeamScope({ ...base, isCrmTeamLead: true }, "me")).toEqual({
+      restrictToUserId: "u1",
+      teamWide: false,
+      canViewWholeTeam: true,
+      selfUserId: "u1",
+    });
   });
 });
 
