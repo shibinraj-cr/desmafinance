@@ -3,6 +3,7 @@ import { z } from "zod";
 import { prisma } from "@/lib/prisma";
 import { getCurrentUserAndPermissions } from "@/lib/permissions";
 import { canApproveHr } from "@/lib/hr-rbac";
+import { recomputeLeaveBalance } from "@/lib/hr-leave-balance";
 
 const Schema = z.object({
   decision: z.enum(["approve", "reject", "clarify"]),
@@ -113,5 +114,17 @@ export async function PATCH(req: Request, { params }: { params: { id: string } }
       },
     });
   });
+
+  // An approved punch correction can change the day's status (e.g. a
+  // missing-punch fix turns an LV/HD day back into P), which changes the LV/HD
+  // days that drive the canonical leave balance. Mirror the decide route and
+  // recompute it — otherwise the balance (and the salary run that reads it)
+  // stays frozen at the pre-correction figures. Sivapriya, Apr 2026: her 11 Apr
+  // LV was regularized to P, but `used` stayed at 4 and balance at 0 because
+  // this path never refreshed it.
+  if (parsed.data.decision === "approve") {
+    await recomputeLeaveBalance(reg.employee.id, reg.date.getUTCFullYear());
+  }
+
   return NextResponse.json({ ok: true, status: newStatus });
 }
