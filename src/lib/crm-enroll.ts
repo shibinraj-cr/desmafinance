@@ -6,6 +6,10 @@ import { Prisma } from "@prisma/client";
 import { prisma } from "./prisma";
 import { badRequest, HttpError } from "./http-error";
 import { recordLeadActivity } from "./crm-activity";
+import { recordOpsActivity } from "./ops-activity";
+import { getActiveTemplateForService } from "./ops-templates";
+import { createProjectForEnrollment, resolveDefaultOpsAssignee } from "./ops-projects";
+import { loadHolidaySet } from "./ops-dates";
 import { monthCodeFromDate, flowFor } from "./catalog";
 
 /**
@@ -235,7 +239,9 @@ type EnrollArgs = {
 
 /** Enroll: status → Enrolled, create/link the candidate (Party) for Finance,
  *  and flip the pipeline to closed_won. Returns the linked party + pipeline. */
-export async function enrollLead(args: EnrollArgs): Promise<{ partyId: string; pipelineId: string; draftId: string | null }> {
+export async function enrollLead(
+  args: EnrollArgs,
+): Promise<{ partyId: string; pipelineId: string; draftId: string | null; opsProjectId: string | null }> {
   const lead = await prisma.lead.findUnique({
     where: { id: args.leadId },
     select: { ...leadCoreSelect, status: { select: { label: true } }, expectedValue: true, expectedCloseDate: true },
@@ -261,14 +267,24 @@ export async function enrollLead(args: EnrollArgs): Promise<{ partyId: string; p
   const classification = await resolveRevenueClassification(serviceId);
   const draftDate = new Date();
 
+  // Operations: resolve the service's active process template (+ holiday
+  // calendar and default assignee) up front, read-only — like the reviewer
+  // above — so the project is built atomically inside the enroll transaction.
+  // A missing template is a soft no-op: enrollment must never fail because
+  // Operations hasn't authored the process yet.
+  const opsTemplate = await getActiveTemplateForService(prisma, serviceId);
+  const opsHolidays = opsTemplate ? await loadHolidaySet(prisma) : new Set<string>();
+  const opsAssigneeId = opsTemplate ? await resolveDefaultOpsAssignee(prisma) : null;
+
   const deal = { serviceId, sourceId: lead.sourceId, ownerUserId, expectedValue, expectedCloseDate };
 
   const result = await prisma.$transaction(async (tx) => {
     const partyId = await findOrCreateParty(tx, lead, ownerUserId);
-    await tx.partyService.upsert({
+    const partyService = await tx.partyService.upsert({
       where: { partyId_serviceId: { partyId, serviceId } },
       create: { partyId, serviceId, totalAmount: expectedValue },
       update: { totalAmount: expectedValue },
+      select: { id: true },
     });
     const pipelineId = await upsertPipeline(tx, lead, deal, "closed_won", partyId);
     await tx.lead.update({
@@ -305,7 +321,29 @@ export async function enrollLead(args: EnrollArgs): Promise<{ partyId: string; p
       });
       draftId = draft.id;
     }
-    return { partyId, pipelineId, draftId };
+
+    // Auto-create the operations project + tasks for this enrollment. Inside
+    // the transaction so a candidate is never enrolled without their project;
+    // idempotent on partyServiceId and a soft no-op when no template exists.
+    const opsProject = await createProjectForEnrollment(tx, {
+      partyServiceId: partyService.id,
+      partyId,
+      serviceId,
+      leadId: lead.id,
+      actorId: args.actorId,
+      template: opsTemplate,
+      holidays: opsHolidays,
+      assigneeId: opsAssigneeId,
+    });
+
+    return {
+      partyId,
+      pipelineId,
+      draftId,
+      opsProjectId: opsProject?.projectId ?? null,
+      opsCreated: opsProject?.created ?? false,
+      opsTaskCount: opsProject?.taskCount ?? 0,
+    };
   });
 
   await recordLeadActivity({
@@ -338,6 +376,25 @@ export async function enrollLead(args: EnrollArgs): Promise<{ partyId: string; p
       : `Enrolled value ₹${expectedValue.toLocaleString("en-IN")} — no draft-review user configured; record the revenue transaction manually.`,
     metadata: { draftId: result.draftId, amount: expectedValue, partyId: result.partyId, serviceId },
   });
+
+  // Operations handoff — surface the project on the lead timeline AND on the
+  // project's own timeline. Only on first creation (re-enroll is a no-op).
+  if (result.opsCreated && result.opsProjectId) {
+    await recordLeadActivity({
+      leadId: lead.id,
+      actorId: args.actorId,
+      type: "OPS_PROJECT_CREATED",
+      summary: `Operations project created — ${result.opsTaskCount} step${result.opsTaskCount === 1 ? "" : "s"}`,
+      metadata: { opsProjectId: result.opsProjectId, taskCount: result.opsTaskCount, serviceId },
+    });
+    await recordOpsActivity({
+      projectId: result.opsProjectId,
+      actorId: args.actorId,
+      type: "PROJECT_CREATED",
+      summary: `Project created on enrollment — ${result.opsTaskCount} step${result.opsTaskCount === 1 ? "" : "s"}`,
+      metadata: { leadId: lead.id, serviceId, taskCount: result.opsTaskCount },
+    });
+  }
 
   return result;
 }
