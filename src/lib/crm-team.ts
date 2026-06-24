@@ -168,28 +168,51 @@ export function isDeliberateAssignment(lead: {
 }
 
 export type TeamScope = {
-  /** When set, every query is restricted to this user's own leads/work (BDE self-view). */
+  /** When set, every query is restricted to this user's own leads/work (self-view). */
   restrictToUserId: string | null;
-  /** True for managers (admin / CRM-admin / supervisor) who see the whole team. */
+  /** True when the view is currently showing the WHOLE team (not a single person). */
   teamWide: boolean;
+  /**
+   * True when the user is ALLOWED to see the whole team — drives whether the
+   * team/self toggle is offered. A team lead (e.g. heading sales) can view the
+   * whole team AND switch to "just me"; a plain BDE only ever sees themselves.
+   */
+  canViewWholeTeam: boolean;
+  /** The signed-in user's own id (the target of the "Just me" toggle). */
+  selfUserId: string;
 };
 
 /**
- * Resolve who the Team Activity page shows: managers (system admin, CRM-admin
- * tier, or Lead Pulse supervisor) see the whole team; everyone else (a plain
- * BDE) sees only their own numbers. Unlike the leads list this is NOT
- * overridable — the page is a fixed team-vs-self surface.
+ * Resolve which numbers the Team Activity page shows. Managers (system admin,
+ * CRM-admin tier, or Lead Pulse supervisor) may see the whole team; everyone
+ * else (a plain BDE) is locked to their own numbers. A team-wide-capable user
+ * can flip to their own activity via `requested === "me"` — so a player-coach
+ * like a sales-team head gets both the team view and a personal view.
  */
-export function resolveTeamScope(access: {
-  isAdmin: boolean;
-  isSupervisor: boolean;
-  canManageCrm: boolean;
-  userId: string;
-}): TeamScope {
-  const teamWide = access.isAdmin || access.isSupervisor || access.canManageCrm;
-  return teamWide
-    ? { restrictToUserId: null, teamWide: true }
-    : { restrictToUserId: access.userId, teamWide: false };
+export function resolveTeamScope(
+  access: {
+    isAdmin: boolean;
+    isSupervisor: boolean;
+    canManageCrm: boolean;
+    /** View-only sales-team lead — sees the whole team without CRM-admin powers. */
+    isCrmTeamLead?: boolean;
+    userId: string;
+  },
+  /** Requested view from the page: "me" forces the personal view; anything else shows the team. */
+  requested?: string,
+): TeamScope {
+  const canViewWholeTeam =
+    access.isAdmin || access.isSupervisor || access.canManageCrm || !!access.isCrmTeamLead;
+  if (!canViewWholeTeam) {
+    return { restrictToUserId: access.userId, teamWide: false, canViewWholeTeam: false, selfUserId: access.userId };
+  }
+  const showSelf = requested === "me";
+  return {
+    restrictToUserId: showSelf ? access.userId : null,
+    teamWide: !showSelf,
+    canViewWholeTeam: true,
+    selfUserId: access.userId,
+  };
 }
 
 /** Median of a numeric list, or null when empty. Does not mutate the input. */

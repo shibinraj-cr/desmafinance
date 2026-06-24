@@ -25,6 +25,16 @@ function str(sp: SP, k: string): string | undefined {
   return typeof v === "string" && v.length > 0 ? v : undefined;
 }
 
+/** Build a /crm/team href preserving the current filters but overriding `scope`. */
+function withScope(sp: SP, scope: "team" | "me"): string {
+  const params = new URLSearchParams();
+  for (const [k, v] of Object.entries(sp)) {
+    if (typeof v === "string" && k !== "scope") params.set(k, v);
+  }
+  params.set("scope", scope);
+  return `/crm/team?${params.toString()}`;
+}
+
 function pctText(part: number, whole: number): string {
   if (whole === 0) return "—";
   return `${Math.round((part / whole) * 100)}%`;
@@ -138,7 +148,7 @@ export default async function TeamActivityPage({ searchParams }: { searchParams:
     );
   }
 
-  const scope = resolveTeamScope(access);
+  const scope = resolveTeamScope(access, str(searchParams, "scope"));
   const period = parsePeriod({
     period: str(searchParams, "period"),
     from: str(searchParams, "from"),
@@ -163,10 +173,34 @@ export default async function TeamActivityPage({ searchParams }: { searchParams:
       />
       <div className="p-margin space-y-lg">
         <div className="flex flex-wrap items-center justify-between gap-base">
-          <p className="text-label-sm text-on-surface-variant">
-            Activity for <span className="font-semibold text-on-surface">{rangeText}</span>. Attention buckets are live
-            (now).
-          </p>
+          <div className="flex flex-wrap items-center gap-base">
+            {scope.canViewWholeTeam && (
+              <div className="inline-flex rounded-lg border border-outline-variant bg-surface-container-lowest p-[2px] text-label-sm font-semibold">
+                <Link
+                  href={withScope(searchParams, "team")}
+                  className={
+                    "px-md py-xs rounded-md transition " +
+                    (scope.teamWide ? "bg-primary text-on-primary" : "text-on-surface-variant hover:text-on-surface")
+                  }
+                >
+                  Whole team
+                </Link>
+                <Link
+                  href={withScope(searchParams, "me")}
+                  className={
+                    "px-md py-xs rounded-md transition " +
+                    (!scope.teamWide ? "bg-primary text-on-primary" : "text-on-surface-variant hover:text-on-surface")
+                  }
+                >
+                  Just me
+                </Link>
+              </div>
+            )}
+            <p className="text-label-sm text-on-surface-variant">
+              Activity for <span className="font-semibold text-on-surface">{rangeText}</span>. Attention buckets are
+              live (now).
+            </p>
+          </div>
           <DateFilter />
         </div>
 

@@ -12,6 +12,7 @@ function access(partial: Partial<CrmAccess>): CrmAccess {
     isAdmin: false,
     isBde: false,
     isSupervisor: false,
+    isCrmTeamLead: false,
     canManageCrm: false,
     bdeDisplayName: null,
     canViewLeads: true,
