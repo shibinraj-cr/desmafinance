@@ -106,6 +106,10 @@ export function TasksBoard({
   }
 
   const totalPages = Math.max(1, Math.ceil(total / pageSize));
+  // Export link mirrors the current filters (drop pagination — export all matches).
+  const exportParams = new URLSearchParams(search.toString());
+  exportParams.delete("page");
+  const exportHref = "/api/crm/tasks/export" + (exportParams.toString() ? `?${exportParams.toString()}` : "");
   const today = startOfToday();
   const statusVal = search.get("status") ?? "open";
   const dueVal = search.get("due") ?? "";
@@ -238,6 +242,17 @@ export function TasksBoard({
             Clear all
           </button>
         )}
+
+        <a
+          href={exportHref}
+          className="ml-auto h-9 px-md rounded-lg border border-outline-variant text-label-sm font-semibold text-on-surface-variant hover:text-on-surface hover:bg-surface-container-low transition inline-flex items-center gap-xs"
+          title="Download the filtered tasks as an Excel file (name, number, stage per consultant)"
+        >
+          <span className="material-symbols-outlined" style={{ fontSize: 18 }}>
+            download
+          </span>
+          Export Excel
+        </a>
       </div>
 
       {/* Table */}
