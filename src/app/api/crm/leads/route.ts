@@ -18,6 +18,7 @@ import {
   isActiveBde,
   assignedDayRange,
   resolveAssigneeFilter,
+  isActionOnlyStatus,
 } from "@/lib/crm-leads";
 import { recordReInquiry, resolveReInquiryContext, notifySupervisorOfReInquiries } from "@/lib/crm-reinquiry";
 
@@ -111,6 +112,15 @@ export const POST = withApiHandler(async (req: Request) => {
   if (statusId) {
     const exists = await prisma.crmLeadStatus.findFirst({ where: { id: statusId, active: true } });
     if (!exists) throw badRequest("Unknown or inactive status", "invalid_status");
+    // Action-only statuses (Pipeline / Enrolled / Duplicate) are set by an action
+    // (Set deal / Enroll / import dedup), never by direct create. Mirrors the
+    // PATCH guard so a lead can't be born in an action-only stage.
+    if (isActionOnlyStatus(exists.code)) {
+      throw badRequest(
+        `"${exists.label}" is set by an action (Set deal / Enroll), not at creation.`,
+        "status_action_only",
+      );
+    }
   } else {
     const def = await resolveDefaultStatus();
     if (!def) throw badRequest("No lead statuses configured — run db:seed-crm", "no_status_configured");
