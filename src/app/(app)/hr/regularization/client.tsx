@@ -10,6 +10,7 @@ type RegRow = {
   empCode: string;
   name: string;
   date: string;
+  requestType: string;
   reasonType: string;
   reasonLabel: string;
   reason: string;
@@ -77,7 +78,7 @@ export function RegularizationReviewClient({
             {STATUSES.map((s) => (
               <Link
                 key={s}
-                href={`/hr/regularization?tab=requests&status=${s}`}
+                href={`/hr/regularization?status=${s}`}
                 className={`px-sm py-xs rounded-lg text-label-sm capitalize ${s === status ? "bg-primary text-on-primary font-semibold" : "bg-surface-container text-on-surface-variant"}`}
               >
                 {s}
@@ -96,6 +97,7 @@ export function RegularizationReviewClient({
                   <th className="px-sm py-xs text-left">Submitted</th>
                   <th className="px-sm py-xs text-left">Employee</th>
                   <th className="px-sm py-xs text-left">Date</th>
+                  <th className="px-sm py-xs text-left">Type</th>
                   <th className="px-sm py-xs text-left">Reason</th>
                   <th className="px-sm py-xs text-left">Proposed In</th>
                   <th className="px-sm py-xs text-left">Out</th>
@@ -115,6 +117,18 @@ export function RegularizationReviewClient({
                       {r.name}
                     </td>
                     <td className="px-sm py-sm">{r.date}</td>
+                    <td className="px-sm py-sm">
+                      <span
+                        className={
+                          "px-xs py-[1px] rounded text-caption font-semibold " +
+                          (r.requestType === "leave"
+                            ? "bg-purple-50 text-purple-700"
+                            : "bg-yellow-50 text-yellow-700")
+                        }
+                      >
+                        {r.requestType === "leave" ? "Leave" : "Punch"}
+                      </span>
+                    </td>
                     <td className="px-sm py-sm">
                       <span className="font-semibold">{r.reasonLabel}</span>
                       <p className="text-on-surface-variant text-caption mt-[2px] max-w-md">
@@ -227,53 +241,61 @@ function ApproveModal({
     finalStatus: "P" as "P" | "HD" | "REG",
     reviewNote: "",
   });
+  const isLeave = row.requestType === "leave";
   return (
     <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-md">
       <div className="bg-surface-container-lowest rounded-xl border border-outline-variant p-lg w-full max-w-md space-y-base">
-        <h3 className="text-h3">Approve regularization</h3>
+        <h3 className="text-h3">{isLeave ? "Approve leave request" : "Approve punch correction"}</h3>
         <p className="text-label-sm text-on-surface-variant">
           {row.empCode} · {row.name} · {row.date} · {row.reasonLabel}
         </p>
-        <div className="grid grid-cols-2 gap-base">
-          <label className="block space-y-xs">
-            <span className="text-caption uppercase tracking-wider text-on-surface-variant">
-              Final In
-            </span>
-            <input
-              type="time"
-              value={v.finalIn}
-              onChange={(e) => setV({ ...v, finalIn: e.target.value })}
-              className="w-full bg-surface-container border border-outline-variant rounded-lg px-sm py-xs"
-            />
-          </label>
-          <label className="block space-y-xs">
-            <span className="text-caption uppercase tracking-wider text-on-surface-variant">
-              Final Out
-            </span>
-            <input
-              type="time"
-              value={v.finalOut}
-              onChange={(e) => setV({ ...v, finalOut: e.target.value })}
-              className="w-full bg-surface-container border border-outline-variant rounded-lg px-sm py-xs"
-            />
-          </label>
-        </div>
-        <label className="block space-y-xs">
-          <span className="text-caption uppercase tracking-wider text-on-surface-variant">
-            Final status
-          </span>
-          <select
-            value={v.finalStatus}
-            onChange={(e) =>
-              setV({ ...v, finalStatus: e.target.value as "P" | "HD" | "REG" })
-            }
-            className="w-full bg-surface-container border border-outline-variant rounded-lg px-sm py-xs"
-          >
-            <option value="P">Present (full day)</option>
-            <option value="HD">Half-day</option>
-            <option value="REG">Regularized (special)</option>
-          </select>
-        </label>
+        {isLeave ? (
+          <p className="text-label-sm rounded bg-purple-50 text-purple-800 px-sm py-xs">
+            Approving marks {row.date} as <strong>paid leave (LV)</strong> and deducts it from the
+            employee&apos;s leave balance.
+          </p>
+        ) : (
+          <>
+            <div className="grid grid-cols-2 gap-base">
+              <label className="block space-y-xs">
+                <span className="text-caption uppercase tracking-wider text-on-surface-variant">
+                  Final In
+                </span>
+                <input
+                  type="time"
+                  value={v.finalIn}
+                  onChange={(e) => setV({ ...v, finalIn: e.target.value })}
+                  className="w-full bg-surface-container border border-outline-variant rounded-lg px-sm py-xs"
+                />
+              </label>
+              <label className="block space-y-xs">
+                <span className="text-caption uppercase tracking-wider text-on-surface-variant">
+                  Final Out
+                </span>
+                <input
+                  type="time"
+                  value={v.finalOut}
+                  onChange={(e) => setV({ ...v, finalOut: e.target.value })}
+                  className="w-full bg-surface-container border border-outline-variant rounded-lg px-sm py-xs"
+                />
+              </label>
+            </div>
+            <label className="block space-y-xs">
+              <span className="text-caption uppercase tracking-wider text-on-surface-variant">
+                Final status
+              </span>
+              <select
+                value={v.finalStatus}
+                onChange={(e) => setV({ ...v, finalStatus: e.target.value as "P" | "HD" | "REG" })}
+                className="w-full bg-surface-container border border-outline-variant rounded-lg px-sm py-xs"
+              >
+                <option value="P">Present (full day)</option>
+                <option value="HD">Half-day</option>
+                <option value="REG">Regularized (special)</option>
+              </select>
+            </label>
+          </>
+        )}
         <label className="block space-y-xs">
           <span className="text-caption uppercase tracking-wider text-on-surface-variant">
             Review note
