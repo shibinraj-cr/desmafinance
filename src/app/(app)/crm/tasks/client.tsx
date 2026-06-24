@@ -8,7 +8,7 @@ import { DEFAULT_STATUS_COLOR } from "@/lib/crm";
 
 export type BdeOpt = { userId: string; displayName: string; username: string; role: string };
 export type TasksAccess = { isAdmin: boolean; isBde: boolean; userId: string };
-export type TaskCounts = { open: number; overdue: number; dueToday: number; unassignedOpen: number };
+export type TaskCounts = { open: number; overdue: number; dueToday: number; unassignedOpen: number; reinquiry: number };
 
 // ── Reusable class strings (verbatim from the leads board design system) ────
 const selectClass =
@@ -57,6 +57,24 @@ function LeadStatusPill({ status }: { status: { label: string; color: string | n
       style={{ backgroundColor: `${color}22`, color, border: `1px solid ${color}66` }}
     >
       {status.label}
+    </span>
+  );
+}
+
+// A task is a re-inquiry follow-up when its subject carries "re-inquiry" — the
+// shared marker across every creator (action, oversight, rescue "Re-engage").
+// Mirrors the server-side `kind=reinquiry` filter (REINQUIRY_TASK_SUBJECT_NEEDLE).
+function isReInquiryTask(subject: string): boolean {
+  return /re-inquiry/i.test(subject);
+}
+function ReInquiryBadge() {
+  return (
+    <span
+      className="inline-flex items-center gap-[2px] shrink-0 px-xs py-[2px] rounded-full text-[10px] font-bold uppercase tracking-wider whitespace-nowrap border bg-accent/15 text-accent border-accent/40"
+      title="Re-inquiry — an existing candidate submitted again"
+    >
+      <span className="material-symbols-outlined" style={{ fontSize: 12 }}>autorenew</span>
+      Re-inquiry
     </span>
   );
 }
@@ -114,22 +132,27 @@ export function TasksBoard({
   const statusVal = search.get("status") ?? "open";
   const dueVal = search.get("due") ?? "";
   const assigneeVal = search.get("assignee") ?? "";
+  const kindVal = search.get("kind") ?? "";
   const anyFilter =
     !!search.get("status") ||
     !!search.get("assignee") ||
     !!search.get("priority") ||
     !!search.get("due") ||
+    !!search.get("kind") ||
     !!search.get("q");
 
   // Quick-filter chips. `active` highlights the chip when its filter is set.
+  // Each chip is a one-click preset: it sets the dimension(s) it owns and clears
+  // the others (status/assignee/priority/due/kind) so the chips stay exclusive.
   const chips: { key: string; label: string; count?: number; active: boolean; patch: Record<string, string | null> }[] = [
-    { key: "open", label: "All open", count: counts.open, active: !anyFilter || (statusVal === "open" && !dueVal && !assigneeVal && !search.get("priority")), patch: { status: null, assignee: null, priority: null, due: null, q: null } },
-    { key: "overdue", label: "Overdue", count: counts.overdue, active: dueVal === "overdue", patch: { due: "overdue", status: null, assignee: null, priority: null } },
-    { key: "today", label: "Due today", count: counts.dueToday, active: dueVal === "today", patch: { due: "today", status: null, assignee: null, priority: null } },
-    { key: "unassigned", label: "Unassigned", count: counts.unassignedOpen, active: assigneeVal === "unassigned", patch: { assignee: "unassigned", status: null, due: null, priority: null } },
+    { key: "open", label: "All open", count: counts.open, active: !anyFilter || (statusVal === "open" && !dueVal && !assigneeVal && !kindVal && !search.get("priority")), patch: { status: null, assignee: null, priority: null, due: null, kind: null, q: null } },
+    { key: "overdue", label: "Overdue", count: counts.overdue, active: dueVal === "overdue", patch: { due: "overdue", status: null, assignee: null, priority: null, kind: null } },
+    { key: "today", label: "Due today", count: counts.dueToday, active: dueVal === "today", patch: { due: "today", status: null, assignee: null, priority: null, kind: null } },
+    { key: "reinquiry", label: "Re-inquiry", count: counts.reinquiry, active: kindVal === "reinquiry", patch: { kind: "reinquiry", status: null, assignee: null, priority: null, due: null } },
+    { key: "unassigned", label: "Unassigned", count: counts.unassignedOpen, active: assigneeVal === "unassigned", patch: { assignee: "unassigned", status: null, due: null, priority: null, kind: null } },
   ];
   if (access.isBde) {
-    chips.push({ key: "mine", label: "My tasks", active: assigneeVal === access.userId, patch: { assignee: access.userId, due: null } });
+    chips.push({ key: "mine", label: "My tasks", active: assigneeVal === access.userId && !kindVal, patch: { assignee: access.userId, due: null, kind: null } });
   }
 
   async function setStatus(task: CrmTaskListRow, status: "done" | "open") {
@@ -236,7 +259,7 @@ export function TasksBoard({
         {anyFilter && (
           <button
             type="button"
-            onClick={() => update({ status: null, assignee: null, priority: null, due: null, q: null })}
+            onClick={() => update({ status: null, assignee: null, priority: null, due: null, kind: null, q: null })}
             className="h-9 px-md rounded-lg border border-outline-variant text-label-sm text-on-surface-variant hover:text-on-surface hover:bg-surface-container-low transition"
           >
             Clear all
@@ -282,6 +305,7 @@ export function TasksBoard({
                   const canEdit = access.isAdmin || (access.isBde && t.lead.assignedToId === access.userId);
                   const overdue = t.status === "open" && !!t.dueAt && new Date(t.dueAt).getTime() < today;
                   const done = t.status === "done";
+                  const reinquiry = isReInquiryTask(t.subject);
                   return (
                     <tr key={t.id} className={"border-t border-outline-variant/60 hover:bg-surface-container-low" + (done ? " opacity-60" : "")}>
                       <Td className="whitespace-nowrap font-mono tabular-nums">
@@ -298,9 +322,12 @@ export function TasksBoard({
                         <PriorityPill priority={t.priority} />
                       </Td>
                       <Td className="max-w-[22rem]">
-                        <span className={"font-medium " + (done ? "line-through text-on-surface-variant" : "text-on-surface")} title={t.note ?? undefined}>
-                          {t.subject}
-                        </span>
+                        <div className="flex items-center gap-xs">
+                          {reinquiry && <ReInquiryBadge />}
+                          <span className={"font-medium " + (done ? "line-through text-on-surface-variant" : "text-on-surface")} title={t.note ?? undefined}>
+                            {t.subject}
+                          </span>
+                        </div>
                         {t.note && <span className="block text-label-sm text-on-surface-variant truncate">{t.note}</span>}
                       </Td>
                       <Td className="whitespace-nowrap font-semibold">
