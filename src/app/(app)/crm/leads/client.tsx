@@ -4,7 +4,7 @@ import { useEffect, useMemo, useRef, useState, useTransition } from "react";
 import { createPortal } from "react-dom";
 import Link from "next/link";
 import { useRouter, usePathname, useSearchParams } from "next/navigation";
-import type { LeadRow } from "@/lib/crm-leads";
+import { type LeadRow, isActionOnlyStatus } from "@/lib/crm-leads";
 import { DEFAULT_STATUS_COLOR, BULK_EMAIL_MERGE_FIELDS, fillTemplate } from "@/lib/crm";
 import { COUNTRIES } from "@/lib/countries";
 
@@ -419,11 +419,15 @@ function NewLeadButton({ masters, access }: { masters: Masters; access: LeadsAcc
                     onChange={(e) => setForm({ ...form, statusId: e.target.value })}
                   >
                     <option value="">Default</option>
-                    {masters.statuses.map((s) => (
-                      <option key={s.id} value={s.id}>
-                        {s.label}
-                      </option>
-                    ))}
+                    {/* Pipeline & Enrolled are set by actions (Set deal / Enroll), not at
+                        creation — exclude them here (server also rejects them). */}
+                    {masters.statuses
+                      .filter((s) => !isActionOnlyStatus(s.code))
+                      .map((s) => (
+                        <option key={s.id} value={s.id}>
+                          {s.label}
+                        </option>
+                      ))}
                   </select>
                 </Field>
               </div>
