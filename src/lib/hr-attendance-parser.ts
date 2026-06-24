@@ -17,6 +17,8 @@ import * as XLSX from "xlsx";
  * Half-day inference (the source format only emits P/A/WO, so we infer):
  *   - Weekday (Mon–Fri) P-day with (work + OT) <   6h  (360 min) → HD
  *   - Saturday          P-day with (work + OT) < 3.5h  (210 min) → HD
+ *   - When the Work+OT column is blank (0) but the day has both punches,
+ *     fall back to gross punch duration (out − in) so the rule still fires.
  *
  * Saturday timing (no Shift A/B distinction — common for everyone):
  *   - On / after 2026-04-25: 09:00 → 16:00
@@ -131,7 +133,14 @@ function findEmpHeader(row: unknown[]): { empCode: string; name: string } | null
 }
 
 /** Normalised attendance status used downstream by the salary engine. */
-function normaliseStatus(raw: string, workMinutes: number, otMinutes: number, date: Date): string {
+export function normaliseStatus(
+  raw: string,
+  workMinutes: number,
+  otMinutes: number,
+  date: Date,
+  inTime: string | null,
+  outTime: string | null,
+): string {
   const s = String(raw ?? "").trim().toUpperCase();
   if (!s || s === "--") return "A";
   if (s === "WO" || s === "W") return "WO";
@@ -140,7 +149,16 @@ function normaliseStatus(raw: string, workMinutes: number, otMinutes: number, da
   if (s === "A" || s === "AB") return "A";
   if (s === "HD" || s === "H/D") return "HD";
   if (s === "P" || s === "PR") {
-    const total = workMinutes + otMinutes;
+    // Worked minutes drive the half-day rule. Some biometric exports leave the
+    // "Work+OT" column blank (0) even though the employee clearly punched in
+    // and out — fall back to gross punch duration (out − in) so the HD rule
+    // still fires. Without this, a short half-day with no Work+OT silently
+    // stayed "P" (e.g. Aswathi 23 Apr 2026, 09:04–13:32, shown full Present).
+    let total = workMinutes + otMinutes;
+    if (total === 0 && inTime && outTime) {
+      const gross = toMinutes(outTime) - toMinutes(inTime);
+      if (gross > 0) total = gross;
+    }
     if (total > 0) {
       const isSaturday = date.getUTCDay() === 6;
       const threshold = isSaturday ? SATURDAY_HD_THRESHOLD_MIN : WEEKDAY_HD_THRESHOLD_MIN;
@@ -195,7 +213,7 @@ export function parseAttendanceWorkbook(buffer: Buffer | ArrayBuffer): ParseResu
     const statusRaw = String(r[8] ?? "").trim();
     const remarkRaw = String(r[9] ?? "").trim();
     const remark = !remarkRaw || remarkRaw === "--" ? null : remarkRaw;
-    const status = normaliseStatus(statusRaw, workMinutes, otMinutes, date);
+    const status = normaliseStatus(statusRaw, workMinutes, otMinutes, date, inTime, outTime);
 
     // Saturday: the biometric system computes late + early-out against
     // the employee's assigned weekday shift (A=09:00–17:30 / B=09:30–18:00),

@@ -5,6 +5,25 @@ import { getCurrentUserAndPermissions } from "@/lib/permissions";
 import { canApproveHr } from "@/lib/hr-rbac";
 import { recomputeLeaveBalance } from "@/lib/hr-leave-balance";
 
+/**
+ * Gross worked minutes from HH:MM punches (out − in), or null if either is
+ * missing or out ≤ in. A regularization rewrites the punches, so the stored
+ * workMinutes must be rederived — otherwise it keeps the pre-correction value
+ * and the half-day rule / audits read stale minutes (e.g. Sivapriya 20 Apr
+ * 2026 kept workMinutes=121 from the old 15:31 punch after correction to 09:00).
+ */
+function grossWorkMinutes(inTime: string | null, outTime: string | null): number | null {
+  if (!inTime || !outTime) return null;
+  const toMin = (t: string) => {
+    const m = t.match(/^(\d{1,2}):(\d{2})$/);
+    return m ? +m[1] * 60 + +m[2] : null;
+  };
+  const i = toMin(inTime);
+  const o = toMin(outTime);
+  if (i == null || o == null || o <= i) return null;
+  return o - i;
+}
+
 const Schema = z.object({
   decision: z.enum(["approve", "reject", "clarify"]),
   reviewNote: z.string().max(500).nullable().optional(),
@@ -55,6 +74,7 @@ export async function PATCH(req: Request, { params }: { params: { id: string } }
       // upload (if any), or skip — HR can re-upload later.
       const inTime = parsed.data.finalIn ?? reg.proposedIn ?? null;
       const outTime = parsed.data.finalOut ?? reg.proposedOut ?? null;
+      const workMinutes = grossWorkMinutes(inTime, outTime);
       if (reg.attendanceDayId) {
         await tx.hrAttendanceDay.update({
           where: { id: reg.attendanceDayId },
@@ -62,6 +82,10 @@ export async function PATCH(req: Request, { params }: { params: { id: string } }
             status: parsed.data.finalStatus,
             inTime,
             outTime,
+            // Rederive worked minutes from the corrected punches (OT folded in)
+            // so the half-day rule and audits don't read the stale value.
+            workMinutes,
+            otMinutes: 0,
             decidedById: userId ?? null,
             decidedAt: now,
             decisionNote: `Regularized · ${parsed.data.reviewNote ?? ""}`.trim(),
@@ -86,9 +110,9 @@ export async function PATCH(req: Request, { params }: { params: { id: string } }
               rawStatus: "REG",
               inTime,
               outTime,
-              workMinutes: null,
+              workMinutes,
               breakMinutes: null,
-              otMinutes: null,
+              otMinutes: 0,
               lateMinutes: null,
               earlyOutMinutes: null,
               remark: `Regularized · ${reg.reasonType}`,
