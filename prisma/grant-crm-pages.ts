@@ -18,8 +18,8 @@ import { PrismaClient } from "@prisma/client";
 const prisma = new PrismaClient();
 
 const ANCHOR = "/marketing/lead-pulse";
-const VIEWER_PAGES = ["/crm/leads", "/crm/tasks"];
-const ADMIN_PAGES = ["/crm/leads", "/crm/tasks", "/crm/settings"];
+const VIEWER_PAGES = ["/crm/leads", "/crm/tasks", "/crm/team"];
+const ADMIN_PAGES = ["/crm/leads", "/crm/tasks", "/crm/team", "/crm/settings"];
 
 async function main() {
   const roles = await prisma.role.findMany();
