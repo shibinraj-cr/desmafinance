@@ -30,6 +30,7 @@ export const CRM_ACTIVITY_TYPES = [
   "DEAL_UPDATED",
   "ENROLLED",
   "REVENUE_DRAFTED",
+  "OPS_PROJECT_CREATED",
 ] as const;
 
 export type CrmActivityType = (typeof CRM_ACTIVITY_TYPES)[number];
