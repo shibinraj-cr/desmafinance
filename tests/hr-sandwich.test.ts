@@ -1,5 +1,11 @@
 import { describe, it, expect } from "vitest";
-import { computeSandwichFlips, inferHdLeaveHalf, type SandwichDay } from "@/lib/hr-sandwich";
+import {
+  computeSandwichFlips,
+  reconcileSandwich,
+  inferHdLeaveHalf,
+  type SandwichDay,
+  type SandwichReconcileDay,
+} from "@/lib/hr-sandwich";
 
 const POLICY = { includeHolidays: true, includeWeekOffs: true, maxGapDays: 7 };
 
@@ -92,5 +98,56 @@ describe("computeSandwichFlips — half-day awareness (Shency rule)", () => {
   it("HD(AM) … WO … HD(PM) → NO sandwich (neither half touches the bridge)", () => {
     const days = [hdAM("2026-05-02"), day("2026-05-03", "WO"), hdPM("2026-05-04")];
     expect(flippedDates(days)).toEqual([]);
+  });
+});
+
+describe("reconcileSandwich — self-correcting flip + revert", () => {
+  let s = 0;
+  function rday(
+    date: string,
+    status: string,
+    opts: { raw?: string | null; note?: string | null; late?: number; eo?: number } = {},
+  ): SandwichReconcileDay {
+    return {
+      id: `r${s++}`,
+      date: new Date(`${date}T00:00:00Z`),
+      status,
+      lateMinutes: opts.late ?? 0,
+      earlyOutMinutes: opts.eo ?? 0,
+      rawStatus: opts.raw ?? status,
+      decisionNote: opts.note ?? null,
+    };
+  }
+  // A prior sandwich flip: stored A, original WO, carrying the sandwich note.
+  const priorFlip = (date: string) =>
+    rday(date, "A", { raw: "WO", note: "Sandwich rule (WO → A)" });
+
+  it("flips a newly-sandwiched week-off (A … WO … A)", () => {
+    const r = reconcileSandwich(
+      [rday("2026-05-02", "A"), rday("2026-05-03", "WO"), rday("2026-05-04", "A")],
+      POLICY,
+    );
+    expect(r.flip.map((f) => f.date)).toEqual(["2026-05-03"]);
+    expect(r.revert).toEqual([]);
+  });
+
+  it("leaves an already-correct flip untouched (idempotent)", () => {
+    const r = reconcileSandwich(
+      [rday("2026-05-02", "A"), priorFlip("2026-05-03"), rday("2026-05-04", "A")],
+      POLICY,
+    );
+    expect(r.flip).toEqual([]);
+    expect(r.revert).toEqual([]);
+  });
+
+  it("reverts a stale flip when an anchor is no longer leave (P … flip … A)", () => {
+    // The left anchor became Present (e.g. a punch fix), so the bridge is no
+    // longer sandwiched and must revert to its original WO.
+    const r = reconcileSandwich(
+      [rday("2026-05-02", "P"), priorFlip("2026-05-03"), rday("2026-05-04", "A")],
+      POLICY,
+    );
+    expect(r.flip).toEqual([]);
+    expect(r.revert.map((x) => `${x.date}→${x.to}`)).toEqual(["2026-05-03→WO"]);
   });
 });
