@@ -6,6 +6,7 @@ import { parseAttendanceWorkbook, type ParsedDay } from "@/lib/hr-attendance-par
 import { cycleMonthForDate, cycleWindowForMonth } from "@/lib/hr-data";
 import { recomputeAllLeaveBalances } from "@/lib/hr-leave-balance";
 import { applySandwichRule } from "@/lib/hr-sandwich";
+import { resolveShiftForDate } from "@/lib/hr-shift";
 
 /**
  * Upload a biometric attendance .xls / .xlsx (any format supported by
@@ -227,11 +228,51 @@ export async function POST(req: Request) {
     },
   });
 
+  // Recompute weekday late-coming against each employee's HR shift start. The
+  // biometric file computes "Late In" against its own shift config, which bakes
+  // in extra grace and understates lateness (e.g. a 09:15 punch shown as 10 min
+  // late, then masked again by our 10-min grace). Measuring from the authoritative
+  // shift start (Shift A 09:00 / B 09:30) and letting computeLateTags apply the
+  // single grace fixes it. Saturdays are already recomputed in the parser.
+  const toMin = (t: string | null) => {
+    if (!t) return null;
+    const mm = t.match(/^(\d{1,2}):(\d{2})$/);
+    return mm ? +mm[1] * 60 + +mm[2] : null;
+  };
+  for (const m of monthSummaries) {
+    const { start, end } = cycleWindowForMonth(m.monthKey);
+    const empRows = await prisma.hrAttendanceDay.findMany({
+      where: { date: { gte: start, lte: end } },
+      select: { employeeId: true },
+      distinct: ["employeeId"],
+    });
+    for (const { employeeId } of empRows) {
+      const shift = await resolveShiftForDate(employeeId, start);
+      const shiftStart = shift ? toMin(shift.startTime) : null;
+      if (shiftStart == null) continue;
+      const days = await prisma.hrAttendanceDay.findMany({
+        where: { employeeId, date: { gte: start, lte: end } },
+        select: { id: true, date: true, inTime: true, lateMinutes: true },
+      });
+      for (const d of days) {
+        const dow = d.date.getUTCDay();
+        if (dow === 0 || dow === 6) continue; // Sun = week-off; Sat handled in parser
+        const inMin = toMin(d.inTime);
+        if (inMin == null) continue;
+        const newLate = Math.max(0, inMin - shiftStart);
+        if (newLate !== (d.lateMinutes ?? 0)) {
+          await prisma.hrAttendanceDay.update({ where: { id: d.id }, data: { lateMinutes: newLate } });
+        }
+      }
+    }
+  }
+
   // Apply the sandwich rule for every employee in each imported cycle: a
   // week-off / holiday flanked by leave (absence/LV/HD) on both sides becomes
   // unpaid (A). This previously ran only via the (now-removed) Leave Review
   // decide route, so a fresh upload left it unapplied. applySandwichRule is
-  // self-reconciling, so re-uploads converge rather than double-flip.
+  // self-reconciling, so re-uploads converge rather than double-flip. Runs after
+  // the late recompute so the HD half-day inference reads corrected lateness.
   for (const m of monthSummaries) {
     const { start, end } = cycleWindowForMonth(m.monthKey);
     const empRows = await prisma.hrAttendanceDay.findMany({
