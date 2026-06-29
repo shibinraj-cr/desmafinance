@@ -93,24 +93,17 @@ export function inferHdLeaveHalf(d: {
   return null;
 }
 
-/** Can this leave day extend a sandwich INTO a following bridge? (PM touches the upcoming week-off.) */
+// Only full-day leave anchors a sandwich: an Absence (A) or full paid leave
+// (LV). A half-day (HD) is WORKED time in this system — short hours, a missing
+// punch, or a late/AL day — so the employee was present and a HD must NOT bridge
+// a holiday/week-off into an absence. (There is no half-day-leave concept here;
+// if one is added later, reintroduce punch-half awareness via inferHdLeaveHalf.)
 function bridgesForward(d: SandwichDay): boolean {
-  if (d.status === "A" || d.status === "LV") return true;
-  if (d.status === "HD") {
-    const half = inferHdLeaveHalf(d);
-    return half === "PM" || half === null;
-  }
-  return false;
+  return d.status === "A" || d.status === "LV";
 }
 
-/** Can this leave day CLOSE a sandwich coming FROM a preceding bridge? (AM touches the preceding week-off.) */
 function bridgesBackward(d: SandwichDay): boolean {
-  if (d.status === "A" || d.status === "LV") return true;
-  if (d.status === "HD") {
-    const half = inferHdLeaveHalf(d);
-    return half === "AM" || half === null;
-  }
-  return false;
+  return d.status === "A" || d.status === "LV";
 }
 
 function isBridgeStatus(s: string, policy: SandwichPolicyLite): boolean {

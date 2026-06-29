@@ -128,8 +128,10 @@ export async function computeMonthlyLeaveLedger(
   const unpaidByMonth = new Map<number, number>();
   for (const d of days) {
     const m = d.date.getUTCMonth() + 1;
+    // Only full-day paid leave (LV) consumes the balance ("taken"). A half-day
+    // (HD) is 0.5-day loss-of-pay, so it shows under "unpaid", not "taken".
     if (d.status === "LV") takenByMonth.set(m, (takenByMonth.get(m) ?? 0) + 1);
-    else if (d.status === "HD") takenByMonth.set(m, (takenByMonth.get(m) ?? 0) + 0.5);
+    else if (d.status === "HD") unpaidByMonth.set(m, (unpaidByMonth.get(m) ?? 0) + 0.5);
     else if (d.status === "A") unpaidByMonth.set(m, (unpaidByMonth.get(m) ?? 0) + 1);
   }
 
@@ -173,7 +175,7 @@ export async function computeLeaveBalanceFor(
     }),
     db.hrAttendanceDay.groupBy({
       by: ["status"],
-      where: { employeeId, date: { gte: yearStart, lte: yearEnd }, status: { in: ["LV", "HD"] } },
+      where: { employeeId, date: { gte: yearStart, lte: yearEnd }, status: { in: ["LV"] } },
       _count: { _all: true },
     }),
   ]);
@@ -185,11 +187,13 @@ export async function computeLeaveBalanceFor(
       : 0;
   const accrued = entitlement + Number(manualLedger._sum.delta ?? 0);
 
-  // Reviewed & decided paid leave: LV = full day, HD = half day.
+  // Paid leave used = full-day paid leave (LV) only. Half-days (HD) are NOT
+  // charged to the leave balance — a HD is simply 0.5-day loss-of-pay in the
+  // salary run (it does not consume paid-leave credit). Counting it here too
+  // double-penalised the employee (0.5 pay AND 0.5 balance).
   let used = 0;
   for (const g of leaveDays) {
     if (g.status === "LV") used += g._count._all;
-    else if (g.status === "HD") used += 0.5 * g._count._all;
   }
 
   const opening = existing ? Number(existing.opening) : 0;
