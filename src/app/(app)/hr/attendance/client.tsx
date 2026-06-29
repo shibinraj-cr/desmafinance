@@ -302,7 +302,10 @@ export function AttendanceClient({
                     </td>
                     {dateCells.map((d) => {
                       const c = row[d.iso];
-                      const code = c?.status ?? "";
+                      // A present day flagged AL (late beyond the allowance) is a
+                      // payroll half-day — show it as HD here too (the AL badge
+                      // below still explains why). LCE days stay Present.
+                      const code = c ? (c.status === "P" && c.lateTag === "AL" ? "HD" : c.status) : "";
                       const tone = STATUS_TONE[code] ?? "bg-surface-container text-on-surface-variant";
                       const isBoundary = d.day === 1;
                       // Missing punch: exactly one of in/out recorded — the
