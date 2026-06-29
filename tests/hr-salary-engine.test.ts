@@ -25,6 +25,7 @@ import {
   isOwnerDesignation,
   bucketAttendance,
   leaveUsedInYear,
+  countAlHalfDays,
   calcLine,
   DEFAULT_ALLOWANCE_PCTS,
   ESI_EMPLOYEE_RATE,
@@ -324,6 +325,26 @@ describe("calcLine — paid-leave double-count regression (Sivapriya, Apr 2026)"
       carriedBalanceBefore: carriedBefore,
     });
     expect(c.totalLeaveForLop).toBe(3); // 4 taken − 1 covered
+  });
+});
+
+describe("countAlHalfDays — AL present-days docked as half-days", () => {
+  it("counts P+AL days; ignores LCE, untagged, and HD(AL) days", () => {
+    const tags = new Map<string, "LCE" | "AL" | null>([
+      ["d1", "AL"], // present + late beyond allowance → docked
+      ["d2", "LCE"], // within allowance → not docked
+      ["d3", "AL"], // AL but already a half-day → not double-docked
+      ["d4", null], // on-time → not docked
+      ["d5", "AL"], // present + AL → docked
+    ]);
+    const days = [
+      { id: "d1", status: "P" },
+      { id: "d2", status: "P" },
+      { id: "d3", status: "HD" },
+      { id: "d4", status: "P" },
+      { id: "d5", status: "P" },
+    ];
+    expect(countAlHalfDays(days, tags)).toBe(2);
   });
 });
 
