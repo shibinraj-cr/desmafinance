@@ -1,5 +1,5 @@
 import { prisma } from "./prisma";
-import { cycleWindowForMonth, structureForMonth } from "./hr-data";
+import { cycleWindowForMonth, structureForMonth, computeLateTags, type LateTag } from "./hr-data";
 
 /**
  * Salary calculation engine.
@@ -274,6 +274,22 @@ export function leaveUsedInYear(days: { date: Date; status: string }[], year: nu
   return used;
 }
 
+/**
+ * Number of PRESENT days flagged "AL" (Arrived Late beyond grace / LCE quota).
+ * Each is docked as a half-day in payroll — being late past the allowance costs
+ * 0.5 day. LCE (within the late-coming allowance) is NOT counted. HD days are
+ * excluded (they already carry a 0.5 deduction). A regularized/excused day is
+ * status REG (not P), so it drops out here → back to full pay.
+ */
+export function countAlHalfDays(
+  days: { id: string; status: string }[],
+  tags: Map<string, LateTag>,
+): number {
+  let n = 0;
+  for (const d of days) if (d.status === "P" && tags.get(d.id) === "AL") n++;
+  return n;
+}
+
 export async function computeSalaryRun(monthKey: string, userId: string | null): Promise<{
   runId: string;
   lineCount: number;
@@ -321,6 +337,8 @@ export async function computeSalaryRun(monthKey: string, userId: string | null):
     let buckets: { daysPresent: number; daysAbsent: number; daysHalfDay: number; daysPaidLeave: number };
     // Paid leave this cycle already deducted from the stored balance (see below).
     let cycleLeaveUsedInYear = 0;
+    // Present-but-late-beyond-allowance (AL) days are docked as half-days.
+    let alHalfDays = 0;
     if (isOwner) {
       buckets = { daysPresent: 0, daysAbsent: 0, daysHalfDay: 0, daysPaidLeave: 0 };
     } else {
@@ -333,6 +351,8 @@ export async function computeSalaryRun(monthKey: string, userId: string | null):
       }
       buckets = bucketAttendance(attendance);
       cycleLeaveUsedInYear = leaveUsedInYear(attendance, year);
+      const { tags } = computeLateTags(attendance, e.halfHourConcession);
+      alHalfDays = countAlHalfDays(attendance, tags);
     }
 
     const balance = await prisma.hrLeaveBalance.findUnique({
@@ -364,6 +384,8 @@ export async function computeSalaryRun(monthKey: string, userId: string | null):
       pfApplicable: isTrainee ? false : structure.pfApplicable,
       professionalTax: isTrainee ? 0 : Number(structure.professionalTax),
       ...buckets,
+      // AL (late beyond allowance) present-days are treated as half-days.
+      daysHalfDay: buckets.daysHalfDay + alHalfDays,
       carriedBalanceBefore: carried,
     });
 

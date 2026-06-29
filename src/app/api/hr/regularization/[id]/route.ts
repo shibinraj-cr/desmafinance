@@ -6,6 +6,14 @@ import { canApproveHr } from "@/lib/hr-rbac";
 import { recomputeLeaveBalance } from "@/lib/hr-leave-balance";
 import { applySandwichRule } from "@/lib/hr-sandwich";
 import { cycleWindowForMonth, cycleMonthForDate } from "@/lib/hr-data";
+import { resolveShiftForDate } from "@/lib/hr-shift";
+
+/** Minutes-since-midnight from an "HH:MM" string, or null. */
+function hhmmToMin(t: string | null): number | null {
+  if (!t) return null;
+  const m = t.match(/^(\d{1,2}):(\d{2})$/);
+  return m ? +m[1] * 60 + +m[2] : null;
+}
 
 /**
  * Gross worked minutes from HH:MM punches (out − in), or null if either is
@@ -60,6 +68,19 @@ export async function PATCH(req: Request, { params }: { params: { id: string } }
         ? "rejected"
         : "clarification";
 
+  // For a punch approval, rederive lateness from the corrected in-time vs the
+  // employee's shift start (Saturday = 09:00) so an approved fix clears any AL
+  // half-day penalty — i.e. a regularized late day becomes full Present.
+  let lateMinutes: number | null = null;
+  if (parsed.data.decision === "approve" && reg.requestType !== "leave") {
+    const inMin = hhmmToMin(parsed.data.finalIn ?? reg.proposedIn ?? null);
+    if (inMin != null) {
+      const shift = await resolveShiftForDate(reg.employee.id, reg.date);
+      const startMin = reg.date.getUTCDay() === 6 ? 9 * 60 : hhmmToMin(shift?.startTime ?? null);
+      if (startMin != null) lateMinutes = Math.max(0, inMin - startMin);
+    }
+  }
+
   await prisma.$transaction(async (tx) => {
     await tx.hrAttendanceRegularization.update({
       where: { id: params.id },
@@ -92,6 +113,7 @@ export async function PATCH(req: Request, { params }: { params: { id: string } }
             // so the half-day rule and audits don't read the stale value.
             workMinutes,
             otMinutes: 0,
+            ...(lateMinutes != null ? { lateMinutes } : {}),
             decidedById: userId ?? null,
             decidedAt: now,
             decisionNote: note,
@@ -119,7 +141,7 @@ export async function PATCH(req: Request, { params }: { params: { id: string } }
               workMinutes,
               breakMinutes: null,
               otMinutes: 0,
-              lateMinutes: null,
+              lateMinutes,
               earlyOutMinutes: null,
               remark: isLeave ? "Leave (regularization)" : `Regularized · ${reg.reasonType}`,
               decidedById: userId ?? null,
