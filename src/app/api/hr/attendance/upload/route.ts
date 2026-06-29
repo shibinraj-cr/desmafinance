@@ -5,6 +5,7 @@ import { canApproveHr } from "@/lib/hr-rbac";
 import { parseAttendanceWorkbook, type ParsedDay } from "@/lib/hr-attendance-parser";
 import { cycleMonthForDate, cycleWindowForMonth } from "@/lib/hr-data";
 import { recomputeAllLeaveBalances } from "@/lib/hr-leave-balance";
+import { applySandwichRule } from "@/lib/hr-sandwich";
 
 /**
  * Upload a biometric attendance .xls / .xlsx (any format supported by
@@ -226,10 +227,28 @@ export async function POST(req: Request) {
     },
   });
 
+  // Apply the sandwich rule for every employee in each imported cycle: a
+  // week-off / holiday flanked by leave (absence/LV/HD) on both sides becomes
+  // unpaid (A). This previously ran only via the (now-removed) Leave Review
+  // decide route, so a fresh upload left it unapplied. applySandwichRule is
+  // self-reconciling, so re-uploads converge rather than double-flip.
+  for (const m of monthSummaries) {
+    const { start, end } = cycleWindowForMonth(m.monthKey);
+    const empRows = await prisma.hrAttendanceDay.findMany({
+      where: { date: { gte: start, lte: end } },
+      select: { employeeId: true },
+      distinct: ["employeeId"],
+    });
+    for (const { employeeId } of empRows) {
+      await applySandwichRule({ employeeId, windowStart: start, windowEnd: end, actorUserId: userId ?? null });
+    }
+  }
+
   // Refresh the canonical leave balances for every calendar year the import
   // touches (a cycle straddles the year boundary, so cover both ends). This
   // folds in per-employee eligibility accrual *and* the freshly imported
-  // reviewed/decided leave (LV/HD) in one pass.
+  // reviewed/decided leave (LV/HD) in one pass. Runs AFTER the sandwich pass so
+  // any newly-flipped A days are reflected in the balances.
   const yearsTouched = new Set<number>();
   for (const m of monthSummaries) {
     const { start, end } = cycleWindowForMonth(m.monthKey);

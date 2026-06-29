@@ -159,10 +159,58 @@ export function computeSandwichFlips(
   return flipped;
 }
 
+/** A day plus the fields needed to recognise (and undo) a prior sandwich flip. */
+export type SandwichReconcileDay = SandwichDay & {
+  rawStatus: string | null;
+  decisionNote: string | null;
+};
+
+/** A day is a prior sandwich flip if it's an A carrying the sandwich note over a WO/HL original. */
+function isPriorSandwichFlip(d: SandwichReconcileDay): boolean {
+  return (
+    d.status === "A" &&
+    (d.decisionNote ?? "").startsWith("Sandwich") &&
+    (d.rawStatus === "WO" || d.rawStatus === "HL")
+  );
+}
+
 /**
- * Apply the sandwich rule to one employee's days in a window. Returns
- * a SandwichResult. Pass actorUserId so the audit log captures who
- * triggered the rule.
+ * Pure, idempotent reconciler. Given the current days, decide which bridge rows
+ * must flip to "A" and which prior flips must REVERT to their original WO/HL —
+ * the latter being what makes the rule self-correct when an anchor later stops
+ * being leave (e.g. an absence regularized to Present). Re-runs converge: no
+ * cross-anchor staleness, and running twice changes nothing.
+ */
+export function reconcileSandwich(
+  days: SandwichReconcileDay[],
+  policy: SandwichPolicyLite,
+): {
+  flip: { dayId: string; date: string; from: string }[];
+  revert: { dayId: string; date: string; to: string }[];
+} {
+  // Evaluate the rule against the ORIGINAL bridge statuses (undo prior flips
+  // in-memory first) so a stale flip can't keep itself alive.
+  const effective = days.map((d) =>
+    isPriorSandwichFlip(d) ? { ...d, status: d.rawStatus as string } : d,
+  );
+  const wanted = new Map(computeSandwichFlips(effective, policy).map((f) => [f.dayId, f]));
+  const flip: { dayId: string; date: string; from: string }[] = [];
+  const revert: { dayId: string; date: string; to: string }[] = [];
+  for (const d of days) {
+    const w = wanted.get(d.id);
+    if (w && d.status !== "A") {
+      flip.push({ dayId: d.id, date: w.date, from: w.from });
+    } else if (!w && isPriorSandwichFlip(d)) {
+      revert.push({ dayId: d.id, date: d.date.toISOString().slice(0, 10), to: d.rawStatus as string });
+    }
+  }
+  return { flip, revert };
+}
+
+/**
+ * Apply the sandwich rule to one employee's days in a window. Self-reconciling:
+ * flips newly-sandwiched WO/HL → A AND reverts prior flips that no longer apply.
+ * Pass actorUserId so the audit log captures who triggered the rule.
  */
 export async function applySandwichRule(args: {
   employeeId: string;
@@ -179,25 +227,32 @@ export async function applySandwichRule(args: {
   const days = await prisma.hrAttendanceDay.findMany({
     where: { employeeId, date: { gte: windowStart, lte: windowEnd } },
     orderBy: { date: "asc" },
-    select: { id: true, date: true, status: true, lateMinutes: true, earlyOutMinutes: true },
+    select: { id: true, date: true, status: true, rawStatus: true, decisionNote: true, lateMinutes: true, earlyOutMinutes: true },
   });
   if (days.length === 0) {
     return { flipped: [], policyApplied: { departmentId: policy.departmentId, maxGapDays: policy.maxGapDays } };
   }
 
-  const flipped = computeSandwichFlips(days, policy);
+  const { flip, revert } = reconcileSandwich(days, policy);
 
-  if (flipped.length > 0) {
+  if (flip.length > 0 || revert.length > 0) {
+    const now = new Date();
     await prisma.$transaction([
-      ...flipped.map((f) =>
+      ...flip.map((f) =>
         prisma.hrAttendanceDay.update({
           where: { id: f.dayId },
           data: {
             status: "A",
             decidedById: actorUserId,
-            decidedAt: new Date(),
+            decidedAt: now,
             decisionNote: `Sandwich rule (${f.from} → A)`,
           },
+        }),
+      ),
+      ...revert.map((r) =>
+        prisma.hrAttendanceDay.update({
+          where: { id: r.dayId },
+          data: { status: r.to, decidedById: null, decidedAt: null, decisionNote: null },
         }),
       ),
       prisma.hrAuditLog.create({
@@ -207,7 +262,8 @@ export async function applySandwichRule(args: {
           entityType: "HrAttendanceDay",
           metadata: {
             employeeId,
-            flipped,
+            flipped: flip,
+            reverted: revert,
             policyId: policy.id,
             departmentId: policy.departmentId,
             maxGapDays: policy.maxGapDays,
@@ -217,5 +273,8 @@ export async function applySandwichRule(args: {
     ]);
   }
 
-  return { flipped, policyApplied: { departmentId: policy.departmentId, maxGapDays: policy.maxGapDays } };
+  return {
+    flipped: flip.map((f) => ({ ...f, to: "A" })),
+    policyApplied: { departmentId: policy.departmentId, maxGapDays: policy.maxGapDays },
+  };
 }

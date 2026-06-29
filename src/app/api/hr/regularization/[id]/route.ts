@@ -4,6 +4,8 @@ import { prisma } from "@/lib/prisma";
 import { getCurrentUserAndPermissions } from "@/lib/permissions";
 import { canApproveHr } from "@/lib/hr-rbac";
 import { recomputeLeaveBalance } from "@/lib/hr-leave-balance";
+import { applySandwichRule } from "@/lib/hr-sandwich";
+import { cycleWindowForMonth, cycleMonthForDate } from "@/lib/hr-data";
 
 /**
  * Gross worked minutes from HH:MM punches (out − in), or null if either is
@@ -151,6 +153,12 @@ export async function PATCH(req: Request, { params }: { params: { id: string } }
   // LV was regularized to P, but `used` stayed at 4 and balance at 0 because
   // this path never refreshed it.
   if (parsed.data.decision === "approve") {
+    // The approved correction changed the day's status, which can create or
+    // dissolve a sandwich bracket — re-reconcile the employee's cycle. This
+    // both flips newly-sandwiched WO/HL and reverts prior flips that no longer
+    // apply (e.g. a punch fix turning an absence anchor into Present).
+    const { start, end } = cycleWindowForMonth(cycleMonthForDate(reg.date));
+    await applySandwichRule({ employeeId: reg.employee.id, windowStart: start, windowEnd: end, actorUserId: userId ?? null });
     await recomputeLeaveBalance(reg.employee.id, reg.date.getUTCFullYear());
   }
 
