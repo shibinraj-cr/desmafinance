@@ -62,6 +62,18 @@ export type CeoHeadline = {
   /** Finance approval queue — distinct from collection plans. Surfaced so the
    *  CEO can see if any reviews are stuck. */
   pendingApprovalsCount: number;
+
+  /** Sum of unsubmitted TransactionDraft.amount (across all users) of
+   *  type Revenue dated in the running calendar month — revenue captured
+   *  on the My Drafts workflow but not yet pushed to the approval queue. */
+  myDraftsRevenue: number;
+  myDraftsRevenueCount: number;
+
+  /** Sum of pending-approval (kind='create', status='pending') proposed
+   *  Revenue amounts dated in the running calendar month — new revenue
+   *  entries awaiting a manager/admin's approval. */
+  pendingApprovalRevenue: number;
+  pendingApprovalRevenueCount: number;
 };
 
 /** Run a Prisma query and degrade gracefully on failure: log the cause to
@@ -84,7 +96,8 @@ export async function ceoHeadline(): Promise<CeoHeadline> {
   const nextMonthStart = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() + 1, 1));
   const prevMonthStart = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() - 1, 1));
 
-  const [cur, prev, plans, pipelineCurrent, pipelineBeyond, approvals] = await Promise.all([
+  const [cur, prev, plans, pipelineCurrent, pipelineBeyond, approvals, drafts, pendingApprovalRows] =
+    await Promise.all([
     safe(
       "transaction.aggregate(currentMonthRevenue)",
       () =>
@@ -176,6 +189,36 @@ export async function ceoHeadline(): Promise<CeoHeadline> {
       () => prisma.pendingApproval.count({ where: { status: "pending" } }),
       0,
     ),
+    // Unsubmitted Revenue drafts (all users) dated this month — captured
+    // but not yet in the approval queue or the ledger.
+    safe(
+      "transactionDraft.aggregate(myDraftsRevenue)",
+      () =>
+        prisma.transactionDraft.aggregate({
+          where: {
+            type: "Revenue",
+            date: { gte: currentMonthStart, lt: nextMonthStart },
+          },
+          _sum: { amount: true },
+          _count: { _all: true },
+        }),
+      {
+        _sum: { amount: null as null | { toString(): string } },
+        _count: { _all: 0 },
+      },
+    ),
+    // Pending CREATE approvals — proposed Revenue values live in the
+    // `proposed` JSON blob, so we fetch the rows and sum in JS (filtering
+    // by type + month below). The queue is small, so this is cheap.
+    safe(
+      "pendingApproval.findMany(pendingApprovalRevenue)",
+      () =>
+        prisma.pendingApproval.findMany({
+          where: { status: "pending", kind: "create" },
+          select: { proposed: true },
+        }),
+      [] as Array<{ proposed: unknown }>,
+    ),
   ]);
 
   const currentMonthRevenue = num(cur._sum.amount);
@@ -187,6 +230,22 @@ export async function ceoHeadline(): Promise<CeoHeadline> {
   const expectedCollections = num(plans._sum.amount);
   const pipelineValue = num(pipelineCurrent._sum.expectedFirstInstallment);
   const pipelineValueBeyond = num(pipelineBeyond._sum.expectedFirstInstallment);
+  const myDraftsRevenue = num(drafts._sum.amount);
+
+  // Sum the proposed Revenue amounts sitting in the pending-approval
+  // queue, scoped to entries dated in the running calendar month.
+  let pendingApprovalRevenue = 0;
+  let pendingApprovalRevenueCount = 0;
+  for (const row of pendingApprovalRows) {
+    const p = row.proposed as { type?: string; amount?: number; date?: string } | null;
+    if (!p || p.type !== "Revenue") continue;
+    const when = p.date ? new Date(p.date) : null;
+    if (!when || isNaN(when.getTime()) || when < currentMonthStart || when >= nextMonthStart) {
+      continue;
+    }
+    pendingApprovalRevenue += num(p.amount);
+    pendingApprovalRevenueCount += 1;
+  }
 
   return {
     currentMonthLabel: now.toLocaleString("en-US", { month: "long", year: "numeric" }),
@@ -201,6 +260,10 @@ export async function ceoHeadline(): Promise<CeoHeadline> {
     pipelineCountBeyond: pipelineBeyond._count._all,
     totalPending: expectedCollections + pipelineValue,
     pendingApprovalsCount: approvals,
+    myDraftsRevenue,
+    myDraftsRevenueCount: drafts._count._all,
+    pendingApprovalRevenue,
+    pendingApprovalRevenueCount,
   };
 }
 

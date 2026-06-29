@@ -56,7 +56,7 @@ export default async function ExecutiveDashboardPage() {
       />
       <div className="p-margin space-y-lg">
         {/* Row 1 — Headline KPIs */}
-        <section className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6 gap-gutter">
+        <section className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-gutter">
           <KpiCard
             label={`Current Month Revenue · ${headline.currentMonthLabel}`}
             value={headline.currentMonthRevenue}
@@ -93,16 +93,36 @@ export default async function ExecutiveDashboardPage() {
             hero
             hint={`Pending submission + ${headline.currentMonthLabel} pipeline · ${headline.pendingApprovalsCount} approvals queued`}
           />
+          <KpiCard
+            label={`My Drafts · ${headline.currentMonthLabel}`}
+            value={headline.myDraftsRevenue}
+            tone="default"
+            hero
+            hint={`${headline.myDraftsRevenueCount} revenue draft${headline.myDraftsRevenueCount === 1 ? "" : "s"} not yet submitted`}
+          />
+          <KpiCard
+            label={`Pending Approval · ${headline.currentMonthLabel}`}
+            value={headline.pendingApprovalRevenue}
+            tone="default"
+            hero
+            hint={`${headline.pendingApprovalRevenueCount} revenue entr${headline.pendingApprovalRevenueCount === 1 ? "y" : "ies"} awaiting approval`}
+          />
           {/* "Forecast" tile — the realistic upper bound on this month's
               revenue: what's already landed (current month revenue) plus
-              everything pending for the month (Total Pending = pending-
-              submission collections + this month's open pipeline). */}
+              everything pending for the month — Total Pending (pending-
+              submission collections + this month's open pipeline) PLUS the
+              revenue still sitting in My Drafts and the approval queue. */}
           <KpiCard
             label={`Forecast · ${headline.currentMonthLabel}`}
-            value={headline.currentMonthRevenue + headline.totalPending}
+            value={
+              headline.currentMonthRevenue +
+              headline.totalPending +
+              headline.myDraftsRevenue +
+              headline.pendingApprovalRevenue
+            }
             tone="success"
             hero
-            hint={`${inr(headline.currentMonthRevenue)} realised + ${inr(headline.totalPending)} pending`}
+            hint={`${inr(headline.currentMonthRevenue)} realised + ${inr(headline.totalPending)} pending + ${inr(headline.myDraftsRevenue + headline.pendingApprovalRevenue)} drafts/approvals`}
           />
         </section>
 
