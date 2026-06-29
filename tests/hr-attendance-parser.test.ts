@@ -54,3 +54,22 @@ describe("normaliseStatus — gross-duration fallback when Work+OT is blank (0)"
     expect(normaliseStatus("P", 480, 0, TUE, "09:00", "13:00")).toBe("P");
   });
 });
+
+describe("normaliseStatus — missing punch (one of in/out) → half-day", () => {
+  it("in-only weekday → HD", () => {
+    expect(normaliseStatus("P", 0, 0, TUE, "09:10", null)).toBe("HD");
+  });
+  it("out-only with blank '--:--' status → HD (Sivapriya 17 Apr)", () => {
+    expect(normaliseStatus("--:--", 0, 0, TUE, null, "17:34")).toBe("HD");
+  });
+  it("'--:--' with NO punch → A (absent)", () => {
+    expect(normaliseStatus("--:--", 0, 0, TUE, null, null)).toBe("A");
+  });
+  it("a stray single punch on a week-off / holiday stays WO / HL", () => {
+    expect(normaliseStatus("WO", 0, 0, TUE, "09:10", null)).toBe("WO");
+    expect(normaliseStatus("HL", 0, 0, TUE, null, "17:00")).toBe("HL");
+  });
+  it("explicit biometric P with no punches at all is trusted as P", () => {
+    expect(normaliseStatus("P", 0, 0, TUE, null, null)).toBe("P");
+  });
+});

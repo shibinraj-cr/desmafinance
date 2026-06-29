@@ -141,21 +141,36 @@ export function normaliseStatus(
   inTime: string | null,
   outTime: string | null,
 ): string {
-  const s = String(raw ?? "").trim().toUpperCase();
-  if (!s || s === "--") return "A";
+  const raw0 = String(raw ?? "").trim().toUpperCase();
+  // Treat biometric placeholders ("--", "--:--") as "no status reported".
+  const s = raw0 === "--" || raw0 === "--:--" ? "" : raw0;
+  // Decided / off codes pass through untouched (a stray punch on a week-off or
+  // holiday must NOT turn it into a worked half-day).
   if (s === "WO" || s === "W") return "WO";
   if (s === "HL" || s === "HOL" || s === "H") return "HL";
   if (s === "LV" || s === "L" || s === "CL" || s === "SL" || s === "PL") return "LV";
-  if (s === "A" || s === "AB") return "A";
   if (s === "HD" || s === "H/D") return "HD";
-  if (s === "P" || s === "PR") {
-    // Worked minutes drive the half-day rule. Some biometric exports leave the
-    // "Work+OT" column blank (0) even though the employee clearly punched in
-    // and out — fall back to gross punch duration (out − in) so the HD rule
-    // still fires. Without this, a short half-day with no Work+OT silently
-    // stayed "P" (e.g. Aswathi 23 Apr 2026, 09:04–13:32, shown full Present).
+
+  const hasIn = !!inTime;
+  const hasOut = !!outTime;
+  // Exactly one punch (the other missing): a full day can't be verified, so it
+  // counts as a half-day pending a punch regularization. Covers biometric P / A
+  // / blank-placeholder rows alike (e.g. Sivapriya 17 Apr 2026: out-only, status
+  // "--:--" — previously ignored entirely by payroll).
+  if (hasIn !== hasOut) return "HD";
+
+  if (s === "A" || s === "AB") return "A";
+  if (s === "P" || s === "PR" || s === "") {
+    if (!hasIn && !hasOut) {
+      // No punch at all: an explicit biometric "P" is trusted; a blank is absent.
+      return s === "" ? "A" : "P";
+    }
+    // Both punches present. Worked minutes drive the half-day rule; some exports
+    // leave "Work+OT" blank (0) even with both punches — fall back to gross punch
+    // duration (out − in) so the HD rule still fires (e.g. Aswathi 23 Apr 2026,
+    // 09:04–13:32, shown full Present otherwise).
     let total = workMinutes + otMinutes;
-    if (total === 0 && inTime && outTime) {
+    if (total === 0) {
       const gross = toMinutes(outTime) - toMinutes(inTime);
       if (gross > 0) total = gross;
     }
@@ -166,7 +181,7 @@ export function normaliseStatus(
     }
     return "P";
   }
-  return s;
+  return s || "A";
 }
 
 export function parseAttendanceWorkbook(buffer: Buffer | ArrayBuffer): ParseResult {
