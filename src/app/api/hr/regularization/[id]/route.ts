@@ -7,6 +7,8 @@ import { recomputeLeaveBalance } from "@/lib/hr-leave-balance";
 import { applySandwichRule } from "@/lib/hr-sandwich";
 import { cycleWindowForMonth, cycleMonthForDate } from "@/lib/hr-data";
 import { resolveShiftForDate } from "@/lib/hr-shift";
+import { employeeForUser } from "@/lib/hr-me";
+import { leaveStatusBlockedByPunch } from "@/lib/hr-attendance-status";
 
 /** Minutes-since-midnight from an "HH:MM" string, or null. */
 function hhmmToMin(t: string | null): number | null {
@@ -58,6 +60,36 @@ export async function PATCH(req: Request, { params }: { params: { id: string } }
   if (!reg) return NextResponse.json({ error: "not found" }, { status: 404 });
   if (reg.status === "approved" || reg.status === "rejected") {
     return NextResponse.json({ error: "already decided" }, { status: 400 });
+  }
+
+  // No self-approval: an approver cannot decide their own request. The HR queue
+  // already hides own requests, but enforce it server-side too (so Soumya's
+  // requests route only to admin, etc.). Admins with no linked employee are
+  // unaffected.
+  const approverEmp = userId ? await employeeForUser(userId) : null;
+  if (approverEmp && approverEmp.id === reg.employeeId) {
+    return NextResponse.json(
+      { error: "You can't approve your own request — it must be reviewed by another approver." },
+      { status: 403 },
+    );
+  }
+
+  // A leave request can only be approved onto a no-punch day. If the day has a
+  // punch, the employee was present — it's a worked day (P/HD), never paid leave
+  // (the same guardrail the decide route enforces).
+  if (parsed.data.decision === "approve" && reg.requestType === "leave" && reg.attendanceDayId) {
+    const day = await prisma.hrAttendanceDay.findUnique({
+      where: { id: reg.attendanceDayId },
+      select: { inTime: true, outTime: true },
+    });
+    if (day && leaveStatusBlockedByPunch("LV", day.inTime, day.outTime)) {
+      return NextResponse.json(
+        {
+          error: `${reg.date.toISOString().slice(0, 10)} has a punch (${day.inTime ?? "—"}–${day.outTime ?? "—"}) — it's a worked day and can't be marked as leave. Use a punch correction instead.`,
+        },
+        { status: 400 },
+      );
+    }
   }
 
   const now = new Date();

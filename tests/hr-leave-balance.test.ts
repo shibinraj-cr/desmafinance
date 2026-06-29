@@ -3,7 +3,7 @@
  *
  * Covers the two behaviours the balance must honour:
  *   1. accrued tracks per-employee eligibility entitlement-to-date, and
- *   2. used reflects reviewed & decided leave (LV = 1.0, HD = 0.5),
+ *   2. used reflects full-day paid leave only (LV = 1.0; HD is LOP, not used),
  * with balance = opening + accrued − used.
  */
 import { describe, it, expect, vi, beforeEach } from "vitest";
@@ -94,18 +94,18 @@ describe("computeLeaveBalanceFor", () => {
     expect(c.balance).toBe(7.5);
   });
 
-  it("counts reviewed & decided leave as used: LV = 1.0, HD = 0.5", async () => {
+  it("counts only full-day paid leave (LV) as used; HD is not charged to balance", async () => {
     const db = makeDb({
       eligibility: { enabled: true, leavesPerPeriod: 1, effectiveFrom: new Date(Date.UTC(2026, 0, 1)) },
       leaveDays: [
         { status: "LV", count: 3 },
-        { status: "HD", count: 2 },
+        { status: "HD", count: 2 }, // half-days do NOT consume leave balance
       ],
     });
     const c = await computeLeaveBalanceFor(db, "e1", 2026, asOf);
     expect(c.accrued).toBe(5); // 1 × 5 months
-    expect(c.used).toBe(4); // 3×1.0 + 2×0.5
-    expect(c.balance).toBe(1); // 0 + 5 − 4
+    expect(c.used).toBe(3); // LV only (HD is 0.5-day LOP, not leave used)
+    expect(c.balance).toBe(2); // 0 + 5 − 3
   });
 
   it("folds manual ledger adjustments into accrued and keeps opening", async () => {

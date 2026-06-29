@@ -239,15 +239,15 @@ describe("bucketAttendance", () => {
 });
 
 describe("leaveUsedInYear", () => {
-  it("counts LV as 1.0 and HD as 0.5 for dates in the given year", () => {
+  it("counts full-day paid leave (LV) only; HD does not consume the balance", () => {
     const days = [
       { date: new Date(Date.UTC(2026, 3, 2)), status: "LV" },
       { date: new Date(Date.UTC(2026, 3, 11)), status: "LV" },
-      { date: new Date(Date.UTC(2026, 3, 20)), status: "HD" },
+      { date: new Date(Date.UTC(2026, 3, 20)), status: "HD" }, // half-day = LOP, not leave used
       { date: new Date(Date.UTC(2026, 3, 12)), status: "A" }, // absence — not paid leave
       { date: new Date(Date.UTC(2026, 3, 1)), status: "P" }, // present — ignored
     ];
-    expect(leaveUsedInYear(days, 2026)).toBe(2.5); // 1 + 1 + 0.5
+    expect(leaveUsedInYear(days, 2026)).toBe(2); // LV only
   });
 
   it("excludes leave that falls in a different calendar year (Dec→Jan cycle)", () => {
@@ -256,9 +256,9 @@ describe("leaveUsedInYear", () => {
     const days = [
       { date: new Date(Date.UTC(2025, 11, 29)), status: "LV" }, // Dec 2025 — excluded
       { date: new Date(Date.UTC(2026, 0, 5)), status: "LV" }, // Jan 2026 — counted
-      { date: new Date(Date.UTC(2026, 0, 10)), status: "HD" }, // Jan 2026 — counted
+      { date: new Date(Date.UTC(2026, 0, 10)), status: "HD" }, // Jan 2026 — HD not counted
     ];
-    expect(leaveUsedInYear(days, 2026)).toBe(1.5);
+    expect(leaveUsedInYear(days, 2026)).toBe(1); // Jan LV only
   });
 });
 
