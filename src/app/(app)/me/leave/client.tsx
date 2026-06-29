@@ -25,6 +25,15 @@ type Balance = {
   balance: number;
 };
 
+type LedgerRow = {
+  month: number;
+  label: string;
+  accrued: number;
+  taken: number;
+  unpaid: number;
+  balance: number;
+};
+
 const STATUS_TONE: Record<string, string> = {
   pending: "bg-yellow-50 text-yellow-800",
   approved: "bg-green-50 text-green-800",
@@ -36,10 +45,16 @@ export function MyLeaveClient({
   balance,
   requests,
   canApply = true,
+  ledger = [],
+  ledgerYear,
+  ledgerOpening = 0,
 }: {
   balance: Balance | null;
   requests: Request[];
   canApply?: boolean;
+  ledger?: LedgerRow[];
+  ledgerYear?: number;
+  ledgerOpening?: number;
 }) {
   const router = useRouter();
   const [pending, start] = useTransition();
@@ -87,6 +102,52 @@ export function MyLeaveClient({
                 <p className="text-h2 font-extrabold">{c.value.toFixed(1)}</p>
               </div>
             ))}
+          </div>
+        </Section>
+      )}
+
+      {ledger.length > 0 && (
+        <Section title={`Leave ledger · ${ledgerYear ?? ""}`}>
+          <p className="text-caption text-on-surface-variant mb-sm">
+            Paid leave is credited each month and carries forward if unused. &ldquo;Taken&rdquo;
+            counts leave used (half-day = 0.5); &ldquo;Unpaid&rdquo; is absence days (loss of pay).
+          </p>
+          <div className="overflow-x-auto">
+            <table className="w-full text-label-sm">
+              <thead className="bg-surface-container text-on-surface-variant uppercase tracking-wider text-caption">
+                <tr>
+                  <th className="px-sm py-xs text-left">Month</th>
+                  <th className="px-sm py-xs text-right">Paid leave</th>
+                  <th className="px-sm py-xs text-right">Taken</th>
+                  <th className="px-sm py-xs text-right">Unpaid</th>
+                  <th className="px-sm py-xs text-right">Balance</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr className="border-t border-outline-variant text-on-surface-variant">
+                  <td className="px-sm py-xs italic">Opening (carried forward)</td>
+                  <td className="px-sm py-xs text-right">—</td>
+                  <td className="px-sm py-xs text-right">—</td>
+                  <td className="px-sm py-xs text-right">—</td>
+                  <td className="px-sm py-xs text-right font-semibold">{ledgerOpening.toFixed(1)}</td>
+                </tr>
+                {ledger.map((r) => (
+                  <tr key={r.month} className="border-t border-outline-variant">
+                    <td className="px-sm py-xs">{r.label}</td>
+                    <td className="px-sm py-xs text-right text-green-700">
+                      {r.accrued ? `+${r.accrued.toFixed(1)}` : "—"}
+                    </td>
+                    <td className="px-sm py-xs text-right text-purple-700">
+                      {r.taken ? r.taken.toFixed(1) : "—"}
+                    </td>
+                    <td className="px-sm py-xs text-right text-red-700">
+                      {r.unpaid ? r.unpaid.toFixed(1) : "—"}
+                    </td>
+                    <td className="px-sm py-xs text-right font-semibold">{r.balance.toFixed(1)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
           </div>
         </Section>
       )}

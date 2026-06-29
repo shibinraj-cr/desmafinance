@@ -10,7 +10,26 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 
 vi.mock("@/lib/prisma", () => ({ prisma: {} }));
 
-import { elapsedAccrualMonths, computeLeaveBalanceFor } from "@/lib/hr-leave-balance";
+import { elapsedAccrualMonths, accrualMonthsInYear, computeLeaveBalanceFor } from "@/lib/hr-leave-balance";
+
+describe("accrualMonthsInYear", () => {
+  const asOf = new Date(Date.UTC(2026, 5, 15)); // 2026-06-15 → current month = June (6)
+  it("returns effectiveFrom-month through the current month (mid-year start)", () => {
+    expect(accrualMonthsInYear(2026, new Date(Date.UTC(2026, 2, 26)), asOf)).toEqual([3, 4, 5, 6]);
+  });
+  it("starts at January when eligibility began in a prior year", () => {
+    expect(accrualMonthsInYear(2026, new Date(Date.UTC(2025, 5, 1)), asOf)).toEqual([1, 2, 3, 4, 5, 6]);
+  });
+  it("covers all 12 months for a fully-elapsed past year", () => {
+    expect(accrualMonthsInYear(2025, new Date(Date.UTC(2025, 0, 1)), asOf)).toEqual([
+      1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12,
+    ]);
+  });
+  it("returns none for a future year or pre-eligibility year", () => {
+    expect(accrualMonthsInYear(2027, new Date(Date.UTC(2026, 0, 1)), asOf)).toEqual([]);
+    expect(accrualMonthsInYear(2025, new Date(Date.UTC(2026, 0, 1)), asOf)).toEqual([]);
+  });
+});
 
 describe("elapsedAccrualMonths", () => {
   const asOf = new Date(Date.UTC(2026, 4, 30)); // 2026-05-30 → current month = May (5)
