@@ -138,7 +138,7 @@ export default async function TeamActivityPage({ searchParams }: { searchParams:
   if (!access.canViewLeads) {
     return (
       <>
-        <TopBar title="Team Activity" subtitle="CRM" />
+        <TopBar title="Activity" subtitle="CRM" />
         <div className="p-margin">
           <div className="rounded-xl border border-outline-variant bg-surface-container-lowest p-lg text-on-surface-variant">
             You don&apos;t have access to the CRM. Ask an administrator to grant you the CRM pages.
@@ -168,7 +168,7 @@ export default async function TeamActivityPage({ searchParams }: { searchParams:
   return (
     <>
       <TopBar
-        title="Team Activity"
+        title="Activity"
         subtitle={scope.teamWide ? "Team-wide CRM activity & follow-up health" : "My CRM activity & follow-up health"}
       />
       <div className="p-margin space-y-lg">
