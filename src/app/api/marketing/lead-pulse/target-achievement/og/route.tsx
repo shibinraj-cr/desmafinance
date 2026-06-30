@@ -2,10 +2,8 @@ import { NextRequest } from "next/server";
 import { ImageResponse } from "next/og";
 import { getCurrentUserAndPermissions } from "@/lib/permissions";
 import { getLeadPulseAccess } from "@/lib/lead-pulse-rbac";
-import {
-  getServiceConversionMatrix,
-  getPipelineForecast,
-} from "@/lib/lead-pulse-metrics";
+import { getPipelineForecast } from "@/lib/lead-pulse-metrics";
+import { resolveServiceMatrix } from "@/lib/lead-pulse-crm-metrics";
 import { prisma } from "@/lib/prisma";
 import { todayIst } from "@/lib/lead-pulse-dates";
 
@@ -50,7 +48,11 @@ export async function GET(req: NextRequest) {
   const month = Number(url.searchParams.get("month")) || Number(today.slice(5, 7));
 
   const [matrix, forecast, bdeInsights] = await Promise.all([
-    getServiceConversionMatrix(year, month),
+    // Honor the active metrics source (CRM vs daily-entry) so this PNG
+    // matches the dashboard / monthly report. Previously this called
+    // getServiceConversionMatrix directly, which always read legacy
+    // daily-entry closes and diverged from the CRM-sourced on-page card.
+    resolveServiceMatrix(year, month),
     getPipelineForecast(year, month),
     prisma.leadPulseBdeInsight.findMany({
       where: { year, month, status: "answered" },
