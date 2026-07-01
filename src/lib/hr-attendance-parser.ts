@@ -20,26 +20,30 @@ import * as XLSX from "xlsx";
  *   - When the Work+OT column is blank (0) but the day has both punches,
  *     fall back to gross punch duration (out − in) so the rule still fires.
  *
- * Saturday timing (no Shift A/B distinction — common for everyone):
- *   - On / after 2026-04-25: 09:00 → 16:00
- *   - Before     2026-04-25: 09:00 → 17:00
- *   Saturday late + early-out are RECOMPUTED against this standard
- *   because the biometric system computes them against the employee's
- *   weekday Shift A/B end-time, which is wrong for Saturdays.
+ * Saturday timing: 09:00 → 16:00 for everyone EXCEPT exempt employees
+ *   (SATURDAY_RULE_EXEMPT, e.g. Nithya, who works a different schedule).
+ *   Saturday late + early-out are RECOMPUTED against this window because the
+ *   biometric computes them against the employee's weekday Shift A/B end-time,
+ *   which is wrong for Saturdays. Late-coming (LCE/AL) therefore runs from 09:00.
  */
 
 const WEEKDAY_HD_THRESHOLD_MIN = 360;  // 6 h
 const SATURDAY_HD_THRESHOLD_MIN = 210; // 3.5 h
-const SATURDAY_START_MIN = 9 * 60;     // 09:00
-const SATURDAY_END_MIN_LEGACY = 17 * 60;  // 17:00 — Saturdays before 2026-04-25
-const SATURDAY_END_MIN_CURRENT = 16 * 60; // 16:00 — Saturdays on/after 2026-04-25
-/// Saturday end-time switched from 17:00 → 16:00 from this date.
-const SATURDAY_NEW_END_FROM = Date.UTC(2026, 3, 25); // 25 April 2026 UTC ms
+// Company Saturday working hours: 09:00 → 16:00 for every employee EXCEPT those
+// exempt below. Saturday late / early-out are recomputed against this window
+// (the biometric computes them against the weekday shift, which is wrong for
+// Saturday), and late-coming (LCE/AL) applies from 09:00.
+const SATURDAY_START_MIN = 9 * 60; // 09:00
+const SATURDAY_END_MIN = 16 * 60; // 16:00
 
-function saturdayEndMin(date: Date): number {
-  return date.getTime() >= SATURDAY_NEW_END_FROM
-    ? SATURDAY_END_MIN_CURRENT
-    : SATURDAY_END_MIN_LEGACY;
+// Employees who do NOT follow the standard 9:00–16:00 Saturday rule — their
+// Saturday late / early-out are left as the biometric values (they work a
+// different Saturday schedule). Matched loosely on the biometric name. Nithya
+// is exempt; her specific Saturday hours can be applied here once configured.
+const SATURDAY_RULE_EXEMPT = ["nithya"];
+export function isSaturdayRuleExempt(rawName: string): boolean {
+  const n = String(rawName ?? "").toLowerCase();
+  return SATURDAY_RULE_EXEMPT.some((x) => n.includes(x));
 }
 
 export type ParsedDay = {
@@ -230,23 +234,14 @@ export function parseAttendanceWorkbook(buffer: Buffer | ArrayBuffer): ParseResu
     const remark = !remarkRaw || remarkRaw === "--" ? null : remarkRaw;
     const status = normaliseStatus(statusRaw, workMinutes, otMinutes, date, inTime, outTime);
 
-    // Saturday: the biometric system computes late + early-out against
-    // the employee's assigned weekday shift (A=09:00–17:30 / B=09:30–18:00),
-    // which doesn't apply on Saturday. Recompute against Saturday's
-    // common standard:  09:00 → 17:00 (pre 2026-04-25) | 09:00 → 16:00 (current).
-    if (date.getUTCDay() === 6) {
-      if (inTime) {
-        const inMin = toMinutes(inTime);
-        lateMinutes = Math.max(0, inMin - SATURDAY_START_MIN);
-      } else {
-        lateMinutes = 0;
-      }
-      if (outTime) {
-        const outMin = toMinutes(outTime);
-        earlyOutMinutes = Math.max(0, saturdayEndMin(date) - outMin);
-      } else {
-        earlyOutMinutes = 0;
-      }
+    // Saturday: the biometric computes late + early-out against the employee's
+    // assigned weekday shift (A=09:00–17:30 / B=09:30–18:00), which is wrong for
+    // Saturday. Recompute against the company Saturday window 09:00 → 16:00 so
+    // late-coming (LCE/AL) applies from 09:00. Exempt employees (e.g. Nithya)
+    // work a different Saturday schedule and keep their biometric values.
+    if (date.getUTCDay() === 6 && !isSaturdayRuleExempt(current.name)) {
+      lateMinutes = inTime ? Math.max(0, toMinutes(inTime) - SATURDAY_START_MIN) : 0;
+      earlyOutMinutes = outTime ? Math.max(0, SATURDAY_END_MIN - toMinutes(outTime)) : 0;
     }
 
     out.push({
