@@ -6,7 +6,7 @@
  * (and full days) misclassified across the April-2026 cycle.
  */
 import { describe, it, expect } from "vitest";
-import { normaliseStatus } from "@/lib/hr-attendance-parser";
+import { normaliseStatus, isSaturdayRuleExempt } from "@/lib/hr-attendance-parser";
 
 const TUE = new Date(Date.UTC(2026, 3, 14)); // weekday (threshold 360)
 const SAT = new Date(Date.UTC(2026, 3, 4)); //  Saturday (threshold 210)
@@ -71,5 +71,16 @@ describe("normaliseStatus — missing punch (one of in/out) → half-day", () =>
   });
   it("explicit biometric P with no punches at all is trusted as P", () => {
     expect(normaliseStatus("P", 0, 0, TUE, null, null)).toBe("P");
+  });
+});
+
+describe("isSaturdayRuleExempt", () => {
+  it("exempts Nithya (any biometric name containing it) from the 9–4 Saturday rule", () => {
+    expect(isSaturdayRuleExempt("Nithya")).toBe(true);
+    expect(isSaturdayRuleExempt("NITHYA K")).toBe(true);
+  });
+  it("everyone else follows the standard Saturday rule", () => {
+    expect(isSaturdayRuleExempt("Sivapriya Sivakumar")).toBe(false);
+    expect(isSaturdayRuleExempt("")).toBe(false);
   });
 });
