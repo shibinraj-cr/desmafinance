@@ -1263,6 +1263,12 @@ const EMAIL_TEMPLATES: { id: string; label: string; subject: string; body: strin
     subject: "Following up — {service}",
     body: "Hi {name},\n\nJust following up on our earlier conversation regarding {service}. Do let me know a good time to connect.\n\n{consultant}",
   },
+  {
+    id: "not_responding",
+    label: "Not responding / Unavailable",
+    subject: "We tried to reach you — Australian Nursing Registration",
+    body: "Dear Candidate,\n\nWe tried reaching you on the phone number you provided, but unfortunately, we couldn't get through.\n\nIf you're still interested in pursuing the Australian Nursing Registration process, please feel free to call or WhatsApp us at +91 79949 20775. Our team will be happy to assist you.\n\nWe look forward to hearing from you.\n\nThank you,\nTeam DESMA",
+  },
 ];
 
 function EmailModal({ lead, emailConfigured, onClose }: { lead: LeadRow; emailConfigured: boolean; onClose: () => void }) {
