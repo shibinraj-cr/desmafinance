@@ -5,6 +5,7 @@ import Link from "next/link";
 import { useRouter, usePathname, useSearchParams } from "next/navigation";
 import type { CrmTaskListRow } from "@/lib/crm-leads";
 import { DEFAULT_STATUS_COLOR } from "@/lib/crm";
+import { NextStepDialog, type NextStepPayload } from "@/components/crm/NextStepDialog";
 
 export type BdeOpt = { userId: string; displayName: string; username: string; role: string };
 export type TasksAccess = { isAdmin: boolean; isBde: boolean; userId: string };
@@ -155,17 +156,61 @@ export function TasksBoard({
     chips.push({ key: "mine", label: "My tasks", active: assigneeVal === access.userId && !kindVal, patch: { assignee: access.userId, due: null, kind: null } });
   }
 
+  // When completing the last open task on a still-active lead, the API rejects
+  // with 422 next_task_required; we then collect the next follow-up and retry.
+  const [pendingComplete, setPendingComplete] = useState<CrmTaskListRow | null>(null);
+  const [nextBusy, setNextBusy] = useState(false);
+  const [nextError, setNextError] = useState<string | null>(null);
+
   async function setStatus(task: CrmTaskListRow, status: "done" | "open") {
     const res = await fetch(`/api/crm/leads/${task.leadId}/tasks/${task.id}`, {
       method: "PATCH",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ status }),
     });
+    if (status === "done" && res.status === 422) {
+      const j = await res.json().catch(() => null);
+      if (j?.error === "next_task_required") {
+        setNextError(null);
+        setPendingComplete(task);
+        return;
+      }
+    }
     if (res.ok) router.refresh();
+  }
+
+  async function submitNextStep(payload: NextStepPayload) {
+    if (!pendingComplete) return;
+    setNextBusy(true);
+    setNextError(null);
+    const res = await fetch(`/api/crm/leads/${pendingComplete.leadId}/tasks/${pendingComplete.id}`, {
+      method: "PATCH",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ status: "done", nextTask: payload }),
+    });
+    setNextBusy(false);
+    if (res.ok) {
+      setPendingComplete(null);
+      router.refresh();
+    } else {
+      setNextError("Couldn’t complete the task. Please try again.");
+    }
   }
 
   return (
     <div className="space-y-md">
+      {pendingComplete && (
+        <NextStepDialog
+          leadName={pendingComplete.lead.candidateName}
+          busy={nextBusy}
+          error={nextError}
+          onCancel={() => {
+            setPendingComplete(null);
+            setNextError(null);
+          }}
+          onSubmit={submitNextStep}
+        />
+      )}
       {/* Quick-filter chips */}
       <div className="flex flex-wrap items-center gap-xs">
         {chips.map((c) => (

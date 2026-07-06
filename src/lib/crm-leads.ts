@@ -347,6 +347,22 @@ export function serializeTask(t: TaskWithRels): TaskRow {
   };
 }
 
+/**
+ * The "active leads always have a next step" rule. Completing a task must be
+ * accompanied by a new follow-up when ALL of these hold:
+ *   - it is a completion (not a reopen or a plain field edit),
+ *   - the lead is still ACTIVE (won/lost leads need no further action), and
+ *   - no other open task remains once this one is done.
+ * Enforced in the task-complete route; pure so the exact exemptions are testable.
+ */
+export function requiresNextStepOnComplete(opts: {
+  completing: boolean;
+  leadKind: string; // 'active' | 'won' | 'lost'
+  remainingOpenTasks: number; // open tasks on the lead EXCLUDING the one being completed
+}): boolean {
+  return opts.completing && opts.leadKind === "active" && opts.remainingOpenTasks === 0;
+}
+
 /** Open tasks first (by due date, soonest first), then completed. */
 export const taskOrderBy: Prisma.CrmTaskOrderByWithRelationInput[] = [
   { status: "desc" }, // 'open' > 'done' alphabetically, so desc lists open first

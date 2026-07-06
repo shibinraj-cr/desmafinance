@@ -4,7 +4,31 @@ import { describe, it, expect, vi } from "vitest";
 // mock prisma to avoid constructing a real DB client when the module loads.
 vi.mock("@/lib/prisma", () => ({ prisma: {} }));
 
-import { resolveAssigneeFilter, buildLeadWhere, buildCrmTaskWhere } from "@/lib/crm-leads";
+import {
+  resolveAssigneeFilter,
+  buildLeadWhere,
+  buildCrmTaskWhere,
+  requiresNextStepOnComplete,
+} from "@/lib/crm-leads";
+
+describe("requiresNextStepOnComplete — mandatory next step on an active lead", () => {
+  it("requires a next step when completing an active lead's last open task", () => {
+    expect(requiresNextStepOnComplete({ completing: true, leadKind: "active", remainingOpenTasks: 0 })).toBe(true);
+  });
+
+  it("does not require one when another open task remains", () => {
+    expect(requiresNextStepOnComplete({ completing: true, leadKind: "active", remainingOpenTasks: 1 })).toBe(false);
+  });
+
+  it("exempts won and lost leads", () => {
+    expect(requiresNextStepOnComplete({ completing: true, leadKind: "won", remainingOpenTasks: 0 })).toBe(false);
+    expect(requiresNextStepOnComplete({ completing: true, leadKind: "lost", remainingOpenTasks: 0 })).toBe(false);
+  });
+
+  it("does not fire on a reopen / non-completion", () => {
+    expect(requiresNextStepOnComplete({ completing: false, leadKind: "active", remainingOpenTasks: 0 })).toBe(false);
+  });
+});
 
 describe("resolveAssigneeFilter", () => {
   it("defaults a BDE with no explicit choice to their own queue", () => {

@@ -10,6 +10,7 @@ import { renderTemplate } from "@/lib/crm";
 import { COUNTRIES } from "@/lib/countries";
 import { StatusPill, type StatusOpt, type Opt, type BdeOpt } from "../client";
 import { EnrollCelebration } from "@/components/EnrollCelebration";
+import { NextStepDialog, type NextStepPayload } from "@/components/crm/NextStepDialog";
 
 export type PartyOpt = { id: string; label: string; phone: string | null };
 export type DetailMasters = {
@@ -323,6 +324,7 @@ export function LeadDetail({
       {tab === "tasks" && (
         <TasksPanel
           leadId={lead.id}
+          leadName={lead.candidateName}
           tasks={tasks}
           canEdit={canEdit}
           bdes={masters.bdes}
@@ -1714,12 +1716,14 @@ function PriorityPill({ priority }: { priority: string }) {
 
 function TasksPanel({
   leadId,
+  leadName,
   tasks,
   canEdit,
   bdes,
   defaultAssigneeId,
 }: {
   leadId: string;
+  leadName: string;
   tasks: TaskRow[];
   canEdit: boolean;
   bdes: BdeOpt[];
@@ -1755,7 +1759,7 @@ function TasksPanel({
         ) : (
           <ul className="space-y-base">
             {open.map((t) => (
-              <TaskItem key={t.id} leadId={leadId} task={t} canEdit={canEdit} />
+              <TaskItem key={t.id} leadId={leadId} leadName={leadName} task={t} canEdit={canEdit} />
             ))}
           </ul>
         )}
@@ -1766,7 +1770,7 @@ function TasksPanel({
           <div className="text-label-sm uppercase tracking-wider text-on-surface-variant">Completed</div>
           <ul className="space-y-base">
             {done.map((t) => (
-              <TaskItem key={t.id} leadId={leadId} task={t} canEdit={canEdit} />
+              <TaskItem key={t.id} leadId={leadId} leadName={leadName} task={t} canEdit={canEdit} />
             ))}
           </ul>
         </div>
@@ -1868,19 +1872,51 @@ function TaskComposer({
   );
 }
 
-function TaskItem({ leadId, task, canEdit }: { leadId: string; task: TaskRow; canEdit: boolean }) {
+function TaskItem({ leadId, task, canEdit, leadName }: { leadId: string; task: TaskRow; canEdit: boolean; leadName?: string | null }) {
   const router = useRouter();
   const [busy, setBusy] = useState(false);
+  const [showNext, setShowNext] = useState(false);
+  const [nextError, setNextError] = useState<string | null>(null);
   const done = task.status === "done";
   const due = taskDueLabel(task.dueAt);
 
+  // Complete the task; if it's the active lead's last open task the API returns
+  // 422 next_task_required, so we collect the next follow-up and retry with it.
+  async function complete(nextTask?: NextStepPayload) {
+    setBusy(true);
+    setNextError(null);
+    const res = await fetch(`/api/crm/leads/${leadId}/tasks/${task.id}`, {
+      method: "PATCH",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(nextTask ? { status: "done", nextTask } : { status: "done" }),
+    });
+    if (res.status === 422) {
+      const j = await res.json().catch(() => null);
+      if (j?.error === "next_task_required") {
+        setBusy(false);
+        if (nextTask) setNextError("Couldn’t complete the task. Please try again.");
+        else setShowNext(true);
+        return;
+      }
+    }
+    setBusy(false);
+    if (res.ok) {
+      setShowNext(false);
+      router.refresh();
+    }
+  }
+
   async function toggle() {
     if (!canEdit || busy) return;
+    if (!done) {
+      await complete();
+      return;
+    }
     setBusy(true);
     const res = await fetch(`/api/crm/leads/${leadId}/tasks/${task.id}`, {
       method: "PATCH",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ status: done ? "open" : "done" }),
+      body: JSON.stringify({ status: "open" }),
     });
     setBusy(false);
     if (res.ok) router.refresh();
@@ -1896,6 +1932,18 @@ function TaskItem({ leadId, task, canEdit }: { leadId: string; task: TaskRow; ca
 
   return (
     <li className="flex items-start gap-sm rounded-lg border border-outline-variant bg-surface-container-low p-md">
+      {showNext && (
+        <NextStepDialog
+          leadName={leadName}
+          busy={busy}
+          error={nextError}
+          onCancel={() => {
+            setShowNext(false);
+            setNextError(null);
+          }}
+          onSubmit={(p) => complete(p)}
+        />
+      )}
       <button
         type="button"
         onClick={toggle}
