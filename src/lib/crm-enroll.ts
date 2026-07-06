@@ -91,6 +91,11 @@ async function upsertPipeline(
   deal: { serviceId: string; sourceId: string; ownerUserId: string; expectedValue: number; expectedCloseDate: Date },
   status: "open" | "closed_won",
   partyId: string | null,
+  // Explicit enrollment (close) date supplied at enroll time. When given it
+  // wins — it's what drives the month bucket in every CRM metric. When omitted
+  // we keep any existing close date (so editing a deal never re-stamps it) and
+  // fall back to now for a brand-new won row.
+  closedDateOverride?: Date | null,
 ): Promise<string> {
   const base = {
     userId: deal.ownerUserId,
@@ -110,14 +115,15 @@ async function upsertPipeline(
     });
     if (exists) {
       // Keep an existing close date when staying/becoming won so editing a deal
-      // never re-stamps the enrollment date; clear it only when re-opening.
-      const closedDate = status === "closed_won" ? exists.closedDate ?? new Date() : null;
+      // never re-stamps the enrollment date; an explicit override wins; clear it
+      // only when re-opening.
+      const closedDate = status === "closed_won" ? closedDateOverride ?? exists.closedDate ?? new Date() : null;
       await tx.leadPulsePipeline.update({ where: { id: lead.pipelineId }, data: { ...base, closedDate } });
       return lead.pipelineId;
     }
   }
   const created = await tx.leadPulsePipeline.create({
-    data: { ...base, closedDate: status === "closed_won" ? new Date() : null },
+    data: { ...base, closedDate: status === "closed_won" ? closedDateOverride ?? new Date() : null },
   });
   return created.id;
 }
@@ -233,6 +239,10 @@ type EnrollArgs = {
   serviceId?: string | null;
   expectedValue?: number | null;
   expectedCloseDate?: Date | null;
+  // The actual enrollment date. Drives the pipeline's `closedDate` — i.e. which
+  // month the enrollment counts in across every CRM metric. Defaults to now
+  // when omitted (e.g. an older client that doesn't send it).
+  closedDate?: Date | null;
   ownerUserId?: string | null;
   actorId: string;
 };
@@ -286,7 +296,7 @@ export async function enrollLead(
       update: { totalAmount: expectedValue },
       select: { id: true },
     });
-    const pipelineId = await upsertPipeline(tx, lead, deal, "closed_won", partyId);
+    const pipelineId = await upsertPipeline(tx, lead, deal, "closed_won", partyId, args.closedDate ?? null);
     await tx.lead.update({
       where: { id: lead.id },
       data: {

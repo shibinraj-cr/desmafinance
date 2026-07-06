@@ -10,6 +10,7 @@ import { renderTemplate } from "@/lib/crm";
 import { COUNTRIES } from "@/lib/countries";
 import { StatusPill, type StatusOpt, type Opt, type BdeOpt } from "../client";
 import { EnrollCelebration } from "@/components/EnrollCelebration";
+import { NextStepDialog, type NextStepPayload } from "@/components/crm/NextStepDialog";
 
 export type PartyOpt = { id: string; label: string; phone: string | null };
 export type DetailMasters = {
@@ -323,6 +324,7 @@ export function LeadDetail({
       {tab === "tasks" && (
         <TasksPanel
           leadId={lead.id}
+          leadName={lead.candidateName}
           tasks={tasks}
           canEdit={canEdit}
           bdes={masters.bdes}
@@ -1008,6 +1010,13 @@ function DealModal({
   const [serviceId, setServiceId] = useState(lead.service?.id ?? "");
   const [value, setValue] = useState(lead.expectedValue != null ? String(lead.expectedValue) : "");
   const [closeDate, setCloseDate] = useState(lead.expectedCloseDate ? lead.expectedCloseDate.slice(0, 10) : "");
+  // Enroll: the date the close counts against in the CRM metrics. Defaults to
+  // the lead's expected close date when it's already set and not in the future
+  // (a month-end deal keyed the next morning dates back to when it closed),
+  // else today (IST). Never defaults to a future date.
+  const todayIst = new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Kolkata" }).format(new Date());
+  const expClose = lead.expectedCloseDate ? lead.expectedCloseDate.slice(0, 10) : "";
+  const [enrollDate, setEnrollDate] = useState(expClose && expClose <= todayIst ? expClose : todayIst);
   const [ownerId, setOwnerId] = useState(assigneeIsL2 ? lead.assignedTo!.id : "");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -1017,6 +1026,7 @@ function DealModal({
     if (!serviceId) return setError("Pick a service.");
     if (!(Number(value) > 0)) return setError("Enter an expected value.");
     if (mode === "deal" && !closeDate) return setError("Pick an expected close date.");
+    if (mode === "enroll" && !enrollDate) return setError("Pick the enrollment date.");
     if (!assigneeIsL2 && !ownerId) return setError("Choose an L2 BDE as the deal owner.");
     setBusy(true);
     const res = await fetch(`/api/crm/leads/${lead.id}/${mode === "enroll" ? "enroll" : "deal"}`, {
@@ -1025,7 +1035,11 @@ function DealModal({
       body: JSON.stringify({
         serviceId,
         expectedValue: Number(value),
-        expectedCloseDate: closeDate || undefined,
+        // On enroll, the enrollment date is the actual close — send it as both
+        // the close date (drives the CRM month bucket) and the expected close so
+        // the lead's displayed deal date matches.
+        expectedCloseDate: (mode === "enroll" ? enrollDate : closeDate) || undefined,
+        ...(mode === "enroll" ? { closedDate: enrollDate || undefined } : {}),
         ownerUserId: assigneeIsL2 ? undefined : ownerId,
       }),
     });
@@ -1066,9 +1080,19 @@ function DealModal({
       <Field label="Expected value (₹)">
         <input className={inputCls} type="number" min={0} value={value} onChange={(e) => setValue(e.target.value)} />
       </Field>
-      <Field label={mode === "enroll" ? "Expected close date (optional)" : "Expected close date"}>
-        <input className={inputCls} type="date" value={closeDate} onChange={(e) => setCloseDate(e.target.value)} />
-      </Field>
+      {mode === "enroll" ? (
+        <Field label="Enrollment date">
+          <input className={inputCls} type="date" value={enrollDate} onChange={(e) => setEnrollDate(e.target.value)} />
+          <p className="mt-xs text-label-sm text-on-surface-variant">
+            The date this enrollment counts against in the reports. Defaults to today — set it back (e.g. to the last of the
+            month) if the deal actually closed earlier.
+          </p>
+        </Field>
+      ) : (
+        <Field label="Expected close date">
+          <input className={inputCls} type="date" value={closeDate} onChange={(e) => setCloseDate(e.target.value)} />
+        </Field>
+      )}
       {!assigneeIsL2 && (
         <Field label="Deal owner (L2 BDE)">
           <select className={inputCls} value={ownerId} onChange={(e) => setOwnerId(e.target.value)}>
@@ -1714,12 +1738,14 @@ function PriorityPill({ priority }: { priority: string }) {
 
 function TasksPanel({
   leadId,
+  leadName,
   tasks,
   canEdit,
   bdes,
   defaultAssigneeId,
 }: {
   leadId: string;
+  leadName: string;
   tasks: TaskRow[];
   canEdit: boolean;
   bdes: BdeOpt[];
@@ -1755,7 +1781,7 @@ function TasksPanel({
         ) : (
           <ul className="space-y-base">
             {open.map((t) => (
-              <TaskItem key={t.id} leadId={leadId} task={t} canEdit={canEdit} />
+              <TaskItem key={t.id} leadId={leadId} leadName={leadName} task={t} canEdit={canEdit} />
             ))}
           </ul>
         )}
@@ -1766,7 +1792,7 @@ function TasksPanel({
           <div className="text-label-sm uppercase tracking-wider text-on-surface-variant">Completed</div>
           <ul className="space-y-base">
             {done.map((t) => (
-              <TaskItem key={t.id} leadId={leadId} task={t} canEdit={canEdit} />
+              <TaskItem key={t.id} leadId={leadId} leadName={leadName} task={t} canEdit={canEdit} />
             ))}
           </ul>
         </div>
@@ -1868,19 +1894,51 @@ function TaskComposer({
   );
 }
 
-function TaskItem({ leadId, task, canEdit }: { leadId: string; task: TaskRow; canEdit: boolean }) {
+function TaskItem({ leadId, task, canEdit, leadName }: { leadId: string; task: TaskRow; canEdit: boolean; leadName?: string | null }) {
   const router = useRouter();
   const [busy, setBusy] = useState(false);
+  const [showNext, setShowNext] = useState(false);
+  const [nextError, setNextError] = useState<string | null>(null);
   const done = task.status === "done";
   const due = taskDueLabel(task.dueAt);
 
+  // Complete the task; if it's the active lead's last open task the API returns
+  // 422 next_task_required, so we collect the next follow-up and retry with it.
+  async function complete(nextTask?: NextStepPayload) {
+    setBusy(true);
+    setNextError(null);
+    const res = await fetch(`/api/crm/leads/${leadId}/tasks/${task.id}`, {
+      method: "PATCH",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(nextTask ? { status: "done", nextTask } : { status: "done" }),
+    });
+    if (res.status === 422) {
+      const j = await res.json().catch(() => null);
+      if (j?.error === "next_task_required") {
+        setBusy(false);
+        if (nextTask) setNextError("Couldn’t complete the task. Please try again.");
+        else setShowNext(true);
+        return;
+      }
+    }
+    setBusy(false);
+    if (res.ok) {
+      setShowNext(false);
+      router.refresh();
+    }
+  }
+
   async function toggle() {
     if (!canEdit || busy) return;
+    if (!done) {
+      await complete();
+      return;
+    }
     setBusy(true);
     const res = await fetch(`/api/crm/leads/${leadId}/tasks/${task.id}`, {
       method: "PATCH",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ status: done ? "open" : "done" }),
+      body: JSON.stringify({ status: "open" }),
     });
     setBusy(false);
     if (res.ok) router.refresh();
@@ -1896,6 +1954,18 @@ function TaskItem({ leadId, task, canEdit }: { leadId: string; task: TaskRow; ca
 
   return (
     <li className="flex items-start gap-sm rounded-lg border border-outline-variant bg-surface-container-low p-md">
+      {showNext && (
+        <NextStepDialog
+          leadName={leadName}
+          busy={busy}
+          error={nextError}
+          onCancel={() => {
+            setShowNext(false);
+            setNextError(null);
+          }}
+          onSubmit={(p) => complete(p)}
+        />
+      )}
       <button
         type="button"
         onClick={toggle}

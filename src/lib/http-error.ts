@@ -22,3 +22,4 @@ export const unauthorized = (message = "unauthorized") => new HttpError(401, mes
 export const forbidden = (message = "forbidden") => new HttpError(403, message, "forbidden");
 export const notFound = (message = "not_found") => new HttpError(404, message, "not_found");
 export const conflict = (message: string, code = "conflict") => new HttpError(409, message, code);
+export const unprocessable = (message: string, code = "unprocessable") => new HttpError(422, message, code);

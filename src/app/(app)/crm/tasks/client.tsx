@@ -5,10 +5,11 @@ import Link from "next/link";
 import { useRouter, usePathname, useSearchParams } from "next/navigation";
 import type { CrmTaskListRow } from "@/lib/crm-leads";
 import { DEFAULT_STATUS_COLOR } from "@/lib/crm";
+import { NextStepDialog, type NextStepPayload } from "@/components/crm/NextStepDialog";
 
 export type BdeOpt = { userId: string; displayName: string; username: string; role: string };
 export type TasksAccess = { isAdmin: boolean; isBde: boolean; userId: string };
-export type TaskCounts = { open: number; overdue: number; dueToday: number; unassignedOpen: number };
+export type TaskCounts = { open: number; overdue: number; dueToday: number; unassignedOpen: number; reinquiry: number };
 
 // ── Reusable class strings (verbatim from the leads board design system) ────
 const selectClass =
@@ -61,6 +62,24 @@ function LeadStatusPill({ status }: { status: { label: string; color: string | n
   );
 }
 
+// A task is a re-inquiry follow-up when its subject carries "re-inquiry" — the
+// shared marker across every creator (action, oversight, rescue "Re-engage").
+// Mirrors the server-side `kind=reinquiry` filter (REINQUIRY_TASK_SUBJECT_NEEDLE).
+function isReInquiryTask(subject: string): boolean {
+  return /re-inquiry/i.test(subject);
+}
+function ReInquiryBadge() {
+  return (
+    <span
+      className="inline-flex items-center gap-[2px] shrink-0 px-xs py-[2px] rounded-full text-[10px] font-bold uppercase tracking-wider whitespace-nowrap border bg-accent/15 text-accent border-accent/40"
+      title="Re-inquiry — an existing candidate submitted again"
+    >
+      <span className="material-symbols-outlined" style={{ fontSize: 12 }}>autorenew</span>
+      Re-inquiry
+    </span>
+  );
+}
+
 const SORT_OPTIONS = [
   { value: "due_asc", label: "Due soonest" },
   { value: "due_desc", label: "Due latest" },
@@ -106,27 +125,49 @@ export function TasksBoard({
   }
 
   const totalPages = Math.max(1, Math.ceil(total / pageSize));
+  // Export link mirrors the current filters (drop pagination — export all matches).
+  const exportParams = new URLSearchParams(search.toString());
+  exportParams.delete("page");
+  const exportHref = "/api/crm/tasks/export" + (exportParams.toString() ? `?${exportParams.toString()}` : "");
   const today = startOfToday();
   const statusVal = search.get("status") ?? "open";
   const dueVal = search.get("due") ?? "";
-  const assigneeVal = search.get("assignee") ?? "";
+  // Effective assignee mirrors the server default: a BDE with no explicit
+  // assignee lands on their own queue ("my tasks"); non-BDEs (and the explicit
+  // "All tasks" / "all" choice) see everyone. Used for the select value + chips.
+  const rawAssignee = search.get("assignee");
+  const assigneeVal = rawAssignee ?? (access.isBde ? access.userId : "all");
+  const kindVal = search.get("kind") ?? "";
   const anyFilter =
     !!search.get("status") ||
     !!search.get("assignee") ||
     !!search.get("priority") ||
     !!search.get("due") ||
+    !!search.get("kind") ||
     !!search.get("q");
 
   // Quick-filter chips. `active` highlights the chip when its filter is set.
+  // Each chip is a one-click preset: it sets the dimension(s) it owns and clears
+  // the others (status/assignee/priority/due/kind) so the chips stay exclusive.
+  // "No narrowing" = the plain open list with no due/kind/priority facet, used so
+  // the All/My scope chips light up only when nothing else is filtering.
+  const noNarrowing = statusVal === "open" && !dueVal && !kindVal && !search.get("priority");
   const chips: { key: string; label: string; count?: number; active: boolean; patch: Record<string, string | null> }[] = [
-    { key: "open", label: "All open", count: counts.open, active: !anyFilter || (statusVal === "open" && !dueVal && !assigneeVal && !search.get("priority")), patch: { status: null, assignee: null, priority: null, due: null, q: null } },
-    { key: "overdue", label: "Overdue", count: counts.overdue, active: dueVal === "overdue", patch: { due: "overdue", status: null, assignee: null, priority: null } },
-    { key: "today", label: "Due today", count: counts.dueToday, active: dueVal === "today", patch: { due: "today", status: null, assignee: null, priority: null } },
-    { key: "unassigned", label: "Unassigned", count: counts.unassignedOpen, active: assigneeVal === "unassigned", patch: { assignee: "unassigned", status: null, due: null, priority: null } },
+    { key: "open", label: "All open", count: counts.open, active: assigneeVal === "all" && noNarrowing, patch: { status: null, assignee: "all", priority: null, due: null, kind: null, q: null } },
+    { key: "overdue", label: "Overdue", count: counts.overdue, active: dueVal === "overdue", patch: { due: "overdue", status: null, assignee: null, priority: null, kind: null } },
+    { key: "today", label: "Due today", count: counts.dueToday, active: dueVal === "today", patch: { due: "today", status: null, assignee: null, priority: null, kind: null } },
+    { key: "reinquiry", label: "Re-inquiry", count: counts.reinquiry, active: kindVal === "reinquiry", patch: { kind: "reinquiry", status: null, assignee: null, priority: null, due: null } },
+    { key: "unassigned", label: "Unassigned", count: counts.unassignedOpen, active: assigneeVal === "unassigned", patch: { assignee: "unassigned", status: null, due: null, priority: null, kind: null } },
   ];
   if (access.isBde) {
-    chips.push({ key: "mine", label: "My tasks", active: assigneeVal === access.userId, patch: { assignee: access.userId, due: null } });
+    chips.push({ key: "mine", label: "My tasks", active: assigneeVal === access.userId && noNarrowing, patch: { assignee: access.userId, status: null, due: null, kind: null, priority: null } });
   }
+
+  // When completing the last open task on a still-active lead, the API rejects
+  // with 422 next_task_required; we then collect the next follow-up and retry.
+  const [pendingComplete, setPendingComplete] = useState<CrmTaskListRow | null>(null);
+  const [nextBusy, setNextBusy] = useState(false);
+  const [nextError, setNextError] = useState<string | null>(null);
 
   async function setStatus(task: CrmTaskListRow, status: "done" | "open") {
     const res = await fetch(`/api/crm/leads/${task.leadId}/tasks/${task.id}`, {
@@ -134,11 +175,49 @@ export function TasksBoard({
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ status }),
     });
+    if (status === "done" && res.status === 422) {
+      const j = await res.json().catch(() => null);
+      if (j?.error === "next_task_required") {
+        setNextError(null);
+        setPendingComplete(task);
+        return;
+      }
+    }
     if (res.ok) router.refresh();
+  }
+
+  async function submitNextStep(payload: NextStepPayload) {
+    if (!pendingComplete) return;
+    setNextBusy(true);
+    setNextError(null);
+    const res = await fetch(`/api/crm/leads/${pendingComplete.leadId}/tasks/${pendingComplete.id}`, {
+      method: "PATCH",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ status: "done", nextTask: payload }),
+    });
+    setNextBusy(false);
+    if (res.ok) {
+      setPendingComplete(null);
+      router.refresh();
+    } else {
+      setNextError("Couldn’t complete the task. Please try again.");
+    }
   }
 
   return (
     <div className="space-y-md">
+      {pendingComplete && (
+        <NextStepDialog
+          leadName={pendingComplete.lead.candidateName}
+          busy={nextBusy}
+          error={nextError}
+          onCancel={() => {
+            setPendingComplete(null);
+            setNextError(null);
+          }}
+          onSubmit={submitNextStep}
+        />
+      )}
       {/* Quick-filter chips */}
       <div className="flex flex-wrap items-center gap-xs">
         {chips.map((c) => (
@@ -196,8 +275,8 @@ export function TasksBoard({
           <option value="all">All statuses</option>
         </select>
 
-        <select className={selectClass} value={assigneeVal} onChange={(e) => update({ assignee: e.target.value || null })}>
-          <option value="">All consultants</option>
+        <select className={selectClass} value={assigneeVal} onChange={(e) => update({ assignee: e.target.value })}>
+          <option value="all">All consultants</option>
           <option value="unassigned">Unassigned</option>
           {bdes.map((b) => (
             <option key={b.userId} value={b.userId}>
@@ -232,12 +311,23 @@ export function TasksBoard({
         {anyFilter && (
           <button
             type="button"
-            onClick={() => update({ status: null, assignee: null, priority: null, due: null, q: null })}
+            onClick={() => update({ status: null, assignee: null, priority: null, due: null, kind: null, q: null })}
             className="h-9 px-md rounded-lg border border-outline-variant text-label-sm text-on-surface-variant hover:text-on-surface hover:bg-surface-container-low transition"
           >
             Clear all
           </button>
         )}
+
+        <a
+          href={exportHref}
+          className="ml-auto h-9 px-md rounded-lg border border-outline-variant text-label-sm font-semibold text-on-surface-variant hover:text-on-surface hover:bg-surface-container-low transition inline-flex items-center gap-xs"
+          title="Download the filtered tasks as an Excel file (name, number, stage per consultant)"
+        >
+          <span className="material-symbols-outlined" style={{ fontSize: 18 }}>
+            download
+          </span>
+          Export Excel
+        </a>
       </div>
 
       {/* Table */}
@@ -267,6 +357,7 @@ export function TasksBoard({
                   const canEdit = access.isAdmin || (access.isBde && t.lead.assignedToId === access.userId);
                   const overdue = t.status === "open" && !!t.dueAt && new Date(t.dueAt).getTime() < today;
                   const done = t.status === "done";
+                  const reinquiry = isReInquiryTask(t.subject);
                   return (
                     <tr key={t.id} className={"border-t border-outline-variant/60 hover:bg-surface-container-low" + (done ? " opacity-60" : "")}>
                       <Td className="whitespace-nowrap font-mono tabular-nums">
@@ -283,9 +374,12 @@ export function TasksBoard({
                         <PriorityPill priority={t.priority} />
                       </Td>
                       <Td className="max-w-[22rem]">
-                        <span className={"font-medium " + (done ? "line-through text-on-surface-variant" : "text-on-surface")} title={t.note ?? undefined}>
-                          {t.subject}
-                        </span>
+                        <div className="flex items-center gap-xs">
+                          {reinquiry && <ReInquiryBadge />}
+                          <span className={"font-medium " + (done ? "line-through text-on-surface-variant" : "text-on-surface")} title={t.note ?? undefined}>
+                            {t.subject}
+                          </span>
+                        </div>
                         {t.note && <span className="block text-label-sm text-on-surface-variant truncate">{t.note}</span>}
                       </Td>
                       <Td className="whitespace-nowrap font-semibold">

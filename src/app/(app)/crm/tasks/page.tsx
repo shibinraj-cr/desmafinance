@@ -9,6 +9,8 @@ import {
   crmTaskListOrderBy,
   serializeCrmTaskListRow,
   getAssignableBdes,
+  resolveAssigneeFilter,
+  REINQUIRY_TASK_SUBJECT_NEEDLE,
 } from "@/lib/crm-leads";
 import { TasksBoard } from "./client";
 
@@ -46,15 +48,25 @@ export default async function TasksPage({ searchParams }: { searchParams: SP }) 
   const statusParam = str(searchParams, "status");
   const status = statusParam === "all" ? undefined : statusParam ?? "open";
 
+  // BDEs default to their own queue ("my tasks") until they pick a consultant or
+  // explicitly choose "All tasks"; everyone else sees all tasks. Mirrors the
+  // leads list default.
+  const assignee = resolveAssigneeFilter(str(searchParams, "assignee"), { isBde: access.isBde, userId });
   const filters = {
     status,
-    assignee: str(searchParams, "assignee"),
+    assignee,
     priority: str(searchParams, "priority"),
     due: str(searchParams, "due"),
+    kind: str(searchParams, "kind"),
     q: str(searchParams, "q"),
     now,
   };
   const where = buildCrmTaskWhere(filters);
+
+  // Scope the stat chips to the same effective assignee so the counts always
+  // match the visible list: a BDE sees their own open/overdue/due-today/
+  // re-inquiry counts; "all" / unassigned / non-BDE keep the global figures.
+  const scope = assignee && assignee !== "all" && assignee !== "unassigned" ? { assignedToId: assignee } : {};
   const sort = str(searchParams, "sort");
   const requestedPage = Math.max(1, parseInt(str(searchParams, "page") || "1", 10) || 1);
 
@@ -65,7 +77,7 @@ export default async function TasksPage({ searchParams }: { searchParams: SP }) 
   const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
   const tomorrow = new Date(today.getTime() + 24 * 60 * 60 * 1000);
 
-  const [rows, bdes, openCount, overdueCount, dueTodayCount, unassignedOpenCount] = await Promise.all([
+  const [rows, bdes, openCount, overdueCount, dueTodayCount, unassignedOpenCount, reinquiryCount] = await Promise.all([
     prisma.crmTask.findMany({
       where,
       orderBy: crmTaskListOrderBy(sort),
@@ -74,10 +86,13 @@ export default async function TasksPage({ searchParams }: { searchParams: SP }) 
       include: crmTaskListInclude,
     }),
     getAssignableBdes(),
-    prisma.crmTask.count({ where: { status: "open" } }),
-    prisma.crmTask.count({ where: { status: "open", dueAt: { lt: today } } }),
-    prisma.crmTask.count({ where: { status: "open", dueAt: { gte: today, lt: tomorrow } } }),
+    prisma.crmTask.count({ where: { status: "open", ...scope } }),
+    prisma.crmTask.count({ where: { status: "open", dueAt: { lt: today }, ...scope } }),
+    prisma.crmTask.count({ where: { status: "open", dueAt: { gte: today, lt: tomorrow }, ...scope } }),
+    // The unassigned pool is intentionally global — it's the shared backlog a BDE
+    // can pick from, not part of their own queue.
     prisma.crmTask.count({ where: { status: "open", assignedToId: null } }),
+    prisma.crmTask.count({ where: { status: "open", subject: { contains: REINQUIRY_TASK_SUBJECT_NEEDLE, mode: "insensitive" }, ...scope } }),
   ]);
 
   const counts = {
@@ -85,6 +100,7 @@ export default async function TasksPage({ searchParams }: { searchParams: SP }) 
     overdue: overdueCount,
     dueToday: dueTodayCount,
     unassignedOpen: unassignedOpenCount,
+    reinquiry: reinquiryCount,
   };
   const accessProps = { isAdmin: access.isAdmin, isBde: access.isBde, userId };
 

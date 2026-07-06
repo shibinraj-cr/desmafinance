@@ -16,6 +16,9 @@ const Schema = z.object({
   serviceId: z.string().optional().nullable(),
   expectedValue: z.coerce.number().positive().optional().nullable(),
   expectedCloseDate: z.coerce.date().optional().nullable(),
+  // Actual enrollment date — the date this close counts against in the CRM
+  // metrics. Optional; defaults to now server-side when absent.
+  closedDate: z.coerce.date().optional().nullable(),
   ownerUserId: z.string().optional().nullable(),
 });
 
@@ -34,6 +37,7 @@ export const POST = withApiHandler(async (req: Request, { params }: { params: { 
     serviceId: d.serviceId ?? undefined,
     expectedValue: d.expectedValue ?? undefined,
     expectedCloseDate: d.expectedCloseDate ?? undefined,
+    closedDate: d.closedDate ?? undefined,
     ownerUserId: d.ownerUserId ?? undefined,
     actorId: userId,
   });
