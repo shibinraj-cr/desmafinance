@@ -120,6 +120,55 @@ export function classifyStaleness(opts: {
   };
 }
 
+export type AttentionFlags = {
+  /** Untouched past this status's SLA (see {@link SLA_THRESHOLD_DAYS}). */
+  slaBreached: boolean;
+  /** Untouched for more than {@link ABANDONED_DAYS}. */
+  abandoned: boolean;
+  /** No open task scheduled to move the lead forward. */
+  noNextStep: boolean;
+  /** In the same status for more than {@link STUCK_DAYS} (no STATUS_CHANGED since). */
+  stuck: boolean;
+  /** This status's SLA in days, or null when the status isn't SLA-monitored. */
+  slaDays: number | null;
+  /** Days since the lead was last touched. */
+  daysSinceTouch: number;
+  /** Days in the current status (since the last STATUS_CHANGED, else since creation). */
+  daysInStage: number;
+  /** True when the lead hits at least one attention bucket — the drill-down keeps only these. */
+  flagged: boolean;
+};
+
+/**
+ * Classify one active, owned lead against every attention bucket at once —
+ * SLA breach + abandoned (via {@link classifyStaleness}), no-next-step (no open
+ * task), and stuck-in-stage (days since the last STATUS_CHANGED). The single
+ * source of truth for both the Team Activity dashboard's per-BDE counts and the
+ * consultant-filterable drill-down queue, so the two surfaces can never diverge.
+ */
+export function attentionFlags(opts: {
+  statusCode: string;
+  lastTouchAt: Date;
+  stuckSince: Date;
+  hasOpenTask: boolean;
+  now: Date;
+}): AttentionFlags {
+  const v = classifyStaleness({ statusCode: opts.statusCode, lastTouchAt: opts.lastTouchAt, now: opts.now });
+  const daysInStage = ageInDays(opts.now, opts.stuckSince);
+  const stuck = daysInStage > STUCK_DAYS;
+  const noNextStep = !opts.hasOpenTask;
+  return {
+    slaBreached: v.breached,
+    abandoned: v.abandoned,
+    noNextStep,
+    stuck,
+    slaDays: v.slaDays,
+    daysSinceTouch: v.ageDays,
+    daysInStage,
+    flagged: v.breached || v.abandoned || noNextStep || stuck,
+  };
+}
+
 /** Local midnight at the start of `d`'s calendar day (matches the task board's day boundaries). */
 export function startOfLocalDay(d: Date): Date {
   return new Date(d.getFullYear(), d.getMonth(), d.getDate());
@@ -625,25 +674,30 @@ export async function getTeamActivity(opts: {
   for (const l of attentionLeads) {
     const a = l.assignedToId ? acc.get(l.assignedToId) : undefined;
     const lastTouchAt = touchByLead.get(l.id) ?? l.createdAt;
-    const verdict = classifyStaleness({ statusCode: l.status.code, lastTouchAt, now });
-
-    if (verdict.breached) {
-      if (a) a.slaBreaches++;
-      slaList.push(toRef(l, verdict.ageDays));
-    }
-    if (verdict.abandoned) {
-      if (a) a.abandoned++;
-      abandonedList.push(toRef(l, verdict.ageDays));
-    }
-    if (!leadsWithOpenTask.has(l.id)) {
-      if (a) a.noTask++;
-      noTaskList.push(toRef(l, verdict.ageDays));
-    }
     const stuckSince = statusChangeByLead.get(l.id) ?? l.createdAt;
-    const stuckDays = ageInDays(now, stuckSince);
-    if (stuckDays > STUCK_DAYS) {
+    const f = attentionFlags({
+      statusCode: l.status.code,
+      lastTouchAt,
+      stuckSince,
+      hasOpenTask: leadsWithOpenTask.has(l.id),
+      now,
+    });
+
+    if (f.slaBreached) {
+      if (a) a.slaBreaches++;
+      slaList.push(toRef(l, f.daysSinceTouch));
+    }
+    if (f.abandoned) {
+      if (a) a.abandoned++;
+      abandonedList.push(toRef(l, f.daysSinceTouch));
+    }
+    if (f.noNextStep) {
+      if (a) a.noTask++;
+      noTaskList.push(toRef(l, f.daysSinceTouch));
+    }
+    if (f.stuck) {
       if (a) a.stuck++;
-      stuckList.push(toRef(l, stuckDays));
+      stuckList.push(toRef(l, f.daysInStage));
     }
   }
 
@@ -694,4 +748,156 @@ export async function getTeamActivity(opts: {
       stuck: cap(stuckList),
     },
   };
+}
+
+// ── Attention drill-down queue (full, consultant-filterable) ─────────────────
+
+/** The four attention buckets, as URL/query values for the drill-down filter. */
+export type AttentionIssue = "sla" | "no-task" | "stuck" | "abandoned";
+
+/** One flagged lead in the drill-down queue, with everything the detail table shows. */
+export type AttentionQueueRow = {
+  id: string;
+  name: string;
+  statusCode: string;
+  statusLabel: string;
+  statusColor: string | null;
+  assigneeId: string | null;
+  assigneeName: string | null;
+  /** Days since last touch. */
+  daysSinceTouch: number;
+  /** Last-touch instant, or null when the lead was never touched (age falls back to creation). */
+  lastTouchAt: Date | null;
+  /** Days in the current status. */
+  daysInStage: number;
+  /** This status's SLA in days, or null when not SLA-monitored. */
+  slaDays: number | null;
+  slaBreached: boolean;
+  abandoned: boolean;
+  noNextStep: boolean;
+  stuck: boolean;
+  /** Earliest open-task due date, for context (null when none / no due date). */
+  nextTaskDueAt: Date | null;
+};
+
+export type AttentionQueue = {
+  rows: AttentionQueueRow[];
+  /** Bucket counts across ALL rows (before any issue filter), for the summary chips. */
+  counts: { total: number; sla: number; noTask: number; stuck: number; abandoned: number };
+};
+
+/**
+ * The full, uncapped list of active owned leads that hit at least one attention
+ * bucket (SLA breach / no next step / stuck / abandoned), optionally narrowed to
+ * one consultant — the data behind `/crm/team/queue`. Shares every threshold and
+ * the deliberate-assignment carve-out with {@link getTeamActivity} (via
+ * {@link attentionFlags}), so its counts reconcile exactly with the dashboard.
+ */
+export async function getAttentionQueue(opts: {
+  scope: TeamScope;
+  /** Restrict to one consultant (userId). Ignored under a self-scoped BDE (already restricted to self). */
+  consultantId?: string | null;
+  now: Date;
+}): Promise<AttentionQueue> {
+  const { scope, now } = opts;
+  const self = scope.restrictToUserId;
+  // Self-view forces self; a team-view may narrow to a single consultant.
+  const ownerId = self ?? (opts.consultantId || null);
+
+  const roster = (await getAssignableBdes()).filter((b) => !self || b.userId === self);
+  const nameById = new Map(roster.map((b) => [b.userId, b.displayName]));
+
+  // Owned, active leads — the population, carryover-excluded below so the
+  // unassigned/imported backlog never shows up as someone's attention item.
+  const activeAssignedRaw = await prisma.lead.findMany({
+    where: { status: { kind: "active" }, assignedToId: ownerId ? ownerId : { not: null } },
+    select: {
+      id: true,
+      candidateName: true,
+      assignedToId: true,
+      assignedAt: true,
+      createdAt: true,
+      importBatch: { select: { createdAt: true } },
+      status: { select: { code: true, label: true, color: true } },
+    },
+  });
+
+  const attentionLeads = activeAssignedRaw.filter((l) =>
+    isDeliberateAssignment({
+      assignedToId: l.assignedToId,
+      assignedAt: l.assignedAt,
+      importBatchCreatedAt: l.importBatch?.createdAt ?? null,
+    }),
+  );
+  const ids = attentionLeads.map((l) => l.id);
+
+  const [openTaskGroups, touchGroups, statusChangeGroups] = await Promise.all([
+    ids.length
+      ? prisma.crmTask.groupBy({ by: ["leadId"], where: { status: "open", leadId: { in: ids } }, _min: { dueAt: true } })
+      : Promise.resolve([] as Array<{ leadId: string; _min: { dueAt: Date | null } }>),
+    ids.length
+      ? prisma.leadActivity.groupBy({
+          by: ["leadId"],
+          where: { leadId: { in: ids }, ...touchActivityWhere() },
+          _max: { occurredAt: true },
+        })
+      : Promise.resolve([] as Array<{ leadId: string; _max: { occurredAt: Date | null } }>),
+    ids.length
+      ? prisma.leadActivity.groupBy({
+          by: ["leadId"],
+          where: { leadId: { in: ids }, type: "STATUS_CHANGED" },
+          _max: { occurredAt: true },
+        })
+      : Promise.resolve([] as Array<{ leadId: string; _max: { occurredAt: Date | null } }>),
+  ]);
+
+  const nextTaskByLead = new Map(openTaskGroups.map((g) => [g.leadId, g._min.dueAt]));
+  const openTaskLeads = new Set(openTaskGroups.map((g) => g.leadId));
+  const touchByLead = new Map(touchGroups.map((g) => [g.leadId, g._max.occurredAt]));
+  const statusChangeByLead = new Map(statusChangeGroups.map((g) => [g.leadId, g._max.occurredAt]));
+
+  const rows: AttentionQueueRow[] = [];
+  const counts = { total: 0, sla: 0, noTask: 0, stuck: 0, abandoned: 0 };
+
+  for (const l of attentionLeads) {
+    const lastTouch = touchByLead.get(l.id) ?? null;
+    const stuckSince = statusChangeByLead.get(l.id) ?? l.createdAt;
+    const f = attentionFlags({
+      statusCode: l.status.code,
+      lastTouchAt: lastTouch ?? l.createdAt,
+      stuckSince,
+      hasOpenTask: openTaskLeads.has(l.id),
+      now,
+    });
+    if (!f.flagged) continue;
+
+    counts.total++;
+    if (f.slaBreached) counts.sla++;
+    if (f.noNextStep) counts.noTask++;
+    if (f.stuck) counts.stuck++;
+    if (f.abandoned) counts.abandoned++;
+
+    rows.push({
+      id: l.id,
+      name: l.candidateName,
+      statusCode: l.status.code,
+      statusLabel: l.status.label,
+      statusColor: l.status.color,
+      assigneeId: l.assignedToId,
+      assigneeName: l.assignedToId ? nameById.get(l.assignedToId) ?? null : null,
+      daysSinceTouch: f.daysSinceTouch,
+      lastTouchAt: lastTouch,
+      daysInStage: f.daysInStage,
+      slaDays: f.slaDays,
+      slaBreached: f.slaBreached,
+      abandoned: f.abandoned,
+      noNextStep: f.noNextStep,
+      stuck: f.stuck,
+      nextTaskDueAt: nextTaskByLead.get(l.id) ?? null,
+    });
+  }
+
+  // Worst-first: stalest (longest since a touch) at the top.
+  rows.sort((a, b) => b.daysSinceTouch - a.daysSinceTouch);
+  return { rows, counts };
 }
