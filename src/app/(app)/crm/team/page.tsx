@@ -35,6 +35,14 @@ function withScope(sp: SP, scope: "team" | "me"): string {
   return `/crm/team?${params.toString()}`;
 }
 
+/** Link to the attention drill-down for one bucket, carrying the current consultant scope. */
+function queueHref(issue: string, consultantId: string | null): string {
+  const params = new URLSearchParams();
+  if (consultantId) params.set("consultant", consultantId);
+  params.set("issue", issue);
+  return `/crm/team/queue?${params.toString()}`;
+}
+
 function pctText(part: number, whole: number): string {
   if (whole === 0) return "—";
   return `${Math.round((part / whole) * 100)}%`;
@@ -73,6 +81,7 @@ function AttentionList({
   total,
   ageLabel,
   showAssignee,
+  moreHref,
   tone = "danger",
 }: {
   title: string;
@@ -81,6 +90,8 @@ function AttentionList({
   total: number;
   ageLabel: string;
   showAssignee: boolean;
+  /** Drill-down link to the full, consultant-filterable queue for this bucket. */
+  moreHref: string;
   tone?: "danger" | "warning";
 }) {
   const dot = tone === "danger" ? "bg-error" : "bg-amber-500";
@@ -88,7 +99,11 @@ function AttentionList({
     <Section
       title={title}
       className="lg:col-span-6"
-      action={<span className="text-label-sm font-semibold text-on-surface-variant">{total}</span>}
+      action={
+        <Link href={moreHref} className="text-label-sm font-semibold text-primary hover:underline">
+          {total} · View all →
+        </Link>
+      }
     >
       <p className="-mt-md mb-md text-caption text-on-surface-variant">{hint}</p>
       {rows.length === 0 ? (
@@ -119,7 +134,10 @@ function AttentionList({
       )}
       {total > rows.length && (
         <p className="mt-md text-caption text-on-surface-variant">
-          Showing the {rows.length} most stale of {total}. Open a lead to act. ({ageLabel})
+          Showing the {rows.length} most stale of {total} ({ageLabel}).{" "}
+          <Link href={moreHref} className="font-semibold text-primary hover:underline">
+            View the full list →
+          </Link>
         </p>
       )}
     </Section>
@@ -359,6 +377,7 @@ export default async function TeamActivityPage({ searchParams }: { searchParams:
             total={t.slaBreaches}
             ageLabel="days since last touch"
             showAssignee={scope.teamWide}
+            moreHref={queueHref("sla", scope.restrictToUserId)}
             tone="danger"
           />
           <AttentionList
@@ -368,6 +387,7 @@ export default async function TeamActivityPage({ searchParams }: { searchParams:
             total={t.abandoned}
             ageLabel="days since last touch"
             showAssignee={scope.teamWide}
+            moreHref={queueHref("abandoned", scope.restrictToUserId)}
             tone="danger"
           />
           <AttentionList
@@ -377,6 +397,7 @@ export default async function TeamActivityPage({ searchParams }: { searchParams:
             total={t.noTask}
             ageLabel="days since last touch"
             showAssignee={scope.teamWide}
+            moreHref={queueHref("no-task", scope.restrictToUserId)}
             tone="warning"
           />
           <AttentionList
@@ -386,6 +407,7 @@ export default async function TeamActivityPage({ searchParams }: { searchParams:
             total={t.stuck}
             ageLabel="days in current status"
             showAssignee={scope.teamWide}
+            moreHref={queueHref("stuck", scope.restrictToUserId)}
             tone="warning"
           />
         </section>

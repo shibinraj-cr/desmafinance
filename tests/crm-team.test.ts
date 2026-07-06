@@ -13,6 +13,7 @@ import {
   outboundContactWhere,
   ageInDays,
   classifyStaleness,
+  attentionFlags,
   startOfLocalDay,
   startOfNextLocalDay,
   isTaskOnTime,
@@ -99,6 +100,49 @@ describe("classifyStaleness — per-status SLA", () => {
     expect(ABANDONED_DAYS).toBe(30);
     expect(STUCK_DAYS).toBe(14);
     expect(FIRST_RESPONSE_SLA_HOURS).toBe(24);
+  });
+});
+
+describe("attentionFlags — combined bucket classification", () => {
+  const now = new Date("2026-06-24T12:00:00Z");
+  const ago = (days: number) => new Date(now.getTime() - days * DAY);
+  const fresh = { statusCode: "qualify", lastTouchAt: ago(1), stuckSince: ago(1), hasOpenTask: true, now };
+
+  it("is not flagged when fresh, has an open task, and sits in-stage briefly", () => {
+    const f = attentionFlags(fresh);
+    expect(f).toMatchObject({ slaBreached: false, abandoned: false, noNextStep: false, stuck: false, flagged: false });
+  });
+
+  it("flags an SLA breach past the stage threshold", () => {
+    const f = attentionFlags({ ...fresh, lastTouchAt: ago(5) }); // qualify SLA = 3d
+    expect(f.slaBreached).toBe(true);
+    expect(f.slaDays).toBe(3);
+    expect(f.flagged).toBe(true);
+  });
+
+  it("flags no-next-step when there is no open task", () => {
+    const f = attentionFlags({ ...fresh, hasOpenTask: false });
+    expect(f.noNextStep).toBe(true);
+    expect(f.flagged).toBe(true);
+  });
+
+  it("flags stuck strictly past STUCK_DAYS in stage, using stuckSince not lastTouch", () => {
+    expect(attentionFlags({ ...fresh, stuckSince: ago(STUCK_DAYS) }).stuck).toBe(false);
+    const f = attentionFlags({ ...fresh, stuckSince: ago(STUCK_DAYS + 1) });
+    expect(f.stuck).toBe(true);
+    expect(f.daysInStage).toBeGreaterThan(STUCK_DAYS);
+    expect(f.flagged).toBe(true);
+  });
+
+  it("flags abandoned past ABANDONED_DAYS regardless of stage", () => {
+    const f = attentionFlags({ ...fresh, lastTouchAt: ago(ABANDONED_DAYS + 1) });
+    expect(f.abandoned).toBe(true);
+    expect(f.flagged).toBe(true);
+  });
+
+  it("reports every bucket a lead hits at once", () => {
+    const f = attentionFlags({ statusCode: "follow_up", lastTouchAt: ago(40), stuckSince: ago(40), hasOpenTask: false, now });
+    expect(f).toMatchObject({ slaBreached: true, abandoned: true, noNextStep: true, stuck: true, flagged: true });
   });
 });
 
