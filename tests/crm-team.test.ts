@@ -16,6 +16,7 @@ import {
   attentionFlags,
   startOfLocalDay,
   startOfNextLocalDay,
+  hasUpcomingTask,
   isTaskOnTime,
   isDeliberateAssignment,
   IMPORT_CARRYOVER_GRACE_MS,
@@ -106,7 +107,7 @@ describe("classifyStaleness — per-status SLA", () => {
 describe("attentionFlags — combined bucket classification", () => {
   const now = new Date("2026-06-24T12:00:00Z");
   const ago = (days: number) => new Date(now.getTime() - days * DAY);
-  const fresh = { statusCode: "qualify", lastTouchAt: ago(1), stuckSince: ago(1), hasOpenTask: true, now };
+  const fresh = { statusCode: "qualify", lastTouchAt: ago(1), stuckSince: ago(1), hasOpenTask: true, nextTaskDueAt: null, now };
 
   it("is not flagged when fresh, has an open task, and sits in-stage briefly", () => {
     const f = attentionFlags(fresh);
@@ -141,8 +142,66 @@ describe("attentionFlags — combined bucket classification", () => {
   });
 
   it("reports every bucket a lead hits at once", () => {
-    const f = attentionFlags({ statusCode: "follow_up", lastTouchAt: ago(40), stuckSince: ago(40), hasOpenTask: false, now });
+    const f = attentionFlags({ statusCode: "follow_up", lastTouchAt: ago(40), stuckSince: ago(40), hasOpenTask: false, nextTaskDueAt: null, now });
     expect(f).toMatchObject({ slaBreached: true, abandoned: true, noNextStep: true, stuck: true, flagged: true });
+  });
+
+  it("suppresses SLA breach and stuck when an upcoming task is scheduled", () => {
+    // Would breach (qualify SLA = 3d, idle 5d) AND be stuck (in stage 20d), but a
+    // task is due tomorrow — the consultant has a planned next step.
+    const f = attentionFlags({
+      ...fresh,
+      lastTouchAt: ago(5),
+      stuckSince: ago(20),
+      nextTaskDueAt: new Date(now.getTime() + DAY),
+    });
+    expect(f).toMatchObject({ slaBreached: false, stuck: false, flagged: false });
+  });
+
+  it("still counts abandoned even with an upcoming task (carve-out is SLA/stuck only)", () => {
+    const f = attentionFlags({
+      ...fresh,
+      lastTouchAt: ago(ABANDONED_DAYS + 1),
+      nextTaskDueAt: new Date(now.getTime() + 7 * DAY),
+    });
+    expect(f).toMatchObject({ abandoned: true, slaBreached: false, flagged: true });
+  });
+
+  it("does not suppress when the earliest open task is already overdue", () => {
+    // A lapsed (overdue) task is not a live next step — the lead still breaches.
+    const f = attentionFlags({
+      ...fresh,
+      lastTouchAt: ago(5),
+      stuckSince: ago(20),
+      nextTaskDueAt: ago(2), // due 2 days ago
+    });
+    expect(f).toMatchObject({ slaBreached: true, stuck: true, flagged: true });
+  });
+
+  it("treats a task due today (day not yet passed) as upcoming", () => {
+    const f = attentionFlags({
+      ...fresh,
+      lastTouchAt: ago(5),
+      nextTaskDueAt: new Date(now.getFullYear(), now.getMonth(), now.getDate(), 8), // earlier today
+    });
+    expect(f.slaBreached).toBe(false);
+  });
+});
+
+describe("hasUpcomingTask", () => {
+  const now = new Date(2026, 5, 24, 12, 0); // local noon
+
+  it("is false when there is no scheduled task", () => {
+    expect(hasUpcomingTask(null, now)).toBe(false);
+  });
+  it("counts a task due today as upcoming (its day has not passed)", () => {
+    expect(hasUpcomingTask(new Date(2026, 5, 24, 8, 0), now)).toBe(true);
+  });
+  it("counts a task due tomorrow as upcoming", () => {
+    expect(hasUpcomingTask(new Date(2026, 5, 25, 9, 0), now)).toBe(true);
+  });
+  it("is false for an overdue task (due before today)", () => {
+    expect(hasUpcomingTask(new Date(2026, 5, 23, 23, 0), now)).toBe(false);
   });
 });
 

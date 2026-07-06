@@ -21,6 +21,10 @@
  *     activity/first-response metrics use the page's selected date range;
  *     attention buckets (SLA breach / abandoned / no-task / stuck) are
  *     point-in-time snapshots that ignore the range. Each is labelled in the UI.
+ *   - A lead with an *upcoming* scheduled task (an open task due today or later)
+ *     is exempt from the SLA-breach and stuck-in-stage buckets: a planned, not-yet-
+ *     lapsed next step means the consultant is on it. Abandoned and no-next-step
+ *     are unaffected. See {@link hasUpcomingTask} / {@link attentionFlags}.
  */
 import { Prisma } from "@prisma/client";
 import { prisma } from "./prisma";
@@ -121,13 +125,21 @@ export function classifyStaleness(opts: {
 }
 
 export type AttentionFlags = {
-  /** Untouched past this status's SLA (see {@link SLA_THRESHOLD_DAYS}). */
+  /**
+   * Untouched past this status's SLA (see {@link SLA_THRESHOLD_DAYS}) — UNLESS the
+   * lead has an upcoming scheduled task ({@link hasUpcomingTask}), in which case a
+   * planned next step already exists and it is not counted as a breach.
+   */
   slaBreached: boolean;
   /** Untouched for more than {@link ABANDONED_DAYS}. */
   abandoned: boolean;
   /** No open task scheduled to move the lead forward. */
   noNextStep: boolean;
-  /** In the same status for more than {@link STUCK_DAYS} (no STATUS_CHANGED since). */
+  /**
+   * In the same status for more than {@link STUCK_DAYS} (no STATUS_CHANGED since) —
+   * UNLESS the lead has an upcoming scheduled task ({@link hasUpcomingTask}); a
+   * planned next step means the consultant is still working it, not stalled.
+   */
   stuck: boolean;
   /** This status's SLA in days, or null when the status isn't SLA-monitored. */
   slaDays: number | null;
@@ -145,27 +157,38 @@ export type AttentionFlags = {
  * task), and stuck-in-stage (days since the last STATUS_CHANGED). The single
  * source of truth for both the Team Activity dashboard's per-BDE counts and the
  * consultant-filterable drill-down queue, so the two surfaces can never diverge.
+ *
+ * SLA-breach and stuck-in-stage are suppressed when the lead has an upcoming
+ * scheduled task ({@link hasUpcomingTask}, driven by `nextTaskDueAt`): a planned
+ * next step that has not yet lapsed means the consultant is already on it, so the
+ * lead should not nag as breached/stalled. Abandoned and no-next-step are NOT
+ * suppressed — a lead untouched for a month, or with no task at all, still needs
+ * a look regardless of anything scheduled.
  */
 export function attentionFlags(opts: {
   statusCode: string;
   lastTouchAt: Date;
   stuckSince: Date;
   hasOpenTask: boolean;
+  /** Earliest open-task due date (the `_min` over open tasks), or null when none has one. */
+  nextTaskDueAt: Date | null;
   now: Date;
 }): AttentionFlags {
   const v = classifyStaleness({ statusCode: opts.statusCode, lastTouchAt: opts.lastTouchAt, now: opts.now });
   const daysInStage = ageInDays(opts.now, opts.stuckSince);
-  const stuck = daysInStage > STUCK_DAYS;
+  const upcoming = hasUpcomingTask(opts.nextTaskDueAt, opts.now);
+  const stuck = daysInStage > STUCK_DAYS && !upcoming;
+  const slaBreached = v.breached && !upcoming;
   const noNextStep = !opts.hasOpenTask;
   return {
-    slaBreached: v.breached,
+    slaBreached,
     abandoned: v.abandoned,
     noNextStep,
     stuck,
     slaDays: v.slaDays,
     daysSinceTouch: v.ageDays,
     daysInStage,
-    flagged: v.breached || v.abandoned || noNextStep || stuck,
+    flagged: slaBreached || v.abandoned || noNextStep || stuck,
   };
 }
 
@@ -177,6 +200,19 @@ export function startOfLocalDay(d: Date): Date {
 /** Local midnight at the start of the day AFTER `d`. */
 export function startOfNextLocalDay(d: Date): Date {
   return new Date(d.getFullYear(), d.getMonth(), d.getDate() + 1);
+}
+
+/**
+ * True when a lead has an upcoming scheduled follow-up: an open task whose
+ * earliest due date has not yet passed (due today or later). `nextTaskDueAt` is
+ * the `_min` open-task due date, so "min not overdue" means every open task is
+ * still upcoming — the consultant has a planned next step that hasn't lapsed.
+ * Uses the task board's day boundary (a task is overdue only once its due day has
+ * fully passed), matching the queue UI's `overdue` rule. An open task with no due
+ * date (null) does not count — there is no scheduled date to be "in the future".
+ */
+export function hasUpcomingTask(nextTaskDueAt: Date | null, now: Date): boolean {
+  return nextTaskDueAt !== null && nextTaskDueAt.getTime() >= startOfLocalDay(now).getTime();
 }
 
 /**
@@ -540,11 +576,16 @@ export async function getTeamActivity(opts: {
   const assignedLeadIds = assignments.map((a) => a.leadId);
 
   // Per-lead last touch + last status change over the owned set, which owned leads
-  // already have an open task, and the first-response contacts for assigned leads.
+  // already have an open task (and its earliest due date, for the upcoming-task
+  // carve-out), and the first-response contacts for assigned leads.
   const [leadsWithOpenTaskGroups, touchGroups, statusChangeGroups, firstResponseContacts] = await Promise.all([
     attentionLeadIds.length
-      ? prisma.crmTask.groupBy({ by: ["leadId"], where: { status: "open", leadId: { in: attentionLeadIds } } })
-      : Promise.resolve([] as Array<{ leadId: string }>),
+      ? prisma.crmTask.groupBy({
+          by: ["leadId"],
+          where: { status: "open", leadId: { in: attentionLeadIds } },
+          _min: { dueAt: true },
+        })
+      : Promise.resolve([] as Array<{ leadId: string; _min: { dueAt: Date | null } }>),
     attentionLeadIds.length
       ? prisma.leadActivity.groupBy({
           by: ["leadId"],
@@ -570,6 +611,7 @@ export async function getTeamActivity(opts: {
   const touchByLead = new Map(touchGroups.map((g) => [g.leadId, g._max.occurredAt]));
   const statusChangeByLead = new Map(statusChangeGroups.map((g) => [g.leadId, g._max.occurredAt]));
   const leadsWithOpenTask = new Set(leadsWithOpenTaskGroups.map((g) => g.leadId));
+  const nextTaskByLead = new Map(leadsWithOpenTaskGroups.map((g) => [g.leadId, g._min.dueAt]));
 
   // ── Per-BDE accumulators ──
   const blank = (): Omit<TeamBdeRow, "userId" | "displayName" | "role"> => ({
@@ -680,6 +722,7 @@ export async function getTeamActivity(opts: {
       lastTouchAt,
       stuckSince,
       hasOpenTask: leadsWithOpenTask.has(l.id),
+      nextTaskDueAt: nextTaskByLead.get(l.id) ?? null,
       now,
     });
 
@@ -867,6 +910,7 @@ export async function getAttentionQueue(opts: {
       lastTouchAt: lastTouch ?? l.createdAt,
       stuckSince,
       hasOpenTask: openTaskLeads.has(l.id),
+      nextTaskDueAt: nextTaskByLead.get(l.id) ?? null,
       now,
     });
     if (!f.flagged) continue;
