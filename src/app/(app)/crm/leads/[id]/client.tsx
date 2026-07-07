@@ -1290,26 +1290,10 @@ function leadCommsVars(lead: LeadRow) {
   });
 }
 
+// "Blank" is the only built-in; all real templates are DB-managed on
+// /crm/templates and appended below (seeded via db:seed-crm-templates).
 const EMAIL_TEMPLATES: { id: string; label: string; subject: string; body: string }[] = [
   { id: "blank", label: "Blank", subject: "", body: "" },
-  {
-    id: "intro",
-    label: "Introduction",
-    subject: "DESMA — {service}",
-    body: "Hi {name},\n\nThank you for your interest in {service}. I'm {consultant} from DESMA and I'll be assisting you.\n\nBest regards,\n{consultant}",
-  },
-  {
-    id: "followup",
-    label: "Follow up",
-    subject: "Following up — {service}",
-    body: "Hi {name},\n\nJust following up on our earlier conversation regarding {service}. Do let me know a good time to connect.\n\n{consultant}",
-  },
-  {
-    id: "not_responding",
-    label: "Not responding / Unavailable",
-    subject: "We tried to reach you — Australian Nursing Registration",
-    body: "Dear Candidate,\n\nWe tried reaching you on the phone number you provided, but unfortunately, we couldn't get through.\n\nIf you're still interested in pursuing the Australian Nursing Registration process, please feel free to call or WhatsApp us at +91 79949 20775. Our team will be happy to assist you.\n\nWe look forward to hearing from you.\n\nThank you,\nTeam DESMA",
-  },
 ];
 
 function EmailModal({
@@ -1418,19 +1402,6 @@ function EmailModal({
   );
 }
 
-const WHATSAPP_BUILTIN = {
-  id: "default",
-  label: "DESMA — save my number",
-  body:
-    "Hi {name} 😊,\n\n" +
-    "This is {consultant} from DESMA International.\n\n" +
-    "We help nurses like you through the Australian Nursing Registration process — step by step, stress-free.\n\n" +
-    "👉 Please save my number now to get all important updates.\n\n" +
-    "Once done, reply “SAVED” so I can assist you further.\n\n" +
-    "Got any questions?\n" +
-    "📞 I HAVE BOTIM. Call me NOW — I’m just a ping away to help you get started!",
-};
-
 function WhatsAppModal({
   lead,
   templates,
@@ -1442,13 +1413,15 @@ function WhatsAppModal({
 }) {
   const router = useRouter();
   const vars = leadCommsVars(lead);
-  // Built-in default first, then the team's saved WhatsApp templates.
+  // Blank + the team's saved WhatsApp templates (DB-managed on /crm/templates).
   const options = [
-    WHATSAPP_BUILTIN,
+    { id: "blank", label: "Blank", body: "" },
     ...templates.filter((t) => t.channel === "whatsapp").map((t) => ({ id: t.id, label: t.name, body: t.body })),
   ];
-  const [tpl, setTpl] = useState(options[0].id);
-  const [message, setMessage] = useState(fillTemplate(options[0].body, vars));
+  // Pre-select the first real template if there is one; otherwise start blank.
+  const initial = options.find((o) => o.id !== "blank") ?? options[0];
+  const [tpl, setTpl] = useState(initial.id);
+  const [message, setMessage] = useState(fillTemplate(initial.body, vars));
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
