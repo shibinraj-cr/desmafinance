@@ -10,6 +10,7 @@ import {
   crmTaskListInclude,
   crmTaskListOrderBy,
   serializeCrmTaskListRow,
+  resolveAssigneeFilter,
 } from "@/lib/crm-leads";
 
 export const dynamic = "force-dynamic";
@@ -34,7 +35,8 @@ export const GET = withApiHandler(async (req: Request) => {
 
   const where = buildCrmTaskWhere({
     status,
-    assignee: sp.get("assignee") || undefined,
+    // Mirror the board's "my tasks" default so a BDE's export matches their view.
+    assignee: resolveAssigneeFilter(sp.get("assignee") || undefined, { isBde: access.isBde, userId }),
     priority: sp.get("priority") || undefined,
     due: sp.get("due") || undefined,
     kind: sp.get("kind") || undefined,

@@ -14,6 +14,7 @@ function access(partial: Partial<CrmAccess>): CrmAccess {
     isSupervisor: false,
     isCrmTeamLead: false,
     canManageCrm: false,
+    canManageTemplates: false,
     bdeDisplayName: null,
     canViewLeads: true,
     canCreateLeads: false,

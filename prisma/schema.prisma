@@ -80,6 +80,7 @@ model User {
   crmTasksAssigned       CrmTask[]            @relation("CrmTaskAssignee")
   crmTasksCreated        CrmTask[]            @relation("CrmTaskCreatedBy")
   crmTasksCompleted      CrmTask[]            @relation("CrmTaskCompletedBy")
+  crmMessageTemplates    CrmMessageTemplate[] @relation("CrmMessageTemplateCreatedBy")
   appSettings            AppSetting[]         @relation("AppSettingEditor")
 
   // Operations relations
@@ -285,6 +286,9 @@ model LeadPulseRole {
   // Region codes from LeadPulseRegion.code; empty array = all regions.
   regionFocus String[] @default([])
   displayName String
+  // Consultant contact number, surfaced as the {consultant_phone} merge field in
+  // CRM email/WhatsApp templates. Optional — blank renders as an empty string.
+  phone       String?
   active      Boolean  @default(true)
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
@@ -2075,6 +2079,31 @@ model AppSetting {
   updatedAt   DateTime @updatedAt
 
   @@index([updatedById])
+}
+
+/// Reusable email / WhatsApp message template authored in the CRM. Drives the
+/// template pickers in the single-lead Email/WhatsApp composers and the bulk
+/// email composer. Bodies (and email subjects) use `{token}` merge fields
+/// (e.g. {name}, {service}, {consultant}) rendered at send time. Managed on
+/// /crm/templates by system admins and roles granted that page (see
+/// CRM_TEMPLATES_PAGE / canManageTemplates in src/lib/crm-rbac.ts).
+model CrmMessageTemplate {
+  id          String   @id @default(cuid())
+  // "email" | "whatsapp" — which composer the template appears in.
+  channel     String
+  name        String
+  // Email subject line (merge fields allowed). Null/unused for WhatsApp.
+  subject     String?
+  body        String
+  // Inactive templates are hidden from the composers but kept for reference.
+  isActive    Boolean  @default(true)
+  createdById String?
+  createdBy   User?    @relation("CrmMessageTemplateCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@index([channel, isActive])
+  @@index([createdById])
 }
 
 // ──────────────────────────────────────────────────────────────────────

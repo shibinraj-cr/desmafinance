@@ -12,6 +12,14 @@ import { getLeadPulseAccess } from "./lead-pulse-rbac";
 export const CRM_TEAM_LEAD_PAGE = "/crm/team-all";
 
 /**
+ * The Message Templates page. Granting a role this page lets it author the CRM
+ * email/WhatsApp templates (see {@link CrmAccess.canManageTemplates}) WITHOUT
+ * the full CRM-admin powers of `/crm/settings`. This is how a marketing
+ * supervisor (e.g. Suhaina) manages templates while staying a normal BDE.
+ */
+export const CRM_TEMPLATES_PAGE = "/crm/templates";
+
+/**
  * Resolved CRM capabilities for the current user. Mirrors the shape of
  * `LeadPulseAccess` — a single object the page/API layers branch on.
  *
@@ -47,6 +55,12 @@ export type CrmAccess = {
    * Gates assign / import / bulk-email / history / settings.
    */
   canManageCrm: boolean;
+  /**
+   * Author/edit CRM email & WhatsApp templates. True for full CRM admins and
+   * for any role granted the {@link CRM_TEMPLATES_PAGE} — so a marketing
+   * supervisor can manage templates without CRM assign/import/settings powers.
+   */
+  canManageTemplates: boolean;
   /** BDE display name from the Lead Pulse roster (null when not a BDE). */
   bdeDisplayName: string | null;
 
@@ -78,6 +92,9 @@ export async function getCrmAccess(
   // Settings page. Granting a role `/crm/settings` therefore promotes it to
   // CRM admin — no code change needed for future CRM admins.
   const canManageCrm = admin || (perms ? canSeePage(perms, "/crm/settings") : false);
+  // Template authoring: full CRM admins, plus any role explicitly granted the
+  // Message Templates page (e.g. a marketing supervisor).
+  const canManageTemplates = canManageCrm || (perms ? canSeePage(perms, CRM_TEMPLATES_PAGE) : false);
 
   return {
     userId,
@@ -86,6 +103,7 @@ export async function getCrmAccess(
     isSupervisor,
     isCrmTeamLead,
     canManageCrm,
+    canManageTemplates,
     bdeDisplayName: lp.displayName,
     canViewLeads: admin || isBde || isSupervisor || isCrmTeamLead || hasPage,
     canCreateLeads: canManageCrm || isBde,

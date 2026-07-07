@@ -17,6 +17,7 @@ type RosterRow = {
   email: string | null;
   role: LeadPulseRoleSlug;
   displayName: string;
+  phone: string | null;
   regionFocus: string[];
   active: boolean;
 };
@@ -173,6 +174,7 @@ function RosterRow({ row, regions }: { row: RosterRow; regions: RegionOption[] }
       body: JSON.stringify({
         role: draft.role,
         displayName: draft.displayName,
+        phone: draft.phone,
         regionFocus: draft.regionFocus,
         active: draft.active,
       }),
@@ -233,16 +235,30 @@ function RosterRow({ row, regions }: { row: RosterRow; regions: RegionOption[] }
       >
         <td className="px-[16px] py-[10px] font-semibold">
           {editing ? (
-            <input
-              value={draft.displayName}
-              onChange={(e) => setDraft({ ...draft, displayName: e.target.value })}
-              className="w-full h-[32px] px-[8px] rounded border outline-none"
-              style={{
-                backgroundColor: "var(--lp-surface-container-low)",
-                borderColor: "var(--lp-outline-variant)",
-                color: "var(--lp-on-surface)",
-              }}
-            />
+            <div className="space-y-[4px]">
+              <input
+                value={draft.displayName}
+                onChange={(e) => setDraft({ ...draft, displayName: e.target.value })}
+                placeholder="Display name"
+                className="w-full h-[32px] px-[8px] rounded border outline-none"
+                style={{
+                  backgroundColor: "var(--lp-surface-container-low)",
+                  borderColor: "var(--lp-outline-variant)",
+                  color: "var(--lp-on-surface)",
+                }}
+              />
+              <input
+                value={draft.phone ?? ""}
+                onChange={(e) => setDraft({ ...draft, phone: e.target.value })}
+                placeholder="Phone (for {consultant_phone})"
+                className="w-full h-[32px] px-[8px] rounded border outline-none text-[12px] font-normal"
+                style={{
+                  backgroundColor: "var(--lp-surface-container-low)",
+                  borderColor: "var(--lp-outline-variant)",
+                  color: "var(--lp-on-surface)",
+                }}
+              />
+            </div>
           ) : (
             row.displayName
           )}
@@ -253,6 +269,12 @@ function RosterRow({ row, regions }: { row: RosterRow; regions: RegionOption[] }
         >
           <div>{row.username}</div>
           {row.email && <div className="text-[11px]">{row.email}</div>}
+          {row.phone && (
+            <div className="text-[11px] flex items-center gap-[4px]">
+              <span className="material-symbols-outlined" style={{ fontSize: 12 }}>call</span>
+              {row.phone}
+            </div>
+          )}
         </td>
         <td className="px-[16px] py-[10px]">
           {editing ? (
@@ -437,6 +459,7 @@ export function AddBdeButton({
     userId: assignableUsers[0]?.id ?? "",
     role: "l1" as LeadPulseRoleSlug,
     displayName: "",
+    phone: "",
     regionFocus: [] as string[],
   });
 
@@ -479,6 +502,7 @@ export function AddBdeButton({
         userId: form.userId,
         role: form.role,
         displayName: form.displayName.trim() || undefined,
+        phone: form.phone.trim() || null,
         regionFocus: form.regionFocus,
       }),
     });
@@ -493,6 +517,7 @@ export function AddBdeButton({
       userId: assignableUsers[0]?.id ?? "",
       role: "l1",
       displayName: "",
+      phone: "",
       regionFocus: [],
     });
     router.refresh();
@@ -574,6 +599,14 @@ export function AddBdeButton({
                   />
                 </Field>
               </div>
+              <Field label="Phone (used for the {consultant_phone} merge field)">
+                <input
+                  value={form.phone}
+                  onChange={(e) => setForm({ ...form, phone: e.target.value })}
+                  placeholder="e.g. +91 79949 20775"
+                  className={inputCls}
+                />
+              </Field>
               <Field label="Region focus (optional — empty = all regions)">
                 <div className="flex flex-wrap gap-[6px]">
                   {regions.map((r) => {

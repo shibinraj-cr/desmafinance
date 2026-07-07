@@ -73,6 +73,7 @@ export default async function TeamRosterPage() {
           email: r.user.email,
           role: r.role as "l1" | "l2" | "supervisor",
           displayName: r.displayName,
+          phone: r.phone,
           regionFocus: r.regionFocus,
           active: r.active,
         }))}

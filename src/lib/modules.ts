@@ -191,6 +191,14 @@ export const MODULES: AppModule[] = [
         group: "PIPELINE",
       },
       {
+        // Not adminOnly: gated by an explicit page grant so a marketing
+        // supervisor can be given template access without full CRM admin.
+        href: "/crm/templates",
+        label: "Message Templates",
+        icon: "quickreply",
+        group: "TOOLS",
+      },
+      {
         href: "/crm/settings",
         label: "Settings",
         icon: "tune",

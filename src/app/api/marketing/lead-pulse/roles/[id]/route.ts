@@ -7,6 +7,7 @@ import { getLeadPulseAccess, LEAD_PULSE_ROLE_SLUGS } from "@/lib/lead-pulse-rbac
 const PatchSchema = z.object({
   role: z.enum(LEAD_PULSE_ROLE_SLUGS).optional(),
   displayName: z.string().min(1).max(120).optional(),
+  phone: z.string().max(40).nullable().optional(),
   regionFocus: z.array(z.string()).optional(),
   active: z.boolean().optional(),
 });
@@ -40,6 +41,7 @@ export async function PATCH(req: NextRequest, { params }: { params: { id: string
   const update: Record<string, unknown> = {};
   if (data.role !== undefined) update.role = data.role;
   if (data.displayName !== undefined) update.displayName = data.displayName.trim();
+  if (data.phone !== undefined) update.phone = data.phone?.trim() || null;
   if (data.regionFocus !== undefined) update.regionFocus = data.regionFocus;
   if (data.active !== undefined) update.active = data.active;
 

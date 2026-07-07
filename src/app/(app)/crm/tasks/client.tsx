@@ -132,7 +132,11 @@ export function TasksBoard({
   const today = startOfToday();
   const statusVal = search.get("status") ?? "open";
   const dueVal = search.get("due") ?? "";
-  const assigneeVal = search.get("assignee") ?? "";
+  // Effective assignee mirrors the server default: a BDE with no explicit
+  // assignee lands on their own queue ("my tasks"); non-BDEs (and the explicit
+  // "All tasks" / "all" choice) see everyone. Used for the select value + chips.
+  const rawAssignee = search.get("assignee");
+  const assigneeVal = rawAssignee ?? (access.isBde ? access.userId : "all");
   const kindVal = search.get("kind") ?? "";
   const anyFilter =
     !!search.get("status") ||
@@ -145,15 +149,18 @@ export function TasksBoard({
   // Quick-filter chips. `active` highlights the chip when its filter is set.
   // Each chip is a one-click preset: it sets the dimension(s) it owns and clears
   // the others (status/assignee/priority/due/kind) so the chips stay exclusive.
+  // "No narrowing" = the plain open list with no due/kind/priority facet, used so
+  // the All/My scope chips light up only when nothing else is filtering.
+  const noNarrowing = statusVal === "open" && !dueVal && !kindVal && !search.get("priority");
   const chips: { key: string; label: string; count?: number; active: boolean; patch: Record<string, string | null> }[] = [
-    { key: "open", label: "All open", count: counts.open, active: !anyFilter || (statusVal === "open" && !dueVal && !assigneeVal && !kindVal && !search.get("priority")), patch: { status: null, assignee: null, priority: null, due: null, kind: null, q: null } },
+    { key: "open", label: "All open", count: counts.open, active: assigneeVal === "all" && noNarrowing, patch: { status: null, assignee: "all", priority: null, due: null, kind: null, q: null } },
     { key: "overdue", label: "Overdue", count: counts.overdue, active: dueVal === "overdue", patch: { due: "overdue", status: null, assignee: null, priority: null, kind: null } },
     { key: "today", label: "Due today", count: counts.dueToday, active: dueVal === "today", patch: { due: "today", status: null, assignee: null, priority: null, kind: null } },
     { key: "reinquiry", label: "Re-inquiry", count: counts.reinquiry, active: kindVal === "reinquiry", patch: { kind: "reinquiry", status: null, assignee: null, priority: null, due: null } },
     { key: "unassigned", label: "Unassigned", count: counts.unassignedOpen, active: assigneeVal === "unassigned", patch: { assignee: "unassigned", status: null, due: null, priority: null, kind: null } },
   ];
   if (access.isBde) {
-    chips.push({ key: "mine", label: "My tasks", active: assigneeVal === access.userId && !kindVal, patch: { assignee: access.userId, due: null, kind: null } });
+    chips.push({ key: "mine", label: "My tasks", active: assigneeVal === access.userId && noNarrowing, patch: { assignee: access.userId, status: null, due: null, kind: null, priority: null } });
   }
 
   // When completing the last open task on a still-active lead, the API rejects
@@ -268,8 +275,8 @@ export function TasksBoard({
           <option value="all">All statuses</option>
         </select>
 
-        <select className={selectClass} value={assigneeVal} onChange={(e) => update({ assignee: e.target.value || null })}>
-          <option value="">All consultants</option>
+        <select className={selectClass} value={assigneeVal} onChange={(e) => update({ assignee: e.target.value })}>
+          <option value="all">All consultants</option>
           <option value="unassigned">Unassigned</option>
           {bdes.map((b) => (
             <option key={b.userId} value={b.userId}>

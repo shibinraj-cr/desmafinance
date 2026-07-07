@@ -6,7 +6,7 @@ import { useRouter } from "next/navigation";
 import Link from "next/link";
 import type { LeadRow, NoteRow, ActivityRow, TaskRow } from "@/lib/crm-leads";
 import { isActionOnlyStatus } from "@/lib/crm-leads";
-import { renderTemplate } from "@/lib/crm";
+import { buildLeadMergeVars, fillTemplate, type MessageTemplateDTO } from "@/lib/crm";
 import { COUNTRIES } from "@/lib/countries";
 import { StatusPill, type StatusOpt, type Opt, type BdeOpt } from "../client";
 import { EnrollCelebration } from "@/components/EnrollCelebration";
@@ -219,6 +219,7 @@ export function LeadDetail({
   masters,
   canEdit,
   emailConfigured,
+  templates,
   access,
 }: {
   lead: LeadRow;
@@ -229,6 +230,7 @@ export function LeadDetail({
   masters: DetailMasters;
   canEdit: boolean;
   emailConfigured: boolean;
+  templates: MessageTemplateDTO[];
   access: DetailAccess;
 }) {
   const [tab, setTab] = useState<"overview" | "tasks" | "history">("overview");
@@ -334,8 +336,10 @@ export function LeadDetail({
 
       {tab === "history" && <HistoryPanel leadId={lead.id} bdes={masters.bdes} />}
 
-      {comm === "email" && <EmailModal lead={lead} emailConfigured={emailConfigured} onClose={() => setComm(null)} />}
-      {comm === "whatsapp" && <WhatsAppModal lead={lead} onClose={() => setComm(null)} />}
+      {comm === "email" && (
+        <EmailModal lead={lead} emailConfigured={emailConfigured} templates={templates} onClose={() => setComm(null)} />
+      )}
+      {comm === "whatsapp" && <WhatsAppModal lead={lead} templates={templates} onClose={() => setComm(null)} />}
       {comm === "call" && <CallModal lead={lead} onClose={() => setComm(null)} />}
     </div>
   );
@@ -1010,6 +1014,13 @@ function DealModal({
   const [serviceId, setServiceId] = useState(lead.service?.id ?? "");
   const [value, setValue] = useState(lead.expectedValue != null ? String(lead.expectedValue) : "");
   const [closeDate, setCloseDate] = useState(lead.expectedCloseDate ? lead.expectedCloseDate.slice(0, 10) : "");
+  // Enroll: the date the close counts against in the CRM metrics. Defaults to
+  // the lead's expected close date when it's already set and not in the future
+  // (a month-end deal keyed the next morning dates back to when it closed),
+  // else today (IST). Never defaults to a future date.
+  const todayIst = new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Kolkata" }).format(new Date());
+  const expClose = lead.expectedCloseDate ? lead.expectedCloseDate.slice(0, 10) : "";
+  const [enrollDate, setEnrollDate] = useState(expClose && expClose <= todayIst ? expClose : todayIst);
   const [ownerId, setOwnerId] = useState(assigneeIsL2 ? lead.assignedTo!.id : "");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -1019,6 +1030,7 @@ function DealModal({
     if (!serviceId) return setError("Pick a service.");
     if (!(Number(value) > 0)) return setError("Enter an expected value.");
     if (mode === "deal" && !closeDate) return setError("Pick an expected close date.");
+    if (mode === "enroll" && !enrollDate) return setError("Pick the enrollment date.");
     if (!assigneeIsL2 && !ownerId) return setError("Choose an L2 BDE as the deal owner.");
     setBusy(true);
     const res = await fetch(`/api/crm/leads/${lead.id}/${mode === "enroll" ? "enroll" : "deal"}`, {
@@ -1027,7 +1039,11 @@ function DealModal({
       body: JSON.stringify({
         serviceId,
         expectedValue: Number(value),
-        expectedCloseDate: closeDate || undefined,
+        // On enroll, the enrollment date is the actual close — send it as both
+        // the close date (drives the CRM month bucket) and the expected close so
+        // the lead's displayed deal date matches.
+        expectedCloseDate: (mode === "enroll" ? enrollDate : closeDate) || undefined,
+        ...(mode === "enroll" ? { closedDate: enrollDate || undefined } : {}),
         ownerUserId: assigneeIsL2 ? undefined : ownerId,
       }),
     });
@@ -1068,9 +1084,19 @@ function DealModal({
       <Field label="Expected value (₹)">
         <input className={inputCls} type="number" min={0} value={value} onChange={(e) => setValue(e.target.value)} />
       </Field>
-      <Field label={mode === "enroll" ? "Expected close date (optional)" : "Expected close date"}>
-        <input className={inputCls} type="date" value={closeDate} onChange={(e) => setCloseDate(e.target.value)} />
-      </Field>
+      {mode === "enroll" ? (
+        <Field label="Enrollment date">
+          <input className={inputCls} type="date" value={enrollDate} onChange={(e) => setEnrollDate(e.target.value)} />
+          <p className="mt-xs text-label-sm text-on-surface-variant">
+            The date this enrollment counts against in the reports. Defaults to today — set it back (e.g. to the last of the
+            month) if the deal actually closed earlier.
+          </p>
+        </Field>
+      ) : (
+        <Field label="Expected close date">
+          <input className={inputCls} type="date" value={closeDate} onChange={(e) => setCloseDate(e.target.value)} />
+        </Field>
+      )}
       {!assigneeIsL2 && (
         <Field label="Deal owner (L2 BDE)">
           <select className={inputCls} value={ownerId} onChange={(e) => setOwnerId(e.target.value)}>
@@ -1251,6 +1277,19 @@ function CandidateLinkPicker({
 }
 
 // ── Comms modals ──────────────────────────────────────────────────────────────
+
+/** Merge-field values for a single lead's email / WhatsApp templates. */
+function leadCommsVars(lead: LeadRow) {
+  return buildLeadMergeVars({
+    candidateName: lead.candidateName,
+    service: lead.service?.name,
+    consultant: lead.assignedTo?.name,
+    consultantPhone: lead.assignedTo?.phone,
+    campaign: lead.campaign,
+    qualification: lead.qualification?.label,
+  });
+}
+
 const EMAIL_TEMPLATES: { id: string; label: string; subject: string; body: string }[] = [
   { id: "blank", label: "Blank", subject: "", body: "" },
   {
@@ -1273,9 +1312,26 @@ const EMAIL_TEMPLATES: { id: string; label: string; subject: string; body: strin
   },
 ];
 
-function EmailModal({ lead, emailConfigured, onClose }: { lead: LeadRow; emailConfigured: boolean; onClose: () => void }) {
+function EmailModal({
+  lead,
+  emailConfigured,
+  templates,
+  onClose,
+}: {
+  lead: LeadRow;
+  emailConfigured: boolean;
+  templates: MessageTemplateDTO[];
+  onClose: () => void;
+}) {
   const router = useRouter();
-  const vars = { name: lead.candidateName, service: lead.service?.name ?? "", consultant: lead.assignedTo?.name ?? "" };
+  const vars = leadCommsVars(lead);
+  // Built-in defaults first, then the team's saved email templates.
+  const options = [
+    ...EMAIL_TEMPLATES,
+    ...templates
+      .filter((t) => t.channel === "email")
+      .map((t) => ({ id: t.id, label: t.name, subject: t.subject ?? "", body: t.body })),
+  ];
   const [tpl, setTpl] = useState("blank");
   const [subject, setSubject] = useState("");
   const [body, setBody] = useState("");
@@ -1284,10 +1340,10 @@ function EmailModal({ lead, emailConfigured, onClose }: { lead: LeadRow; emailCo
 
   function applyTemplate(id: string) {
     setTpl(id);
-    const t = EMAIL_TEMPLATES.find((x) => x.id === id);
+    const t = options.find((x) => x.id === id);
     if (t) {
-      setSubject(renderTemplate(t.subject, vars));
-      setBody(renderTemplate(t.body, vars));
+      setSubject(fillTemplate(t.subject, vars));
+      setBody(fillTemplate(t.body, vars));
     }
   }
 
@@ -1327,7 +1383,7 @@ function EmailModal({ lead, emailConfigured, onClose }: { lead: LeadRow; emailCo
       </Field>
       <Field label="Template">
         <select className={inputCls} value={tpl} onChange={(e) => applyTemplate(e.target.value)}>
-          {EMAIL_TEMPLATES.map((t) => (
+          {options.map((t) => (
             <option key={t.id} value={t.id}>
               {t.label}
             </option>
@@ -1362,23 +1418,45 @@ function EmailModal({ lead, emailConfigured, onClose }: { lead: LeadRow; emailCo
   );
 }
 
-function WhatsAppModal({ lead, onClose }: { lead: LeadRow; onClose: () => void }) {
+const WHATSAPP_BUILTIN = {
+  id: "default",
+  label: "DESMA — save my number",
+  body:
+    "Hi {name} 😊,\n\n" +
+    "This is {consultant} from DESMA International.\n\n" +
+    "We help nurses like you through the Australian Nursing Registration process — step by step, stress-free.\n\n" +
+    "👉 Please save my number now to get all important updates.\n\n" +
+    "Once done, reply “SAVED” so I can assist you further.\n\n" +
+    "Got any questions?\n" +
+    "📞 I HAVE BOTIM. Call me NOW — I’m just a ping away to help you get started!",
+};
+
+function WhatsAppModal({
+  lead,
+  templates,
+  onClose,
+}: {
+  lead: LeadRow;
+  templates: MessageTemplateDTO[];
+  onClose: () => void;
+}) {
   const router = useRouter();
-  const vars = { name: lead.candidateName, service: lead.service?.name ?? "", consultant: lead.assignedTo?.name ?? "" };
-  const [message, setMessage] = useState(
-    renderTemplate(
-      "Hi {name} 😊,\n\n" +
-        "This is {consultant} from DESMA International.\n\n" +
-        "We help nurses like you through the Australian Nursing Registration process — step by step, stress-free.\n\n" +
-        "👉 Please save my number now to get all important updates.\n\n" +
-        "Once done, reply “SAVED” so I can assist you further.\n\n" +
-        "Got any questions?\n" +
-        "📞 I HAVE BOTIM. Call me NOW — I’m just a ping away to help you get started!",
-      vars,
-    ),
-  );
+  const vars = leadCommsVars(lead);
+  // Built-in default first, then the team's saved WhatsApp templates.
+  const options = [
+    WHATSAPP_BUILTIN,
+    ...templates.filter((t) => t.channel === "whatsapp").map((t) => ({ id: t.id, label: t.name, body: t.body })),
+  ];
+  const [tpl, setTpl] = useState(options[0].id);
+  const [message, setMessage] = useState(fillTemplate(options[0].body, vars));
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  function applyTemplate(id: string) {
+    setTpl(id);
+    const t = options.find((x) => x.id === id);
+    if (t) setMessage(fillTemplate(t.body, vars));
+  }
 
   async function send() {
     setBusy(true);
@@ -1403,6 +1481,17 @@ function WhatsAppModal({ lead, onClose }: { lead: LeadRow; onClose: () => void }
   return (
     <Modal title="WhatsApp lead" onClose={onClose} busy={busy}>
       {error && <div className="rounded-lg bg-error-container text-on-error-container px-md py-sm">{error}</div>}
+      {options.length > 1 && (
+        <Field label="Template">
+          <select className={inputCls} value={tpl} onChange={(e) => applyTemplate(e.target.value)}>
+            {options.map((t) => (
+              <option key={t.id} value={t.id}>
+                {t.label}
+              </option>
+            ))}
+          </select>
+        </Field>
+      )}
       <Field label="To">
         <input className={inputCls} value={lead.phoneE164 ?? ""} disabled placeholder="No WhatsApp-capable number" />
       </Field>

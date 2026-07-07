@@ -5,7 +5,7 @@ import { createPortal } from "react-dom";
 import Link from "next/link";
 import { useRouter, usePathname, useSearchParams } from "next/navigation";
 import { type LeadRow, isActionOnlyStatus } from "@/lib/crm-leads";
-import { DEFAULT_STATUS_COLOR, BULK_EMAIL_MERGE_FIELDS, fillTemplate } from "@/lib/crm";
+import { DEFAULT_STATUS_COLOR, BULK_EMAIL_MERGE_FIELDS, fillTemplate, type MessageTemplateDTO } from "@/lib/crm";
 import { COUNTRIES } from "@/lib/countries";
 
 // ── Shared prop shapes ──────────────────────────────────────────────────────
@@ -525,6 +525,7 @@ export function LeadsTable({
   pageSize,
   masters,
   access,
+  templates,
 }: {
   leads: LeadRow[];
   total: number;
@@ -532,6 +533,7 @@ export function LeadsTable({
   pageSize: number;
   masters: Masters;
   access: LeadsAccess;
+  templates: MessageTemplateDTO[];
 }) {
   const router = useRouter();
   const pathname = usePathname();
@@ -984,6 +986,7 @@ export function LeadsTable({
           leadIds={Array.from(selected)}
           truncated={matchedAll?.truncated ?? false}
           emailConfigured={access.emailConfigured}
+          templates={templates}
           onClose={() => setComposeOpen(false)}
           onDone={() => {
             setComposeOpen(false);
@@ -1258,6 +1261,7 @@ const SAMPLE_VARS: Record<string, string> = {
   first_name: "Priya",
   service: "AHPRA Direct",
   consultant: "Your name",
+  consultant_phone: "+91 79949 20775",
   campaign: "Meta — RN Australia",
   qualification: "BSN",
 };
@@ -1270,16 +1274,25 @@ function BulkEmailModal({
   leadIds,
   truncated,
   emailConfigured,
+  templates,
   onClose,
   onDone,
 }: {
   leadIds: string[];
   truncated: boolean;
   emailConfigured: boolean;
+  templates: MessageTemplateDTO[];
   onClose: () => void;
   onDone: () => void;
 }) {
   const [mounted, setMounted] = useState(false);
+  // Built-in defaults first, then the team's saved email templates.
+  const options = [
+    ...BULK_TEMPLATES,
+    ...templates
+      .filter((t) => t.channel === "email")
+      .map((t) => ({ id: t.id, label: t.name, subject: t.subject ?? "", body: t.body })),
+  ];
   const [tpl, setTpl] = useState("blank");
   const [subject, setSubject] = useState("");
   const [body, setBody] = useState("");
@@ -1300,7 +1313,7 @@ function BulkEmailModal({
 
   function applyTemplate(id: string) {
     setTpl(id);
-    const t = BULK_TEMPLATES.find((x) => x.id === id);
+    const t = options.find((x) => x.id === id);
     if (t) {
       setSubject(t.subject);
       setBody(t.body);
@@ -1405,7 +1418,7 @@ function BulkEmailModal({
 
             <Field label="Template">
               <select className={inputCls} value={tpl} onChange={(e) => applyTemplate(e.target.value)}>
-                {BULK_TEMPLATES.map((t) => (
+                {options.map((t) => (
                   <option key={t.id} value={t.id}>
                     {t.label}
                   </option>

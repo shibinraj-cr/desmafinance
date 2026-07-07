@@ -101,3 +101,18 @@ describe("buildCrmTaskWhere — re-inquiry kind", () => {
     expect(where.subject).toEqual({ contains: "re-inquiry", mode: "insensitive" });
   });
 });
+
+describe("buildCrmTaskWhere — assignee", () => {
+  it("scopes to a specific consultant", () => {
+    expect(buildCrmTaskWhere({ assignee: "u1" }).assignedToId).toBe("u1");
+  });
+  it("matches the unassigned pool", () => {
+    expect(buildCrmTaskWhere({ assignee: "unassigned" }).assignedToId).toBeNull();
+  });
+  it("treats the 'all' sentinel as no assignee filter (the BDE opt-out)", () => {
+    expect("assignedToId" in buildCrmTaskWhere({ assignee: "all" })).toBe(false);
+  });
+  it("applies no assignee filter when omitted", () => {
+    expect("assignedToId" in buildCrmTaskWhere({})).toBe(false);
+  });
+});

@@ -5,7 +5,7 @@ import { withApiHandler } from "@/lib/api";
 import { unauthorized, forbidden, badRequest } from "@/lib/http-error";
 import { getCurrentUserAndPermissions } from "@/lib/permissions";
 import { getCrmAccess } from "@/lib/crm-rbac";
-import { fillTemplate } from "@/lib/crm";
+import { buildLeadMergeVars, fillTemplate } from "@/lib/crm";
 import { getEmailConfig, getDailyQuota, sendEmail, smtpErrorInfo } from "@/lib/mailer";
 
 export const dynamic = "force-dynamic";
@@ -31,17 +31,16 @@ function mergeVars(lead: {
   campaign: string | null;
   service: { name: string } | null;
   qualification: { label: string } | null;
-  assignedTo: { username: string; leadPulseRole: { displayName: string } | null } | null;
+  assignedTo: { username: string; leadPulseRole: { displayName: string; phone: string | null } | null } | null;
 }): Record<string, string> {
-  const name = lead.candidateName ?? "";
-  return {
-    name,
-    first_name: name.trim().split(/\s+/)[0] ?? "",
-    service: lead.service?.name ?? "",
-    consultant: lead.assignedTo?.leadPulseRole?.displayName ?? lead.assignedTo?.username ?? "",
-    campaign: lead.campaign ?? "",
-    qualification: lead.qualification?.label ?? "",
-  };
+  return buildLeadMergeVars({
+    candidateName: lead.candidateName,
+    service: lead.service?.name,
+    consultant: lead.assignedTo?.leadPulseRole?.displayName ?? lead.assignedTo?.username,
+    consultantPhone: lead.assignedTo?.leadPulseRole?.phone,
+    campaign: lead.campaign,
+    qualification: lead.qualification?.label,
+  });
 }
 
 // POST /api/crm/leads/bulk-email — send an individual, merge-filled email to
@@ -85,7 +84,7 @@ export const POST = withApiHandler(async (req: Request) => {
       campaign: true,
       service: { select: { name: true } },
       qualification: { select: { label: true } },
-      assignedTo: { select: { username: true, leadPulseRole: { select: { displayName: true } } } },
+      assignedTo: { select: { username: true, leadPulseRole: { select: { displayName: true, phone: true } } } },
     },
   });
   const byId = new Map(leads.map((l) => [l.id, l]));
