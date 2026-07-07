@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { useRouter } from "next/navigation";
+import Link from "next/link";
 import {
   CRM_TEMPLATE_MERGE_FIELDS,
   CRM_TEMPLATE_SAMPLE_VARS,
@@ -75,6 +76,18 @@ export function MessageTemplatesClient({ templates }: { templates: MessageTempla
         >
           <Icon name="add" /> New {channel === "email" ? "email" : "WhatsApp"} template
         </button>
+      </div>
+
+      {/* Consultant phone lives on the BDE roster — link out so it's findable from CRM. */}
+      <div className="rounded-lg border border-outline-variant bg-surface-container-low px-md py-sm text-body-sm text-on-surface-variant flex items-center gap-xs flex-wrap">
+        <Icon name="info" size={16} />
+        <span>
+          The <span className="font-mono">{"{consultant_phone}"}</span> field is set per consultant in the{" "}
+          <Link href="/marketing/lead-pulse/team-roster" className="text-primary font-semibold hover:underline">
+            Team Roster
+          </Link>
+          .
+        </span>
       </div>
 
       {/* Channel tabs */}
