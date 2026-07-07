@@ -96,9 +96,77 @@ export const BULK_EMAIL_MERGE_FIELDS = [
   "first_name",
   "service",
   "consultant",
+  "consultant_phone",
   "campaign",
   "qualification",
 ] as const;
+
+// ── CRM message templates (email + WhatsApp) ────────────────────────────────
+// Pure, client-safe definitions shared by the template manager, the single-lead
+// composers, and the bulk composer. Server-only helpers (list/serialize against
+// the DB) live in `crm-message-templates.ts`.
+
+export type MessageChannel = "email" | "whatsapp";
+
+/** A saved CRM message template, serialized for the client. */
+export type MessageTemplateDTO = {
+  id: string;
+  channel: MessageChannel;
+  name: string;
+  /** Email subject line (merge fields allowed). Always null for WhatsApp. */
+  subject: string | null;
+  body: string;
+  isActive: boolean;
+  createdAt: string;
+};
+
+export type CrmMergeField = { token: string; label: string; sample: string };
+
+/**
+ * Merge tokens available in CRM email/WhatsApp templates. Rendered per-lead at
+ * send time via {@link fillTemplate}. Token names here MUST match the keys
+ * produced by {@link buildLeadMergeVars}.
+ */
+export const CRM_TEMPLATE_MERGE_FIELDS: CrmMergeField[] = [
+  { token: "name", label: "Candidate name", sample: "Priya Menon" },
+  { token: "first_name", label: "Candidate first name", sample: "Priya" },
+  { token: "service", label: "Service of interest", sample: "AHPRA Direct" },
+  { token: "consultant", label: "Consultant name", sample: "Aparna" },
+  { token: "consultant_phone", label: "Consultant phone", sample: "+91 79949 20775" },
+  { token: "campaign", label: "Campaign", sample: "Meta — RN Australia" },
+  { token: "qualification", label: "Qualification", sample: "BSN" },
+];
+
+/** Sample values for previewing a template when no real lead is in context. */
+export const CRM_TEMPLATE_SAMPLE_VARS: Record<string, string> = Object.fromEntries(
+  CRM_TEMPLATE_MERGE_FIELDS.map((f) => [f.token, f.sample]),
+);
+
+/**
+ * Build the `{token}` → value map for a single lead, used to render an
+ * email/WhatsApp template. Keys must line up with {@link CRM_TEMPLATE_MERGE_FIELDS}.
+ * Missing values render as an empty string (so an unset consultant phone just
+ * drops out rather than leaving a literal `{consultant_phone}`).
+ */
+export function buildLeadMergeVars(input: {
+  candidateName?: string | null;
+  service?: string | null;
+  consultant?: string | null;
+  consultantPhone?: string | null;
+  campaign?: string | null;
+  qualification?: string | null;
+}): Record<string, string> {
+  const name = (input.candidateName ?? "").trim();
+  return {
+    name,
+    first_name: name.split(/\s+/)[0] ?? "",
+    service: input.service ?? "",
+    consultant: input.consultant ?? "",
+    consultant_phone: input.consultantPhone ?? "",
+    campaign: input.campaign ?? "",
+    qualification: input.qualification ?? "",
+  };
+}
 
 /**
  * Fill a template against an arbitrary `{token}` map. Unknown tokens are left

@@ -191,6 +191,14 @@ export const MODULES: AppModule[] = [
         group: "PIPELINE",
       },
       {
+        // Not adminOnly: gated by an explicit page grant so a marketing
+        // supervisor can be given template access without full CRM admin.
+        href: "/crm/templates",
+        label: "Message Templates",
+        icon: "quickreply",
+        group: "TOOLS",
+      },
+      {
         href: "/crm/settings",
         label: "Settings",
         icon: "tune",
@@ -236,12 +244,11 @@ export const MODULES: AppModule[] = [
       { href: "/hr/org-chart", label: "Org Chart", icon: "account_tree", group: "PEOPLE" },
       { href: "/hr/birthdays", label: "Birthday Calendar", icon: "cake", group: "PEOPLE" },
       { href: "/hr/leave", label: "Leave Requests", icon: "event_busy", group: "LEAVE" },
-      { href: "/hr/leave-review", label: "Leave Review", icon: "rule", group: "LEAVE" },
       { href: "/hr/leave-balances", label: "Leave Balances", icon: "savings", group: "LEAVE" },
       { href: "/hr/leave-eligibility", label: "Leave Eligibility", icon: "auto_awesome", group: "LEAVE" },
       { href: "/hr/sandwich-policy", label: "Sandwich Policy", icon: "rule_settings", group: "LEAVE" },
       { href: "/hr/attendance", label: "Attendance", icon: "fact_check", group: "ATTENDANCE" },
-      { href: "/hr/regularization", label: "Regularizations", icon: "edit_calendar", group: "ATTENDANCE" },
+      { href: "/hr/regularization", label: "Attendance Corrections", icon: "edit_calendar", group: "ATTENDANCE" },
       { href: "/hr/shifts", label: "Shifts", icon: "schedule", group: "ATTENDANCE" },
       { href: "/hr/shift-assignments", label: "Shift Assignments", icon: "schedule_send", group: "ATTENDANCE" },
       { href: "/hr/salary-structures", label: "Salary Structures", icon: "calculate", group: "PAYROLL" },

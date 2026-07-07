@@ -16,6 +16,7 @@ import {
   resolveAssigneeFilter,
 } from "@/lib/crm-leads";
 import { isEmailConfigured } from "@/lib/mailer";
+import { listMessageTemplates } from "@/lib/crm-message-templates";
 import { LeadsToolbar, LeadsTable } from "./client";
 
 export const dynamic = "force-dynamic";
@@ -81,7 +82,7 @@ export default async function LeadsPage({ searchParams }: { searchParams: SP }) 
   const totalPages = Math.max(1, Math.ceil(total / PAGE_SIZE));
   const page = Math.min(requestedPage, totalPages);
 
-  const [rows, statuses, sources, services, qualifications, bdes, campaignGroups, countryGroups, destinationGroups, emailConfigured] = await Promise.all([
+  const [rows, statuses, sources, services, qualifications, bdes, campaignGroups, countryGroups, destinationGroups, emailConfigured, emailTemplates] = await Promise.all([
     prisma.lead.findMany({
       where,
       orderBy: leadOrderBy(sort),
@@ -126,6 +127,7 @@ export default async function LeadsPage({ searchParams }: { searchParams: SP }) 
       orderBy: { studyDestination: "asc" },
     }),
     isEmailConfigured(),
+    listMessageTemplates({ channel: "email", activeOnly: true }),
   ]);
 
   // Fresh leads assigned to the signed-in BDE — drives the "My new leads" chip
@@ -178,6 +180,7 @@ export default async function LeadsPage({ searchParams }: { searchParams: SP }) 
           pageSize={PAGE_SIZE}
           masters={masters}
           access={accessProps}
+          templates={emailTemplates}
         />
       </div>
     </>

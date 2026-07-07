@@ -10,6 +10,7 @@ const CreateSchema = z.object({
   userId: z.string().min(1),
   role: z.enum(LEAD_PULSE_ROLE_SLUGS),
   displayName: z.string().min(1).max(120).optional(),
+  phone: z.string().max(40).nullable().optional(),
   regionFocus: z.array(z.string()).optional(),
   active: z.boolean().default(true),
 });
@@ -59,11 +60,13 @@ export async function POST(req: NextRequest) {
   }
 
   const displayName = data.displayName?.trim() || target.username;
+  const phone = data.phone?.trim() || null;
   const upserted = await prisma.leadPulseRole.upsert({
     where: { userId: data.userId },
     update: {
       role: data.role,
       displayName,
+      phone,
       regionFocus: data.regionFocus ?? [],
       active: data.active,
     },
@@ -71,6 +74,7 @@ export async function POST(req: NextRequest) {
       userId: data.userId,
       role: data.role,
       displayName,
+      phone,
       regionFocus: data.regionFocus ?? [],
       active: data.active,
     },

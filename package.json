@@ -30,6 +30,7 @@
     "db:seed-lead-pulse": "tsx prisma/seed-lead-pulse.ts",
     "db:seed-crm": "tsx prisma/seed-crm.ts",
     "db:grant-crm-pages": "tsx prisma/grant-crm-pages.ts",
+    "db:grant-suhaina-crm-templates": "tsx prisma/grant-suhaina-crm-templates.ts",
     "db:grant-operations-pages": "tsx prisma/grant-operations-pages.ts",
     "db:backfill-ops-projects": "tsx prisma/backfill-ops-projects.ts",
     "db:seed-from-excel": "tsx prisma/seed-from-excel.ts",

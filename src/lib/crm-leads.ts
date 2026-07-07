@@ -9,7 +9,7 @@ export const leadRowInclude = Prisma.validator<Prisma.LeadInclude>()({
   qualification: { select: { id: true, label: true } },
   status: { select: { id: true, code: true, label: true, kind: true, color: true } },
   assignedTo: {
-    select: { id: true, username: true, leadPulseRole: { select: { displayName: true } } },
+    select: { id: true, username: true, leadPulseRole: { select: { displayName: true, phone: true } } },
   },
   party: { select: { id: true, name: true } },
   pipeline: { select: { status: true } },
@@ -31,7 +31,7 @@ export type LeadRow = {
   service: { id: string; name: string } | null;
   qualification: { id: string; label: string } | null;
   status: { id: string; code: string; label: string; kind: string; color: string | null };
-  assignedTo: { id: string; name: string } | null;
+  assignedTo: { id: string; name: string; phone: string | null } | null;
   assignedAt: string | null;
   party: { id: string; name: string } | null;
   campaign: string | null;
@@ -67,7 +67,11 @@ export function serializeLead(l: LeadWithRels): LeadRow {
       color: l.status.color,
     },
     assignedTo: l.assignedTo
-      ? { id: l.assignedTo.id, name: l.assignedTo.leadPulseRole?.displayName ?? l.assignedTo.username }
+      ? {
+          id: l.assignedTo.id,
+          name: l.assignedTo.leadPulseRole?.displayName ?? l.assignedTo.username,
+          phone: l.assignedTo.leadPulseRole?.phone ?? null,
+        }
       : null,
     assignedAt: l.assignedAt ? l.assignedAt.toISOString() : null,
     party: l.party ? { id: l.party.id, name: l.party.name } : null,
