@@ -1240,20 +1240,10 @@ function Checkbox({
   );
 }
 
+// "Blank" is the only built-in; all real templates are DB-managed on
+// /crm/templates and appended below (seeded via db:seed-crm-templates).
 const BULK_TEMPLATES: { id: string; label: string; subject: string; body: string }[] = [
   { id: "blank", label: "Blank", subject: "", body: "" },
-  {
-    id: "intro",
-    label: "Introduction",
-    subject: "DESMA — {service}",
-    body: "Hi {first_name},\n\nThank you for your interest in {service}. I'm {consultant} from DESMA and I'll be happy to help you with the next steps.\n\nWarm regards,\n{consultant}\nDESMA",
-  },
-  {
-    id: "followup",
-    label: "Follow up",
-    subject: "Following up — {service}",
-    body: "Hi {first_name},\n\nJust following up on your interest in {service}. Do let me know a good time to connect.\n\n{consultant}\nDESMA",
-  },
 ];
 
 const SAMPLE_VARS: Record<string, string> = {
