@@ -52,6 +52,106 @@ export function elapsedAccrualMonths(year: number, effectiveFrom: Date, asOf: Da
   return Math.max(0, lastMonth - firstMonth + 1);
 }
 
+/**
+ * The calendar months (1–12) of `year` that receive the standard monthly
+ * accrual, given the eligibility `effectiveFrom` and `asOf`. Same window as
+ * `elapsedAccrualMonths`, but returns the months rather than the count.
+ */
+export function accrualMonthsInYear(year: number, effectiveFrom: Date, asOf: Date): number[] {
+  const effYear = effectiveFrom.getUTCFullYear();
+  if (effYear > year) return [];
+  const firstMonth = effYear < year ? 1 : effectiveFrom.getUTCMonth() + 1;
+  const curYear = asOf.getUTCFullYear();
+  let lastMonth: number;
+  if (year > curYear) lastMonth = 0;
+  else if (year < curYear) lastMonth = 12;
+  else lastMonth = asOf.getUTCMonth() + 1;
+  const months: number[] = [];
+  for (let m = firstMonth; m <= lastMonth; m++) months.push(m);
+  return months;
+}
+
+export type LeaveLedgerRow = {
+  month: number; // 1–12
+  label: string; // e.g. "Apr 2026"
+  accrued: number; // paid leave credited that month
+  taken: number; // paid leave used that month (LV = 1, HD = 0.5)
+  unpaid: number; // absences / loss-of-pay that month (A days)
+  balance: number; // running carry-forward balance after this month
+};
+
+const MONTH_LABELS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+
+/**
+ * Employee-facing month-wise leave ledger for `year`: paid leave credited,
+ * leave taken, unpaid (absence) days, and the running carry-forward balance.
+ * Read-only derivation over the canonical sources (eligibility accrual + manual
+ * ledger + decided attendance). Months after `asOf` are omitted.
+ */
+export async function computeMonthlyLeaveLedger(
+  employeeId: string,
+  year: number,
+  asOf: Date = new Date(),
+): Promise<{ rows: LeaveLedgerRow[]; opening: number }> {
+  const yearStart = new Date(Date.UTC(year, 0, 1));
+  const yearEnd = new Date(Date.UTC(year, 11, 31));
+
+  const [eligibility, existing, manualLedger, days] = await Promise.all([
+    prisma.hrLeaveEligibility.findUnique({ where: { employeeId } }),
+    prisma.hrLeaveBalance.findUnique({ where: { employeeId_year: { employeeId, year } } }),
+    prisma.hrLeaveAccrual.findMany({
+      where: { employeeId, source: { in: ["manual", "expiry"] }, periodKey: { startsWith: `${year}-` } },
+      select: { periodKey: true, delta: true },
+    }),
+    prisma.hrAttendanceDay.findMany({
+      where: { employeeId, date: { gte: yearStart, lte: yearEnd }, status: { in: ["LV", "HD", "A"] } },
+      select: { date: true, status: true },
+    }),
+  ]);
+
+  const opening = existing ? Number(existing.opening) : 0;
+  const perMonthRate =
+    eligibility && eligibility.enabled ? Number(eligibility.leavesPerPeriod) : 0;
+  const accrualMonths = new Set(
+    eligibility && eligibility.enabled
+      ? accrualMonthsInYear(year, eligibility.effectiveFrom, asOf)
+      : [],
+  );
+
+  const manualByMonth = new Map<number, number>();
+  for (const a of manualLedger) {
+    const m = Number(a.periodKey.split("-")[1]);
+    if (m >= 1 && m <= 12) manualByMonth.set(m, (manualByMonth.get(m) ?? 0) + Number(a.delta));
+  }
+
+  const takenByMonth = new Map<number, number>();
+  const unpaidByMonth = new Map<number, number>();
+  for (const d of days) {
+    const m = d.date.getUTCMonth() + 1;
+    // Only full-day paid leave (LV) consumes the balance ("taken"). A half-day
+    // (HD) is 0.5-day loss-of-pay, so it shows under "unpaid", not "taken".
+    if (d.status === "LV") takenByMonth.set(m, (takenByMonth.get(m) ?? 0) + 1);
+    else if (d.status === "HD") unpaidByMonth.set(m, (unpaidByMonth.get(m) ?? 0) + 0.5);
+    else if (d.status === "A") unpaidByMonth.set(m, (unpaidByMonth.get(m) ?? 0) + 1);
+  }
+
+  // Show months from January through the last elapsed month (Dec for past
+  // years). The running balance opens from the year's carried-in opening.
+  const curYear = asOf.getUTCFullYear();
+  const lastMonth = year > curYear ? 0 : year < curYear ? 12 : asOf.getUTCMonth() + 1;
+  const rows: LeaveLedgerRow[] = [];
+  let balance = opening;
+  for (let m = 1; m <= lastMonth; m++) {
+    const accrued =
+      (accrualMonths.has(m) ? perMonthRate : 0) + (manualByMonth.get(m) ?? 0);
+    const taken = takenByMonth.get(m) ?? 0;
+    const unpaid = unpaidByMonth.get(m) ?? 0;
+    balance = Math.round((balance + accrued - taken) * 100) / 100;
+    rows.push({ month: m, label: `${MONTH_LABELS[m - 1]} ${year}`, accrued, taken, unpaid, balance });
+  }
+  return { rows, opening };
+}
+
 /** Derive (but don't persist) the canonical balance for one employee/year. */
 export async function computeLeaveBalanceFor(
   db: Db,
@@ -75,7 +175,7 @@ export async function computeLeaveBalanceFor(
     }),
     db.hrAttendanceDay.groupBy({
       by: ["status"],
-      where: { employeeId, date: { gte: yearStart, lte: yearEnd }, status: { in: ["LV", "HD"] } },
+      where: { employeeId, date: { gte: yearStart, lte: yearEnd }, status: { in: ["LV"] } },
       _count: { _all: true },
     }),
   ]);
@@ -87,11 +187,13 @@ export async function computeLeaveBalanceFor(
       : 0;
   const accrued = entitlement + Number(manualLedger._sum.delta ?? 0);
 
-  // Reviewed & decided paid leave: LV = full day, HD = half day.
+  // Paid leave used = full-day paid leave (LV) only. Half-days (HD) are NOT
+  // charged to the leave balance — a HD is simply 0.5-day loss-of-pay in the
+  // salary run (it does not consume paid-leave credit). Counting it here too
+  // double-penalised the employee (0.5 pay AND 0.5 balance).
   let used = 0;
   for (const g of leaveDays) {
     if (g.status === "LV") used += g._count._all;
-    else if (g.status === "HD") used += 0.5 * g._count._all;
   }
 
   const opening = existing ? Number(existing.opening) : 0;

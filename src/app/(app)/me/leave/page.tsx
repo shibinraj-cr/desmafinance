@@ -5,6 +5,7 @@ import { TopBar } from "@/components/TopBar";
 import { Section } from "@/components/Cards";
 import { employeeForUser } from "@/lib/hr-me";
 import { isOwnerDesignation } from "@/lib/hr-salary-engine";
+import { computeMonthlyLeaveLedger } from "@/lib/hr-leave-balance";
 import { MyLeaveClient } from "./client";
 
 export const dynamic = "force-dynamic";
@@ -37,6 +38,10 @@ export default async function MyLeavePage() {
   const bal = emp.leaveBalances[0];
   // Owners (MD / Director) have no leave — show history only, no apply form.
   const canApply = !(isOwnerDesignation(emp.designationRef?.name) || isOwnerDesignation(emp.designation));
+  const ledgerYear = new Date().getUTCFullYear();
+  const ledger = canApply
+    ? await computeMonthlyLeaveLedger(emp.id, ledgerYear)
+    : { rows: [], opening: 0 };
   return (
     <>
       <TopBar
@@ -48,6 +53,9 @@ export default async function MyLeavePage() {
       <div className="p-margin">
         <MyLeaveClient
           canApply={canApply}
+          ledgerYear={ledgerYear}
+          ledgerOpening={ledger.opening}
+          ledger={ledger.rows}
           balance={
             bal
               ? {

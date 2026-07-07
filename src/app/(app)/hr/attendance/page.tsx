@@ -121,7 +121,11 @@ export default async function HrAttendancePage({
       lateTag,
     };
     summary[d.employeeId] ??= { P: 0, HD: 0, A: 0, WO: 0, HL: 0, LV: 0, LCE: 0, AL: 0 };
-    const k = d.status as keyof (typeof summary)[string];
+    // A present day flagged AL (late beyond the allowance) is docked as a
+    // half-day in payroll, so count it as HD here too — keeps the grid summary
+    // consistent with the salary run (LCE days are not penalised).
+    const isAlHalf = d.status === "P" && lateTag === "AL";
+    const k = (isAlHalf ? "HD" : d.status) as keyof (typeof summary)[string];
     if (k in summary[d.employeeId]) (summary[d.employeeId][k] as number)++;
     if (lateTag === "LCE") summary[d.employeeId].LCE++;
     else if (lateTag === "AL") summary[d.employeeId].AL++;

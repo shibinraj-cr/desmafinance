@@ -302,12 +302,20 @@ export function AttendanceClient({
                     </td>
                     {dateCells.map((d) => {
                       const c = row[d.iso];
-                      const code = c?.status ?? "";
+                      // A present day flagged AL (late beyond the allowance) is a
+                      // payroll half-day — show it as HD here too (the AL badge
+                      // below still explains why). LCE days stay Present.
+                      const code = c ? (c.status === "P" && c.lateTag === "AL" ? "HD" : c.status) : "";
                       const tone = STATUS_TONE[code] ?? "bg-surface-container text-on-surface-variant";
                       const isBoundary = d.day === 1;
+                      // Missing punch: exactly one of in/out recorded — the
+                      // employee clocked one side only. Highlighted so HR (and
+                      // the employee, in My Attendance) can get it regularized.
+                      const missingPunch = !!c && !!c.in !== !!c.out;
                       const tip = c
                         ? [
                             `${d.iso} ${code}`,
+                            missingPunch ? "⚠ punch missing" : null,
                             c.in && c.out ? `${c.in} → ${c.out}` : null,
                             c.work ? `work ${hhmm(c.work)}` : null,
                             c.ot ? `OT ${hhmm(c.ot)}` : null,
@@ -337,7 +345,8 @@ export function AttendanceClient({
                             title={tip}
                             className={
                               "flex flex-col items-stretch justify-start rounded text-[9px] font-bold leading-tight w-11 mx-auto " +
-                              tone
+                              tone +
+                              (missingPunch ? " ring-2 ring-orange-500" : "")
                             }
                           >
                             <span className="text-center text-[10px] py-[1px] border-b border-current/10">
@@ -353,6 +362,14 @@ export function AttendanceClient({
                               <span className="font-normal text-[9px] text-center py-[1px] opacity-50">
                                 &nbsp;
                                 <br />&nbsp;
+                              </span>
+                            )}
+                            {missingPunch && (
+                              <span
+                                className="text-[8px] font-extrabold text-center py-[1px] border-t border-current/10 bg-orange-200 text-orange-900"
+                                title="Punch missing — only one of in/out recorded"
+                              >
+                                MP
                               </span>
                             )}
                             {c?.lateTag && (
@@ -441,6 +458,8 @@ export function AttendanceClient({
           (≤30 min late, within 3 days/cycle).
           {" "}<span className="font-bold text-red-700">AL</span> Arrived Late beyond grace or
           quota.
+          {" "}<span className="font-bold text-orange-700">MP</span> (orange ring) Missing punch —
+          only one of in/out recorded; needs a regularization.
           The Summary column shows day counts on top, Paid / Unpaid totals next, and the
           Late-Coming usage at the bottom for employees with that eligibility enabled.
         </p>

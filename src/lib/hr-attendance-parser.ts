@@ -17,27 +17,33 @@ import * as XLSX from "xlsx";
  * Half-day inference (the source format only emits P/A/WO, so we infer):
  *   - Weekday (Mon–Fri) P-day with (work + OT) <   6h  (360 min) → HD
  *   - Saturday          P-day with (work + OT) < 3.5h  (210 min) → HD
+ *   - When the Work+OT column is blank (0) but the day has both punches,
+ *     fall back to gross punch duration (out − in) so the rule still fires.
  *
- * Saturday timing (no Shift A/B distinction — common for everyone):
- *   - On / after 2026-04-25: 09:00 → 16:00
- *   - Before     2026-04-25: 09:00 → 17:00
- *   Saturday late + early-out are RECOMPUTED against this standard
- *   because the biometric system computes them against the employee's
- *   weekday Shift A/B end-time, which is wrong for Saturdays.
+ * Saturday timing: 09:00 → 16:00 for everyone EXCEPT exempt employees
+ *   (SATURDAY_RULE_EXEMPT, e.g. Nithya, who works a different schedule).
+ *   Saturday late + early-out are RECOMPUTED against this window because the
+ *   biometric computes them against the employee's weekday Shift A/B end-time,
+ *   which is wrong for Saturdays. Late-coming (LCE/AL) therefore runs from 09:00.
  */
 
 const WEEKDAY_HD_THRESHOLD_MIN = 360;  // 6 h
 const SATURDAY_HD_THRESHOLD_MIN = 210; // 3.5 h
-const SATURDAY_START_MIN = 9 * 60;     // 09:00
-const SATURDAY_END_MIN_LEGACY = 17 * 60;  // 17:00 — Saturdays before 2026-04-25
-const SATURDAY_END_MIN_CURRENT = 16 * 60; // 16:00 — Saturdays on/after 2026-04-25
-/// Saturday end-time switched from 17:00 → 16:00 from this date.
-const SATURDAY_NEW_END_FROM = Date.UTC(2026, 3, 25); // 25 April 2026 UTC ms
+// Company Saturday working hours: 09:00 → 16:00 for every employee EXCEPT those
+// exempt below. Saturday late / early-out are recomputed against this window
+// (the biometric computes them against the weekday shift, which is wrong for
+// Saturday), and late-coming (LCE/AL) applies from 09:00.
+const SATURDAY_START_MIN = 9 * 60; // 09:00
+const SATURDAY_END_MIN = 16 * 60; // 16:00
 
-function saturdayEndMin(date: Date): number {
-  return date.getTime() >= SATURDAY_NEW_END_FROM
-    ? SATURDAY_END_MIN_CURRENT
-    : SATURDAY_END_MIN_LEGACY;
+// Employees who do NOT follow the standard 9:00–16:00 Saturday rule — their
+// Saturday late / early-out are left as the biometric values (they work a
+// different Saturday schedule). Matched loosely on the biometric name. Nithya
+// is exempt; her specific Saturday hours can be applied here once configured.
+const SATURDAY_RULE_EXEMPT = ["nithya"];
+export function isSaturdayRuleExempt(rawName: string): boolean {
+  const n = String(rawName ?? "").toLowerCase();
+  return SATURDAY_RULE_EXEMPT.some((x) => n.includes(x));
 }
 
 export type ParsedDay = {
@@ -131,16 +137,47 @@ function findEmpHeader(row: unknown[]): { empCode: string; name: string } | null
 }
 
 /** Normalised attendance status used downstream by the salary engine. */
-function normaliseStatus(raw: string, workMinutes: number, otMinutes: number, date: Date): string {
-  const s = String(raw ?? "").trim().toUpperCase();
-  if (!s || s === "--") return "A";
+export function normaliseStatus(
+  raw: string,
+  workMinutes: number,
+  otMinutes: number,
+  date: Date,
+  inTime: string | null,
+  outTime: string | null,
+): string {
+  const raw0 = String(raw ?? "").trim().toUpperCase();
+  // Treat biometric placeholders ("--", "--:--") as "no status reported".
+  const s = raw0 === "--" || raw0 === "--:--" ? "" : raw0;
+  // Decided / off codes pass through untouched (a stray punch on a week-off or
+  // holiday must NOT turn it into a worked half-day).
   if (s === "WO" || s === "W") return "WO";
   if (s === "HL" || s === "HOL" || s === "H") return "HL";
   if (s === "LV" || s === "L" || s === "CL" || s === "SL" || s === "PL") return "LV";
-  if (s === "A" || s === "AB") return "A";
   if (s === "HD" || s === "H/D") return "HD";
-  if (s === "P" || s === "PR") {
-    const total = workMinutes + otMinutes;
+
+  const hasIn = !!inTime;
+  const hasOut = !!outTime;
+  // Exactly one punch (the other missing): a full day can't be verified, so it
+  // counts as a half-day pending a punch regularization. Covers biometric P / A
+  // / blank-placeholder rows alike (e.g. Sivapriya 17 Apr 2026: out-only, status
+  // "--:--" — previously ignored entirely by payroll).
+  if (hasIn !== hasOut) return "HD";
+
+  if (s === "A" || s === "AB") return "A";
+  if (s === "P" || s === "PR" || s === "") {
+    if (!hasIn && !hasOut) {
+      // No punch at all: an explicit biometric "P" is trusted; a blank is absent.
+      return s === "" ? "A" : "P";
+    }
+    // Both punches present. Worked minutes drive the half-day rule; some exports
+    // leave "Work+OT" blank (0) even with both punches — fall back to gross punch
+    // duration (out − in) so the HD rule still fires (e.g. Aswathi 23 Apr 2026,
+    // 09:04–13:32, shown full Present otherwise).
+    let total = workMinutes + otMinutes;
+    if (total === 0) {
+      const gross = toMinutes(outTime) - toMinutes(inTime);
+      if (gross > 0) total = gross;
+    }
     if (total > 0) {
       const isSaturday = date.getUTCDay() === 6;
       const threshold = isSaturday ? SATURDAY_HD_THRESHOLD_MIN : WEEKDAY_HD_THRESHOLD_MIN;
@@ -148,7 +185,7 @@ function normaliseStatus(raw: string, workMinutes: number, otMinutes: number, da
     }
     return "P";
   }
-  return s;
+  return s || "A";
 }
 
 export function parseAttendanceWorkbook(buffer: Buffer | ArrayBuffer): ParseResult {
@@ -195,25 +232,16 @@ export function parseAttendanceWorkbook(buffer: Buffer | ArrayBuffer): ParseResu
     const statusRaw = String(r[8] ?? "").trim();
     const remarkRaw = String(r[9] ?? "").trim();
     const remark = !remarkRaw || remarkRaw === "--" ? null : remarkRaw;
-    const status = normaliseStatus(statusRaw, workMinutes, otMinutes, date);
+    const status = normaliseStatus(statusRaw, workMinutes, otMinutes, date, inTime, outTime);
 
-    // Saturday: the biometric system computes late + early-out against
-    // the employee's assigned weekday shift (A=09:00–17:30 / B=09:30–18:00),
-    // which doesn't apply on Saturday. Recompute against Saturday's
-    // common standard:  09:00 → 17:00 (pre 2026-04-25) | 09:00 → 16:00 (current).
-    if (date.getUTCDay() === 6) {
-      if (inTime) {
-        const inMin = toMinutes(inTime);
-        lateMinutes = Math.max(0, inMin - SATURDAY_START_MIN);
-      } else {
-        lateMinutes = 0;
-      }
-      if (outTime) {
-        const outMin = toMinutes(outTime);
-        earlyOutMinutes = Math.max(0, saturdayEndMin(date) - outMin);
-      } else {
-        earlyOutMinutes = 0;
-      }
+    // Saturday: the biometric computes late + early-out against the employee's
+    // assigned weekday shift (A=09:00–17:30 / B=09:30–18:00), which is wrong for
+    // Saturday. Recompute against the company Saturday window 09:00 → 16:00 so
+    // late-coming (LCE/AL) applies from 09:00. Exempt employees (e.g. Nithya)
+    // work a different Saturday schedule and keep their biometric values.
+    if (date.getUTCDay() === 6 && !isSaturdayRuleExempt(current.name)) {
+      lateMinutes = inTime ? Math.max(0, toMinutes(inTime) - SATURDAY_START_MIN) : 0;
+      earlyOutMinutes = outTime ? Math.max(0, SATURDAY_END_MIN - toMinutes(outTime)) : 0;
     }
 
     out.push({

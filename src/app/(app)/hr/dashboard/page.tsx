@@ -302,8 +302,7 @@ export default async function HrDashboardPage() {
               {[
                 { href: "/hr/attendance", icon: "fact_check", label: "Upload attendance" },
                 { href: "/hr/salary", icon: "calculate", label: "Run salary" },
-                { href: "/hr/leave-review", icon: "rule", label: "Review leaves" },
-                { href: "/hr/regularization", icon: "edit_calendar", label: "Regularizations" },
+                { href: "/hr/regularization", icon: "edit_calendar", label: "Attendance corrections" },
                 { href: "/hr/shift-assignments", icon: "schedule_send", label: "Shift assignments" },
                 { href: "/hr/leave-eligibility", icon: "savings", label: "Leave eligibility" },
                 { href: "/hr/birthdays", icon: "cake", label: "Birthday calendar" },

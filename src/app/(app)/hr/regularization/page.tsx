@@ -2,6 +2,7 @@ import { redirect } from "next/navigation";
 import { prisma } from "@/lib/prisma";
 import { getCurrentUserAndPermissions } from "@/lib/permissions";
 import { isHrUser, canApproveHr } from "@/lib/hr-rbac";
+import { employeeForUser } from "@/lib/hr-me";
 import { TopBar } from "@/components/TopBar";
 import { Section } from "@/components/Cards";
 import { REGULARIZATION_REASONS } from "@/lib/hr-regularization";
@@ -14,12 +15,12 @@ export default async function RegularizationReviewPage({
 }: {
   searchParams?: { status?: string };
 }) {
-  const { perms } = await getCurrentUserAndPermissions();
+  const { perms, userId } = await getCurrentUserAndPermissions();
   if (!perms) redirect("/login");
   if (!isHrUser(perms)) {
     return (
       <>
-        <TopBar title="Regularization Requests" />
+        <TopBar title="Attendance Corrections" />
         <div className="p-margin">
           <Section title="">
             <div className="py-lg text-center text-on-surface-variant">No access.</div>
@@ -28,16 +29,23 @@ export default async function RegularizationReviewPage({
       </>
     );
   }
+
   const status = searchParams?.status ?? "pending";
+  // Routing / no self-approval: an approver never sees their OWN requests, so
+  // Soumya's requests route only to admin, and everyone else's to Soumya + admin.
+  const myEmp = userId ? await employeeForUser(userId) : null;
+  const notMine = myEmp ? { employeeId: { not: myEmp.id } } : {};
+
   const [requests, counts] = await Promise.all([
     prisma.hrAttendanceRegularization.findMany({
-      where: { status },
+      where: { status, ...notMine },
       orderBy: { createdAt: "desc" },
       take: 500,
       include: { employee: { select: { empCode: true, name: true } } },
     }),
     prisma.hrAttendanceRegularization.groupBy({
       by: ["status"],
+      where: notMine,
       _count: { _all: true },
     }),
   ]);
@@ -46,8 +54,8 @@ export default async function RegularizationReviewPage({
   return (
     <>
       <TopBar
-        title="Attendance Regularization"
-        subtitle={`Pending ${tally.pending ?? 0} · Approved ${tally.approved ?? 0} · Rejected ${tally.rejected ?? 0}`}
+        title="Attendance Corrections"
+        subtitle={`Approve punch & leave requests · Pending ${tally.pending ?? 0} · Approved ${tally.approved ?? 0} · Rejected ${tally.rejected ?? 0}`}
       />
       <div className="p-margin space-y-lg">
         <RegularizationReviewClient
@@ -58,8 +66,10 @@ export default async function RegularizationReviewPage({
             empCode: r.employee.empCode,
             name: r.employee.name,
             date: r.date.toISOString().slice(0, 10),
+            requestType: r.requestType,
             reasonType: r.reasonType,
-            reasonLabel: reasonLabel[r.reasonType] ?? r.reasonType,
+            reasonLabel:
+              r.requestType === "leave" ? "Leave request" : reasonLabel[r.reasonType] ?? r.reasonType,
             reason: r.reason,
             proposedIn: r.proposedIn,
             proposedOut: r.proposedOut,

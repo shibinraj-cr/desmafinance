@@ -3,14 +3,33 @@
  *
  * Covers the two behaviours the balance must honour:
  *   1. accrued tracks per-employee eligibility entitlement-to-date, and
- *   2. used reflects reviewed & decided leave (LV = 1.0, HD = 0.5),
+ *   2. used reflects full-day paid leave only (LV = 1.0; HD is LOP, not used),
  * with balance = opening + accrued − used.
  */
 import { describe, it, expect, vi, beforeEach } from "vitest";
 
 vi.mock("@/lib/prisma", () => ({ prisma: {} }));
 
-import { elapsedAccrualMonths, computeLeaveBalanceFor } from "@/lib/hr-leave-balance";
+import { elapsedAccrualMonths, accrualMonthsInYear, computeLeaveBalanceFor } from "@/lib/hr-leave-balance";
+
+describe("accrualMonthsInYear", () => {
+  const asOf = new Date(Date.UTC(2026, 5, 15)); // 2026-06-15 → current month = June (6)
+  it("returns effectiveFrom-month through the current month (mid-year start)", () => {
+    expect(accrualMonthsInYear(2026, new Date(Date.UTC(2026, 2, 26)), asOf)).toEqual([3, 4, 5, 6]);
+  });
+  it("starts at January when eligibility began in a prior year", () => {
+    expect(accrualMonthsInYear(2026, new Date(Date.UTC(2025, 5, 1)), asOf)).toEqual([1, 2, 3, 4, 5, 6]);
+  });
+  it("covers all 12 months for a fully-elapsed past year", () => {
+    expect(accrualMonthsInYear(2025, new Date(Date.UTC(2025, 0, 1)), asOf)).toEqual([
+      1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12,
+    ]);
+  });
+  it("returns none for a future year or pre-eligibility year", () => {
+    expect(accrualMonthsInYear(2027, new Date(Date.UTC(2026, 0, 1)), asOf)).toEqual([]);
+    expect(accrualMonthsInYear(2025, new Date(Date.UTC(2026, 0, 1)), asOf)).toEqual([]);
+  });
+});
 
 describe("elapsedAccrualMonths", () => {
   const asOf = new Date(Date.UTC(2026, 4, 30)); // 2026-05-30 → current month = May (5)
@@ -75,18 +94,18 @@ describe("computeLeaveBalanceFor", () => {
     expect(c.balance).toBe(7.5);
   });
 
-  it("counts reviewed & decided leave as used: LV = 1.0, HD = 0.5", async () => {
+  it("counts only full-day paid leave (LV) as used; HD is not charged to balance", async () => {
     const db = makeDb({
       eligibility: { enabled: true, leavesPerPeriod: 1, effectiveFrom: new Date(Date.UTC(2026, 0, 1)) },
       leaveDays: [
         { status: "LV", count: 3 },
-        { status: "HD", count: 2 },
+        { status: "HD", count: 2 }, // half-days do NOT consume leave balance
       ],
     });
     const c = await computeLeaveBalanceFor(db, "e1", 2026, asOf);
     expect(c.accrued).toBe(5); // 1 × 5 months
-    expect(c.used).toBe(4); // 3×1.0 + 2×0.5
-    expect(c.balance).toBe(1); // 0 + 5 − 4
+    expect(c.used).toBe(3); // LV only (HD is 0.5-day LOP, not leave used)
+    expect(c.balance).toBe(2); // 0 + 5 − 3
   });
 
   it("folds manual ledger adjustments into accrued and keeps opening", async () => {
