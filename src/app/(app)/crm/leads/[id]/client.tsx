@@ -916,11 +916,8 @@ function DealCard({
 }) {
   const router = useRouter();
   const [modal, setModal] = useState<null | "deal" | "enroll">(null);
-  const [reEnrollOpen, setReEnrollOpen] = useState(false);
+  const [reopenOpen, setReopenOpen] = useState(false);
   const [celebrateName, setCelebrateName] = useState<string | null>(null);
-  // When set, the celebration navigates to the freshly-created re-enrollment lead
-  // instead of just refreshing the current one.
-  const [newLeadId, setNewLeadId] = useState<string | null>(null);
   const isEnrolled = lead.status.code === "enrolled";
   const hasDeal = lead.expectedValue != null || lead.expectedCloseDate != null;
 
@@ -985,19 +982,20 @@ function DealCard({
         </div>
       )}
 
-      {/* Re-enrollment: a candidate whose service is done enrolls in another.
-          Available to any consultant (not just this lead's owner). */}
+      {/* Re-enrollment: a candidate whose service is done comes back for another.
+          Opens a follow-up lead for the second service (worked + enrolled via the
+          normal flow). Available to any consultant, not just this lead's owner. */}
       {isEnrolled && canReEnroll && (
         <div className="pt-xs">
           <button
             type="button"
             className={secondaryBtn + " h-9 inline-flex items-center gap-xs"}
-            onClick={() => setReEnrollOpen(true)}
+            onClick={() => setReopenOpen(true)}
           >
             <span className="material-symbols-outlined" style={{ fontSize: 18 }}>
-              add_shopping_cart
+              replay
             </span>
-            Enroll in another service
+            Reopen for another service
           </button>
         </div>
       )}
@@ -1015,15 +1013,15 @@ function DealCard({
         />
       )}
 
-      {reEnrollOpen && (
-        <ReEnrollModal
+      {reopenOpen && (
+        <ReopenServiceModal
           lead={lead}
           masters={masters}
-          onClose={() => setReEnrollOpen(false)}
-          onEnrolled={(leadId, name) => {
-            setReEnrollOpen(false);
-            setNewLeadId(leadId);
-            setCelebrateName(name);
+          onClose={() => setReopenOpen(false)}
+          onReopened={(leadId) => {
+            setReopenOpen(false);
+            // Land the consultant on the new follow-up lead so they can work it.
+            router.push(`/crm/leads/${leadId}`);
           }}
         />
       )}
@@ -1033,15 +1031,7 @@ function DealCard({
           name={celebrateName}
           onDone={() => {
             setCelebrateName(null);
-            // A re-enrollment lands the user on the new service's lead; a normal
-            // enroll just refreshes the current one.
-            if (newLeadId) {
-              const to = newLeadId;
-              setNewLeadId(null);
-              router.push(`/crm/leads/${to}`);
-            } else {
-              router.refresh();
-            }
+            router.refresh();
           }}
         />
       )}
@@ -1177,68 +1167,59 @@ function DealModal({
   );
 }
 
-// Re-enroll an existing candidate in a FURTHER service. Creates a new
-// single-service lead (pre-linked to the same candidate, primary source
-// "Existing Candidate", original source preserved) and enrolls it in one step —
-// so it counts as a fresh enrollment with its own finance draft & ops project.
-function ReEnrollModal({
+// Reopen an existing candidate for a FURTHER service. Does NOT enroll — it opens
+// a new Follow-up lead for the second service (pre-linked to the same candidate,
+// primary source "Existing Candidate", original source preserved) plus a
+// follow-up task. The consultant then works it and enrolls via the normal
+// Set-deal → Enroll flow, which is where counts + the finance draft happen.
+function ReopenServiceModal({
   lead,
   masters,
   onClose,
-  onEnrolled,
+  onReopened,
 }: {
   lead: LeadRow;
   masters: DetailMasters;
   onClose: () => void;
-  /** Fired on success — hands the NEW lead id + candidate name to the celebration. */
-  onEnrolled: (newLeadId: string, name: string) => void;
+  /** Fired on success — hands the NEW follow-up lead id so the caller can navigate. */
+  onReopened: (newLeadId: string) => void;
 }) {
-  const l2Bdes = masters.bdes.filter((b) => b.role === "l2");
   const [serviceId, setServiceId] = useState("");
-  const [value, setValue] = useState("");
-  const todayIst = new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Kolkata" }).format(new Date());
-  const [enrollDate, setEnrollDate] = useState(todayIst);
   // Preserved original source — defaults to the candidate's current source.
   const [originalSourceId, setOriginalSourceId] = useState(lead.source?.id ?? "");
-  // Optional owner override; blank = reuse the previous enrollment's L2 owner.
-  const [ownerId, setOwnerId] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   async function submit() {
     setError(null);
     if (!serviceId) return setError("Pick a service.");
-    if (!(Number(value) > 0)) return setError("Enter the deal value.");
-    if (!enrollDate) return setError("Pick the enrollment date.");
     setBusy(true);
     const res = await fetch(`/api/crm/leads/${lead.id}/reenroll`, {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({
         serviceId,
-        expectedValue: Number(value),
-        closedDate: enrollDate || undefined,
         originalSourceId: originalSourceId || undefined,
-        ownerUserId: ownerId || undefined,
       }),
     });
     setBusy(false);
     if (!res.ok) {
       const d = (await res.json().catch(() => ({}))) as { message?: string; error?: string };
-      setError(d.message || d.error || "Could not enroll.");
+      setError(d.message || d.error || "Could not reopen.");
       return;
     }
     const d = (await res.json().catch(() => ({}))) as { leadId?: string };
-    if (d.leadId) onEnrolled(d.leadId, lead.candidateName);
+    if (d.leadId) onReopened(d.leadId);
     else onClose();
   }
 
   return (
-    <Modal title="Enroll in another service" onClose={onClose} busy={busy}>
+    <Modal title="Reopen for another service" onClose={onClose} busy={busy}>
       <p className="text-label-sm text-on-surface-variant">
-        Creates a <b>new enrollment</b> for {lead.candidateName} in the chosen service — it counts as a fresh enrollment,
-        generates its own finance draft &amp; operations project, and keeps their original source for attribution. The new
-        lead&apos;s source is recorded as <b>&ldquo;Existing Candidate.&rdquo;</b>
+        Opens a <b>new follow-up lead</b> for {lead.candidateName} in the chosen service and raises a follow-up task — work
+        it like any lead and <b>Enroll</b> it once the deal closes (that&apos;s when it counts as an enrollment and drafts
+        the revenue). The new lead&apos;s source is recorded as <b>&ldquo;Existing Candidate,&rdquo;</b> keeping their
+        original source for attribution.
       </p>
       <Field label="Service">
         <select className={inputCls} value={serviceId} onChange={(e) => setServiceId(e.target.value)}>
@@ -1252,15 +1233,6 @@ function ReEnrollModal({
             ))}
         </select>
       </Field>
-      <Field label="Deal value (₹)">
-        <input className={inputCls} type="number" min={0} value={value} onChange={(e) => setValue(e.target.value)} />
-      </Field>
-      <Field label="Enrollment date">
-        <input className={inputCls} type="date" value={enrollDate} onChange={(e) => setEnrollDate(e.target.value)} />
-        <p className="mt-xs text-label-sm text-on-surface-variant">
-          The date this enrollment counts against in the reports. Defaults to today.
-        </p>
-      </Field>
       <Field label="Original source (kept for attribution)">
         <select className={inputCls} value={originalSourceId} onChange={(e) => setOriginalSourceId(e.target.value)}>
           <option value="">— None —</option>
@@ -1271,23 +1243,13 @@ function ReEnrollModal({
           ))}
         </select>
       </Field>
-      <Field label="Deal owner (L2 BDE)">
-        <select className={inputCls} value={ownerId} onChange={(e) => setOwnerId(e.target.value)}>
-          <option value="">Same as previous enrollment</option>
-          {l2Bdes.map((b) => (
-            <option key={b.userId} value={b.userId}>
-              {b.displayName}
-            </option>
-          ))}
-        </select>
-      </Field>
       {error && <p className="text-label-sm text-error">{error}</p>}
       <div className="flex justify-end gap-base pt-xs">
         <button type="button" className={secondaryBtn} disabled={busy} onClick={onClose}>
           Cancel
         </button>
         <button type="button" className={primaryBtn} disabled={busy} onClick={submit}>
-          {busy ? "Enrolling…" : "Enroll"}
+          {busy ? "Reopening…" : "Reopen for follow-up"}
         </button>
       </div>
     </Modal>

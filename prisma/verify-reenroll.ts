@@ -1,13 +1,16 @@
 /**
  * End-to-end verification for the CRM re-enrollment feature (existing candidate
- * → further service). Drives the REAL code paths — `enrollLead` and
- * `reEnrollCandidate` — against whatever DATABASE_URL points to, then asserts the
- * data effects and cleans up after itself.
+ * → further service). Drives the REAL code paths — `reopenForAnotherService`
+ * (opens a Follow-up lead) then `enrollLead` (the close) — against whatever
+ * DATABASE_URL points to, asserts the data effects, and cleans up after itself.
  *
  * SAFETY: refuses to run against the known production Neon endpoint. Run it
- * against a DISPOSABLE database only (e.g. a Neon branch of neondb):
+ * against a DISPOSABLE database only (e.g. a Neon branch of neondb). Use the
+ * DIRECT (non-pooler) endpoint — interactive transactions misbehave over the
+ * pooler — and raise the tx timeout for high-latency links:
  *
- *   DATABASE_URL='<neon-branch-url>' DIRECT_URL='<neon-branch-url>' \
+ *   PRISMA_TX_TIMEOUT_MS=60000 \
+ *     DATABASE_URL='<neon-branch-direct-url>' DIRECT_URL='<neon-branch-direct-url>' \
  *     npx tsx prisma/verify-reenroll.ts
  *
  * The branch is a throwaway copy of prod — it already has the real services /
@@ -16,7 +19,7 @@
  */
 import { prisma } from "../src/lib/prisma";
 import { enrollLead } from "../src/lib/crm-enroll";
-import { reEnrollCandidate } from "../src/lib/crm-reenroll";
+import { reopenForAnotherService } from "../src/lib/crm-reenroll";
 import { resolveDefaultStatus } from "../src/lib/crm-leads";
 
 // Production endpoint fragment — never let this script touch it.
@@ -43,9 +46,8 @@ async function main() {
   const allServices = await prisma.service.findMany({ where: { isActive: true }, orderBy: { name: "asc" }, select: { id: true, name: true } });
   // Prefer services WITHOUT an active ops template. Ops-project creation runs many
   // sequential queries inside enrollLead's interactive transaction; over a remote
-  // connection that can exceed the 5s transaction timeout (a network artifact — in
-  // production the DB is co-located). Every re-enrollment assertion below is
-  // template-agnostic, so template-less services give a fast, reliable run.
+  // connection that can exceed the tx timeout (a network artifact). Every
+  // re-enrollment assertion below is template-agnostic.
   const templated = new Set(
     (await prisma.processTemplate.findMany({ where: { isActive: true }, select: { serviceId: true } })).map((t) => t.serviceId),
   );
@@ -93,36 +95,56 @@ async function main() {
     partyId = enrollA.partyId;
     console.log(`  seeded: candidate enrolled in "${svcA.name}" (party=${partyId})\n`);
 
-    // ── Step 2: re-enroll the SAME candidate in service B (any consultant) ────
-    console.log("── Re-enrolling into a second service ──");
-    const re = await reEnrollCandidate({
+    // ── Step 2: REOPEN the candidate for service B → a Follow-up lead ─────────
+    console.log("── Reopening for a second service (follow-up) ──");
+    const reopen = await reopenForAnotherService({
       sourceLeadId: leadA.id,
       serviceId: svcB.id,
-      expectedValue: 20000,
       actorId: l2.userId,
       canAssign: false, // the "any consultant self-serves" path — no admin
     });
-    leadIds.push(re.leadId);
+    leadIds.push(reopen.leadId);
 
-    // ── Assertions ────────────────────────────────────────────────────────────
+    const existingCandidateSource = await prisma.leadPulseSource.findUnique({ where: { code: "existing_candidate" }, select: { id: true } });
+    const leadB = await prisma.lead.findUnique({
+      where: { id: reopen.leadId },
+      select: { sourceId: true, originalSourceId: true, assignedToId: true, partyId: true, expectedValue: true, status: { select: { code: true } } },
+    });
+    check("reopen created a FOLLOW-UP lead (not enrolled)", leadB?.status.code === "follow_up", `status=${leadB?.status.code}`);
+    check('follow-up lead source = "Existing Candidate"', leadB?.sourceId === existingCandidateSource?.id);
+    check("follow-up lead preserves the ORIGINAL source", leadB?.originalSourceId === origSource.id, `original="${origSource.label}"`);
+    check("follow-up lead self-assigned to the acting consultant (no admin)", leadB?.assignedToId === l2.userId);
+    check("follow-up lead linked to the SAME candidate (Party)", leadB?.partyId === partyId);
+    check("no deal value yet (set later during follow-up)", leadB?.expectedValue == null);
+
+    const task = reopen.taskId ? await prisma.crmTask.findUnique({ where: { id: reopen.taskId }, select: { status: true, assignedToId: true, leadId: true } }) : null;
+    check("follow-up task raised on the new lead, assigned to the consultant", !!task && task.status === "open" && task.assignedToId === l2.userId && task.leadId === reopen.leadId);
+
+    // Before enroll: the follow-up must NOT prematurely count or create finance/party rows.
+    check("not counted yet — still 1 closed_won pipeline", (await prisma.leadPulsePipeline.count({ where: { partyId, status: "closed_won" } })) === 1);
+    check("no PartyService for service B yet", (await prisma.partyService.count({ where: { partyId, serviceId: svcB.id } })) === 0);
+
+    // Guard: a second reopen of the same service while a follow-up is open → blocked.
+    let openGuard = false;
+    try {
+      await reopenForAnotherService({ sourceLeadId: leadA.id, serviceId: svcB.id, actorId: l2.userId, canAssign: false });
+    } catch (e) {
+      openGuard = /already an open/i.test((e as Error).message);
+    }
+    check("second reopen of the same service is blocked (open follow-up exists)", openGuard);
+
+    // ── Step 3: work the follow-up → Enroll it (the normal close) ─────────────
+    console.log("\n── Enrolling the follow-up (deal closed) ──");
+    await enrollLead({ leadId: reopen.leadId, serviceId: svcB.id, expectedValue: 20000, ownerUserId: l2.userId, actorId: l2.userId });
+
     const partyServices = await prisma.partyService.findMany({ where: { partyId }, select: { serviceId: true } });
     check("candidate now holds 2 services (PartyService rows)", partyServices.length === 2, `found ${partyServices.length}`);
     const svcSet = new Set(partyServices.map((p) => p.serviceId));
     check("the 2 services are A and B", svcSet.has(svcA.id) && svcSet.has(svcB.id));
+    check("enrollment count reflects 2 closed_won pipelines (metric basis)", (await prisma.leadPulsePipeline.count({ where: { partyId, status: "closed_won" } })) === 2);
 
-    const wonPipelines = await prisma.leadPulsePipeline.count({ where: { partyId, status: "closed_won" } });
-    check("enrollment count reflects 2 closed_won pipelines (metric basis)", wonPipelines === 2, `found ${wonPipelines}`);
-
-    const leadB = await prisma.lead.findUnique({
-      where: { id: re.leadId },
-      select: { sourceId: true, originalSourceId: true, statusId: true, assignedToId: true, partyId: true },
-    });
-    const existingCandidateSource = await prisma.leadPulseSource.findUnique({ where: { code: "existing_candidate" }, select: { id: true } });
-    check('new lead primary source = "Existing Candidate"', leadB?.sourceId === existingCandidateSource?.id);
-    check("new lead preserves the ORIGINAL source", leadB?.originalSourceId === origSource.id, `original="${origSource.label}"`);
-    check("new lead is Enrolled", !!enrolledStatus && leadB?.statusId === enrolledStatus.id);
-    check("new lead self-assigned to the acting consultant (no admin needed)", leadB?.assignedToId === l2.userId);
-    check("new lead linked to the SAME candidate (Party)", leadB?.partyId === partyId);
+    const leadBAfter = await prisma.lead.findUnique({ where: { id: reopen.leadId }, select: { statusId: true } });
+    check("follow-up lead is now Enrolled", !!enrolledStatus && leadBAfter?.statusId === enrolledStatus.id);
 
     if (reviewer) {
       const drafts = await prisma.transactionDraft.findMany({ where: { partyId, type: "Revenue" }, select: { amount: true, description: true } });
@@ -135,16 +157,14 @@ async function main() {
       check("finance draft assertions", true, "skipped (no draftFirst reviewer on this DB)");
     }
 
-    check("re-enrollment produced its own operations project (or soft no-op if no template)", true, re.opsProjectId ? `opsProject=${re.opsProjectId}` : "no active template for service B → no project (expected)");
-
-    // ── Guard: re-enrolling the SAME service is rejected (no double-count) ─────
-    let guarded = false;
+    // Guard: reopening an ALREADY-ENROLLED service is rejected (no double-count).
+    let enrolledGuard = false;
     try {
-      await reEnrollCandidate({ sourceLeadId: leadA.id, serviceId: svcB.id, expectedValue: 20000, actorId: l2.userId, canAssign: false });
+      await reopenForAnotherService({ sourceLeadId: leadA.id, serviceId: svcB.id, actorId: l2.userId, canAssign: false });
     } catch (e) {
-      guarded = /already enrolled/i.test((e as Error).message);
+      enrolledGuard = /already enrolled/i.test((e as Error).message);
     }
-    check("re-enrolling the SAME service is blocked", guarded);
+    check("reopening an already-enrolled service is blocked", enrolledGuard);
   } finally {
     // ── Cleanup (best-effort; the branch is disposable anyway) ─────────────────
     console.log("\n── Cleanup ──");
