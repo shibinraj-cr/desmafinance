@@ -1184,11 +1184,12 @@ model HrAttendanceDay {
   otMinutes       Int?
   lateMinutes     Int?
   earlyOutMinutes Int?
-  /// Normalised status: P | A | WO | HL | LV | HD. HD is derived when
-  /// status=P but workMinutes is < ~4h (per the half-day rule).
-  /// HR can later override A → LV (paid CL) or LV → A (LOP) from the
-  /// /hr/leave-review page; the original biometric value is preserved
-  /// in `rawStatus` for audit.
+  /// Normalised status: P | A | WO | HL | LV | HD. HD is derived on upload when
+  /// status=P but the punch-based worked duration is under the half-day bar
+  /// (weekday < 7h / Saturday < 5.5h), where the out-time is capped at the shift
+  /// end (weekday: resolved shift end; Saturday: 16:00). HR can later override
+  /// via regularization; the original biometric value is preserved in
+  /// `rawStatus` for audit.
   status          String
   /// Free-text remark from the biometric report (e.g. "LT-EO", "MIS-LT-OT").
   remark          String?
