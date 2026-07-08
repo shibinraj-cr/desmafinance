@@ -6,7 +6,7 @@ import { unauthorized, forbidden, notFound, badRequest } from "@/lib/http-error"
 import { getCurrentUserAndPermissions } from "@/lib/permissions";
 import { getCrmAccess } from "@/lib/crm-rbac";
 import { recordLeadActivity } from "@/lib/crm-activity";
-import { leadRowInclude, serializeLead } from "@/lib/crm-leads";
+import { leadRowInclude, serializeLead, crmTaskFollowAssignmentWhere } from "@/lib/crm-leads";
 
 export const dynamic = "force-dynamic";
 
@@ -45,16 +45,34 @@ export const POST = withApiHandler(async (req: Request, { params }: { params: { 
   }
 
   if (existing.assignedToId === target) {
+    // Assignee unchanged, but still pull any OPEN tasks stranded as "Unassigned"
+    // onto the current owner so the Tasks board's "Unassigned" filter stays in
+    // sync (repairs tasks stamped null before a consultant existed).
+    if (target) {
+      await prisma.crmTask.updateMany({
+        where: { leadId: params.id, status: "open", ...crmTaskFollowAssignmentWhere(null) },
+        data: { assignedToId: target },
+      });
+    }
     const unchanged = await prisma.lead.findUnique({ where: { id: params.id }, include: leadRowInclude });
     return NextResponse.json({ lead: serializeLead(unchanged!) });
   }
 
-  const updated = await prisma.lead.update({
-    where: { id: params.id },
-    // Stamp the assignment moment (cleared on unassign) so the list can show an
-    // "Assigned" date and filter by it.
-    data: { assignedToId: target, assignedAt: target ? new Date() : null },
-    include: leadRowInclude,
+  // Propagate the (re)assignment to the lead's OPEN tasks so the Tasks board's
+  // "Unassigned" filter and consultant column track the lead owner.
+  const updated = await prisma.$transaction(async (tx) => {
+    const lead = await tx.lead.update({
+      where: { id: params.id },
+      // Stamp the assignment moment (cleared on unassign) so the list can show an
+      // "Assigned" date and filter by it.
+      data: { assignedToId: target, assignedAt: target ? new Date() : null },
+      include: leadRowInclude,
+    });
+    await tx.crmTask.updateMany({
+      where: { leadId: params.id, status: "open", ...crmTaskFollowAssignmentWhere(existing.assignedToId) },
+      data: { assignedToId: target },
+    });
+    return lead;
   });
 
   const wasAssigned = !!existing.assignedToId;

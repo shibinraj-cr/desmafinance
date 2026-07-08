@@ -9,6 +9,7 @@ import {
   buildLeadWhere,
   buildCrmTaskWhere,
   requiresNextStepOnComplete,
+  crmTaskFollowAssignmentWhere,
 } from "@/lib/crm-leads";
 
 describe("requiresNextStepOnComplete — mandatory next step on an active lead", () => {
@@ -114,5 +115,28 @@ describe("buildCrmTaskWhere — assignee", () => {
   });
   it("applies no assignee filter when omitted", () => {
     expect("assignedToId" in buildCrmTaskWhere({})).toBe(false);
+  });
+});
+
+describe("crmTaskFollowAssignmentWhere — tasks that follow a lead (re)assignment", () => {
+  it("sweeps only the unassigned pool when the lead had no prior owner", () => {
+    // Assigning an unassigned lead: its null-owned re-inquiry tasks must move so
+    // they leave the Tasks board's "Unassigned" filter. Nothing else is touched.
+    expect(crmTaskFollowAssignmentWhere(null)).toEqual({ assignedToId: null });
+  });
+
+  it("sweeps unassigned tasks AND the outgoing owner's tasks on reassignment", () => {
+    // Reassigning A→B moves tasks owned by A and any unassigned tasks, but leaves
+    // tasks owned by anyone else (e.g. a supervisor's oversight copy) alone.
+    expect(crmTaskFollowAssignmentWhere("bde-A")).toEqual({
+      OR: [{ assignedToId: null }, { assignedToId: "bde-A" }],
+    });
+  });
+
+  it("never matches a third party's tasks (no bare unconditional match)", () => {
+    // Guard against a where that would grab every open task regardless of owner.
+    const where = crmTaskFollowAssignmentWhere("bde-A");
+    const owners = "OR" in where ? where.OR : [where];
+    expect(owners).not.toContainEqual({});
   });
 });
