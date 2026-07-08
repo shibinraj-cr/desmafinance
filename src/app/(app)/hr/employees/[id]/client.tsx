@@ -65,12 +65,24 @@ function suggestPT(gross: number) {
   return 125;
 }
 
-type Balance = {
-  year: number;
-  opening: number;
+type LeaveLedgerRow = {
+  month: number;
+  label: string;
+  allocated: number;
   accrued: number;
-  used: number;
+  taken: number;
+  unpaid: number;
   balance: number;
+};
+
+type LeaveTabData = {
+  employeeId: string;
+  year: number;
+  availableYears: number[];
+  opening: number;
+  balanceAsOn: number;
+  currentMonth: number; // cycle-month index within `year`: 0 = future year, 12 = past year
+  rows: LeaveLedgerRow[];
 };
 
 export function EmployeeEditor({
@@ -84,7 +96,7 @@ export function EmployeeEditor({
   departmentsList,
   rolesList,
   canEdit,
-  currentBalance,
+  leaveTab,
 }: {
   employee: EmpDraft;
   shifts: ShiftLite[];
@@ -96,7 +108,7 @@ export function EmployeeEditor({
   departmentsList: DepartmentLite[];
   rolesList: RoleLite[];
   canEdit: boolean;
-  currentBalance: Balance | null;
+  leaveTab: LeaveTabData;
 }) {
   const router = useRouter();
   const [tab, setTab] = useState<"profile" | "org" | "salary" | "leave">("profile");
@@ -396,7 +408,7 @@ export function EmployeeEditor({
         />
       )}
 
-      {tab === "leave" && <LeaveTab balance={currentBalance} />}
+      {tab === "leave" && <LeaveTab data={leaveTab} canEdit={canEdit} />}
     </>
   );
 }
@@ -967,32 +979,191 @@ function OrgTab({
   );
 }
 
-function LeaveTab({ balance }: { balance: Balance | null }) {
-  if (!balance) {
-    return (
-      <Section title="">
-        <p className="text-on-surface-variant">
-          No leave balance row for the current year yet. It will be created automatically when
-          attendance is imported or the leave accrual job runs.
-        </p>
-      </Section>
-    );
+function LeaveTab({ data, canEdit }: { data: LeaveTabData; canEdit: boolean }) {
+  const [year, setYear] = useState(data.year);
+  const [rows, setRows] = useState<LeaveLedgerRow[]>(data.rows);
+  const [opening, setOpening] = useState(data.opening);
+  const [balanceAsOn, setBalanceAsOn] = useState(data.balanceAsOn);
+  const [currentMonth, setCurrentMonth] = useState(data.currentMonth);
+  // Edited paid-leave values, keyed by month. "" clears the override.
+  const [edits, setEdits] = useState<Record<number, string>>({});
+  const [pending, start] = useTransition();
+  const [error, setError] = useState<string | null>(null);
+  const [saved, setSaved] = useState(false);
+
+  // `currentMonth` (0..12) is the cycle month `balanceAsOn` is measured at — the
+  // same figure the headline is labelled with, so the two never disagree. 0 = a
+  // future year (nothing accrued yet), 12 = a fully-elapsed past year.
+  const currentMonthLabel = rows.find((r) => r.month === currentMonth)?.label;
+  const headlineLabel =
+    currentMonth === 0
+      ? `Opening balance · ${year}`
+      : currentMonthLabel
+        ? `Balance as on ${currentMonthLabel}`
+        : `Balance · ${year}`;
+
+  function applyPayload(p: {
+    rows: LeaveLedgerRow[];
+    opening: number;
+    balanceAsOn: number;
+    currentMonth: number;
+  }) {
+    setRows(p.rows);
+    setOpening(p.opening);
+    setBalanceAsOn(p.balanceAsOn);
+    setCurrentMonth(p.currentMonth);
+    setEdits({});
   }
+
+  function changeYear(nextYear: number) {
+    setYear(nextYear);
+    setSaved(false);
+    setError(null);
+    setEdits({});
+    start(async () => {
+      const res = await fetch(
+        `/api/hr/employees/${data.employeeId}/leave-allocation?year=${nextYear}`,
+      );
+      if (!res.ok) {
+        setError("Failed to load that year.");
+        return;
+      }
+      applyPayload(await res.json());
+    });
+  }
+
+  function save() {
+    setError(null);
+    setSaved(false);
+    const months = Object.entries(edits).map(([month, raw]) => ({
+      month: Number(month),
+      paidLeaves: raw.trim() === "" ? null : Number(raw),
+    }));
+    if (months.length === 0) return;
+    if (months.some((m) => m.paidLeaves !== null && !Number.isFinite(m.paidLeaves))) {
+      setError("Paid leaves must be a number.");
+      return;
+    }
+    start(async () => {
+      const res = await fetch(`/api/hr/employees/${data.employeeId}/leave-allocation`, {
+        method: "PUT",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ year, months }),
+      });
+      if (!res.ok) {
+        const j = await res.json().catch(() => ({}));
+        setError(j.error || "Save failed.");
+        return;
+      }
+      applyPayload(await res.json());
+      setSaved(true);
+    });
+  }
+
+  const dirty = Object.keys(edits).length > 0;
+
   return (
-    <Section title={`Leave balance · ${balance.year}`}>
-      <div className="grid grid-cols-4 gap-base">
-        {[
-          { label: "Opening", value: balance.opening },
-          { label: "Accrued", value: balance.accrued },
-          { label: "Used", value: balance.used },
-          { label: "Balance", value: balance.balance },
-        ].map((c) => (
-          <div key={c.label} className="bg-surface-container rounded p-md">
-            <p className="text-caption text-on-surface-variant uppercase tracking-wider">{c.label}</p>
-            <p className="text-h2 font-extrabold">{c.value.toFixed(1)}</p>
-          </div>
-        ))}
+    <Section title="">
+      <div className="flex items-end justify-between gap-base flex-wrap mb-md">
+        <div className="bg-surface-container rounded p-md min-w-[14rem]">
+          <p className="text-caption text-on-surface-variant uppercase tracking-wider">
+            {headlineLabel}
+          </p>
+          <p className="text-h2 font-extrabold">{balanceAsOn.toFixed(1)}</p>
+          <p className="text-caption text-on-surface-variant mt-xs">
+            Opening {opening.toFixed(1)} · salary-cycle months (26th → 25th)
+          </p>
+        </div>
+        <label className="flex flex-col gap-xs">
+          <span className="text-caption text-on-surface-variant">Year</span>
+          <select
+            value={year}
+            onChange={(e) => changeYear(Number(e.target.value))}
+            disabled={pending}
+            className="px-sm py-sm rounded border border-outline-variant bg-surface min-w-[7rem]"
+          >
+            {data.availableYears.map((y) => (
+              <option key={y} value={y}>
+                {y}
+              </option>
+            ))}
+          </select>
+        </label>
       </div>
+
+      {!canEdit && (
+        <p className="text-caption text-on-surface-variant mb-sm">
+          You can view the ledger. Editing the monthly paid-leave allocation needs HR Manager or
+          Admin rights.
+        </p>
+      )}
+
+      <div className="overflow-x-auto">
+        <table className="w-full text-label-sm">
+          <thead>
+            <tr className="text-on-surface-variant text-left">
+              <th className="px-sm py-xs font-medium">Month</th>
+              <th className="px-sm py-xs font-medium text-right">Paid leaves</th>
+              <th className="px-sm py-xs font-medium text-right">Paid taken</th>
+              <th className="px-sm py-xs font-medium text-right">Unpaid taken</th>
+              <th className="px-sm py-xs font-medium text-right">Balance</th>
+            </tr>
+          </thead>
+          <tbody>
+            {rows.map((r) => {
+              const isFuture = currentMonth > 0 && r.month > currentMonth;
+              const editValue = edits[r.month];
+              const displayPaid =
+                editValue !== undefined ? editValue : r.allocated ? String(r.allocated) : "";
+              return (
+                <tr key={r.month} className="border-t border-outline-variant">
+                  <td className="px-sm py-xs">{r.label}</td>
+                  <td className="px-sm py-xs text-right">
+                    {canEdit ? (
+                      <input
+                        type="number"
+                        min={0}
+                        max={31}
+                        step={0.5}
+                        value={displayPaid}
+                        placeholder="0"
+                        onChange={(e) =>
+                          setEdits((prev) => ({ ...prev, [r.month]: e.target.value }))
+                        }
+                        className="w-20 px-sm py-xs rounded border border-outline-variant bg-surface text-right"
+                      />
+                    ) : r.allocated ? (
+                      r.allocated.toFixed(1)
+                    ) : (
+                      "—"
+                    )}
+                  </td>
+                  <td className="px-sm py-xs text-right">{r.taken ? r.taken.toFixed(1) : "—"}</td>
+                  <td className="px-sm py-xs text-right">{r.unpaid ? r.unpaid.toFixed(1) : "—"}</td>
+                  <td className="px-sm py-xs text-right font-semibold">
+                    {isFuture ? "—" : r.balance.toFixed(1)}
+                  </td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      </div>
+
+      {canEdit && (
+        <div className="flex items-center gap-md mt-md">
+          <button
+            onClick={save}
+            disabled={pending || !dirty}
+            className="px-base py-sm rounded bg-primary text-on-primary text-label-sm font-medium disabled:opacity-50"
+          >
+            {pending ? "Saving…" : "Save allocation"}
+          </button>
+          {saved && <span className="text-green-700 text-label-sm">Saved.</span>}
+          {error && <span className="text-red-700 text-label-sm">{error}</span>}
+        </div>
+      )}
+      {!canEdit && error && <p className="text-red-700 text-label-sm mt-sm">{error}</p>}
     </Section>
   );
 }
