@@ -504,6 +504,21 @@ export function buildCrmTaskWhere(p: CrmTaskFilterParams): Prisma.CrmTaskWhereIn
   return where;
 }
 
+/**
+ * Owner-match for the open tasks that should follow a lead (re)assignment. The
+ * Tasks board filters on each task's own `assignedToId`, so assigning a lead has
+ * to be swept down onto its open tasks or they linger in the "Unassigned" view
+ * (e.g. a re-inquiry task stamped null while the lead had no consultant). We move
+ * tasks that are unassigned or owned by the outgoing assignee, and leave tasks
+ * owned by anyone else (e.g. a supervisor's oversight copy) untouched.
+ * `previousAssigneeId` is the lead's owner *before* the change (null if none).
+ */
+export function crmTaskFollowAssignmentWhere(previousAssigneeId: string | null): Prisma.CrmTaskWhereInput {
+  return previousAssigneeId
+    ? { OR: [{ assignedToId: null }, { assignedToId: previousAssigneeId }] }
+    : { assignedToId: null };
+}
+
 /** Ordering for the task board. Open-relevant sorts keep null due dates last. */
 export function crmTaskListOrderBy(sort?: string): Prisma.CrmTaskOrderByWithRelationInput[] {
   switch (sort) {
