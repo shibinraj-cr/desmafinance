@@ -65,22 +65,30 @@ describe("computeSandwichFlips — full-day leaves (baseline, unchanged)", () =>
   });
 });
 
-describe("computeSandwichFlips — half-days are WORKED time, never an anchor", () => {
-  // In this system a HD is short hours / a missing punch / a late day — the
-  // employee was present, so a HD must not bridge a holiday/week-off into an
-  // absence (only full Absence A or full paid leave LV anchor a sandwich).
-  it("HD … WO … A → NO sandwich (HD is worked, not leave)", () => {
-    expect(flippedDates([hdPM("2026-05-02"), day("2026-05-03", "WO"), day("2026-05-04", "A")])).toEqual([]);
+describe("computeSandwichFlips — half-day anchors are side-aware", () => {
+  it("HD second half before WO, followed by A → sandwiches the WO", () => {
+    expect(flippedDates([hdPM("2026-05-02"), day("2026-05-03", "WO"), day("2026-05-04", "A")])).toEqual(["2026-05-03"]);
+  });
+
+  it("HD first half before WO does not touch the WO, so no sandwich", () => {
     expect(flippedDates([hdAM("2026-05-02"), day("2026-05-03", "WO"), day("2026-05-04", "A")])).toEqual([]);
   });
 
-  it("A … WO … HD → NO sandwich (worked HD does not close the bridge)", () => {
-    expect(flippedDates([day("2026-05-01", "A"), day("2026-05-02", "WO"), hdAM("2026-05-04")])).toEqual([]);
+  it("A before WO, followed by HD first half → sandwiches the WO", () => {
+    expect(flippedDates([day("2026-05-01", "A"), day("2026-05-02", "WO"), hdAM("2026-05-04")])).toEqual(["2026-05-02"]);
+  });
+
+  it("A before WO, followed by HD second half does not touch the WO, so no sandwich", () => {
     expect(flippedDates([day("2026-05-01", "A"), day("2026-05-02", "WO"), hdPM("2026-05-04")])).toEqual([]);
   });
 
-  it("HD … WO … HD → NO sandwich (both anchors are worked)", () => {
-    expect(flippedDates([hdPM("2026-05-02"), day("2026-05-03", "WO"), hdAM("2026-05-04")])).toEqual([]);
+  it("HD second half … WO … HD first half sandwiches the WO", () => {
+    expect(flippedDates([hdPM("2026-05-02"), day("2026-05-03", "WO"), hdAM("2026-05-04")])).toEqual(["2026-05-03"]);
+  });
+
+  it("ambiguous HD bridges both directions", () => {
+    expect(flippedDates([day("2026-05-02", "HD"), day("2026-05-03", "WO"), day("2026-05-04", "A")])).toEqual(["2026-05-03"]);
+    expect(flippedDates([day("2026-05-02", "A"), day("2026-05-03", "WO"), day("2026-05-04", "HD")])).toEqual(["2026-05-03"]);
   });
 
   it("LV … WO … A still flips (full leaves anchor)", () => {
@@ -136,5 +144,14 @@ describe("reconcileSandwich — self-correcting flip + revert", () => {
     );
     expect(r.flip).toEqual([]);
     expect(r.revert.map((x) => `${x.date}→${x.to}`)).toEqual(["2026-05-03→WO"]);
+  });
+
+  it("flips when a PM half-day touches a following week-off before an absence", () => {
+    const r = reconcileSandwich(
+      [rday("2026-03-28", "HD", { late: 10, eo: 173 }), rday("2026-03-29", "WO"), rday("2026-03-30", "A")],
+      POLICY,
+    );
+    expect(r.flip.map((f) => f.date)).toEqual(["2026-03-29"]);
+    expect(r.revert).toEqual([]);
   });
 });

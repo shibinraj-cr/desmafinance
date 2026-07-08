@@ -93,17 +93,22 @@ export function inferHdLeaveHalf(d: {
   return null;
 }
 
-// Only full-day leave anchors a sandwich: an Absence (A) or full paid leave
-// (LV). A half-day (HD) is WORKED time in this system — short hours, a missing
-// punch, or a late/AL day — so the employee was present and a HD must NOT bridge
-// a holiday/week-off into an absence. (There is no half-day-leave concept here;
-// if one is added later, reintroduce punch-half awareness via inferHdLeaveHalf.)
+// Full-day leave anchors a sandwich in both directions. A half-day anchors only
+// when the absent half touches the bridge: PM leave before a WO/HL, AM leave
+// after a WO/HL. Ambiguous HDs bridge both ways so HR does not silently miss a
+// sandwich when the punch pattern cannot prove which half was absent.
 function bridgesForward(d: SandwichDay): boolean {
-  return d.status === "A" || d.status === "LV";
+  if (d.status === "A" || d.status === "LV") return true;
+  if (d.status !== "HD") return false;
+  const half = inferHdLeaveHalf(d);
+  return half === "PM" || half === null;
 }
 
 function bridgesBackward(d: SandwichDay): boolean {
-  return d.status === "A" || d.status === "LV";
+  if (d.status === "A" || d.status === "LV") return true;
+  if (d.status !== "HD") return false;
+  const half = inferHdLeaveHalf(d);
+  return half === "AM" || half === null;
 }
 
 function isBridgeStatus(s: string, policy: SandwichPolicyLite): boolean {
