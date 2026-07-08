@@ -309,7 +309,10 @@ model LeadPulseSource {
   snapshots         LeadPulseMonthlySnapshot[]
   parties           Party[]
   leadPulsePipeline LeadPulsePipeline[]
-  leads             Lead[]
+  leads             Lead[]                     @relation("LeadSource")
+  // Leads whose ORIGINAL acquisition source was this, but whose primary source
+  // was later re-stamped "Existing Candidate" on a re-enrollment (see Lead.originalSource).
+  originalSourceLeads Lead[]                   @relation("LeadOriginalSource")
 
   @@index([active])
   @@index([displayOrder])
@@ -1838,7 +1841,15 @@ model Lead {
 
   // Classification (FKs to reusable masters)
   sourceId        String?
-  source          LeadPulseSource?  @relation(fields: [sourceId], references: [id], onDelete: SetNull)
+  source          LeadPulseSource?  @relation("LeadSource", fields: [sourceId], references: [id], onDelete: SetNull)
+  // Preserved original acquisition source on a RE-ENROLLMENT lead. When an
+  // existing candidate enrolls in a second service, the lead's primary `source`
+  // is set to "Existing Candidate" (so repeat business shows as its own bucket
+  // in the source funnel / reports) while `originalSource` keeps the channel the
+  // candidate first came in through — so their original attribution is never
+  // lost. Null on ordinary (first-time) leads.
+  originalSourceId String?
+  originalSource   LeadPulseSource? @relation("LeadOriginalSource", fields: [originalSourceId], references: [id], onDelete: SetNull)
   serviceId       String?
   service         Service?          @relation(fields: [serviceId], references: [id], onDelete: SetNull)
   qualificationId String?
@@ -1929,6 +1940,7 @@ model Lead {
   @@index([serviceId])
   @@index([qualificationId])
   @@index([partyId])
+  @@index([originalSourceId])
   @@index([importBatchId])
   @@index([createdAt])
   @@index([lastActivityAt])
