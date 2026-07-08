@@ -40,9 +40,19 @@ async function main() {
   console.log(`\n▶ Verifying re-enrollment against ${url.replace(/:\/\/[^@]*@/, "://***@")}\n`);
 
   // ── Prerequisites (reused from the branch's real data) ────────────────────
-  const services = await prisma.service.findMany({ where: { isActive: true }, orderBy: { name: "asc" }, take: 2, select: { id: true, name: true } });
-  if (services.length < 2) throw new Error("Need at least 2 active services to test with.");
-  const [svcA, svcB] = services;
+  const allServices = await prisma.service.findMany({ where: { isActive: true }, orderBy: { name: "asc" }, select: { id: true, name: true } });
+  // Prefer services WITHOUT an active ops template. Ops-project creation runs many
+  // sequential queries inside enrollLead's interactive transaction; over a remote
+  // connection that can exceed the 5s transaction timeout (a network artifact — in
+  // production the DB is co-located). Every re-enrollment assertion below is
+  // template-agnostic, so template-less services give a fast, reliable run.
+  const templated = new Set(
+    (await prisma.processTemplate.findMany({ where: { isActive: true }, select: { serviceId: true } })).map((t) => t.serviceId),
+  );
+  const noTemplate = allServices.filter((s) => !templated.has(s.id));
+  const pick2 = (noTemplate.length >= 2 ? noTemplate : allServices).slice(0, 2);
+  if (pick2.length < 2) throw new Error("Need at least 2 active services to test with.");
+  const [svcA, svcB] = pick2;
   const l2 = await prisma.leadPulseRole.findFirst({ where: { active: true, role: "l2" }, select: { userId: true, displayName: true } });
   if (!l2) throw new Error("Need an active L2 BDE (leadPulseRole role=l2) to own the pipeline.");
   const origSource = await prisma.leadPulseSource.findFirst({ where: { active: true, code: { not: "existing_candidate" } }, orderBy: { displayOrder: "asc" }, select: { id: true, label: true } });
