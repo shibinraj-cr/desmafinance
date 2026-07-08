@@ -14,11 +14,20 @@ import * as XLSX from "xlsx";
  *   R6+  01/03/2026 | X | --:-- | 00:00 | 00:00 | --:-- | 00:00 | 00:00 | WO | --
  *   …    (one row per date for the employee, then next Empcode block)
  *
- * Half-day inference (the source format only emits P/A/WO, so we infer):
- *   - Weekday (Mon–Fri) P-day with (work + OT) <   6h  (360 min) → HD
- *   - Saturday          P-day with (work + OT) < 3.5h  (210 min) → HD
- *   - When the Work+OT column is blank (0) but the day has both punches,
- *     fall back to gross punch duration (out − in) so the rule still fires.
+ * Half-day inference (the source format only emits P/A/WO, so we infer). The
+ * worked duration is PUNCH-BASED: actual punch-in → out-time, with the out-time
+ * capped at the shift end so overtime past the shift end never counts toward a
+ * full day. Early punch-in counts as recorded. The Work+OT column is ignored.
+ *   - Weekday (Mon–Fri) P-day with capped duration <  7h  (420 min) → HD
+ *   - Saturday          P-day with capped duration < 5.5h (330 min) → HD
+ *
+ * The shift end is only known once the employee's shift is resolved from the DB,
+ * so this parser applies the thresholds to the UNCAPPED punch span as a first
+ * pass (capping can only shorten the span — i.e. only turn a full day into a
+ * half-day, never the reverse). The upload route
+ * (src/app/api/hr/attendance/upload/route.ts) then re-applies the rule with the
+ * real cap — weekday: the resolved shift end (Shift A 17:30 / B 18:00);
+ * Saturday: 16:00 — and is the authoritative classification.
  *
  * Saturday timing: 09:00 → 16:00 for everyone EXCEPT exempt employees
  *   (SATURDAY_RULE_EXEMPT, e.g. Nithya, who works a different schedule).
@@ -27,14 +36,14 @@ import * as XLSX from "xlsx";
  *   which is wrong for Saturdays. Late-coming (LCE/AL) therefore runs from 09:00.
  */
 
-const WEEKDAY_HD_THRESHOLD_MIN = 360;  // 6 h
-const SATURDAY_HD_THRESHOLD_MIN = 210; // 3.5 h
+export const WEEKDAY_HD_THRESHOLD_MIN = 420;  // 7 h
+export const SATURDAY_HD_THRESHOLD_MIN = 330; // 5.5 h
 // Company Saturday working hours: 09:00 → 16:00 for every employee EXCEPT those
 // exempt below. Saturday late / early-out are recomputed against this window
 // (the biometric computes them against the weekday shift, which is wrong for
 // Saturday), and late-coming (LCE/AL) applies from 09:00.
 const SATURDAY_START_MIN = 9 * 60; // 09:00
-const SATURDAY_END_MIN = 16 * 60; // 16:00
+export const SATURDAY_END_MIN = 16 * 60; // 16:00 — Saturday shift end / out-time cap
 
 // Employees who do NOT follow the standard 9:00–16:00 Saturday rule — their
 // Saturday late / early-out are left as the biometric values (they work a
@@ -76,6 +85,36 @@ function toMinutes(hhmm: string | undefined | null): number {
   const m = s.match(/^(\d+):(\d{2})$/);
   if (!m) return 0;
   return +m[1] * 60 + +m[2];
+}
+
+/**
+ * Worked minutes for the half-day rule: actual punch-in → the out-time capped
+ * at the shift end (overtime past the shift end does NOT count toward a full
+ * day). Early punch-in counts as recorded. Returns null when either punch is
+ * missing or the resulting span is non-positive.
+ *
+ * `shiftEndMin` is minutes-since-midnight of the shift end (weekday: the
+ * employee's resolved shift end; Saturday: 16:00 / SATURDAY_END_MIN). Pass null
+ * to skip the cap — e.g. the parser's first pass, before the shift is resolved.
+ */
+export function workedMinutesForHalfDay(
+  inTime: string | null,
+  outTime: string | null,
+  shiftEndMin: number | null,
+): number | null {
+  if (!inTime || !outTime) return null;
+  const inMin = toMinutes(inTime);
+  const outMin = toMinutes(outTime);
+  if (inMin <= 0 || outMin <= 0) return null;
+  const cappedOut = shiftEndMin != null ? Math.min(outMin, shiftEndMin) : outMin;
+  const duration = cappedOut - inMin;
+  return duration > 0 ? duration : null;
+}
+
+/** HD when the (capped) worked minutes fall under the weekday / Saturday bar. */
+export function isHalfDayDuration(workedMinutes: number, isSaturday: boolean): boolean {
+  const threshold = isSaturday ? SATURDAY_HD_THRESHOLD_MIN : WEEKDAY_HD_THRESHOLD_MIN;
+  return workedMinutes < threshold;
 }
 
 function cleanTime(v: unknown): string | null {
@@ -139,8 +178,6 @@ function findEmpHeader(row: unknown[]): { empCode: string; name: string } | null
 /** Normalised attendance status used downstream by the salary engine. */
 export function normaliseStatus(
   raw: string,
-  workMinutes: number,
-  otMinutes: number,
   date: Date,
   inTime: string | null,
   outTime: string | null,
@@ -169,19 +206,15 @@ export function normaliseStatus(
       // No punch at all: an explicit biometric "P" is trusted; a blank is absent.
       return s === "" ? "A" : "P";
     }
-    // Both punches present. Worked minutes drive the half-day rule; some exports
-    // leave "Work+OT" blank (0) even with both punches — fall back to gross punch
-    // duration (out − in) so the HD rule still fires (e.g. Aswathi 23 Apr 2026,
-    // 09:04–13:32, shown full Present otherwise).
-    let total = workMinutes + otMinutes;
-    if (total === 0) {
-      const gross = toMinutes(outTime) - toMinutes(inTime);
-      if (gross > 0) total = gross;
-    }
-    if (total > 0) {
-      const isSaturday = date.getUTCDay() === 6;
-      const threshold = isSaturday ? SATURDAY_HD_THRESHOLD_MIN : WEEKDAY_HD_THRESHOLD_MIN;
-      if (total < threshold) return "HD";
+    // Both punches present (a single punch is handled above). The half-day rule
+    // is punch-based: actual in → out. The out-time cap at the shift end can't be
+    // applied here (the shift isn't resolved yet), so this is the UNCAPPED first
+    // pass — the upload route re-applies the rule with the real cap and is
+    // authoritative. Work+OT is not consulted (e.g. Aswathi 23 Apr 2026,
+    // 09:04–13:32 → 268 min < 420 → HD).
+    const worked = workedMinutesForHalfDay(inTime, outTime, null);
+    if (worked != null && isHalfDayDuration(worked, date.getUTCDay() === 6)) {
+      return "HD";
     }
     return "P";
   }
@@ -232,7 +265,7 @@ export function parseAttendanceWorkbook(buffer: Buffer | ArrayBuffer): ParseResu
     const statusRaw = String(r[8] ?? "").trim();
     const remarkRaw = String(r[9] ?? "").trim();
     const remark = !remarkRaw || remarkRaw === "--" ? null : remarkRaw;
-    const status = normaliseStatus(statusRaw, workMinutes, otMinutes, date, inTime, outTime);
+    const status = normaliseStatus(statusRaw, date, inTime, outTime);
 
     // Saturday: the biometric computes late + early-out against the employee's
     // assigned weekday shift (A=09:00–17:30 / B=09:30–18:00), which is wrong for

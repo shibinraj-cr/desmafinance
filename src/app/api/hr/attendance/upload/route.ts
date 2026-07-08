@@ -2,7 +2,14 @@ import { NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { getCurrentUserAndPermissions } from "@/lib/permissions";
 import { canApproveHr } from "@/lib/hr-rbac";
-import { parseAttendanceWorkbook, type ParsedDay } from "@/lib/hr-attendance-parser";
+import {
+  parseAttendanceWorkbook,
+  workedMinutesForHalfDay,
+  isHalfDayDuration,
+  isSaturdayRuleExempt,
+  SATURDAY_END_MIN,
+  type ParsedDay,
+} from "@/lib/hr-attendance-parser";
 import { cycleMonthForDate, cycleWindowForMonth } from "@/lib/hr-data";
 import { recomputeAllLeaveBalances } from "@/lib/hr-leave-balance";
 import { applySandwichRule } from "@/lib/hr-sandwich";
@@ -228,12 +235,20 @@ export async function POST(req: Request) {
     },
   });
 
-  // Recompute weekday late-coming against each employee's HR shift start. The
-  // biometric file computes "Late In" against its own shift config, which bakes
-  // in extra grace and understates lateness (e.g. a 09:15 punch shown as 10 min
-  // late, then masked again by our 10-min grace). Measuring from the authoritative
-  // shift start (Shift A 09:00 / B 09:30) and letting computeLateTags apply the
-  // single grace fixes it. Saturdays are already recomputed in the parser.
+  // Recompute, per employee, against the authoritative HR shift now that it can
+  // be resolved from the DB:
+  //   (1) Weekday late-coming vs the HR shift start. The biometric file computes
+  //       "Late In" against its own shift config, which bakes in extra grace and
+  //       understates lateness (e.g. a 09:15 punch shown as 10 min late, then
+  //       masked again by our 10-min grace). Measuring from the shift start
+  //       (Shift A 09:00 / B 09:30) and letting computeLateTags apply the single
+  //       grace fixes it. Saturday lateness is already recomputed in the parser.
+  //   (2) The half-day rule with the out-time CAPPED at the shift end (weekday:
+  //       the resolved shift end; Saturday: 16:00) — overtime past shift end must
+  //       not count toward a full day. The parser only had the uncapped span, so
+  //       this is the authoritative pass. Only worked days (both punches, current
+  //       status P/HD) are eligible; decided/off codes and missing-punch HDs are
+  //       left untouched.
   const toMin = (t: string | null) => {
     if (!t) return null;
     const mm = t.match(/^(\d{1,2}):(\d{2})$/);
@@ -249,19 +264,52 @@ export async function POST(req: Request) {
     for (const { employeeId } of empRows) {
       const shift = await resolveShiftForDate(employeeId, start);
       const shiftStart = shift ? toMin(shift.startTime) : null;
-      if (shiftStart == null) continue;
+      const shiftEnd = shift ? toMin(shift.endTime) : null;
       const days = await prisma.hrAttendanceDay.findMany({
         where: { employeeId, date: { gte: start, lte: end } },
-        select: { id: true, date: true, inTime: true, lateMinutes: true },
+        select: {
+          id: true,
+          date: true,
+          inTime: true,
+          outTime: true,
+          lateMinutes: true,
+          status: true,
+          rawName: true,
+        },
       });
       for (const d of days) {
         const dow = d.date.getUTCDay();
-        if (dow === 0 || dow === 6) continue; // Sun = week-off; Sat handled in parser
-        const inMin = toMin(d.inTime);
-        if (inMin == null) continue;
-        const newLate = Math.max(0, inMin - shiftStart);
-        if (newLate !== (d.lateMinutes ?? 0)) {
-          await prisma.hrAttendanceDay.update({ where: { id: d.id }, data: { lateMinutes: newLate } });
+        if (dow === 0) continue; // Sunday = week-off
+        const isSat = dow === 6;
+        const updates: { lateMinutes?: number; status?: string } = {};
+
+        // (1) Weekday late-coming (Saturday handled in the parser).
+        if (!isSat && shiftStart != null) {
+          const inMin = toMin(d.inTime);
+          if (inMin != null) {
+            const newLate = Math.max(0, inMin - shiftStart);
+            if (newLate !== (d.lateMinutes ?? 0)) updates.lateMinutes = newLate;
+          }
+        }
+
+        // (2) Half-day recompute from the capped punch duration. Saturday caps at
+        // 16:00; exempt employees (e.g. Nithya) work a different Saturday
+        // schedule, so leave their out-time uncapped.
+        if ((d.status === "P" || d.status === "HD") && d.inTime && d.outTime) {
+          const cap = isSat
+            ? isSaturdayRuleExempt(d.rawName ?? "")
+              ? null
+              : SATURDAY_END_MIN
+            : shiftEnd;
+          const worked = workedMinutesForHalfDay(d.inTime, d.outTime, cap);
+          if (worked != null) {
+            const newStatus = isHalfDayDuration(worked, isSat) ? "HD" : "P";
+            if (newStatus !== d.status) updates.status = newStatus;
+          }
+        }
+
+        if (Object.keys(updates).length > 0) {
+          await prisma.hrAttendanceDay.update({ where: { id: d.id }, data: updates });
         }
       }
     }
@@ -316,4 +364,3 @@ function nameTokens(s: string): string[] {
     .split(/\s+/)
     .filter(Boolean);
 }
-
