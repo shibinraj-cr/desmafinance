@@ -46,6 +46,12 @@ export function EmployeesTable({
 }) {
   const [query, setQuery] = useState("");
   const [showInactive, setShowInactive] = useState(false);
+  const exportParams = new URLSearchParams();
+  if (query.trim()) exportParams.set("q", query.trim());
+  if (showInactive) exportParams.set("inactive", "1");
+  const exportHref = `/api/hr/employees/export${
+    exportParams.toString() ? `?${exportParams.toString()}` : ""
+  }`;
   const filtered = employees.filter((e) => {
     if (!showInactive && !e.active) return false;
     if (!query) return true;
@@ -75,6 +81,12 @@ export function EmployeesTable({
           />
           Show inactive
         </label>
+        <a
+          href={exportHref}
+          className="px-md py-sm rounded border border-outline-variant whitespace-nowrap text-label-sm"
+        >
+          Export to Excel
+        </a>
       </div>
       <div className="overflow-x-auto">
         <table className="w-full text-label-sm">
