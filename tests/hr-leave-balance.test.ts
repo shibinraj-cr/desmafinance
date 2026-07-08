@@ -8,9 +8,22 @@
  */
 import { describe, it, expect, vi, beforeEach } from "vitest";
 
-vi.mock("@/lib/prisma", () => ({ prisma: {} }));
+vi.mock("@/lib/prisma", () => ({
+  prisma: {
+    hrLeaveEligibility: { findUnique: vi.fn() },
+    hrLeaveBalance: { findUnique: vi.fn() },
+    hrLeaveAccrual: { findMany: vi.fn() },
+    hrAttendanceDay: { findMany: vi.fn() },
+  },
+}));
 
-import { elapsedAccrualMonths, accrualMonthsInYear, computeLeaveBalanceFor } from "@/lib/hr-leave-balance";
+import { prisma } from "@/lib/prisma";
+import {
+  elapsedAccrualMonths,
+  accrualMonthsInYear,
+  computeLeaveBalanceFor,
+  computeMonthlyLeaveLedger,
+} from "@/lib/hr-leave-balance";
 
 describe("accrualMonthsInYear", () => {
   const asOf = new Date(Date.UTC(2026, 5, 15)); // 2026-06-15 → current month = June (6)
@@ -62,13 +75,19 @@ function makeDb(over: {
   eligibility?: unknown;
   existing?: unknown;
   manualSum?: number | null;
+  allocations?: { month: number; value: number }[]; // source 'allocation' rows (year 2026)
   leaveDays?: { status: string; count: number }[];
 }) {
+  const ledger: { periodKey: string; delta: number; source: string }[] = [];
+  if (over.manualSum != null) ledger.push({ periodKey: "2026-01", delta: over.manualSum, source: "manual" });
+  for (const a of over.allocations ?? []) {
+    ledger.push({ periodKey: `2026-${String(a.month).padStart(2, "0")}`, delta: a.value, source: "allocation" });
+  }
   return {
     hrLeaveEligibility: { findUnique: vi.fn().mockResolvedValue(over.eligibility ?? null) },
     hrLeaveBalance: { findUnique: vi.fn().mockResolvedValue(over.existing ?? null) },
     hrLeaveAccrual: {
-      aggregate: vi.fn().mockResolvedValue({ _sum: { delta: over.manualSum ?? null } }),
+      findMany: vi.fn().mockResolvedValue(ledger),
     },
     hrAttendanceDay: {
       groupBy: vi
@@ -131,5 +150,69 @@ describe("computeLeaveBalanceFor", () => {
     expect(c.accrued).toBe(0);
     expect(c.used).toBe(1);
     expect(c.balance).toBe(-1);
+  });
+
+  it("uses HR's monthly allocation override where set, eligibility elsewhere", async () => {
+    // Eligibility 1/month, Jan..May elapsed. March overridden to 2.5.
+    const db = makeDb({
+      eligibility: { enabled: true, leavesPerPeriod: 1, effectiveFrom: new Date(Date.UTC(2026, 0, 1)) },
+      allocations: [{ month: 3, value: 2.5 }],
+    });
+    const c = await computeLeaveBalanceFor(db, "e1", 2026, asOf);
+    // Jan,Feb,Apr,May = 1 each (4) + Mar override 2.5 = 6.5.
+    expect(c.accrued).toBe(6.5);
+    expect(c.balance).toBe(6.5);
+  });
+
+  it("credits an allocation-only month even with no eligibility, ignoring future months", async () => {
+    // No eligibility. Feb allocated 3 (elapsed), Aug allocated 5 (future — excluded as of May).
+    const db = makeDb({
+      allocations: [
+        { month: 2, value: 3 },
+        { month: 8, value: 5 },
+      ],
+    });
+    const c = await computeLeaveBalanceFor(db, "e1", 2026, asOf);
+    expect(c.accrued).toBe(3);
+    expect(c.balance).toBe(3);
+  });
+});
+
+describe("computeMonthlyLeaveLedger", () => {
+  const asOf = new Date(Date.UTC(2026, 4, 15)); // 2026-05-15 → current cycle month = May
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    (prisma.hrLeaveEligibility.findUnique as ReturnType<typeof vi.fn>).mockResolvedValue(null);
+    (prisma.hrLeaveBalance.findUnique as ReturnType<typeof vi.fn>).mockResolvedValue(null);
+    (prisma.hrLeaveAccrual.findMany as ReturnType<typeof vi.fn>).mockResolvedValue([]);
+    (prisma.hrAttendanceDay.findMany as ReturnType<typeof vi.fn>).mockResolvedValue([]);
+  });
+
+  it("attributes a late-December leave to the next cycle month and scores HD/A as unpaid", async () => {
+    (prisma.hrAttendanceDay.findMany as ReturnType<typeof vi.fn>).mockResolvedValue([
+      { date: new Date(Date.UTC(2025, 11, 28)), status: "LV" }, // 28 Dec 2025 → Jan-2026 cycle
+      { date: new Date(Date.UTC(2026, 0, 10)), status: "HD" }, // 10 Jan → Jan-2026
+      { date: new Date(Date.UTC(2026, 3, 15)), status: "A" }, // 15 Apr → Apr-2026
+    ]);
+    const { rows } = await computeMonthlyLeaveLedger("e1", 2026, { asOf });
+    const jan = rows.find((r) => r.month === 1)!;
+    expect(jan.label).toBe("Jan-2026");
+    expect(jan.taken).toBe(1); // the 28-Dec LV lands here
+    expect(jan.unpaid).toBe(0.5); // the HD
+    expect(rows.find((r) => r.month === 4)!.unpaid).toBe(1); // the absence
+  });
+
+  it("'full' returns 12 cycle rows; future allocation does not inflate balanceAsOn", async () => {
+    (prisma.hrLeaveAccrual.findMany as ReturnType<typeof vi.fn>).mockResolvedValue([
+      { periodKey: "2026-02", delta: 2, source: "allocation" }, // Feb (elapsed)
+      { periodKey: "2026-08", delta: 5, source: "allocation" }, // Aug (future)
+    ]);
+    const { rows, balanceAsOn } = await computeMonthlyLeaveLedger("e1", 2026, { asOf, fill: "full" });
+    expect(rows).toHaveLength(12);
+    expect(rows.find((r) => r.month === 2)!.allocated).toBe(2);
+    // balanceAsOn is captured at the current cycle month (May); Aug's 5 comes later.
+    expect(balanceAsOn).toBe(2);
+    expect(rows.find((r) => r.month === 8)!.balance).toBe(7); // running balance still projects it
   });
 });

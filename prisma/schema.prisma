@@ -1476,10 +1476,13 @@ model HrLeaveAccrual {
   periodKey   String
   /// Positive for credit, negative for debit/adjustment.
   delta       Decimal  @db.Decimal(5, 2)
-  /// 'auto'   — scheduled accrual job
-  /// 'manual' — HR adjustment
-  /// 'expiry' — system-driven expiry
-  /// 'opening'— year-rollover opening balance
+  /// 'auto'      — scheduled accrual job
+  /// 'manual'    — HR adjustment (additive delta)
+  /// 'allocation'— HR's per-(cycle)-month paid-leave allocation; one row per
+  ///               month (periodKey 'YYYY-MM'), delta = the set value, and it
+  ///               overrides the eligibility auto-accrual for that month
+  /// 'expiry'    — system-driven expiry
+  /// 'opening'   — year-rollover opening balance
   source      String
   leaveType   String   @default("CL")
   reason      String?

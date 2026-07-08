@@ -3,6 +3,7 @@ import Link from "next/link";
 import { prisma } from "@/lib/prisma";
 import { getCurrentUserAndPermissions } from "@/lib/permissions";
 import { isHrUser, canApproveHr } from "@/lib/hr-rbac";
+import { computeMonthlyLeaveLedger, leaveLedgerYears } from "@/lib/hr-leave-balance";
 import { TopBar } from "@/components/TopBar";
 import { Section } from "@/components/Cards";
 import { EmployeeEditor } from "./client";
@@ -33,7 +34,6 @@ export default async function EmployeeDetailPage({ params }: { params: { id: str
         shift: true,
         designationRef: true,
         salaryStructures: { orderBy: { effectiveFrom: "desc" } },
-        leaveBalances: { orderBy: { year: "desc" } },
         departments: { include: { department: true } },
         roleMemberships: { include: { role: true } },
       },
@@ -55,7 +55,10 @@ export default async function EmployeeDetailPage({ params }: { params: { id: str
   if (!employee) notFound();
 
   const currentYear = new Date().getUTCFullYear();
-  const currentBalance = employee.leaveBalances.find((b) => b.year === currentYear);
+  const [leaveLedger, leaveYears] = await Promise.all([
+    computeMonthlyLeaveLedger(employee.id, currentYear, { fill: "full" }),
+    leaveLedgerYears(employee.id),
+  ]);
 
   // Designation, department & role are the structured (Designation &
   // Departments tab) values — the single source of truth — falling back to
@@ -138,17 +141,15 @@ export default async function EmployeeDetailPage({ params }: { params: { id: str
             notes: s.notes,
           }))}
           canEdit={canApproveHr(perms)}
-          currentBalance={
-            currentBalance
-              ? {
-                  year: currentBalance.year,
-                  opening: Number(currentBalance.opening),
-                  accrued: Number(currentBalance.accrued),
-                  used: Number(currentBalance.used),
-                  balance: Number(currentBalance.balance),
-                }
-              : null
-          }
+          leaveTab={{
+            employeeId: employee.id,
+            year: currentYear,
+            availableYears: leaveYears,
+            opening: leaveLedger.opening,
+            balanceAsOn: leaveLedger.balanceAsOn,
+            currentMonth: leaveLedger.currentMonth,
+            rows: leaveLedger.rows,
+          }}
         />
       </div>
     </>
