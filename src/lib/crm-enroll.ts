@@ -128,10 +128,14 @@ async function upsertPipeline(
   return created.id;
 }
 
-/** Find a candidate Party by email → phone → name, else create one. */
+/** Find a candidate Party by explicit link → email → phone → name, else create one. */
 async function findOrCreateParty(tx: Prisma.TransactionClient, lead: LeadCore, ownerUserId: string): Promise<string> {
   let found: { id: string } | null = null;
-  if (lead.email) found = await tx.party.findFirst({ where: { email: lead.email }, select: { id: true } });
+  // An explicit partyId (e.g. a re-enrollment lead pre-linked to the candidate)
+  // is authoritative — it pins the second service to the intended candidate even
+  // when email/phone are absent or ambiguous.
+  if (lead.partyId) found = await tx.party.findUnique({ where: { id: lead.partyId }, select: { id: true } });
+  if (!found && lead.email) found = await tx.party.findFirst({ where: { email: lead.email }, select: { id: true } });
   if (!found && lead.phone) found = await tx.party.findFirst({ where: { phone: lead.phone }, select: { id: true } });
   if (!found) found = await tx.party.findFirst({ where: { name: lead.candidateName }, select: { id: true } });
 
@@ -275,6 +279,9 @@ export async function enrollLead(
   // front (read-only) so the draft is created atomically with the enrollment.
   const reviewer = await prisma.user.findFirst({ where: { draftFirst: true }, select: { id: true, username: true } });
   const classification = await resolveRevenueClassification(serviceId);
+  // Service name for the draft description (helps Finance tell apart a
+  // candidate's multiple services / re-enrollments in their review queue).
+  const service = await prisma.service.findUnique({ where: { id: serviceId }, select: { name: true } });
   const draftDate = new Date();
 
   // Operations: resolve the service's active process template (+ holiday
@@ -296,6 +303,10 @@ export async function enrollLead(
       update: { totalAmount: expectedValue },
       select: { id: true },
     });
+    // Repeat business: the candidate already holds another (different) service —
+    // this enrollment is a re-enrollment. Drives the finance draft wording.
+    const priorServices = await tx.partyService.count({ where: { partyId, serviceId: { not: serviceId } } });
+    const isRepeat = priorServices > 0;
     const pipelineId = await upsertPipeline(tx, lead, deal, "closed_won", partyId, args.closedDate ?? null);
     await tx.lead.update({
       where: { id: lead.id },
@@ -321,7 +332,7 @@ export async function enrollLead(
           type: "Revenue",
           category: classification.category,
           subItem: classification.subItem,
-          description: `Enrollment — ${lead.candidateName} (review & complete)`,
+          description: `${isRepeat ? "Re-enrollment" : "Enrollment"} — ${lead.candidateName}${service?.name ? ` · ${service.name}` : ""} (review & complete)`,
           paymentMode: "HDFC Bank",
           amount: expectedValue,
           flow: flowFor("Revenue"),

@@ -167,6 +167,7 @@ export default async function LeadDetailPage({ params }: { params: { id: string 
             isAdmin: access.isAdmin,
             canAssign: access.canAssign,
             canViewHistory: access.canViewHistory,
+            canCreateLeads: access.canCreateLeads,
             userId,
           }}
         />

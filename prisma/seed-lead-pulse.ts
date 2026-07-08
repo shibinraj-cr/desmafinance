@@ -18,6 +18,11 @@ const SOURCES = [
   { code: "website", label: "Website", displayOrder: 6 },
   { code: "candidate_referral", label: "Candidate Referral", displayOrder: 7 },
   { code: "agency_referral", label: "Agency Referral", displayOrder: 8 },
+  // Repeat business: an already-enrolled candidate enrolling in a further
+  // service. The re-enrollment flow stamps a new lead's primary source with this
+  // (preserving the original channel in Lead.originalSource) so repeat revenue
+  // shows as its own bucket in the source funnel.
+  { code: "existing_candidate", label: "Existing Candidate", displayOrder: 9 },
 ];
 
 const REGIONS = [
