@@ -446,6 +446,19 @@ export type TeamActivity = {
   };
   /** New-leads-per-day sparkline for the last 14 local days (oldest→newest). */
   newLeadTrend: number[];
+  /**
+   * Pipeline forecast for the CURRENT calendar month (always `now`'s month, not
+   * the selected range) — the projected book of business:
+   *   - `won`   = deals already enrolled this month (closed_won pipeline, closedDate in month)
+   *   - `open`  = active leads whose deal is expected to close this month (expectedCloseDate in month)
+   *   - `total` = won + open (what the month lands at if every open deal closes)
+   * `value` is the summed `expectedValue` (₹) of the leads in each bucket.
+   */
+  forecast: {
+    won: { count: number; value: number };
+    open: { count: number; value: number };
+    total: { count: number; value: number };
+  };
   bdeRows: TeamBdeRow[];
   attention: {
     slaBreaches: TeamLeadRef[];
@@ -481,6 +494,12 @@ export async function getTeamActivity(opts: {
   const TREND_DAYS = 14;
   const trendFrom = new Date(startOfNextLocalDay(now).getTime() - TREND_DAYS * 86_400_000);
 
+  // Current calendar-month bounds for the pipeline forecast. expectedCloseDate /
+  // closedDate are @db.Date (UTC-midnight, date-only), so compare in UTC — matches
+  // getPipelineForecast in lead-pulse-metrics. Half-open [start, next month start).
+  const fcStart = new Date(Date.UTC(now.getFullYear(), now.getMonth(), 1));
+  const fcEnd = new Date(Date.UTC(now.getFullYear(), now.getMonth() + 1, 1));
+
   const [
     funnel,
     activeAssignedRaw,
@@ -491,6 +510,8 @@ export async function getTeamActivity(opts: {
     trendLeads,
     newLeadsRange,
     unassignedActive,
+    openForecastLeads,
+    wonForecastLeads,
   ] = await Promise.all([
     // Conversion (current month, carryover-safe). Narrowed to self below.
     getCrmFunnelByBde(now.getFullYear(), now.getMonth() + 1),
@@ -551,7 +572,41 @@ export async function getTeamActivity(opts: {
     prisma.lead.count({ where: { ...(occurredAt ? { createdAt: occurredAt } : {}), ...scopeLeadWhere } }),
     // Unassigned active leads (managers only; 0 for a self-view).
     self ? Promise.resolve(0) : prisma.lead.count({ where: { status: { kind: "active" }, assignedToId: null } }),
+    // Forecast — open deals expected to close this calendar month (active leads
+    // with an expectedCloseDate in the month). Scoped to self for a BDE view.
+    prisma.lead.findMany({
+      where: {
+        ...scopeLeadWhere,
+        status: { kind: "active" },
+        expectedCloseDate: { gte: fcStart, lt: fcEnd },
+      },
+      select: { expectedValue: true },
+    }),
+    // Forecast — deals already won (enrolled) this calendar month: their mirrored
+    // pipeline is closed_won with a closedDate in the month (same rule as the
+    // "Enrolled" column / getCrmFunnelByBde).
+    prisma.lead.findMany({
+      where: {
+        ...scopeLeadWhere,
+        pipeline: { status: "closed_won", closedDate: { gte: fcStart, lt: fcEnd } },
+      },
+      select: { expectedValue: true },
+    }),
   ]);
+
+  // Sum a set of leads' expected deal values (₹), treating a null value as 0.
+  const sumExpected = (rows: Array<{ expectedValue: Prisma.Decimal | null }>) =>
+    rows.reduce((s, r) => s + (r.expectedValue ? Number(r.expectedValue.toString()) : 0), 0);
+  const forecastOpen = { count: openForecastLeads.length, value: sumExpected(openForecastLeads) };
+  const forecastWon = { count: wonForecastLeads.length, value: sumExpected(wonForecastLeads) };
+  const forecast = {
+    won: forecastWon,
+    open: forecastOpen,
+    total: {
+      count: forecastWon.count + forecastOpen.count,
+      value: forecastWon.value + forecastOpen.value,
+    },
+  };
 
   // Carryover-exclude: keep only genuinely-owned leads (drops bulk-import dumps),
   // so the unassigned/imported backlog never inflates a consultant's numbers.
@@ -783,6 +838,7 @@ export async function getTeamActivity(opts: {
       unassignedActive,
     },
     newLeadTrend,
+    forecast,
     bdeRows,
     attention: {
       slaBreaches: cap(slaList),
