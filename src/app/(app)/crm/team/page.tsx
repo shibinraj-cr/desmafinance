@@ -9,12 +9,15 @@ import { parsePeriod, rangeFor, periodLabel } from "@/lib/period";
 import {
   resolveTeamScope,
   getTeamActivity,
+  wholeTeamScope,
+  getScorecardExcludedUserIds,
   SLA_THRESHOLD_DAYS,
   ABANDONED_DAYS,
   STUCK_DAYS,
   type TeamLeadRef,
   type TeamBdeRow,
 } from "@/lib/crm-team";
+import { buildL2Scorecard, type L2Score, type ScoreComponent } from "@/lib/crm-score";
 
 export const dynamic = "force-dynamic";
 
@@ -148,6 +151,100 @@ function num(n: number): string {
   return String(n);
 }
 
+/** Colour tokens for a score band — value text, the component-bar fill, and the label chip. */
+function bandStyles(band: L2Score["band"]): { text: string; bar: string; chip: string } {
+  switch (band) {
+    case "excellent":
+      return { text: "text-green-700", bar: "bg-green-600", chip: "bg-green-50 text-green-700" };
+    case "solid":
+      return { text: "text-accent", bar: "bg-primary", chip: "bg-amber-50 text-amber-900" };
+    case "developing":
+      return { text: "text-amber-600", bar: "bg-amber-500", chip: "bg-amber-50 text-amber-800" };
+    case "attention":
+      return { text: "text-error", bar: "bg-error", chip: "bg-red-50 text-error" };
+  }
+}
+
+/** One component's contribution: label, earned/max, and a proportional fill bar. */
+function ScoreBar({ component, barClass }: { component: ScoreComponent; barClass: string }) {
+  const pct = Math.round((component.earned / component.max) * 100);
+  const fill = component.neutral ? "bg-outline" : barClass;
+  return (
+    <div>
+      <div className="flex items-baseline justify-between text-caption">
+        <span className="text-on-surface-variant">
+          {component.label}
+          {component.neutral && <span className="ml-xs text-on-surface-variant/70">· no data</span>}
+        </span>
+        <span className="font-semibold tabular-nums text-on-surface">
+          {component.earned}
+          <span className="text-on-surface-variant">/{component.max}</span>
+        </span>
+      </div>
+      <div className="mt-[3px] h-1.5 w-full overflow-hidden rounded-full bg-outline-variant">
+        <div className={`h-full rounded-full ${fill}`} style={{ width: `${pct}%` }} />
+      </div>
+    </div>
+  );
+}
+
+/** A single L2 consultant's scorecard: headline score, breakdown bars, narrative, and a details drawer. */
+function ScoreCard({ entry, rank }: { entry: L2Score; rank: number }) {
+  const s = bandStyles(entry.band);
+  return (
+    <div className="flex flex-col rounded-xl border border-outline-variant bg-surface-container-lowest p-lg shadow-sm">
+      <div className="flex items-start justify-between gap-base">
+        <div className="min-w-0">
+          <div className="flex items-center gap-sm">
+            {entry.scored && (
+              <span className="text-caption font-semibold tabular-nums text-on-surface-variant">#{rank}</span>
+            )}
+            <span className="truncate font-semibold text-on-surface">{entry.displayName}</span>
+            <span className="text-caption uppercase text-on-surface-variant">{entry.role}</span>
+          </div>
+        </div>
+        <div className="shrink-0 text-right">
+          {entry.scored ? (
+            <>
+              <div className={`text-[28px] font-bold leading-none tabular-nums ${s.text}`}>{entry.score}</div>
+              <span className={`mt-xs inline-block rounded-full px-xs py-[1px] text-[11px] font-semibold ${s.chip}`}>
+                {entry.bandLabel}
+              </span>
+            </>
+          ) : (
+            <span className="text-label-sm text-on-surface-variant">Not scored</span>
+          )}
+        </div>
+      </div>
+
+      <p className="mt-sm text-label-sm text-on-surface-variant">{entry.narrative}</p>
+
+      {entry.scored && (
+        <>
+          <div className="mt-md grid grid-cols-1 gap-sm sm:grid-cols-2">
+            {entry.components.map((c) => (
+              <ScoreBar key={c.key} component={c} barClass={s.bar} />
+            ))}
+          </div>
+          <details className="group mt-md">
+            <summary className="cursor-pointer list-none text-caption font-semibold text-primary hover:underline">
+              Why this score →
+            </summary>
+            <ul className="mt-sm space-y-xs">
+              {entry.components.map((c) => (
+                <li key={c.key} className="flex gap-sm text-caption text-on-surface-variant">
+                  <span className="w-28 shrink-0 font-semibold text-on-surface">{c.label}</span>
+                  <span className="min-w-0">{c.detail}</span>
+                </li>
+              ))}
+            </ul>
+          </details>
+        </>
+      )}
+    </div>
+  );
+}
+
 export default async function TeamActivityPage({ searchParams }: { searchParams: SP }) {
   const { userId, perms } = await getCurrentUserAndPermissions();
   if (!userId || !perms) redirect("/login");
@@ -178,6 +275,14 @@ export default async function TeamActivityPage({ searchParams }: { searchParams:
   const data = await getTeamActivity({ scope, range, now });
   const t = data.totals;
   const rangeText = periodLabel(period);
+
+  // L2 Scorecard — always team-wide (shown to everyone, ranks the whole team), so
+  // reuse the viewer's rows when they're already team-wide, else fetch team-wide.
+  const scoreRows = scope.teamWide
+    ? data.bdeRows
+    : (await getTeamActivity({ scope: wholeTeamScope(scope.selfUserId), range, now })).bdeRows;
+  const excludedUserIds = await getScorecardExcludedUserIds(scoreRows.map((r) => r.userId));
+  const scorecard = buildL2Scorecard(scoreRows, { excludeUserIds: excludedUserIds });
 
   // BDE table sorted worst-first by total attention pressure, then by name.
   const pressure = (r: TeamBdeRow) => r.slaBreaches + r.abandoned + r.stuck + r.noTask + r.firstResponseBreached;
@@ -290,6 +395,26 @@ export default async function TeamActivityPage({ searchParams }: { searchParams:
             — no consultant owns them yet.
           </div>
         )}
+
+        {/* L2 Scorecard — composite performance score per L2 consultant (team-wide, everyone) */}
+        <Section
+          title="L2 Scorecard"
+          action={
+            <span className="text-caption text-on-surface-variant">
+              Score /100 · conversion = this month · responsiveness &amp; discipline = {rangeText} · hygiene = live
+            </span>
+          }
+        >
+          {scorecard.length === 0 ? (
+            <p className="py-md text-center text-on-surface-variant text-label-sm">No L2 consultants to score.</p>
+          ) : (
+            <div className="grid grid-cols-1 gap-gutter lg:grid-cols-2">
+              {scorecard.map((entry, i) => (
+                <ScoreCard key={entry.userId} entry={entry} rank={i + 1} />
+              ))}
+            </div>
+          )}
+        </Section>
 
         {/* BDE performance table */}
         <Section
