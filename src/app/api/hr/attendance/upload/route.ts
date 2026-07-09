@@ -5,7 +5,7 @@ import { canApproveHr } from "@/lib/hr-rbac";
 import {
   parseAttendanceWorkbook,
   workedMinutesForHalfDay,
-  isHalfDayDuration,
+  classifyWorkedDay,
   isSaturdayRuleExempt,
   SATURDAY_END_MIN,
   type ParsedDay,
@@ -292,9 +292,11 @@ export async function POST(req: Request) {
           }
         }
 
-        // (2) Half-day recompute from the capped punch duration. Saturday caps at
-        // 16:00; exempt employees (e.g. Nithya) work a different Saturday
-        // schedule, so leave their out-time uncapped.
+        // (2) Half-day / absence recompute from the capped punch duration.
+        // Saturday caps at 16:00; exempt employees (e.g. Nithya) work a different
+        // Saturday schedule, so leave their out-time uncapped. A capped span under
+        // 3h is a full absence (A) — the cap can push a P/HD below the floor when
+        // the employee only punched in late in the day.
         if ((d.status === "P" || d.status === "HD") && d.inTime && d.outTime) {
           const cap = isSat
             ? isSaturdayRuleExempt(d.rawName ?? "")
@@ -303,7 +305,7 @@ export async function POST(req: Request) {
             : shiftEnd;
           const worked = workedMinutesForHalfDay(d.inTime, d.outTime, cap);
           if (worked != null) {
-            const newStatus = isHalfDayDuration(worked, isSat) ? "HD" : "P";
+            const newStatus = classifyWorkedDay(worked, isSat);
             if (newStatus !== d.status) updates.status = newStatus;
           }
         }

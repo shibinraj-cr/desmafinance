@@ -4,8 +4,9 @@
  * Focus: the punch-based half-day (HD) rule. Worked duration is the actual
  * punch-in → out-time, with the out-time capped at the shift end (overtime past
  * shift end does NOT count). Thresholds: weekday < 7h (420 min), Saturday
- * < 5.5h (330 min). `normaliseStatus` is the parser's UNCAPPED first pass (it
- * has no shift yet); the cap is exercised via `workedMinutesForHalfDay`.
+ * < 5.5h (330 min); below a flat 3h (180 min) floor the day is a full absence
+ * (A), not HD. `normaliseStatus` is the parser's UNCAPPED first pass (it has no
+ * shift yet); the cap is exercised via `workedMinutesForHalfDay`.
  */
 import { describe, it, expect } from "vitest";
 import {
@@ -13,6 +14,7 @@ import {
   isSaturdayRuleExempt,
   workedMinutesForHalfDay,
   isHalfDayDuration,
+  classifyWorkedDay,
   SATURDAY_END_MIN,
 } from "@/lib/hr-attendance-parser";
 
@@ -47,6 +49,38 @@ describe("normaliseStatus — punch-based half-day rule (uncapped first pass)", 
   it("Work+OT is irrelevant — only the punch span decides", () => {
     // Short punch span → HD regardless of any biometric Work+OT figure.
     expect(normaliseStatus("P", TUE, "09:00", "13:00")).toBe("HD"); // 240m < 420
+  });
+});
+
+describe("normaliseStatus — under-3h floor becomes full absence (A), not HD", () => {
+  it("weekday span < 3h → A", () => {
+    expect(normaliseStatus("P", TUE, "09:00", "11:30")).toBe("A"); // 150m < 180
+    expect(normaliseStatus("P", TUE, "09:00", "11:59")).toBe("A"); // 179m < 180
+  });
+  it("exactly 3h is still a half-day, not an absence", () => {
+    expect(normaliseStatus("P", TUE, "09:00", "12:00")).toBe("HD"); // 180m == 180 → HD
+  });
+  it("Saturday span < 3h → A (flat floor, same as weekdays)", () => {
+    expect(normaliseStatus("P", SAT, "09:00", "11:30")).toBe("A"); // 150m < 180
+    expect(normaliseStatus("P", SAT, "09:00", "12:00")).toBe("HD"); // 180m → HD
+  });
+  it("a single missing punch stays HD — no duration to measure against the floor", () => {
+    expect(normaliseStatus("P", TUE, "09:10", null)).toBe("HD");
+  });
+});
+
+describe("classifyWorkedDay — absence floor / half-day / present", () => {
+  it("weekday: <180 → A, <420 → HD, else P", () => {
+    expect(classifyWorkedDay(179, false)).toBe("A");
+    expect(classifyWorkedDay(180, false)).toBe("HD");
+    expect(classifyWorkedDay(419, false)).toBe("HD");
+    expect(classifyWorkedDay(420, false)).toBe("P");
+  });
+  it("Saturday: <180 → A, <330 → HD, else P", () => {
+    expect(classifyWorkedDay(179, true)).toBe("A");
+    expect(classifyWorkedDay(180, true)).toBe("HD");
+    expect(classifyWorkedDay(329, true)).toBe("HD");
+    expect(classifyWorkedDay(330, true)).toBe("P");
   });
 });
 
@@ -125,6 +159,14 @@ describe("half-day cap — parser first pass vs authoritative recompute", () => 
     const capped = workedMinutesForHalfDay("11:40", "19:00", SHIFT_A_END)!;
     expect(isHalfDayDuration(uncapped, false)).toBe(false); // parser: 440m → P
     expect(isHalfDayDuration(capped, false)).toBe(true); //   route:  350m → HD
+  });
+  it("a late-afternoon punch drops from HD to A once OT past the shift end is capped off", () => {
+    // in 15:00, out 20:00, Shift A (ends 17:30): the parser sees 300m (HD), but the
+    // authoritative capped span is 150m (< 3h) → the day is a full absence.
+    const uncapped = workedMinutesForHalfDay("15:00", "20:00", null)!;
+    const capped = workedMinutesForHalfDay("15:00", "20:00", SHIFT_A_END)!;
+    expect(classifyWorkedDay(uncapped, false)).toBe("HD"); // parser: 300m → HD
+    expect(classifyWorkedDay(capped, false)).toBe("A"); //    route:  150m → A
   });
 });
 
