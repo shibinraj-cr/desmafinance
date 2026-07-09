@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 import { prisma } from "@/lib/prisma";
 import { getCurrentUserAndPermissions } from "@/lib/permissions";
+import { isAdmin } from "@/lib/rbac";
 import { getLeadPulseAccess, type LeadPulseRoleSlug } from "@/lib/lead-pulse-rbac";
 import {
   isWithinBackdateWindow,
@@ -29,6 +30,8 @@ const DateParam = z
 export async function GET(req: NextRequest) {
   const { userId: actorId, perms } = await getCurrentUserAndPermissions();
   if (!actorId || !perms) return NextResponse.json({ error: "unauthorized" }, { status: 401 });
+  // Daily Entry is retired — admin-only. The CRM now captures every close.
+  if (!isAdmin(perms)) return NextResponse.json({ error: "forbidden" }, { status: 403 });
 
   const url = new URL(req.url);
   const dateStr = url.searchParams.get("date") ?? todayIst();
@@ -207,6 +210,8 @@ const SaveSchema = z.object({
 export async function POST(req: NextRequest) {
   const { userId: actorId, perms } = await getCurrentUserAndPermissions();
   if (!actorId || !perms) return NextResponse.json({ error: "unauthorized" }, { status: 401 });
+  // Daily Entry is retired — admin-only. The CRM now captures every close.
+  if (!isAdmin(perms)) return NextResponse.json({ error: "forbidden" }, { status: 403 });
 
   const access = await getLeadPulseAccess(actorId, perms);
   if (access.role !== "l1" && access.role !== "l2") {

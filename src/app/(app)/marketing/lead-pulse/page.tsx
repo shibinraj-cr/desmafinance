@@ -1146,6 +1146,9 @@ function PipelineForecastCard({
     (b) => b.totals.targetCount > 0 && b.totals.forecastCount < b.totals.targetCount,
   ).length;
   const inr = (n: number) => "₹" + n.toLocaleString("en-IN", { maximumFractionDigits: 0 });
+  // Counts are service-weighted, so they can be fractional (e.g. a 0.5-weight
+  // service). Show a whole number plainly, a fraction to one decimal.
+  const fmtCount = (n: number) => (Number.isInteger(n) ? String(n) : n.toFixed(1));
 
   if (totalOpen === 0 && totalActual === 0) {
     // Suppress the card entirely if nothing in flight + nothing closed,
@@ -1160,10 +1163,10 @@ function PipelineForecastCard({
           {inr(expectedRevenue)}
         </span>
         <span className="text-[12px]" style={{ color: "var(--lp-on-surface-variant)" }}>
-          expected revenue from {totalOpen} open deals · {inr(actualRevenue)} already closed
+          expected revenue from {fmtCount(totalOpen)} open deals · {inr(actualRevenue)} already closed
         </span>
         <span className="text-[12px] ml-auto" style={{ color: "var(--lp-on-surface-variant)" }}>
-          {totalForecast} closes forecast ({onTrack} on track · {behind} behind)
+          {fmtCount(totalForecast)} closes forecast ({onTrack} on track · {behind} behind)
         </span>
       </div>
       <table className="w-full text-[13px]">
@@ -1191,9 +1194,9 @@ function PipelineForecastCard({
               return (
                 <tr key={b.userId} className="border-t" style={{ borderColor: "var(--lp-outline-variant)" }}>
                   <td className="px-[12px] py-[6px] font-semibold">{b.displayName}</td>
-                  <td className="px-[12px] py-[6px] text-right tabular-nums">{b.totals.actualCount}</td>
-                  <td className="px-[12px] py-[6px] text-right tabular-nums">{b.totals.openCount}</td>
-                  <td className="px-[12px] py-[6px] text-right tabular-nums font-semibold">{b.totals.forecastCount}</td>
+                  <td className="px-[12px] py-[6px] text-right tabular-nums">{fmtCount(b.totals.actualCount)}</td>
+                  <td className="px-[12px] py-[6px] text-right tabular-nums">{fmtCount(b.totals.openCount)}</td>
+                  <td className="px-[12px] py-[6px] text-right tabular-nums font-semibold">{fmtCount(b.totals.forecastCount)}</td>
                   <td className="px-[12px] py-[6px] text-right tabular-nums" style={{ color: "var(--lp-on-surface-variant)" }}>
                     {b.totals.targetCount || "—"}
                   </td>

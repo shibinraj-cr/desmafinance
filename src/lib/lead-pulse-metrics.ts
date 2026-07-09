@@ -1460,7 +1460,7 @@ export async function getPipelineForecast(
       ],
     },
     include: {
-      service: { select: { id: true, name: true, groupId: true, group: { select: { id: true, name: true } } } },
+      service: { select: { id: true, name: true, groupId: true, weight: true, group: { select: { id: true, name: true } } } },
     },
   });
 
@@ -1532,23 +1532,29 @@ export async function getPipelineForecast(
   const closeServices = closeServiceIds.length
     ? await prisma.service.findMany({
         where: { id: { in: closeServiceIds } },
-        select: { id: true, name: true, groupId: true, group: { select: { id: true, name: true } } },
+        select: { id: true, name: true, groupId: true, weight: true, group: { select: { id: true, name: true } } },
       })
     : [];
   const closeServiceById = new Map(closeServices.map((s) => [s.id, s]));
 
+  // Counts are service-weighted — each close/open deal contributes
+  // `service.weight` (e.g. a 0.5-weight service counts as half an enrollment),
+  // exactly as the L2 targets & conversion matrices do (getServiceConversionMatrix /
+  // getCrmServiceMatrix). This keeps forecastCount comparable to targetCount (which
+  // is set in the same weighted units) so the on-track/behind verdict is apples-to-
+  // apples. Revenue is money, so it is never weighted.
   for (const c of dailyCloses) {
     const svc = closeServiceById.get(c.serviceId);
     if (!svc) continue;
     const b = bucketFor(c.entry.userId, svc);
-    b.actualCount += 1;
+    b.actualCount += svc.weight ?? 1;
   }
 
   for (const r of pipelineRows) {
     const b = bucketFor(r.userId, r.service);
     const amount = Number(r.expectedFirstInstallment.toString());
     if (r.status === "open") {
-      b.openCount += 1;
+      b.openCount += r.service.weight ?? 1;
       b.expectedRevenue += amount;
     } else if (r.status === "closed_won") {
       // actualCount is driven by LeadPulseDailyClose above (single source
