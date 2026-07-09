@@ -8,6 +8,7 @@
 
 import { prisma } from "./prisma";
 import { FY_START, FY_END, MONTH_LABELS } from "./period";
+import { getMetricsSource } from "./lead-pulse-crm-metrics";
 
 function num(d: { toString(): string } | number | null | undefined): number {
   if (d === null || d === undefined) return 0;
@@ -275,9 +276,25 @@ export type MonthlyRow = {
   revenue: number;
   expense: number;
   net: number;
-  /** Count of LeadPulseDailyClose rows whose entry sits in the month —
-   *  the "enrollments" metric the CEO tracks. */
+  /** Enrollments landing in the month, sourced from whichever feed the live
+   *  Lead Pulse dashboards use (see `getMetricsSource`):
+   *    - "crm"         → closed_won LeadPulsePipeline rows, bucketed by closedDate
+   *    - "daily_entry" → LeadPulseDailyClose rows, bucketed by entry.entryDate
+   *  Reading the same source keeps this chart in lockstep with Marketing. */
   enrollments: number;
+};
+
+/** Authoritative enrollment totals for the pre-CRM-cutover months. Enrollments
+ *  used to be tracked on the manual daily entry, so per-enrollment closed_won
+ *  pipelines don't exist (April) or are only partial (May: 21 pipelines vs the
+ *  true 60) for these months — a live CRM count under-reports them. These frozen
+ *  totals come from the marketing enrollment records (the same source that
+ *  reconciled June to 59). Only applied to months that have already ended, so the
+ *  current + future months keep flowing live from CRM and self-correct.
+ *  See [[june2026-enrollment-reconciliation]]. */
+const HISTORICAL_ENROLLMENTS: Record<string, number> = {
+  "Apr-26": 47,
+  "May-26": 60,
 };
 
 /** 12 fiscal-year buckets — Apr → Mar — pre-filled with zeros and then
@@ -298,7 +315,13 @@ export async function fyMonthlySeries(): Promise<MonthlyRow[]> {
     });
   }
 
-  const [txRows, closeRows] = await Promise.all([
+  // Enrollments must come from the SAME feed the live Lead Pulse dashboards
+  // read, or the CEO chart drifts from Marketing. Post-CRM-cutover the flag is
+  // "crm": count closed_won pipelines by closedDate (matches getCrmFunnel).
+  // Pre-cutover / rollback it's "daily_entry": count LeadPulseDailyClose rows.
+  const metricsSource = await safe("getMetricsSource", () => getMetricsSource(), "daily_entry");
+
+  const [txRows, enrollmentDates] = await Promise.all([
     safe(
       "transaction.groupBy(monthly)",
       () =>
@@ -312,17 +335,31 @@ export async function fyMonthlySeries(): Promise<MonthlyRow[]> {
         }),
       [] as Array<{ month: string; type: string; _sum: { amount: { toString(): string } | null } }>,
     ),
-    safe(
-      "leadPulseDailyClose.findMany(enrollments)",
-      () =>
-        prisma.leadPulseDailyClose.findMany({
-          where: {
-            entry: { entryDate: { gte: FY_START, lt: FY_END } },
-          },
-          select: { entry: { select: { entryDate: true } } },
-        }),
-      [] as Array<{ entry: { entryDate: Date } }>,
-    ),
+    metricsSource === "crm"
+      ? safe(
+          "leadPulsePipeline.findMany(enrollments)",
+          () =>
+            prisma.leadPulsePipeline
+              .findMany({
+                where: { status: "closed_won", closedDate: { gte: FY_START, lt: FY_END } },
+                select: { closedDate: true },
+              })
+              // closedDate can't be null here (the range filter excludes nulls),
+              // but narrow the type for the bucketer below.
+              .then((rows) => rows.map((r) => r.closedDate).filter((d): d is Date => d !== null)),
+          [] as Date[],
+        )
+      : safe(
+          "leadPulseDailyClose.findMany(enrollments)",
+          () =>
+            prisma.leadPulseDailyClose
+              .findMany({
+                where: { entry: { entryDate: { gte: FY_START, lt: FY_END } } },
+                select: { entry: { select: { entryDate: true } } },
+              })
+              .then((rows) => rows.map((r) => r.entry.entryDate)),
+          [] as Date[],
+        ),
   ]);
 
   const byMonth = new Map(buckets.map((b) => [b.month, b]));
@@ -334,10 +371,21 @@ export async function fyMonthlySeries(): Promise<MonthlyRow[]> {
     else if (r.type === "Expense") b.expense += v;
     b.net = b.revenue - b.expense;
   }
-  for (const c of closeRows) {
-    const label = monthLabel(c.entry.entryDate);
-    const b = byMonth.get(label);
+  for (const d of enrollmentDates) {
+    const b = byMonth.get(monthLabel(d));
     if (b) b.enrollments += 1;
+  }
+
+  // Overlay the authoritative pre-cutover totals, but only for months that have
+  // already closed — never freeze the running/future month, which must keep
+  // counting live CRM enrollments.
+  const now = new Date();
+  const currentMonthStart = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1));
+  for (const b of buckets) {
+    const override = HISTORICAL_ENROLLMENTS[b.month];
+    if (override !== undefined && b.date < currentMonthStart) {
+      b.enrollments = override;
+    }
   }
 
   return buckets;
