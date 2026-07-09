@@ -30,6 +30,7 @@ import { Prisma } from "@prisma/client";
 import { prisma } from "./prisma";
 import { getAssignableBdes, REINQUIRY_TASK_SUBJECT_NEEDLE } from "./crm-leads";
 import { getCrmFunnelByBde } from "./lead-pulse-crm-metrics";
+import { CRM_TEAM_LEAD_PAGE } from "./crm-rbac";
 
 // ── Policy constants ─────────────────────────────────────────────────────────
 
@@ -300,6 +301,15 @@ export function resolveTeamScope(
   };
 }
 
+/**
+ * A synthetic whole-team scope. The L2 Scorecard is shown to everyone with CRM
+ * access and always ranks the full team, so it is computed team-wide regardless
+ * of the viewer's "Whole team / Just me" toggle.
+ */
+export function wholeTeamScope(selfUserId: string): TeamScope {
+  return { restrictToUserId: null, teamWide: true, canViewWholeTeam: true, selfUserId };
+}
+
 /** Median of a numeric list, or null when empty. Does not mutate the input. */
 export function median(xs: number[]): number | null {
   if (xs.length === 0) return null;
@@ -409,6 +419,8 @@ export type TeamBdeRow = {
   firstResponsePending: number;
   firstResponseBreached: number;
   // Attention (point-in-time / now).
+  /** Active leads genuinely owned by this consultant right now — the denominator for hygiene rates. */
+  activeOwned: number;
   slaBreaches: number;
   abandoned: number;
   noTask: number;
@@ -628,6 +640,7 @@ export async function getTeamActivity(opts: {
     firstResponseMedianHours: null,
     firstResponsePending: 0,
     firstResponseBreached: 0,
+    activeOwned: 0,
     slaBreaches: 0,
     abandoned: 0,
     noTask: 0,
@@ -715,6 +728,7 @@ export async function getTeamActivity(opts: {
 
   for (const l of attentionLeads) {
     const a = l.assignedToId ? acc.get(l.assignedToId) : undefined;
+    if (a) a.activeOwned++;
     const lastTouchAt = touchByLead.get(l.id) ?? l.createdAt;
     const stuckSince = statusChangeByLead.get(l.id) ?? l.createdAt;
     const f = attentionFlags({
@@ -791,6 +805,27 @@ export async function getTeamActivity(opts: {
       stuck: cap(stuckList),
     },
   };
+}
+
+/**
+ * Of the given users, those who are CRM managers rather than scored individual
+ * contributors — a system admin or a sales-team lead (holder of the
+ * {@link CRM_TEAM_LEAD_PAGE} marker). The L2 Scorecard excludes them: a team lead
+ * (e.g. Devika) reviews the scorecard, they aren't ranked on it. Generalises the
+ * "except Devika" rule so a future lead is handled automatically; the scorecard
+ * also drops a small name-based list as a belt-and-suspenders guard.
+ */
+export async function getScorecardExcludedUserIds(userIds: string[]): Promise<Set<string>> {
+  if (userIds.length === 0) return new Set();
+  const users = await prisma.user.findMany({
+    where: { id: { in: userIds } },
+    select: { id: true, roleRef: { select: { isAdmin: true, pages: true } } },
+  });
+  return new Set(
+    users
+      .filter((u) => u.roleRef?.isAdmin || u.roleRef?.pages.includes(CRM_TEAM_LEAD_PAGE))
+      .map((u) => u.id),
+  );
 }
 
 // ── Attention drill-down queue (full, consultant-filterable) ─────────────────
