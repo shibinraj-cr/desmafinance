@@ -6,6 +6,7 @@ import Link from "next/link";
 import { useRouter, usePathname, useSearchParams } from "next/navigation";
 import { type LeadRow, isActionOnlyStatus } from "@/lib/crm-leads";
 import { DEFAULT_STATUS_COLOR, BULK_EMAIL_MERGE_FIELDS, fillTemplate, type MessageTemplateDTO } from "@/lib/crm";
+import { ageFromDob } from "@/lib/age";
 import { COUNTRIES } from "@/lib/countries";
 
 // ── Shared prop shapes ──────────────────────────────────────────────────────
@@ -250,11 +251,15 @@ function NewLeadButton({ masters, access }: { masters: Masters; access: LeadsAcc
     sourceId: "",
     serviceId: "",
     qualificationId: "",
+    dob: "",
     country: "",
     studyDestination: "",
     statusId: "",
     assignedToId: "",
   });
+
+  // Live age preview from the entered DOB (auto-derived; never sent to the server).
+  const dobAge = ageFromDob(form.dob || null, new Date());
 
   // The study-destination field only applies to the Study Abroad service.
   const selectedServiceLabel = masters.services.find((s) => s.id === form.serviceId)?.label ?? "";
@@ -289,6 +294,7 @@ function NewLeadButton({ masters, access }: { masters: Masters; access: LeadsAcc
         sourceId: form.sourceId || undefined,
         serviceId: form.serviceId || undefined,
         qualificationId: form.qualificationId || undefined,
+        dob: form.dob || undefined,
         country: form.country || undefined,
         studyDestination: isStudyAbroad ? form.studyDestination || undefined : undefined,
         statusId: form.statusId || undefined,
@@ -309,6 +315,7 @@ function NewLeadButton({ masters, access }: { masters: Masters; access: LeadsAcc
       sourceId: "",
       serviceId: "",
       qualificationId: "",
+      dob: "",
       country: "",
       studyDestination: "",
       statusId: "",
@@ -440,6 +447,15 @@ function NewLeadButton({ masters, access }: { masters: Masters; access: LeadsAcc
                   </select>
                 </Field>
               </div>
+              <Field label={`Date of birth${dobAge !== null ? ` — age ${dobAge}` : ""}`}>
+                <input
+                  className={inputCls}
+                  type="date"
+                  value={form.dob}
+                  max={new Date().toISOString().slice(0, 10)}
+                  onChange={(e) => setForm({ ...form, dob: e.target.value })}
+                />
+              </Field>
               <Field label="Country">
                 <select
                   className={inputCls}
@@ -515,7 +531,7 @@ const SORT_OPTIONS: { value: string; label: string }[] = [
 // fixed). Order is remembered per browser in localStorage.
 const LEADS_COL_ORDER_KEY = "crm.leads.columnOrder.v1";
 const LEADS_DEFAULT_COLUMNS = [
-  "created", "source", "campaign", "status", "candidate", "email", "phone", "country", "studyDestination", "service", "qualification", "consultant", "assigned",
+  "created", "source", "campaign", "status", "candidate", "email", "phone", "age", "country", "studyDestination", "service", "qualification", "consultant", "assigned",
 ] as const;
 
 export function LeadsTable({
@@ -661,6 +677,8 @@ export function LeadsTable({
     !!search.get("campaign") ||
     !!search.get("country") ||
     !!search.get("studyDestination") ||
+    !!search.get("ageMin") ||
+    !!search.get("ageMax") ||
     !!search.get("assignedOn") ||
     !!search.get("q");
 
@@ -718,6 +736,17 @@ export function LeadsTable({
     },
     { id: "email", label: "Email", className: "whitespace-nowrap text-on-surface-variant", render: (l) => l.email ?? "—" },
     { id: "phone", label: "Phone", className: "whitespace-nowrap text-on-surface-variant", render: (l) => l.phone ?? "—" },
+    {
+      id: "age",
+      label: "Age",
+      className: "whitespace-nowrap tabular-nums text-on-surface-variant",
+      render: (l) =>
+        l.age !== null ? (
+          <span title={l.dob ? `DOB ${l.dob}` : undefined}>{l.age}</span>
+        ) : (
+          "—"
+        ),
+    },
     {
       id: "country",
       label: "Country",
@@ -901,6 +930,37 @@ export function LeadsTable({
           </select>
         )}
 
+        <label
+          className={selectClass + " inline-flex items-center gap-xs text-on-surface-variant"}
+          title="Filter candidates by age (years)"
+        >
+          <span className="material-symbols-outlined" style={{ fontSize: 18 }}>
+            cake
+          </span>
+          <span className="whitespace-nowrap">Age</span>
+          <input
+            type="number"
+            min={0}
+            max={120}
+            inputMode="numeric"
+            placeholder="min"
+            value={search.get("ageMin") ?? ""}
+            onChange={(e) => update({ ageMin: e.target.value || null })}
+            className="w-12 bg-transparent outline-none text-on-surface text-center"
+          />
+          <span aria-hidden>–</span>
+          <input
+            type="number"
+            min={0}
+            max={120}
+            inputMode="numeric"
+            placeholder="max"
+            value={search.get("ageMax") ?? ""}
+            onChange={(e) => update({ ageMax: e.target.value || null })}
+            className="w-12 bg-transparent outline-none text-on-surface text-center"
+          />
+        </label>
+
         <select className={selectClass} value={search.get("sort") ?? "created_desc"} onChange={(e) => update({ sort: e.target.value })}>
           {SORT_OPTIONS.map((o) => (
             <option key={o.value} value={o.value}>
@@ -912,7 +972,7 @@ export function LeadsTable({
         {anyFilter && (
           <button
             type="button"
-            onClick={() => update({ status: null, source: null, service: null, assignee: null, campaign: null, country: null, studyDestination: null, assignedOn: null, q: null })}
+            onClick={() => update({ status: null, source: null, service: null, assignee: null, campaign: null, country: null, studyDestination: null, ageMin: null, ageMax: null, assignedOn: null, q: null })}
             className="h-9 px-md rounded-lg border border-outline-variant text-label-sm text-on-surface-variant hover:text-on-surface hover:bg-surface-container-low transition"
           >
             Clear all

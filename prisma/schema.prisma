@@ -1896,6 +1896,12 @@ model Lead {
   // Promoted from extra.campaign so the leads list can filter & segment by it.
   campaign      String?
 
+  // Candidate's official date of birth (date-only, no time). Age is NOT stored —
+  // it's derived from `dob` at read time (see ageFromDob) so it's always current.
+  // Backs the leads-list Age column and the age-range filter (translated to a dob
+  // range in buildLeadWhere), and is shown/edited on the lead detail.
+  dob           DateTime? @db.Date
+
   // Candidate's country (free-form name picked from the full country dropdown,
   // e.g. "India", "Australia"). Optional — drives the leads list country
   // column/filter and is shown/edited on the lead detail.
@@ -1946,6 +1952,7 @@ model Lead {
   @@index([dedupeKey])
   @@index([emailKey])
   @@index([campaign])
+  @@index([dob])
   @@index([country])
   @@index([studyDestination])
   @@index([email])

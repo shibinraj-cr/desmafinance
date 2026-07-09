@@ -7,6 +7,7 @@ import Link from "next/link";
 import type { LeadRow, NoteRow, ActivityRow, TaskRow } from "@/lib/crm-leads";
 import { isActionOnlyStatus } from "@/lib/crm-leads";
 import { buildLeadMergeVars, fillTemplate, type MessageTemplateDTO } from "@/lib/crm";
+import { ageFromDob } from "@/lib/age";
 import { COUNTRIES } from "@/lib/countries";
 import { StatusPill, type StatusOpt, type Opt, type BdeOpt } from "../client";
 import { EnrollCelebration } from "@/components/EnrollCelebration";
@@ -460,10 +461,14 @@ function SummaryCard({ lead, masters, canEdit }: { lead: LeadRow; masters: Detai
     sourceId: lead.source?.id ?? "",
     serviceId: lead.service?.id ?? "",
     qualificationId: lead.qualification?.id ?? "",
+    dob: lead.dob ?? "",
     country: lead.country ?? "",
     studyDestination: lead.studyDestination ?? "",
     statusId: lead.status.id,
   });
+
+  // Live age preview from the entered DOB (auto-derived; never sent to the server).
+  const draftAge = ageFromDob(draft.dob || null, new Date());
 
   // Study destination only applies to the Study Abroad service.
   const selectedServiceLabel = masters.services.find((s) => s.id === draft.serviceId)?.label ?? "";
@@ -487,6 +492,7 @@ function SummaryCard({ lead, masters, canEdit }: { lead: LeadRow; masters: Detai
         sourceId: draft.sourceId,
         serviceId: draft.serviceId,
         qualificationId: draft.qualificationId,
+        dob: draft.dob,
         country: draft.country,
         studyDestination: isStudyAbroad ? draft.studyDestination : undefined,
         statusId: draft.statusId,
@@ -568,6 +574,15 @@ function SummaryCard({ lead, masters, canEdit }: { lead: LeadRow; masters: Detai
               ))}
             </select>
           </Field>
+          <Field label={`Date of birth${draftAge !== null ? ` — age ${draftAge}` : ""}`}>
+            <input
+              className={inputCls}
+              type="date"
+              value={draft.dob}
+              max={new Date().toISOString().slice(0, 10)}
+              onChange={(e) => setDraft({ ...draft, dob: e.target.value })}
+            />
+          </Field>
           <Field label="Country">
             <select className={inputCls} value={draft.country} onChange={(e) => setDraft({ ...draft, country: e.target.value })}>
               <option value="">—</option>
@@ -626,6 +641,8 @@ function SummaryCard({ lead, masters, canEdit }: { lead: LeadRow; masters: Detai
           <Row label="Source" value={lead.source?.label ?? "—"} />
           <Row label="Service" value={lead.service?.name ?? "—"} />
           <Row label="Qualification" value={lead.qualification?.label ?? "—"} />
+          {lead.dob && <Row label="Date of birth" value={lead.dob} />}
+          {lead.age !== null && <Row label="Age" value={`${lead.age} yrs`} />}
           <Row label="Country" value={lead.country ?? "—"} />
           {(/study abroad/i.test(lead.service?.name ?? "") || lead.studyDestination) && (
             <Row label="Study Destination" value={lead.studyDestination ?? "—"} />

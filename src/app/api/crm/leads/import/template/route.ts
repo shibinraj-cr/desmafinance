@@ -5,8 +5,8 @@ import { getCrmAccess } from "@/lib/crm-rbac";
 
 export const dynamic = "force-dynamic";
 
-const HEADERS = ["Candidate Name", "Email", "Phone", "Source", "Service", "Qualification", "Consultant", "Notes"];
-const EXAMPLE = ["Asha Menon", "asha@example.com", "9876543210", "Meta", "", "Bachelor's", "", "Walk-in enquiry"];
+const HEADERS = ["Candidate Name", "Email", "Phone", "Date of Birth", "Source", "Service", "Qualification", "Consultant", "Notes"];
+const EXAMPLE = ["Asha Menon", "asha@example.com", "9876543210", "1998-05-21", "Meta", "", "Bachelor's", "", "Walk-in enquiry"];
 
 // GET /api/crm/leads/import/template — downloadable CSV template (admin).
 export const GET = withApiHandler(async () => {

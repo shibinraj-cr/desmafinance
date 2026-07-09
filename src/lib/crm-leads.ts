@@ -1,5 +1,6 @@
 import { Prisma } from "@prisma/client";
 import { prisma } from "./prisma";
+import { ageFromDob, dobRangeForAge } from "./age";
 
 // Shared include + serialiser so the list API, detail page and import flow all
 // emit the same plain (serialisable) row shape to client components.
@@ -35,6 +36,10 @@ export type LeadRow = {
   assignedAt: string | null;
   party: { id: string; name: string } | null;
   campaign: string | null;
+  /** Official date of birth as `YYYY-MM-DD` (date-only), or null. */
+  dob: string | null;
+  /** Age in whole years, derived from `dob` at serialize time (always current). */
+  age: number | null;
   country: string | null;
   studyDestination: string | null;
   expectedValue: number | null;
@@ -76,6 +81,9 @@ export function serializeLead(l: LeadWithRels): LeadRow {
     assignedAt: l.assignedAt ? l.assignedAt.toISOString() : null,
     party: l.party ? { id: l.party.id, name: l.party.name } : null,
     campaign: l.campaign,
+    // Date-only ISO (drop the time) + age derived relative to now.
+    dob: l.dob ? l.dob.toISOString().slice(0, 10) : null,
+    age: ageFromDob(l.dob, new Date()),
     country: l.country,
     studyDestination: l.studyDestination,
     expectedValue: l.expectedValue ? Number(l.expectedValue) : null,
@@ -101,6 +109,10 @@ export type LeadFilterParams = {
   campaign?: string;
   country?: string;
   studyDestination?: string;
+  /** Inclusive minimum age in years (translated to a `dob` upper bound). */
+  ageMin?: number;
+  /** Inclusive maximum age in years (translated to a `dob` lower bound). */
+  ageMax?: number;
   q?: string;
   /** Resolved half-open createdAt range (e.g. from `rangeFor(parsePeriod(...))`). `to` is exclusive. */
   from?: Date;
@@ -108,6 +120,8 @@ export type LeadFilterParams = {
   /** Half-open assignedAt range — "leads assigned on/within these dates". `assignedTo` is exclusive. */
   assignedFrom?: Date;
   assignedTo?: Date;
+  /** Injected "now" so the age→dob translation is stable within a request/test. */
+  now?: Date;
 };
 
 /**
@@ -137,6 +151,12 @@ export function buildLeadWhere(p: LeadFilterParams): Prisma.LeadWhereInput {
   if (p.campaign) where.campaign = p.campaign;
   if (p.country) where.country = p.country;
   if (p.studyDestination) where.studyDestination = p.studyDestination;
+  // Age filter → indexed `dob` range. A candidate with no dob never matches an
+  // age filter (dob IS NULL is excluded by a gte/lte bound), which is intended.
+  if (p.ageMin !== undefined || p.ageMax !== undefined) {
+    const dob = dobRangeForAge(p.ageMin, p.ageMax, p.now ?? new Date());
+    if (dob) where.dob = dob;
+  }
   const q = p.q?.trim();
   if (q) {
     const or: Prisma.LeadWhereInput[] = [

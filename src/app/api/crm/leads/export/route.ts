@@ -5,6 +5,7 @@ import { withApiHandler } from "@/lib/api";
 import { unauthorized, forbidden } from "@/lib/http-error";
 import { getCurrentUserAndPermissions } from "@/lib/permissions";
 import { getCrmAccess } from "@/lib/crm-rbac";
+import { parseAgeParam } from "@/lib/age";
 import { parsePeriod, rangeFor } from "@/lib/period";
 import {
   buildLeadWhere,
@@ -46,6 +47,8 @@ export const GET = withApiHandler(async (req: Request) => {
     campaign: sp.get("campaign") || undefined,
     country: sp.get("country") || undefined,
     studyDestination: sp.get("studyDestination") || undefined,
+    ageMin: parseAgeParam(sp.get("ageMin")),
+    ageMax: parseAgeParam(sp.get("ageMax")),
     q: sp.get("q") || undefined,
     from: range.from,
     to: range.to,
@@ -71,6 +74,8 @@ export const GET = withApiHandler(async (req: Request) => {
       Email: l.email ?? "",
       Phone: l.phone ?? "",
       "Alt Phone": l.altPhone ?? "",
+      DOB: l.dob ?? "",
+      Age: l.age ?? "",
       Country: l.country ?? "",
       "Study Destination": l.studyDestination ?? "",
       Service: l.service?.name ?? "",
@@ -81,12 +86,12 @@ export const GET = withApiHandler(async (req: Request) => {
   });
 
   const ws = XLSX.utils.json_to_sheet(data, {
-    header: ["Created", "Source", "Campaign", "Status", "Candidate", "Email", "Phone", "Alt Phone", "Country", "Study Destination", "Service", "Qualification", "Consultant", "Assigned"],
+    header: ["Created", "Source", "Campaign", "Status", "Candidate", "Email", "Phone", "Alt Phone", "DOB", "Age", "Country", "Study Destination", "Service", "Qualification", "Consultant", "Assigned"],
   });
   // Reasonable column widths.
   ws["!cols"] = [
     { wch: 20 }, { wch: 14 }, { wch: 22 }, { wch: 14 }, { wch: 22 },
-    { wch: 26 }, { wch: 16 }, { wch: 16 }, { wch: 16 }, { wch: 18 }, { wch: 22 }, { wch: 16 }, { wch: 18 }, { wch: 20 },
+    { wch: 26 }, { wch: 16 }, { wch: 16 }, { wch: 12 }, { wch: 6 }, { wch: 16 }, { wch: 18 }, { wch: 22 }, { wch: 16 }, { wch: 18 }, { wch: 20 },
   ];
   const wb = XLSX.utils.book_new();
   XLSX.utils.book_append_sheet(wb, ws, "Leads");
