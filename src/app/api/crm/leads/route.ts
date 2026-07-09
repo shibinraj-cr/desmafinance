@@ -8,6 +8,7 @@ import { getCurrentUserAndPermissions } from "@/lib/permissions";
 import { getCrmAccess } from "@/lib/crm-rbac";
 import { recordLeadActivity } from "@/lib/crm-activity";
 import { normalizePhone, computeDedupeKey, emailKeyOf, phoneMatchKeys } from "@/lib/crm";
+import { parseDobInput, parseAgeParam } from "@/lib/age";
 import { parsePeriod, rangeFor } from "@/lib/period";
 import {
   leadRowInclude,
@@ -52,6 +53,8 @@ export const GET = withApiHandler(async (req: Request) => {
     campaign: sp.get("campaign") || undefined,
     country: sp.get("country") || undefined,
     studyDestination: sp.get("studyDestination") || undefined,
+    ageMin: parseAgeParam(sp.get("ageMin")),
+    ageMax: parseAgeParam(sp.get("ageMax")),
     q: sp.get("q") || undefined,
     from: range.from,
     to: range.to,
@@ -85,6 +88,11 @@ const CreateSchema = z.object({
   qualificationId: z.string().optional(),
   statusId: z.string().optional(),
   assignedToId: z.string().optional(),
+  // Official date of birth as YYYY-MM-DD (age is derived, never sent).
+  dob: z.preprocess(
+    (v) => (v === "" ? undefined : v),
+    z.string().regex(/^\d{4}-\d{2}-\d{2}$/, "Date of birth must be YYYY-MM-DD").optional(),
+  ),
   country: z.string().trim().max(100).optional(),
   studyDestination: z.string().trim().max(100).optional(),
   extra: z.record(z.string()).optional(),
@@ -186,6 +194,7 @@ export const POST = withApiHandler(async (req: Request) => {
       statusId,
       assignedToId,
       assignedAt: assignedToId ? new Date() : null,
+      dob: parseDobInput(data.dob) ?? null,
       country: data.country || null,
       studyDestination: data.studyDestination || null,
       extra: data.extra ?? undefined,

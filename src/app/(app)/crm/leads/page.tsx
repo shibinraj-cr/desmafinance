@@ -15,6 +15,7 @@ import {
   assignedDayRange,
   resolveAssigneeFilter,
 } from "@/lib/crm-leads";
+import { parseAgeParam } from "@/lib/age";
 import { isEmailConfigured } from "@/lib/mailer";
 import { listMessageTemplates } from "@/lib/crm-message-templates";
 import { LeadsToolbar, LeadsTable } from "./client";
@@ -69,6 +70,8 @@ export default async function LeadsPage({ searchParams }: { searchParams: SP }) 
     campaign: str(searchParams, "campaign"),
     country: str(searchParams, "country"),
     studyDestination: str(searchParams, "studyDestination"),
+    ageMin: parseAgeParam(str(searchParams, "ageMin")),
+    ageMax: parseAgeParam(str(searchParams, "ageMax")),
     q: str(searchParams, "q"),
     from: range.from,
     to: range.to,

@@ -7,6 +7,7 @@ import { unauthorized, forbidden, badRequest } from "@/lib/http-error";
 import { getCurrentUserAndPermissions } from "@/lib/permissions";
 import { getCrmAccess } from "@/lib/crm-rbac";
 import { normalizePhone, computeDedupeKey, emailKeyOf, phoneMatchKeys } from "@/lib/crm";
+import { parseDobCell } from "@/lib/age";
 import { resolveDefaultStatus, getAssignableBdes } from "@/lib/crm-leads";
 import {
   recordReInquiry,
@@ -50,6 +51,12 @@ const HEADER_MAP: Record<string, string> = {
   service: "service",
   qualification: "qualification",
   education: "qualification",
+  dob: "dob",
+  "d.o.b": "dob",
+  "d.o.b.": "dob",
+  "date of birth": "dob",
+  birthdate: "dob",
+  "birth date": "dob",
   consultant: "consultant",
   bde: "consultant",
   "assigned to": "consultant",
@@ -128,6 +135,7 @@ export const POST = withApiHandler(async (req: Request) => {
     altPhoneE164: string | null;
     emailKey: string | null;
     dedupeKey: string | null;
+    dob: Date | null;
     sourceId: string | null;
     serviceId: string | null;
     qualificationId: string | null;
@@ -171,6 +179,12 @@ export const POST = withApiHandler(async (req: Request) => {
       if (v) extra[header] = v;
     }
 
+    // Official DOB → date-only. If the cell is present but unparseable, keep the
+    // raw value in `extra` so nothing is silently dropped.
+    const dobRaw = get(row, "dob");
+    const dob = parseDobCell(dobRaw);
+    if (dobRaw && !dob) extra["Date of Birth"] = dobRaw;
+
     parsed.push({
       candidateName,
       email,
@@ -180,6 +194,7 @@ export const POST = withApiHandler(async (req: Request) => {
       altPhoneE164,
       emailKey,
       dedupeKey,
+      dob,
       sourceId: sourceMap.get(get(row, "source").toLowerCase()) ?? null,
       serviceId: serviceMap.get(get(row, "service").toLowerCase()) ?? null,
       qualificationId: qualMap.get(get(row, "qualification").toLowerCase()) ?? null,
@@ -255,6 +270,7 @@ export const POST = withApiHandler(async (req: Request) => {
       altPhoneE164: p.altPhoneE164,
       emailKey: p.emailKey,
       dedupeKey: p.dedupeKey,
+      dob: p.dob,
       sourceId: p.sourceId,
       serviceId: p.serviceId,
       qualificationId: p.qualificationId,
