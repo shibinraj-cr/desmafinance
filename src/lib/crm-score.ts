@@ -212,19 +212,25 @@ function buildNarrative(components: ScoreComponent[], row: TeamBdeRow): string {
 
 // ── Public API ───────────────────────────────────────────────────────────────
 
+/**
+ * Score bands: label + inclusive lower bound, highest first. Single source of
+ * truth for both the scorer and the guide page (`/crm/team/scorecard-guide`), so
+ * the two never drift. `attention` has `min: 0`, catching everything below 50.
+ */
+export const SCORE_BANDS: ReadonlyArray<{ key: ScoreBand; label: string; min: number }> = [
+  { key: "excellent", label: "Excellent", min: 80 },
+  { key: "solid", label: "Solid", min: 65 },
+  { key: "developing", label: "Developing", min: 50 },
+  { key: "attention", label: "Needs attention", min: 0 },
+];
+
 function bandFor(score: number): ScoreBand {
-  if (score >= 80) return "excellent";
-  if (score >= 65) return "solid";
-  if (score >= 50) return "developing";
-  return "attention";
+  return (SCORE_BANDS.find((b) => score >= b.min) ?? SCORE_BANDS[SCORE_BANDS.length - 1]).key;
 }
 
-const BAND_LABEL: Record<ScoreBand, string> = {
-  excellent: "Excellent",
-  solid: "Solid",
-  developing: "Developing",
-  attention: "Needs attention",
-};
+const BAND_LABEL: Record<ScoreBand, string> = Object.fromEntries(
+  SCORE_BANDS.map((b) => [b.key, b.label]),
+) as Record<ScoreBand, string>;
 
 /** Score one consultant row into a full {@link L2Score}. Pure. */
 export function scoreL2Member(row: TeamBdeRow): L2Score {
