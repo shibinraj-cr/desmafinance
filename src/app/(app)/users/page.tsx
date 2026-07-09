@@ -5,7 +5,7 @@ import { getCurrentUserAndPermissions } from "@/lib/permissions";
 import { TopBar } from "@/components/TopBar";
 import { Section } from "@/components/Cards";
 import {
-  UserActions,
+  UsersTable,
   NewUserButton,
   ResetPlaceholderPasswordsButton,
   LinkPlaceholderRolesButton,
@@ -41,6 +41,7 @@ export default async function UsersPage() {
         email: true,
         role: true,
         roleId: true,
+        isActive: true,
         roleRef: { select: { id: true, name: true } },
         createdAt: true,
       },
@@ -51,67 +52,35 @@ export default async function UsersPage() {
     }),
   ]);
 
+  const rows = users.map((u) => {
+    const displayRole = u.roleRef?.name ?? roleLabel(u.role);
+    return {
+      id: u.id,
+      username: u.username,
+      email: u.email,
+      displayRole,
+      badgeClass: roleBadgeClass(displayRole),
+      created: u.createdAt.toISOString().slice(0, 10),
+      isActive: u.isActive,
+      roleId: u.roleId ?? null,
+    };
+  });
+  const activeCount = rows.filter((r) => r.isActive).length;
+
   return (
     <>
       <TopBar
         title="User Management"
-        subtitle={`${users.length} user${users.length === 1 ? "" : "s"}`}
+        subtitle={`${activeCount} active${
+          rows.length !== activeCount ? ` · ${rows.length} total` : ""
+        }`}
         action={<NewUserButton roles={roles} />}
       />
       <div className="p-margin space-y-lg">
         <SetupMarketingAdminButton />
         <LinkPlaceholderRolesButton />
         <ResetPlaceholderPasswordsButton />
-        <div className="bg-surface-container-lowest border border-outline-variant rounded-xl shadow-sm overflow-hidden">
-          <div className="overflow-x-auto scrollbar-thin">
-            <table className="w-full text-body-md">
-              <thead className="bg-surface-container-low text-on-surface-variant">
-                <tr className="text-left">
-                  <th className="px-md py-sm text-label-sm uppercase tracking-wider">Username</th>
-                  <th className="px-md py-sm text-label-sm uppercase tracking-wider">Email</th>
-                  <th className="px-md py-sm text-label-sm uppercase tracking-wider">Role</th>
-                  <th className="px-md py-sm text-label-sm uppercase tracking-wider">Created</th>
-                  <th className="px-md py-sm text-label-sm uppercase tracking-wider text-right">
-                    Actions
-                  </th>
-                </tr>
-              </thead>
-              <tbody>
-                {users.map((u) => {
-                  const displayRole = u.roleRef?.name ?? roleLabel(u.role);
-                  return (
-                    <tr key={u.id} className="border-t border-outline-variant/60">
-                      <td className="px-md py-sm font-semibold">{u.username}</td>
-                      <td className="px-md py-sm text-on-surface-variant">{u.email ?? "—"}</td>
-                      <td className="px-md py-sm">
-                        <span
-                          className={
-                            "px-sm py-xs rounded-full text-label-sm font-semibold " +
-                            roleBadgeClass(displayRole)
-                          }
-                        >
-                          {displayRole}
-                        </span>
-                      </td>
-                      <td className="px-md py-sm text-on-surface-variant">
-                        {u.createdAt.toISOString().slice(0, 10)}
-                      </td>
-                      <td className="px-md py-sm text-right">
-                        <UserActions
-                          userId={u.id}
-                          username={u.username}
-                          currentRoleId={u.roleId ?? null}
-                          isSelf={u.id === userId}
-                          roles={roles}
-                        />
-                      </td>
-                    </tr>
-                  );
-                })}
-              </tbody>
-            </table>
-          </div>
-        </div>
+        <UsersTable rows={rows} roles={roles} currentUserId={userId} />
       </div>
     </>
   );
