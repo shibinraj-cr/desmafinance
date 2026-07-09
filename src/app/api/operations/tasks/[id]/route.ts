@@ -6,6 +6,8 @@ import { unauthorized, forbidden, notFound, badRequest } from "@/lib/http-error"
 import { getCurrentUserAndPermissions } from "@/lib/permissions";
 import { getOpsAccess, canEditProject } from "@/lib/ops-rbac";
 import { applyTaskTransition, deriveProjectCompleted, TASK_ACTION_ACTIVITY, type TaskAction } from "@/lib/ops-tasks";
+import { recomputeSchedule } from "@/lib/ops-projects";
+import { loadHolidaySet, opsDateKey } from "@/lib/ops-dates";
 import { recordOpsActivity } from "@/lib/ops-activity";
 
 export const dynamic = "force-dynamic";
@@ -35,7 +37,7 @@ export const PATCH = withApiHandler(async (req: Request, { params }: Ctx) => {
       startedAt: true,
       name: true,
       projectId: true,
-      project: { select: { id: true, assignedToId: true, status: true } },
+      project: { select: { id: true, assignedToId: true, status: true, createdAt: true, dueAt: true } },
     },
   });
   if (!task) throw notFound();
@@ -51,6 +53,8 @@ export const PATCH = withApiHandler(async (req: Request, { params }: Ctx) => {
     now,
     blockedReason: d.blockedReason ?? null,
   });
+  // complete/skip/reopen shift the done-set, so the rolling schedule is recomputed.
+  const reschedule = action === "complete" || action === "skip" || action === "reopen";
 
   const projectStatusChange = await prisma.$transaction(async (tx) => {
     await tx.opsTask.update({
@@ -58,11 +62,33 @@ export const PATCH = withApiHandler(async (req: Request, { params }: Ctx) => {
       data: { ...patch, ...(d.notes !== undefined ? { notes: d.notes } : {}) },
     });
 
-    // Roll the project status up/down from the resulting task set.
+    // Read the resulting task set once — feeds both the schedule recompute and
+    // the project-status roll-up.
     const siblings = await tx.opsTask.findMany({
       where: { projectId: task.projectId },
-      select: { isRequired: true, status: true },
+      select: { id: true, seq: true, isRequired: true, status: true, slaDays: true, completedAt: true, dueAt: true },
     });
+
+    // Rolling turnaround: re-anchor every open step's due date on the actual
+    // completion dates, and roll the project ETA up. Only dates that moved are
+    // written.
+    if (reschedule) {
+      const holidays = await loadHolidaySet(tx);
+      const startKey = opsDateKey(task.project.createdAt);
+      const { updates, projectDueAt } = recomputeSchedule(siblings, startKey, holidays);
+      const currentDue = new Map(siblings.map((s) => [s.id, s.dueAt] as const));
+      for (const u of updates) {
+        const cur = currentDue.get(u.id) ?? null;
+        if ((cur?.getTime() ?? null) !== (u.dueAt?.getTime() ?? null)) {
+          await tx.opsTask.update({ where: { id: u.id }, data: { dueAt: u.dueAt } });
+        }
+      }
+      if ((task.project.dueAt?.getTime() ?? null) !== (projectDueAt?.getTime() ?? null)) {
+        await tx.opsProject.update({ where: { id: task.projectId }, data: { dueAt: projectDueAt } });
+      }
+    }
+
+    // Roll the project status up/down from the resulting task set.
     const shouldComplete = deriveProjectCompleted(siblings);
     if (shouldComplete && task.project.status !== "completed") {
       await tx.opsProject.update({ where: { id: task.projectId }, data: { status: "completed", completedAt: now } });
