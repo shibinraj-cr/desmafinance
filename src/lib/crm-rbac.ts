@@ -20,6 +20,25 @@ export const CRM_TEAM_LEAD_PAGE = "/crm/team-all";
 export const CRM_TEMPLATES_PAGE = "/crm/templates";
 
 /**
+ * Capability marker (NOT a real route) granting the ability to assign / reassign
+ * leads to consultants (see {@link CrmAccess.canAssign}) WITHOUT the rest of the
+ * CRM-admin tier that `/crm/settings` carries (bulk import, bulk email,
+ * Settings). This lets a sales-team lead re-distribute leads across the team
+ * while staying a normal BDE. The nav never renders it (it isn't in MODULES);
+ * it's purely a permission flag read by getCrmAccess().
+ */
+export const CRM_ASSIGN_PAGE = "/crm/assign";
+
+/**
+ * Capability marker (NOT a real route) granting access to the full lead History
+ * tab (see {@link CrmAccess.canViewHistory}) — the complete activity log incl.
+ * opens, note before/after and mail/call detail — WITHOUT the other CRM-admin
+ * powers. Paired with {@link CRM_ASSIGN_PAGE} for a sales-team lead who oversees
+ * the team. Purely a permission flag; not in MODULES.
+ */
+export const CRM_HISTORY_PAGE = "/crm/history";
+
+/**
  * Resolved CRM capabilities for the current user. Mirrors the shape of
  * `LeadPulseAccess` — a single object the page/API layers branch on.
  *
@@ -34,6 +53,10 @@ export const CRM_TEMPLATES_PAGE = "/crm/templates";
  *     can see the CRM Settings page (the CRM control panel). This lets a
  *     non-system-admin (e.g. a marketing supervisor) run the CRM without
  *     gaining Finance/HR/user-management access.
+ *   - Assign / reassign and the full History tab can ALSO be granted à la carte
+ *     via the {@link CRM_ASSIGN_PAGE} / {@link CRM_HISTORY_PAGE} markers, so a
+ *     sales-team lead gets exactly those two powers without bulk import, bulk
+ *     email, or Settings.
  */
 export type CrmAccess = {
   userId: string;
@@ -69,7 +92,16 @@ export type CrmAccess = {
   canBulkImport: boolean;
   /** Send a bulk email to many leads at once (CRM-admin, like bulk import). */
   canBulkEmail: boolean;
+  /**
+   * Assign / reassign leads to consultants. True for full CRM admins and for any
+   * role granted the {@link CRM_ASSIGN_PAGE} marker — so a sales-team lead can
+   * re-distribute leads without CRM import/bulk-email/settings powers.
+   */
   canAssign: boolean;
+  /**
+   * View the full lead History tab. True for full CRM admins and for any role
+   * granted the {@link CRM_HISTORY_PAGE} marker.
+   */
   canViewHistory: boolean;
   canManageSettings: boolean;
 };
@@ -92,6 +124,12 @@ export async function getCrmAccess(
   // Settings page. Granting a role `/crm/settings` therefore promotes it to
   // CRM admin — no code change needed for future CRM admins.
   const canManageCrm = admin || (perms ? canSeePage(perms, "/crm/settings") : false);
+  // Narrow operational markers — let a sales-team lead assign/reassign leads and
+  // read the full History tab without the full CRM-admin tier (import, bulk
+  // email, settings). Same "one capability, not all of CRM admin" pattern as the
+  // team-lead and templates markers.
+  const canAssignLeads = canManageCrm || (perms ? canSeePage(perms, CRM_ASSIGN_PAGE) : false);
+  const canViewLeadHistory = canManageCrm || (perms ? canSeePage(perms, CRM_HISTORY_PAGE) : false);
   // Template authoring: full CRM admins, plus any role explicitly granted the
   // Message Templates page (e.g. a marketing supervisor).
   const canManageTemplates = canManageCrm || (perms ? canSeePage(perms, CRM_TEMPLATES_PAGE) : false);
@@ -109,8 +147,8 @@ export async function getCrmAccess(
     canCreateLeads: canManageCrm || isBde,
     canBulkImport: canManageCrm,
     canBulkEmail: canManageCrm,
-    canAssign: canManageCrm,
-    canViewHistory: canManageCrm,
+    canAssign: canAssignLeads,
+    canViewHistory: canViewLeadHistory,
     canManageSettings: canManageCrm,
   };
 }
