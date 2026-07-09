@@ -28,6 +28,26 @@ function moduleTagClass(moduleId: string): string {
 }
 
 /**
+ * Per-module identity hex — used for the "access shape" dots in the role
+ * list and the module filter chips. Kept as inline colours (not Tailwind
+ * classes) so a role's reach reads at a glance without a safelist.
+ */
+const MODULE_HEX: Record<string, string> = {
+  executive: "#7C5CFF",
+  finance: "#CA8A04",
+  marketing: "#0891B2",
+  crm: "#0D9488",
+  operations: "#2563EB",
+  hr: "#64748B",
+  me: "#DB2777",
+  "master-data": "#9333EA",
+  system: "#78716C",
+};
+function moduleHex(id: string): string {
+  return MODULE_HEX[id] ?? "#78716C";
+}
+
+/**
  * Group all pages by their owning module so the role-access UI is
  * scannable. Pages whose href doesn't resolve to any module (rare)
  * land under the System module.
@@ -56,8 +76,8 @@ function groupPagesByModule(
 
 /**
  * Per-module collapsible page-access section with quick-actions for
- * selecting / clearing an entire module's pages. Shared between the
- * existing-role edit panel and the new-role modal.
+ * selecting / clearing an entire module's pages. Used by the new-role
+ * modal (the existing-role editor uses FilterablePageAccess).
  */
 function ModuleGroupedPageAccess({
   allPages,
@@ -120,48 +140,278 @@ function ModuleGroupedPageAccess({
             </div>
             <div className={`grid ${gridCols} gap-base p-md`}>
               {pages.map((p) => (
-                <label
+                <PageCheckbox
                   key={p.href}
-                  className={
-                    "flex items-center gap-sm px-md py-sm rounded-lg border cursor-pointer transition " +
-                    (selected.has(p.href)
-                      ? "bg-primary-fixed/40 border-primary-fixed-dim"
-                      : "bg-surface-container-lowest border-outline-variant hover:bg-surface-container")
-                  }
-                >
-                  <input
-                    type="checkbox"
-                    checked={selected.has(p.href)}
-                    onChange={() => onToggle(p.href)}
-                    className="w-4 h-4 accent-primary"
-                  />
-                  <span
-                    className="material-symbols-outlined text-on-surface-variant"
-                    style={{ fontSize: 18 }}
-                  >
-                    {p.icon}
-                  </span>
-                  <span className="text-body-md text-on-surface flex-1">{p.label}</span>
-                  <span
-                    className={
-                      "text-[10px] uppercase tracking-wider font-semibold px-xs py-[1px] rounded border " +
-                      moduleTagClass(m.id)
-                    }
-                  >
-                    {m.name}
-                  </span>
-                  {p.adminOnly && (
-                    <span className="text-[10px] uppercase tracking-widest text-accent font-bold">
-                      Admin
-                    </span>
-                  )}
-                </label>
+                  page={p}
+                  moduleId={m.id}
+                  moduleName={m.name}
+                  checked={selected.has(p.href)}
+                  onToggle={() => onToggle(p.href)}
+                />
               ))}
             </div>
           </div>
         );
       })}
     </div>
+  );
+}
+
+/** A single page-access checkbox row, shared by both editors. */
+function PageCheckbox({
+  page: p,
+  moduleId,
+  moduleName,
+  checked,
+  onToggle,
+}: {
+  page: AppPage;
+  moduleId: string;
+  moduleName: string;
+  checked: boolean;
+  onToggle: () => void;
+}) {
+  return (
+    <label
+      className={
+        "flex items-center gap-sm px-md py-sm rounded-lg border cursor-pointer transition " +
+        (checked
+          ? "bg-primary-fixed/40 border-primary-fixed-dim"
+          : "bg-surface-container-lowest border-outline-variant hover:bg-surface-container")
+      }
+    >
+      <input
+        type="checkbox"
+        checked={checked}
+        onChange={onToggle}
+        className="w-4 h-4 accent-primary"
+      />
+      <span className="material-symbols-outlined text-on-surface-variant" style={{ fontSize: 18 }}>
+        {p.icon}
+      </span>
+      <span className="text-body-md text-on-surface flex-1">{p.label}</span>
+      <span
+        className={
+          "text-[10px] uppercase tracking-wider font-semibold px-xs py-[1px] rounded border " +
+          moduleTagClass(moduleId)
+        }
+      >
+        {moduleName}
+      </span>
+      {p.adminOnly && (
+        <span className="text-[10px] uppercase tracking-widest text-accent font-bold">
+          Admin
+        </span>
+      )}
+    </label>
+  );
+}
+
+/**
+ * The existing-role page-access editor: module filter chips + a page
+ * search + an "only granted" toggle over the module-grouped grid, with
+ * per-module All/Clear. Handles a ~74-page list without the wall-of-
+ * checkboxes problem.
+ */
+function FilterablePageAccess({
+  allPages,
+  selected,
+  onToggle,
+  onSetMany,
+}: {
+  allPages: AppPage[];
+  selected: Set<string>;
+  onToggle: (href: string) => void;
+  onSetMany: (hrefs: string[], on: boolean) => void;
+}) {
+  const groups = useMemo(() => groupPagesByModule(allPages), [allPages]);
+  const [modFilter, setModFilter] = useState<string>("all");
+  const [query, setQuery] = useState("");
+  const [onlyGranted, setOnlyGranted] = useState(false);
+
+  const q = query.trim().toLowerCase();
+  const total = allPages.length;
+
+  const visibleGroups = groups
+    .filter((g) => modFilter === "all" || g.module.id === modFilter)
+    .map((g) => ({
+      module: g.module,
+      pages: g.pages.filter((p) => {
+        if (onlyGranted && !selected.has(p.href)) return false;
+        if (
+          q &&
+          !p.label.toLowerCase().includes(q) &&
+          !p.href.toLowerCase().includes(q)
+        )
+          return false;
+        return true;
+      }),
+    }))
+    .filter((g) => g.pages.length > 0);
+
+  return (
+    <div className="space-y-sm">
+      <div className="flex items-center gap-base flex-wrap">
+        <p className="text-label-sm font-bold uppercase tracking-wider text-on-surface-variant">
+          Page access
+        </p>
+        <span className="text-caption text-on-surface-variant">
+          {selected.size} of {total} pages granted
+        </span>
+        <div className="ml-auto flex items-center gap-base">
+          <label className="inline-flex items-center gap-xs text-caption font-semibold text-on-surface-variant cursor-pointer select-none">
+            <input
+              type="checkbox"
+              checked={onlyGranted}
+              onChange={(e) => setOnlyGranted(e.target.checked)}
+              className="w-4 h-4 accent-primary"
+            />
+            Only granted
+          </label>
+          <div className="relative">
+            <span
+              className="material-symbols-outlined absolute left-2 top-1/2 -translate-y-1/2 text-on-surface-variant pointer-events-none"
+              style={{ fontSize: 16 }}
+            >
+              search
+            </span>
+            <input
+              value={query}
+              onChange={(e) => setQuery(e.target.value)}
+              placeholder="Filter pages…"
+              className="h-8 w-[200px] max-w-[46vw] pl-8 pr-md rounded-lg border border-outline-variant bg-surface-container-lowest text-caption focus:border-primary focus:ring-2 focus:ring-primary/20 outline-none transition"
+            />
+          </div>
+        </div>
+      </div>
+
+      {/* module filter chips */}
+      <div className="flex gap-xs overflow-x-auto pb-xs border-b border-outline-variant/60">
+        <ModChip
+          active={modFilter === "all"}
+          onClick={() => setModFilter("all")}
+          label="All modules"
+          frac={`${selected.size}/${total}`}
+        />
+        {groups.map(({ module: m, pages }) => {
+          const n = pages.filter((p) => selected.has(p.href)).length;
+          return (
+            <ModChip
+              key={m.id}
+              active={modFilter === m.id}
+              onClick={() => setModFilter(m.id)}
+              color={moduleHex(m.id)}
+              label={m.name}
+              frac={`${n}/${pages.length}`}
+            />
+          );
+        })}
+      </div>
+
+      {visibleGroups.length === 0 ? (
+        <div className="py-lg text-center text-caption text-on-surface-variant">
+          No pages match this filter.
+        </div>
+      ) : (
+        <div className="space-y-md pt-xs">
+          {visibleGroups.map(({ module: m, pages }) => {
+            const moduleHrefs = groups.find((g) => g.module.id === m.id)!.pages.map((p) => p.href);
+            const selectedInModule = moduleHrefs.filter((h) => selected.has(h)).length;
+            const allChecked = selectedInModule === moduleHrefs.length;
+            const noneChecked = selectedInModule === 0;
+            return (
+              <div key={m.id}>
+                <div className="flex items-center gap-sm pb-sm">
+                  <span
+                    className="w-2.5 h-2.5 rounded-[3px]"
+                    style={{ backgroundColor: moduleHex(m.id) }}
+                  />
+                  <span className="text-label-sm font-bold uppercase tracking-wider text-on-surface">
+                    {m.name}
+                  </span>
+                  <span className="text-caption text-on-surface-variant">
+                    {selectedInModule}/{moduleHrefs.length}
+                  </span>
+                  <div className="ml-auto inline-flex items-center gap-xs">
+                    <button
+                      type="button"
+                      onClick={() => onSetMany(moduleHrefs, true)}
+                      disabled={allChecked}
+                      className="h-7 px-sm rounded text-[11px] font-semibold border border-outline-variant text-on-surface-variant hover:text-on-surface hover:bg-surface-container disabled:opacity-40"
+                    >
+                      All
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => onSetMany(moduleHrefs, false)}
+                      disabled={noneChecked}
+                      className="h-7 px-sm rounded text-[11px] font-semibold border border-outline-variant text-on-surface-variant hover:text-on-surface hover:bg-surface-container disabled:opacity-40"
+                    >
+                      Clear
+                    </button>
+                  </div>
+                </div>
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-base">
+                  {pages.map((p) => (
+                    <PageCheckbox
+                      key={p.href}
+                      page={p}
+                      moduleId={m.id}
+                      moduleName={m.name}
+                      checked={selected.has(p.href)}
+                      onToggle={() => onToggle(p.href)}
+                    />
+                  ))}
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function ModChip({
+  active,
+  onClick,
+  label,
+  frac,
+  color,
+}: {
+  active: boolean;
+  onClick: () => void;
+  label: string;
+  frac: string;
+  color?: string;
+}) {
+  // Colour-tinted active state for module chips; the colourless "All modules"
+  // chip falls back to the gold primary-fixed classes.
+  const activeColorless = active && !color;
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className={
+        "flex-none inline-flex items-center gap-xs h-8 px-sm rounded-full border text-caption font-semibold whitespace-nowrap transition " +
+        (active
+          ? activeColorless
+            ? "bg-primary-fixed/50 border-primary-fixed-dim text-on-surface"
+            : "text-on-surface"
+          : "bg-surface-container-low border-outline-variant text-on-surface-variant hover:text-on-surface")
+      }
+      style={
+        active && color
+          ? { backgroundColor: `${color}22`, borderColor: color }
+          : undefined
+      }
+    >
+      {color && (
+        <span className="w-2 h-2 rounded-[2px]" style={{ backgroundColor: color }} />
+      )}
+      {label}
+      <span className="text-[10px] text-on-surface-variant font-bold">{frac}</span>
+    </button>
   );
 }
 
@@ -188,6 +438,21 @@ const errorLabels: Record<string, string> = {
   role_not_found: "Role not found.",
 };
 
+/** Count how many of a role's granted pages fall in each module. */
+function moduleCounts(role: Role): Array<{ module: AppModule; granted: number; total: number }> {
+  const granted = new Set(role.pages);
+  return MODULES.map((m) => ({
+    module: m,
+    granted: m.pages.filter((p) => granted.has(p.href)).length,
+    total: m.pages.length,
+  }));
+}
+
+/**
+ * Master–detail role manager: a searchable, filterable list of roles on
+ * the left; the selected role's editor on the right. Only one role's
+ * page-access grid renders at a time.
+ */
 export function RolesEditor({
   roles,
   allPages,
@@ -195,19 +460,222 @@ export function RolesEditor({
   roles: Role[];
   allPages: AppPage[];
 }) {
+  const [selectedId, setSelectedId] = useState<string | null>(roles[0]?.id ?? null);
+  const [query, setQuery] = useState("");
+  const [typeFilter, setTypeFilter] = useState<"all" | "admin" | "approve" | "custom" | "system">("all");
+
+  const total = allPages.length;
+
+  // Keep the selection valid across refreshes (e.g. after a delete).
+  const selected =
+    roles.find((r) => r.id === selectedId) ?? roles[0] ?? null;
+  useEffect(() => {
+    if (selected && selected.id !== selectedId) setSelectedId(selected.id);
+  }, [selected, selectedId]);
+
+  const q = query.trim().toLowerCase();
+  const filtered = roles.filter((r) => {
+    if (typeFilter === "admin" && !r.isAdmin) return false;
+    if (typeFilter === "approve" && !r.canApprove) return false;
+    if (typeFilter === "custom" && r.isSystem) return false;
+    if (typeFilter === "system" && !r.isSystem) return false;
+    if (
+      q &&
+      !r.name.toLowerCase().includes(q) &&
+      !(r.description ?? "").toLowerCase().includes(q)
+    )
+      return false;
+    return true;
+  });
+
+  const counts = {
+    all: roles.length,
+    admin: roles.filter((r) => r.isAdmin).length,
+    approve: roles.filter((r) => r.canApprove).length,
+    custom: roles.filter((r) => !r.isSystem).length,
+    system: roles.filter((r) => r.isSystem).length,
+  };
+  const usersAssigned = roles.reduce((a, r) => a + r.userCount, 0);
+
   return (
-    <div className="space-y-lg">
-      {roles.map((r) => (
-        <RoleCard key={r.id} role={r} allPages={allPages} />
-      ))}
+    <div className="space-y-md">
+    <div className="grid grid-cols-2 lg:grid-cols-4 gap-base">
+      <StatTile label="Roles" value={counts.all} />
+      <StatTile label="Admin roles" value={counts.admin} hint="full access" />
+      <StatTile label="Users assigned" value={usersAssigned} hint="across all roles" />
+      <StatTile label="Custom roles" value={counts.custom} hint={`${counts.system} system`} />
+    </div>
+    <div className="grid grid-cols-1 lg:grid-cols-[320px_1fr] gap-md items-start">
+      {/* LEFT — role list */}
+      <div className="bg-surface-container-lowest border border-outline-variant rounded-xl shadow-sm overflow-hidden lg:sticky lg:top-md">
+        <div className="p-sm">
+          <div className="relative">
+            <span
+              className="material-symbols-outlined absolute left-3 top-1/2 -translate-y-1/2 text-on-surface-variant pointer-events-none"
+              style={{ fontSize: 18 }}
+            >
+              search
+            </span>
+            <input
+              value={query}
+              onChange={(e) => setQuery(e.target.value)}
+              placeholder="Search roles…"
+              className="w-full h-10 pl-10 pr-md rounded-lg border border-outline-variant bg-surface-container-low text-body-md focus:border-primary focus:ring-2 focus:ring-primary/20 outline-none transition"
+            />
+          </div>
+          <div className="flex flex-wrap gap-xs pt-sm">
+            {([
+              ["all", "All"],
+              ["admin", "Admin"],
+              ["approve", "Approvers"],
+              ["custom", "Custom"],
+              ["system", "System"],
+            ] as const).map(([id, label]) => (
+              <button
+                key={id}
+                type="button"
+                onClick={() => setTypeFilter(id)}
+                className={
+                  "inline-flex items-center gap-xs h-7 px-sm rounded-full border text-[12px] font-semibold transition " +
+                  (typeFilter === id
+                    ? "bg-primary-fixed/50 border-primary-fixed-dim text-on-surface"
+                    : "bg-surface-container-low border-outline-variant text-on-surface-variant hover:text-on-surface")
+                }
+              >
+                {label}
+                <span className="text-[10px] opacity-70">{counts[id]}</span>
+              </button>
+            ))}
+          </div>
+        </div>
+
+        <div className="border-t border-outline-variant/70 p-xs max-h-[calc(100vh-220px)] overflow-y-auto">
+          {filtered.length === 0 ? (
+            <div className="py-lg text-center text-caption text-on-surface-variant">
+              No roles match.
+            </div>
+          ) : (
+            filtered.map((r) => (
+              <RoleListItem
+                key={r.id}
+                role={r}
+                total={total}
+                active={r.id === selected?.id}
+                onSelect={() => setSelectedId(r.id)}
+              />
+            ))
+          )}
+        </div>
+      </div>
+
+      {/* RIGHT — detail editor */}
+      {selected ? (
+        <RoleDetail key={selected.id} role={selected} allPages={allPages} />
+      ) : (
+        <div className="bg-surface-container-lowest border border-outline-variant rounded-xl shadow-sm p-lg text-center text-on-surface-variant">
+          No roles yet. Use “Add role” to create one.
+        </div>
+      )}
+    </div>
     </div>
   );
 }
 
-function RoleCard({ role, allPages }: { role: Role; allPages: AppPage[] }) {
+function StatTile({ label, value, hint }: { label: string; value: number; hint?: string }) {
+  return (
+    <div className="bg-surface-container-lowest border border-outline-variant rounded-xl shadow-sm px-md py-sm">
+      <div className="text-label-sm font-bold uppercase tracking-wider text-on-surface-variant">
+        {label}
+      </div>
+      <div className="text-h2 text-on-surface font-semibold leading-tight mt-xs tabular-nums">
+        {value}
+        {hint && (
+          <span className="text-caption font-medium text-on-surface-variant ml-xs align-middle">
+            {hint}
+          </span>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function RoleListItem({
+  role,
+  total,
+  active,
+  onSelect,
+}: {
+  role: Role;
+  total: number;
+  active: boolean;
+  onSelect: () => void;
+}) {
+  const counts = useMemo(() => moduleCounts(role), [role]);
+  return (
+    <button
+      type="button"
+      onClick={onSelect}
+      aria-current={active}
+      className={
+        "w-full text-left rounded-lg px-sm py-sm mb-[2px] border transition " +
+        (active
+          ? "bg-primary-fixed/40 border-primary-fixed-dim"
+          : "border-transparent hover:bg-surface-container-low")
+      }
+    >
+      <div className="flex items-center gap-sm">
+        <span className="font-semibold text-body-md text-on-surface truncate">{role.name}</span>
+        {role.isAdmin ? (
+          <span className="text-[9px] uppercase tracking-wider font-bold text-amber-800 bg-amber-50 border border-amber-200 rounded-full px-xs py-[1px]">
+            Admin
+          </span>
+        ) : role.isSystem ? (
+          <span className="text-[9px] uppercase tracking-wider font-bold text-on-surface-variant border border-outline-variant rounded-full px-xs py-[1px]">
+            System
+          </span>
+        ) : (
+          <span className="text-[9px] uppercase tracking-wider font-bold text-accent border border-primary-fixed-dim rounded-full px-xs py-[1px]">
+            Custom
+          </span>
+        )}
+      </div>
+      <div className="flex items-center gap-xs text-caption text-on-surface-variant mt-xs">
+        <span>{role.pages.length} of {total} pages</span>
+        <span className="w-[3px] h-[3px] rounded-full bg-current opacity-50" />
+        <span>{role.userCount} user{role.userCount === 1 ? "" : "s"}</span>
+      </div>
+      {/* access shape — one dot per module: solid = full, tint = partial, hollow = none */}
+      <div className="flex gap-[3px] mt-sm">
+        {counts.map(({ module: m, granted, total: t }) => {
+          const hex = moduleHex(m.id);
+          const style =
+            granted === 0
+              ? undefined
+              : granted === t
+                ? { backgroundColor: hex, borderColor: hex }
+                : { backgroundColor: `${hex}66`, borderColor: hex };
+          return (
+            <span
+              key={m.id}
+              title={`${m.name}: ${granted}/${t}`}
+              className={
+                "w-[9px] h-[9px] rounded-[3px] border " +
+                (granted === 0 ? "bg-surface-container-high border-outline-variant" : "")
+              }
+              style={style}
+            />
+          );
+        })}
+      </div>
+    </button>
+  );
+}
+
+function RoleDetail({ role, allPages }: { role: Role; allPages: AppPage[] }) {
   const router = useRouter();
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [saved, setSaved] = useState(false);
   const [draft, setDraft] = useState({
     name: role.name,
     description: role.description ?? "",
@@ -255,6 +723,8 @@ function RoleCard({ role, allPages }: { role: Role; allPages: AppPage[] }) {
       setError(errorLabels[data?.error as string] ?? "Failed to save.");
       return;
     }
+    setSaved(true);
+    setTimeout(() => setSaved(false), 1800);
     router.refresh();
   }
 
@@ -331,26 +801,21 @@ function RoleCard({ role, allPages }: { role: Role; allPages: AppPage[] }) {
         />
       </div>
 
-      <div>
-        <p className="text-label-sm font-bold uppercase tracking-wider text-on-surface-variant mb-sm">
-          Page access
-        </p>
-        <ModuleGroupedPageAccess
-          allPages={allPages}
-          selected={draft.pages}
-          onToggle={toggle}
-          onSetMany={(hrefs, on) => {
-            setDraft((d) => {
-              const next = new Set(d.pages);
-              for (const h of hrefs) {
-                if (on) next.add(h);
-                else next.delete(h);
-              }
-              return { ...d, pages: next };
-            });
-          }}
-        />
-      </div>
+      <FilterablePageAccess
+        allPages={allPages}
+        selected={draft.pages}
+        onToggle={toggle}
+        onSetMany={(hrefs, on) => {
+          setDraft((d) => {
+            const next = new Set(d.pages);
+            for (const h of hrefs) {
+              if (on) next.add(h);
+              else next.delete(h);
+            }
+            return { ...d, pages: next };
+          });
+        }}
+      />
 
       {error && (
         <div className="rounded-lg bg-error-container text-on-error-container px-md py-sm">
@@ -385,6 +850,17 @@ function RoleCard({ role, allPages }: { role: Role; allPages: AppPage[] }) {
           >
             Reset
           </button>
+        )}
+        {dirty && !busy && (
+          <span className="text-caption text-accent font-semibold">Unsaved changes</span>
+        )}
+        {saved && (
+          <span className="inline-flex items-center gap-xs text-caption text-green-700 font-semibold">
+            <span className="material-symbols-outlined" style={{ fontSize: 16 }}>
+              check_circle
+            </span>
+            Saved
+          </span>
         )}
       </div>
     </div>
