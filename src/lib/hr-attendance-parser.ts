@@ -18,6 +18,8 @@ import * as XLSX from "xlsx";
  * worked duration is PUNCH-BASED: actual punch-in → out-time, with the out-time
  * capped at the shift end so overtime past the shift end never counts toward a
  * full day. Early punch-in counts as recorded. The Work+OT column is ignored.
+ *   - Any day      P-day with capped duration <  3h  (180 min) → A  (too little
+ *                  time worked to count — full absence, not a paid half-day)
  *   - Weekday (Mon–Fri) P-day with capped duration <  7h  (420 min) → HD
  *   - Saturday          P-day with capped duration < 5.5h (330 min) → HD
  *
@@ -38,6 +40,9 @@ import * as XLSX from "xlsx";
 
 export const WEEKDAY_HD_THRESHOLD_MIN = 420;  // 7 h
 export const SATURDAY_HD_THRESHOLD_MIN = 330; // 5.5 h
+// Below this the worked span is too short to earn even a half-day — the day is a
+// full absence (A), not HD. Flat 3 h across weekdays and Saturdays.
+export const ABSENT_THRESHOLD_MIN = 180; // 3 h
 // Company Saturday working hours: 09:00 → 16:00 for every employee EXCEPT those
 // exempt below. Saturday late / early-out are recomputed against this window
 // (the biometric computes them against the weekday shift, which is wrong for
@@ -115,6 +120,19 @@ export function workedMinutesForHalfDay(
 export function isHalfDayDuration(workedMinutes: number, isSaturday: boolean): boolean {
   const threshold = isSaturday ? SATURDAY_HD_THRESHOLD_MIN : WEEKDAY_HD_THRESHOLD_MIN;
   return workedMinutes < threshold;
+}
+
+/**
+ * Classify a worked day (both punches present) from its (capped) worked minutes:
+ *   < 3h  (ABSENT_THRESHOLD_MIN)     → "A"  — too little time to count, full LOP
+ *   < weekday/Saturday HD threshold  → "HD" — half day
+ *   otherwise                        → "P"  — full present day
+ * Applies the same 3h absence floor on weekdays and Saturdays.
+ */
+export function classifyWorkedDay(workedMinutes: number, isSaturday: boolean): "A" | "HD" | "P" {
+  if (workedMinutes < ABSENT_THRESHOLD_MIN) return "A";
+  if (isHalfDayDuration(workedMinutes, isSaturday)) return "HD";
+  return "P";
 }
 
 function cleanTime(v: unknown): string | null {
@@ -211,11 +229,9 @@ export function normaliseStatus(
     // applied here (the shift isn't resolved yet), so this is the UNCAPPED first
     // pass — the upload route re-applies the rule with the real cap and is
     // authoritative. Work+OT is not consulted (e.g. Aswathi 23 Apr 2026,
-    // 09:04–13:32 → 268 min < 420 → HD).
+    // 09:04–13:32 → 268 min < 420 → HD). A span under 3h → A (full absence).
     const worked = workedMinutesForHalfDay(inTime, outTime, null);
-    if (worked != null && isHalfDayDuration(worked, date.getUTCDay() === 6)) {
-      return "HD";
-    }
+    if (worked != null) return classifyWorkedDay(worked, date.getUTCDay() === 6);
     return "P";
   }
   return s || "A";
