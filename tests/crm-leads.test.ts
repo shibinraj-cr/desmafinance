@@ -81,6 +81,32 @@ describe("buildLeadWhere — country", () => {
   });
 });
 
+describe("buildLeadWhere — age → dob range", () => {
+  const now = new Date("2026-07-09T00:00:00.000Z");
+
+  it("translates a min age to a dob upper bound", () => {
+    const where = buildLeadWhere({ ageMin: 25, now });
+    expect(where.dob).toEqual({ lte: new Date(Date.UTC(2001, 6, 9)) });
+  });
+
+  it("translates a max age to a dob lower bound", () => {
+    const where = buildLeadWhere({ ageMax: 30, now });
+    expect(where.dob).toEqual({ gte: new Date(Date.UTC(1995, 6, 10)) });
+  });
+
+  it("translates a min+max age range to both dob bounds", () => {
+    const where = buildLeadWhere({ ageMin: 25, ageMax: 30, now });
+    expect(where.dob).toEqual({
+      gte: new Date(Date.UTC(1995, 6, 10)),
+      lte: new Date(Date.UTC(2001, 6, 9)),
+    });
+  });
+
+  it("omits the dob filter when no age bound is given", () => {
+    expect(buildLeadWhere({ now }).dob).toBeUndefined();
+  });
+});
+
 describe("buildCrmTaskWhere — re-inquiry kind", () => {
   it("matches re-inquiry follow-ups by subject (case-insensitive)", () => {
     // Catches every creator: 'Re-inquiry — …', 'Re-inquiry oversight — …', and

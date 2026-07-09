@@ -9,6 +9,7 @@ import { getCrmAccess, canEditLead } from "@/lib/crm-rbac";
 import { recordLeadActivity } from "@/lib/crm-activity";
 import { recordAudit } from "@/lib/audit";
 import { normalizePhone, computeDedupeKey, emailKeyOf } from "@/lib/crm";
+import { parseDobInput } from "@/lib/age";
 import { leadRowInclude, serializeLead, isActionOnlyStatus } from "@/lib/crm-leads";
 
 export const dynamic = "force-dynamic";
@@ -41,6 +42,11 @@ const PatchSchema = z.object({
   qualificationId: z.string().nullable().optional(),
   statusId: z.string().optional(),
   partyId: z.string().nullable().optional(),
+  // Official date of birth as YYYY-MM-DD; "" / null clears it (age is derived).
+  dob: z.preprocess(
+    (v) => (v === "" ? null : v),
+    z.string().regex(/^\d{4}-\d{2}-\d{2}$/, "Date of birth must be YYYY-MM-DD").nullable().optional(),
+  ),
   country: z.string().trim().max(100).nullable().optional(),
   studyDestination: z.string().trim().max(100).nullable().optional(),
   extra: z.record(z.string()).nullable().optional(),
@@ -54,6 +60,7 @@ const FIELD_LABELS: Record<string, string> = {
   sourceId: "Source",
   serviceId: "Service",
   qualificationId: "Qualification",
+  dob: "Date of birth",
   country: "Country",
   studyDestination: "Study Destination",
   extra: "Extra info",
@@ -108,6 +115,15 @@ export const PATCH = withApiHandler(async (req: Request, { params }: Ctx) => {
   if (d.qualificationId !== undefined && clean(d.qualificationId) !== existing.qualificationId) {
     update.qualificationId = clean(d.qualificationId);
     fieldDiff.qualificationId = { from: existing.qualificationId, to: clean(d.qualificationId) };
+  }
+  if (d.dob !== undefined) {
+    const nextDob = parseDobInput(d.dob); // Date | null (date-only)
+    const prevStr = existing.dob ? existing.dob.toISOString().slice(0, 10) : null;
+    const nextStr = nextDob ? nextDob.toISOString().slice(0, 10) : null;
+    if (nextStr !== prevStr) {
+      update.dob = nextDob;
+      fieldDiff.dob = { from: prevStr, to: nextStr };
+    }
   }
   if (d.country !== undefined && clean(d.country) !== existing.country) {
     update.country = clean(d.country);

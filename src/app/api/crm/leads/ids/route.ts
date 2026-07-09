@@ -5,6 +5,7 @@ import { withApiHandler } from "@/lib/api";
 import { unauthorized, forbidden } from "@/lib/http-error";
 import { getCurrentUserAndPermissions } from "@/lib/permissions";
 import { getCrmAccess } from "@/lib/crm-rbac";
+import { parseAgeParam } from "@/lib/age";
 import { parsePeriod, rangeFor } from "@/lib/period";
 import { buildLeadWhere, leadOrderBy, assignedDayRange, resolveAssigneeFilter } from "@/lib/crm-leads";
 
@@ -36,6 +37,8 @@ export const GET = withApiHandler(async (req: Request) => {
     campaign: sp.get("campaign") || undefined,
     country: sp.get("country") || undefined,
     studyDestination: sp.get("studyDestination") || undefined,
+    ageMin: parseAgeParam(sp.get("ageMin")),
+    ageMax: parseAgeParam(sp.get("ageMax")),
     q: sp.get("q") || undefined,
     from: range.from,
     to: range.to,
