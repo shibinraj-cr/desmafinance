@@ -396,6 +396,14 @@ export default async function TeamActivityPage({ searchParams }: { searchParams:
           </div>
         )}
 
+        {/* Guide link, above the scorecard itself */}
+        <Link
+          href="/crm/team/scorecard-guide"
+          className="inline-flex w-fit items-center text-label-sm font-semibold text-primary hover:underline"
+        >
+          How is this score calculated? Read the L2 Scorecard guide →
+        </Link>
+
         {/* L2 Scorecard — composite performance score per L2 consultant (team-wide, everyone) */}
         <Section
           title="L2 Scorecard"
