@@ -80,16 +80,21 @@ export const MODULES: AppModule[] = [
         group: "LEAD PULSE",
       },
       {
+        // Legacy self-report surface. The CRM now captures every close directly
+        // (enroll → daily close), so this is admin-only for oversight/backfill.
         href: "/marketing/lead-pulse/daily-entry",
         label: "Daily Entry",
         icon: "edit_note",
         group: "LEAD PULSE",
+        adminOnly: true,
       },
       {
+        // Legacy self-report surface — admin-only for the same reason as Daily Entry.
         href: "/marketing/lead-pulse/director-entry",
         label: "Director Entry",
         icon: "co_present",
         group: "LEAD PULSE",
+        adminOnly: true,
       },
       {
         href: "/marketing/lead-pulse/pipeline",

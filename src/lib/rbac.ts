@@ -80,11 +80,24 @@ export function needsApproval(p?: Permissions | null): boolean {
 // the "login not linked to an employee" case gracefully.
 export const ALWAYS_VISIBLE_PAGES = ["/me/attendance", "/me/regularization"];
 
+// Hard admin-only pages: hidden from EVERY non-admin's nav even when a role
+// still carries the href in Role.pages. Distinct from the cosmetic `adminOnly`
+// module flag (which admins may still grant by exception — e.g. Suhaina's
+// /crm/settings): these are legacy self-report surfaces fully superseded by CRM
+// capture, so no non-admin should reach them. The page + API route guards
+// enforce the same rule server-side.
+export const ADMIN_RESTRICTED_PAGES = [
+  "/marketing/lead-pulse/daily-entry",
+  "/marketing/lead-pulse/director-entry",
+];
+
 export function canSeePage(p: Permissions, href: string): boolean {
   if (!href.startsWith("/")) return false;
   // Admins see every page — keeps newly added admin-only routes visible
   // without forcing a Role.pages migration each time.
   if (p.isAdmin) return true;
+  // Hard admin-only pages are never shown to non-admins, regardless of Role.pages.
+  if (ADMIN_RESTRICTED_PAGES.some((pg) => href === pg || href.startsWith(pg + "/"))) return false;
   // Self-service essentials everyone can see.
   if (ALWAYS_VISIBLE_PAGES.some((pg) => href === pg || href.startsWith(pg + "/"))) return true;
   // Exact match or prefix match (e.g. allowing /daily-tracker permits
