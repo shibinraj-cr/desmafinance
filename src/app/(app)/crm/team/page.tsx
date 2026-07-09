@@ -18,6 +18,8 @@ import {
   type TeamBdeRow,
 } from "@/lib/crm-team";
 import { buildL2Scorecard, type L2Score, type ScoreComponent } from "@/lib/crm-score";
+import { getPipelineForecast } from "@/lib/lead-pulse-metrics";
+import { inr } from "@/lib/format";
 
 export const dynamic = "force-dynamic";
 
@@ -151,6 +153,12 @@ function num(n: number): string {
   return String(n);
 }
 
+// Forecast counts are service-weighted, so they can be fractional (e.g. a
+// 0.5-weight service). Show a whole number plainly, a fraction to one decimal.
+function fmtCount(n: number): string {
+  return Number.isInteger(n) ? String(n) : n.toFixed(1);
+}
+
 /** Colour tokens for a score band — value text, the component-bar fill, and the label chip. */
 function bandStyles(band: L2Score["band"]): { text: string; bar: string; chip: string } {
   switch (band) {
@@ -275,6 +283,24 @@ export default async function TeamActivityPage({ searchParams }: { searchParams:
   const data = await getTeamActivity({ scope, range, now });
   const t = data.totals;
   const rangeText = periodLabel(period);
+  // The forecast always reflects the current calendar month (not the range filter),
+  // and is always team-wide (per-L2-BDE, like the Scorecard) — the same weighted,
+  // target-aware numbers as the Lead Pulse Pipeline Forecast card.
+  const forecastMonthLabel = now.toLocaleString("en-US", { month: "long", year: "numeric" });
+  const forecast = await getPipelineForecast(now.getFullYear(), now.getMonth() + 1);
+  const forecastRows = forecast.byBde
+    .filter((b) => b.totals.actualCount + b.totals.openCount > 0 || b.totals.targetCount > 0)
+    .sort((a, b) => b.totals.forecastCount - a.totals.forecastCount || a.displayName.localeCompare(b.displayName));
+  const fc = forecast.byBde.reduce(
+    (acc, b) => ({
+      open: acc.open + b.totals.openCount,
+      forecast: acc.forecast + b.totals.forecastCount,
+      target: acc.target + b.totals.targetCount,
+      expectedRevenue: acc.expectedRevenue + b.totals.expectedRevenue,
+      actualRevenue: acc.actualRevenue + b.totals.actualRevenue,
+    }),
+    { open: 0, forecast: 0, target: 0, expectedRevenue: 0, actualRevenue: 0 },
+  );
 
   // L2 Scorecard — always team-wide (shown to everyone, ranks the whole team), so
   // reuse the viewer's rows when they're already team-wide, else fetch team-wide.
@@ -346,6 +372,69 @@ export default async function TeamActivityPage({ searchParams }: { searchParams:
             tone="success"
           />
         </section>
+
+        {/* Pipeline forecast — per-L2-BDE, current calendar month (weighted, target-aware) */}
+        <Section
+          title={`Pipeline Forecast — ${forecastMonthLabel}`}
+          action={
+            <span className="text-caption text-on-surface-variant">
+              {inr(fc.expectedRevenue)} open · {inr(fc.actualRevenue)} closed · {fmtCount(fc.forecast)} forecast vs{" "}
+              {fc.target} target
+            </span>
+          }
+        >
+          <div className="overflow-x-auto">
+            <table className="w-full min-w-[720px] border-collapse text-label-sm">
+              <thead>
+                <tr className="border-b border-outline-variant text-left text-caption uppercase tracking-wider text-on-surface-variant">
+                  <th className="py-sm pr-sm font-semibold">BDE</th>
+                  <th className="px-sm py-sm text-right font-semibold">Actual</th>
+                  <th className="px-sm py-sm text-right font-semibold">Open</th>
+                  <th className="px-sm py-sm text-right font-semibold">Forecast</th>
+                  <th className="px-sm py-sm text-right font-semibold">Target</th>
+                  <th className="px-sm py-sm text-right font-semibold">₹ Open</th>
+                  <th className="pl-sm py-sm text-right font-semibold">Verdict</th>
+                </tr>
+              </thead>
+              <tbody>
+                {forecastRows.length === 0 ? (
+                  <tr>
+                    <td colSpan={7} className="py-lg text-center text-on-surface-variant">
+                      No pipeline or closes this month.
+                    </td>
+                  </tr>
+                ) : (
+                  forecastRows.map((b) => {
+                    const behind = b.totals.targetCount - b.totals.forecastCount;
+                    return (
+                      <tr key={b.userId} className="border-b border-outline-variant/60 hover:bg-surface-container-low">
+                        <td className="py-sm pr-sm font-medium text-on-surface">{b.displayName}</td>
+                        <td className="px-sm py-sm text-right tabular-nums">{fmtCount(b.totals.actualCount)}</td>
+                        <td className="px-sm py-sm text-right tabular-nums">{fmtCount(b.totals.openCount)}</td>
+                        <td className="px-sm py-sm text-right font-semibold tabular-nums">
+                          {fmtCount(b.totals.forecastCount)}
+                        </td>
+                        <td className="px-sm py-sm text-right tabular-nums text-on-surface-variant">
+                          {b.totals.targetCount || "—"}
+                        </td>
+                        <td className="px-sm py-sm text-right tabular-nums">{inr(b.totals.expectedRevenue)}</td>
+                        <td className="pl-sm py-sm text-right">
+                          {b.totals.targetCount === 0 ? (
+                            <span className="text-caption text-on-surface-variant">—</span>
+                          ) : behind <= 0 ? (
+                            <span className="text-label-sm font-semibold text-green-700">On track</span>
+                          ) : (
+                            <span className="text-label-sm font-semibold text-amber-600">Behind {fmtCount(behind)}</span>
+                          )}
+                        </td>
+                      </tr>
+                    );
+                  })
+                )}
+              </tbody>
+            </table>
+          </div>
+        </Section>
 
         {/* Attention strip */}
         <section className="grid grid-cols-2 gap-gutter md:grid-cols-3 lg:grid-cols-6">

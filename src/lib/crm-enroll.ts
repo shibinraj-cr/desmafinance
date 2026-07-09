@@ -11,6 +11,7 @@ import { getActiveTemplateForService } from "./ops-templates";
 import { createProjectForEnrollment, resolveDefaultOpsAssignee } from "./ops-projects";
 import { loadHolidaySet } from "./ops-dates";
 import { monthCodeFromDate, flowFor } from "./catalog";
+import { toPrismaDate, fromPrismaDate } from "./lead-pulse-dates";
 
 /**
  * Resolve a finance (category, subItem) for a revenue draft from the enrolled
@@ -85,6 +86,63 @@ const leadCoreSelect = {
   pipelineId: true,
 } as const;
 
+/**
+ * Mirror the Lead Pulse "closed_won" side-effect: bump the owner's daily entry
+ * `closedWon` (+1, upserting the day's row) and insert one `LeadPulseDailyClose`
+ * tagged with the service. Returns the new close id so the caller can link it on
+ * the pipeline (`dailyCloseId`). This is the same write the manual pipeline
+ * status route performs (pipeline/[id]/status/route.ts) — without it, CRM
+ * enrollments feed `closed_won` revenue but are invisible to every metric that
+ * counts `LeadPulseDailyClose` (e.g. the "Actual" column of the Pipeline
+ * Forecast). Exported so the one-off backfill can reuse the exact same logic.
+ *
+ * Unlike the status route this does NOT block on a locked / out-of-backdate-
+ * window daily entry: enrollment is an authoritative Finance/Ops action and must
+ * never be refused because a BDE's daily sheet for that date is locked.
+ */
+export async function syncDailyClose(
+  tx: Prisma.TransactionClient,
+  owner: { userId: string; sourceId: string; serviceId: string },
+  closedDate: Date,
+): Promise<string> {
+  // Snap to the same pure @db.Date value the pipeline.closedDate resolves to, so
+  // the unique (userId, entryDate, sourceId) lookup matches — mirrors the status
+  // route's toPrismaDate(d.closedDate).
+  const entryDate = toPrismaDate(fromPrismaDate(closedDate));
+
+  const existingEntry = await tx.leadPulseDailyEntry.findUnique({
+    where: { userId_entryDate_sourceId: { userId: owner.userId, entryDate, sourceId: owner.sourceId } },
+  });
+
+  const entry = existingEntry
+    ? await tx.leadPulseDailyEntry.update({
+        where: { id: existingEntry.id },
+        data: { closedWon: (existingEntry.closedWon ?? 0) + 1 },
+      })
+    : await tx.leadPulseDailyEntry.create({
+        data: {
+          userId: owner.userId,
+          entryDate,
+          sourceId: owner.sourceId,
+          roleAtEntry: "l2",
+          status: "draft",
+          receivedFromL1: 0,
+          directLeads: 0,
+          connected: 0,
+          quoteSent: 0,
+          closedWon: 1,
+          closedLost: 0,
+          disqualified: 0,
+          locked: false,
+        },
+      });
+
+  const close = await tx.leadPulseDailyClose.create({
+    data: { entryId: entry.id, serviceId: owner.serviceId },
+  });
+  return close.id;
+}
+
 async function upsertPipeline(
   tx: Prisma.TransactionClient,
   lead: LeadCore,
@@ -111,19 +169,44 @@ async function upsertPipeline(
   if (lead.pipelineId) {
     const exists = await tx.leadPulsePipeline.findUnique({
       where: { id: lead.pipelineId },
-      select: { id: true, closedDate: true },
+      select: { id: true, closedDate: true, status: true, dailyCloseId: true },
     });
     if (exists) {
       // Keep an existing close date when staying/becoming won so editing a deal
       // never re-stamps the enrollment date; an explicit override wins; clear it
       // only when re-opening.
       const closedDate = status === "closed_won" ? closedDateOverride ?? exists.closedDate ?? new Date() : null;
-      await tx.leadPulsePipeline.update({ where: { id: lead.pipelineId }, data: { ...base, closedDate } });
+      // Log a daily close ONLY on a fresh won flip (was not already won and has
+      // no close linked) — so editing a deal on an already-enrolled lead, or a
+      // repeat enroll, never double-counts.
+      let dailyCloseId: string | undefined;
+      if (status === "closed_won" && exists.status !== "closed_won" && !exists.dailyCloseId) {
+        dailyCloseId = await syncDailyClose(
+          tx,
+          { userId: deal.ownerUserId, sourceId: deal.sourceId, serviceId: deal.serviceId },
+          closedDate!,
+        );
+      }
+      await tx.leadPulsePipeline.update({
+        where: { id: lead.pipelineId },
+        // Never write dailyCloseId:null here — it would wipe an existing link.
+        data: { ...base, closedDate, ...(dailyCloseId ? { dailyCloseId } : {}) },
+      });
       return lead.pipelineId;
     }
   }
+  const closedDate = status === "closed_won" ? closedDateOverride ?? new Date() : null;
+  // Brand-new row: no prior state to guard against, so a won row always logs its close.
+  const dailyCloseId =
+    status === "closed_won"
+      ? await syncDailyClose(
+          tx,
+          { userId: deal.ownerUserId, sourceId: deal.sourceId, serviceId: deal.serviceId },
+          closedDate!,
+        )
+      : undefined;
   const created = await tx.leadPulsePipeline.create({
-    data: { ...base, closedDate: status === "closed_won" ? closedDateOverride ?? new Date() : null },
+    data: { ...base, closedDate, dailyCloseId },
   });
   return created.id;
 }

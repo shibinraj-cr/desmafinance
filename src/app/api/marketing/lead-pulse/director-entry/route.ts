@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 import { prisma } from "@/lib/prisma";
 import { getCurrentUserAndPermissions } from "@/lib/permissions";
-import { getLeadPulseAccess } from "@/lib/lead-pulse-rbac";
+import { isAdmin } from "@/lib/rbac";
 import { toPrismaDate } from "@/lib/lead-pulse-dates";
 
 export const dynamic = "force-dynamic";
@@ -32,12 +32,12 @@ const SaveSchema = z.object({
  *
  * Supervisor-gated (Suhaina + admins).
  */
-async function ensureSupervisor() {
+// Director Entry is retired — admin-only. The CRM now captures every close.
+async function ensureAdmin() {
   const { userId, perms } = await getCurrentUserAndPermissions();
   if (!userId || !perms) return { error: "unauthorized" as const, status: 401 };
-  const access = await getLeadPulseAccess(userId, perms);
-  if (!access.canSupervise) return { error: "forbidden" as const, status: 403 };
-  return { userId, access };
+  if (!isAdmin(perms)) return { error: "forbidden" as const, status: 403 };
+  return { userId };
 }
 
 async function getDirectorId() {
@@ -49,7 +49,7 @@ async function getDirectorId() {
 }
 
 export async function GET(req: NextRequest) {
-  const guard = await ensureSupervisor();
+  const guard = await ensureAdmin();
   if ("error" in guard) {
     return NextResponse.json({ error: guard.error }, { status: guard.status });
   }
@@ -81,7 +81,7 @@ export async function GET(req: NextRequest) {
 }
 
 export async function POST(req: NextRequest) {
-  const guard = await ensureSupervisor();
+  const guard = await ensureAdmin();
   if ("error" in guard) {
     return NextResponse.json({ error: guard.error }, { status: guard.status });
   }

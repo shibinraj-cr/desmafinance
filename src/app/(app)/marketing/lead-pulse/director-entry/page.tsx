@@ -1,6 +1,6 @@
 import { redirect } from "next/navigation";
 import { getCurrentUserAndPermissions } from "@/lib/permissions";
-import { getLeadPulseAccess } from "@/lib/lead-pulse-rbac";
+import { isAdmin } from "@/lib/rbac";
 import { prisma } from "@/lib/prisma";
 import { todayIst, toPrismaDate } from "@/lib/lead-pulse-dates";
 import { DirectorEntryClient } from "./client";
@@ -16,8 +16,9 @@ export default async function DirectorEntryPage({
 }) {
   const { userId, perms } = await getCurrentUserAndPermissions();
   if (!userId || !perms) redirect("/login");
-  const access = await getLeadPulseAccess(userId, perms);
-  if (!access.canSupervise) {
+  // Director Entry is retired — the CRM now captures every close directly, so
+  // this legacy self-report surface is admin-only for oversight.
+  if (!isAdmin(perms)) {
     return (
       <div className="px-[24px] py-[40px] max-w-2xl mx-auto">
         <div
@@ -27,8 +28,10 @@ export default async function DirectorEntryPage({
             borderColor: "var(--lp-outline-variant)",
           }}
         >
+          <h1 className="text-[20px] font-semibold mb-[8px]">Admin access required</h1>
           <p style={{ color: "var(--lp-on-surface-variant)" }}>
-            Only supervisors and admins can record the director&apos;s closed leads.
+            Director Entry has been retired — the CRM now captures every enrollment directly. This page is available to
+            administrators only.
           </p>
         </div>
       </div>

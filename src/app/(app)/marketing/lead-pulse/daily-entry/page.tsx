@@ -1,5 +1,6 @@
 import { redirect } from "next/navigation";
 import { getCurrentUserAndPermissions } from "@/lib/permissions";
+import { isAdmin } from "@/lib/rbac";
 import { getLeadPulseAccess } from "@/lib/lead-pulse-rbac";
 import { prisma } from "@/lib/prisma";
 import { todayIst, fromPrismaDate, toPrismaDate, isWithinBackdateWindow } from "@/lib/lead-pulse-dates";
@@ -14,6 +15,26 @@ export default async function DailyEntryPage({
 }) {
   const { userId, perms } = await getCurrentUserAndPermissions();
   if (!userId || !perms) redirect("/login");
+
+  // Daily Entry is retired — the CRM now captures every close directly (enroll →
+  // daily close), so this legacy self-report surface is admin-only for oversight.
+  if (!isAdmin(perms)) {
+    return (
+      <div className="px-[24px] py-[40px] max-w-2xl mx-auto">
+        <div
+          className="rounded-[12px] p-[24px] border"
+          style={{ backgroundColor: "var(--lp-surface-container)", borderColor: "var(--lp-outline-variant)" }}
+        >
+          <h1 className="text-[20px] font-semibold mb-[8px]">Admin access required</h1>
+          <p style={{ color: "var(--lp-on-surface-variant)" }}>
+            Daily Entry has been retired — the CRM now captures every enrollment directly. This page is available to
+            administrators only.
+          </p>
+        </div>
+      </div>
+    );
+  }
+
   const access = await getLeadPulseAccess(userId, perms);
 
   // Only L1 / L2 BDEs submit daily entries. Admins / supervisors who

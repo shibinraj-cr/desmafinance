@@ -58,6 +58,12 @@ function inr(n: number): string {
   return "₹" + n.toLocaleString("en-IN", { maximumFractionDigits: 0 });
 }
 
+// Counts are service-weighted, so they can be fractional (e.g. a 0.5-weight
+// service). Show a whole number plainly, a fraction to one decimal.
+function fmtCount(n: number): string {
+  return Number.isInteger(n) ? String(n) : n.toFixed(1);
+}
+
 export function PipelineClient(props: {
   currentUserId: string;
   canSupervise: boolean;
@@ -874,7 +880,7 @@ function ForecastView({ data, monthLabel }: { data: ForecastData | null; monthLa
             ? null
             : b.totals.forecastCount >= b.totals.targetCount
               ? { label: "On track", bg: "rgba(51, 228, 255, 0.18)", fg: "var(--lp-cyan)" }
-              : { label: `Behind by ${b.totals.targetCount - b.totals.forecastCount}`, bg: "rgba(255, 180, 147, 0.20)", fg: "var(--lp-orange)" };
+              : { label: `Behind by ${fmtCount(b.totals.targetCount - b.totals.forecastCount)}`, bg: "rgba(255, 180, 147, 0.20)", fg: "var(--lp-orange)" };
         return (
           <section
             key={b.userId}
@@ -884,7 +890,7 @@ function ForecastView({ data, monthLabel }: { data: ForecastData | null; monthLa
             <header className="px-[16px] py-[12px] flex flex-wrap items-baseline gap-[12px] border-b" style={{ borderColor: "var(--lp-outline-variant)" }}>
               <span className="text-[15px] font-semibold">{b.displayName}</span>
               <span className="text-[12px]" style={{ color: "var(--lp-on-surface-variant)" }}>
-                {b.totals.actualCount} actual · {b.totals.openCount} open · {b.totals.forecastCount} forecast · {b.totals.targetCount} target
+                {fmtCount(b.totals.actualCount)} actual · {fmtCount(b.totals.openCount)} open · {fmtCount(b.totals.forecastCount)} forecast · {b.totals.targetCount} target
               </span>
               <span className="text-[12px]" style={{ color: "var(--lp-on-surface-variant)" }}>
                 · ₹ open {inr(b.totals.expectedRevenue)}
@@ -921,9 +927,9 @@ function ForecastView({ data, monthLabel }: { data: ForecastData | null; monthLa
                 {b.byService.map((s) => (
                   <tr key={s.serviceId} className="border-t" style={{ borderColor: "var(--lp-outline-variant)" }}>
                     <td className="px-[12px] py-[6px]">{s.serviceName}{s.serviceGroupName ? <span className="text-[11px] ml-[6px]" style={{ color: "var(--lp-on-surface-variant)" }}>({s.serviceGroupName})</span> : null}</td>
-                    <td className="px-[12px] py-[6px] text-right tabular-nums">{s.actualCount}</td>
-                    <td className="px-[12px] py-[6px] text-right tabular-nums">{s.openCount}</td>
-                    <td className="px-[12px] py-[6px] text-right tabular-nums font-semibold">{s.forecastCount}</td>
+                    <td className="px-[12px] py-[6px] text-right tabular-nums">{fmtCount(s.actualCount)}</td>
+                    <td className="px-[12px] py-[6px] text-right tabular-nums">{fmtCount(s.openCount)}</td>
+                    <td className="px-[12px] py-[6px] text-right tabular-nums font-semibold">{fmtCount(s.forecastCount)}</td>
                     <td className="px-[12px] py-[6px] text-right tabular-nums" style={{ color: "var(--lp-on-surface-variant)" }}>{s.targetCount}</td>
                     <td className="px-[12px] py-[6px] text-right tabular-nums">{inr(s.actualRevenue)}</td>
                     <td className="px-[12px] py-[6px] text-right tabular-nums">{inr(s.expectedRevenue)}</td>
