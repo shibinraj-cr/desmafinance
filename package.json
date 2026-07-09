@@ -34,6 +34,8 @@
     "db:grant-suhaina-crm-templates": "tsx prisma/grant-suhaina-crm-templates.ts",
     "db:grant-operations-pages": "tsx prisma/grant-operations-pages.ts",
     "db:backfill-ops-projects": "tsx prisma/backfill-ops-projects.ts",
+    "db:seed-ahpra-oba-template": "tsx prisma/seed-ahpra-oba-template.ts",
+    "db:seed-ahpra-oba-template:dry": "tsx prisma/seed-ahpra-oba-template.ts --dry-run",
     "db:seed-from-excel": "tsx prisma/seed-from-excel.ts",
     "lp:import-historical": "tsx prisma/lead-pulse-import-historical.ts",
     "lp:import-historical:dry": "tsx prisma/lead-pulse-import-historical.ts --dry-run"

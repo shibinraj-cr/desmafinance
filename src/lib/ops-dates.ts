@@ -46,6 +46,16 @@ export function opsToday(): string {
   return istDateString(new Date());
 }
 
+/**
+ * The IST calendar date (YYYY-MM-DD) a timestamp falls on — e.g. a task's
+ * actual `completedAt` or a project's `createdAt`. Used as the anchor for the
+ * rolling schedule, where a step's deadline is measured from the day the
+ * previous step actually closed.
+ */
+export function opsDateKey(ts: Date): string {
+  return istDateString(ts);
+}
+
 /** Re-export so callers can store an SLA date into a Prisma column cleanly. */
 export { toPrismaDate as opsDateToPrisma };
 
