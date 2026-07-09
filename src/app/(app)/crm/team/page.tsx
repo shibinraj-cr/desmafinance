@@ -274,7 +274,10 @@ export default async function TeamActivityPage({ searchParams }: { searchParams:
 
   const data = await getTeamActivity({ scope, range, now });
   const t = data.totals;
+  const f = data.forecast;
   const rangeText = periodLabel(period);
+  // The forecast always reflects the current calendar month (not the range filter).
+  const forecastMonthLabel = now.toLocaleString("en-US", { month: "long", year: "numeric" });
 
   // L2 Scorecard — always team-wide (shown to everyone, ranks the whole team), so
   // reuse the viewer's rows when they're already team-wide, else fetch team-wide.
@@ -346,6 +349,38 @@ export default async function TeamActivityPage({ searchParams }: { searchParams:
             tone="success"
           />
         </section>
+
+        {/* Pipeline forecast — current calendar month (independent of the range filter) */}
+        <Section
+          title={`Pipeline Forecast — ${forecastMonthLabel}`}
+          action={
+            <span className="text-caption text-on-surface-variant">
+              Won + open deals expected to close this month
+            </span>
+          }
+        >
+          <div className="grid grid-cols-1 gap-gutter sm:grid-cols-3">
+            <KpiCard
+              label="Won this month"
+              value={f.won.value}
+              hint={`${f.won.count} enrolled`}
+              tone="success"
+            />
+            <KpiCard
+              label="Open · due this month"
+              value={f.open.value}
+              hint={`${f.open.count} active deal${f.open.count === 1 ? "" : "s"} expected to close`}
+              tone="primary"
+            />
+            <KpiCard
+              label="Forecast total"
+              value={f.total.value}
+              hint={`${f.total.count} deal${f.total.count === 1 ? "" : "s"} · won + open`}
+              tone="primary"
+              hero
+            />
+          </div>
+        </Section>
 
         {/* Attention strip */}
         <section className="grid grid-cols-2 gap-gutter md:grid-cols-3 lg:grid-cols-6">
