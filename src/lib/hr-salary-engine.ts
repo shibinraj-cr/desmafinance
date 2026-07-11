@@ -1,5 +1,6 @@
 import { prisma } from "./prisma";
 import { cycleWindowForMonth, structureForMonth, computeLateTags, type LateTag } from "./hr-data";
+import { computeMonthlyLeaveLedger } from "./hr-leave-balance";
 
 /**
  * Salary calculation engine.
@@ -160,6 +161,9 @@ export function calcLine(args: {
   daysAbsent: number;
   daysPaidLeave: number;
   carriedBalanceBefore: number;
+  // Days of loss-of-pay (absence / half-day / late) covered by the employee's
+  // paid-leave allocation this cycle — subtracted from the LOP so they're paid.
+  paidLeaveCoverForLop?: number;
 }): SalaryCalc {
   const wd = args.workingDaysBase;
   const breakdown = deriveBreakdown(args.basic, args);
@@ -169,7 +173,9 @@ export function calcLine(args: {
   const paidCovered = Math.min(args.daysPaidLeave, Math.max(0, args.carriedBalanceBefore));
   const paidUncovered = Math.max(0, args.daysPaidLeave - paidCovered);
 
-  const totalLeaveForLop = round2(args.daysAbsent + paidUncovered + args.daysHalfDay * 0.5);
+  const lopBeforeCover = args.daysAbsent + paidUncovered + args.daysHalfDay * 0.5;
+  const lopCover = Math.min(Math.max(0, args.paidLeaveCoverForLop ?? 0), lopBeforeCover);
+  const totalLeaveForLop = round2(lopBeforeCover - lopCover);
   // Paid days = working-days base − loss-of-pay. We derive attended days
   // from LOP rather than summing present-marked rows, so the PF base stays
   // consistent with the gross/LOP side: an employee paid the full month
@@ -205,7 +211,10 @@ export function calcLine(args: {
     ...breakdown,
     totalWorkingDays: wd,
     daysAttended,
-    paidLeave: round2(args.daysPaidLeave),
+    // Paid leave = explicit full-day paid leave (LV) + loss-of-pay covered by the
+    // monthly paid-leave allocation this cycle. Absence / half-day counts stay raw
+    // (what actually happened); totalLeaveForLop is the net deduction after cover.
+    paidLeave: round2(args.daysPaidLeave + lopCover),
     unpaidLeave: round2(args.daysAbsent + paidUncovered),
     halfDayLeave: round2(args.daysHalfDay),
     totalLeaveForLop,
@@ -340,6 +349,10 @@ export async function computeSalaryRun(monthKey: string, userId: string | null):
     // Paid-leave days the balance can cover this cycle (passed to calcLine as
     // carriedBalanceBefore; see the per-calendar-year computation below).
     let carried = 0;
+    // Loss-of-pay (absence / half-day / late) covered by the monthly paid-leave
+    // allocation this cycle — read from the canonical leave ledger so payroll and
+    // the "Paid taken / Unpaid taken" ledger agree exactly.
+    let lopCover = 0;
     if (isOwner) {
       buckets = { daysPresent: 0, daysAbsent: 0, daysHalfDay: 0, daysPaidLeave: 0 };
     } else {
@@ -373,6 +386,14 @@ export async function computeSalaryRun(monthKey: string, userId: string | null):
       const startYear = start.getUTCFullYear();
       carried = await coverYear(year);
       if (startYear !== year) carried += await coverYear(startYear);
+
+      // Paid-leave coverage of this cycle's loss-of-pay. The monthly allocation
+      // covers the earliest absence / half-day / late up to the balance available,
+      // carried forward month-to-month — exactly what the ledger computes for this
+      // cycle month, so payroll matches the "Paid taken / Unpaid taken" ledger.
+      const cycleMonthIdx = Number(monthKey.split("-")[1]);
+      const ledger = await computeMonthlyLeaveLedger(e.id, year, { asOf: end, fill: "full" });
+      lopCover = ledger.rows.find((r) => r.month === cycleMonthIdx)?.covered ?? 0;
     }
 
     // Trainees are paid on BASIC ONLY — the engine forces allowances/ESI/PF/PT
@@ -395,6 +416,7 @@ export async function computeSalaryRun(monthKey: string, userId: string | null):
       // AL (late beyond allowance) present-days are treated as half-days.
       daysHalfDay: buckets.daysHalfDay + alHalfDays,
       carriedBalanceBefore: carried,
+      paidLeaveCoverForLop: lopCover,
     });
 
     await prisma.hrSalaryRunLine.create({

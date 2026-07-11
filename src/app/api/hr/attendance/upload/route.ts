@@ -10,7 +10,7 @@ import {
   SATURDAY_END_MIN,
   type ParsedDay,
 } from "@/lib/hr-attendance-parser";
-import { cycleMonthForDate, cycleWindowForMonth } from "@/lib/hr-data";
+import { cycleMonthForDate, cycleWindowForMonth, isEarlyClosureDate } from "@/lib/hr-data";
 import { recomputeAllLeaveBalances } from "@/lib/hr-leave-balance";
 import { applySandwichRule } from "@/lib/hr-sandwich";
 import { resolveShiftForDate } from "@/lib/hr-shift";
@@ -280,6 +280,21 @@ export async function POST(req: Request) {
       for (const d of days) {
         const dow = d.date.getUTCDay();
         if (dow === 0) continue; // Sunday = week-off
+
+        // Early-closure day (HR sanctioned an early shutdown): a present employee
+        // (both punches) is a full Present with NO half-day and NO late penalty,
+        // regardless of punch duration or arrival. Overrides the late (1) and
+        // half-day (2) recompute below, and survives re-imports.
+        if (isEarlyClosureDate(d.date) && d.inTime && d.outTime) {
+          const upd: { status?: string; lateMinutes?: number } = {};
+          if (d.status !== "P") upd.status = "P";
+          if ((d.lateMinutes ?? 0) !== 0) upd.lateMinutes = 0;
+          if (Object.keys(upd).length > 0) {
+            await prisma.hrAttendanceDay.update({ where: { id: d.id }, data: upd });
+          }
+          continue;
+        }
+
         const isSat = dow === 6;
         const updates: { lateMinutes?: number; status?: string } = {};
 
