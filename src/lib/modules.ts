@@ -204,6 +204,14 @@ export const MODULES: AppModule[] = [
         group: "TOOLS",
       },
       {
+        // Not adminOnly: gated by an explicit page grant so the Marketing Admin
+        // can be given the Meta reconciliation tool without full CRM admin.
+        href: "/crm/meta-reconcile",
+        label: "Meta Reconcile",
+        icon: "rule",
+        group: "ADMIN",
+      },
+      {
         href: "/crm/settings",
         label: "Settings",
         icon: "tune",

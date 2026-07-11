@@ -51,6 +51,9 @@ export async function POST() {
     ...marketing.pages.map((p) => p.href),
     "/master-data/sources",
     "/master-data/parties",
+    // CRM Meta reconciliation tool (upload Meta export → find leads missing from
+    // the CRM). Granted to Marketing Admin without the rest of CRM admin.
+    "/crm/meta-reconcile",
   ];
 
   const role = await prisma.role.upsert({
