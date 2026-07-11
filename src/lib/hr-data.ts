@@ -192,6 +192,23 @@ export function cycleMonthForDate(date: Date): string {
   return `${y}-${String(m).padStart(2, "0")}`;
 }
 
+/**
+ * Company early-closure days: HR sanctioned an early shutdown (the office closed
+ * before the normal shift end), so anyone present worked a full — if shortened —
+ * day. On these dates a present employee (both punches) is a full Present (P)
+ * with NO half-day and NO late penalty, regardless of punch duration or arrival
+ * time. Keyed by ISO yyyy-mm-dd. Applied authoritatively on attendance upload
+ * (so it survives re-imports). Add dates here as HR declares closures.
+ *
+ * 2026-04-28 — office closed ~16:00 (vs 17:30); ~10 present staff fell just under
+ * the 7h half-day bar and were wrongly auto-marked HD.
+ */
+export const EARLY_CLOSURE_DATES = new Set<string>(["2026-04-28"]);
+
+export function isEarlyClosureDate(date: Date): boolean {
+  return EARLY_CLOSURE_DATES.has(date.toISOString().slice(0, 10));
+}
+
 /** Total number of days in a salary cycle (28-31). */
 export function cycleDayCount(monthKey: string): number {
   const { start, end } = cycleWindowForMonth(monthKey);
