@@ -15,6 +15,7 @@ import {
   LCE_GRACE_MINUTES,
   type LateTag,
 } from "@/lib/hr-data";
+import { computeMonthlyLeaveLedger, paidLeaveCoveredByDay } from "@/lib/hr-leave-balance";
 import { AttendanceClient } from "./client";
 
 export const dynamic = "force-dynamic";
@@ -90,12 +91,14 @@ export default async function HrAttendancePage({
         late: number | null;
         remark: string | null;
         lateTag: LateTag;
+        paid: number; // paid-leave portion of this day covered by the allocation (0 / 0.5 / 1)
       }
     >
   > = {};
   const summary: Record<
     string,
-    { P: number; HD: number; A: number; WO: number; HL: number; LV: number; LCE: number; AL: number }
+    // PL = paid-leave days covering loss-of-pay this cycle; Unpaid = LOP − PL.
+    { P: number; HD: number; A: number; WO: number; HL: number; LV: number; LCE: number; AL: number; PL: number }
   > = {};
 
   // Compute LCE/AL tags per employee from the days in this cycle.
@@ -119,8 +122,9 @@ export default async function HrAttendancePage({
       late: d.lateMinutes,
       remark: d.remark,
       lateTag,
+      paid: 0,
     };
-    summary[d.employeeId] ??= { P: 0, HD: 0, A: 0, WO: 0, HL: 0, LV: 0, LCE: 0, AL: 0 };
+    summary[d.employeeId] ??= { P: 0, HD: 0, A: 0, WO: 0, HL: 0, LV: 0, LCE: 0, AL: 0, PL: 0 };
     // A present day flagged AL (late beyond the allowance) is docked as a
     // half-day in payroll, so count it as HD here too — keeps the grid summary
     // consistent with the salary run (LCE days are not penalised).
@@ -132,8 +136,30 @@ export default async function HrAttendancePage({
   }
   // Ensure every employee has a summary row even if no days
   for (const emp of employees) {
-    summary[emp.id] ??= { P: 0, HD: 0, A: 0, WO: 0, HL: 0, LV: 0, LCE: 0, AL: 0 };
+    summary[emp.id] ??= { P: 0, HD: 0, A: 0, WO: 0, HL: 0, LV: 0, LCE: 0, AL: 0, PL: 0 };
   }
+
+  // Paid-leave coverage: how much of this cycle's loss-of-pay each employee's
+  // monthly paid-leave allocation covers (earliest-first, carry-forward). Read
+  // from the canonical ledger so the grid matches the Leave tab and payroll, then
+  // mark the specific covered days.
+  const [cycleYear, cycleMonthIdx] = requested.split("-").map(Number);
+  await Promise.all(
+    employees.map(async (emp) => {
+      const { rows } = await computeMonthlyLeaveLedger(emp.id, cycleYear, { fill: "full" });
+      const covered = rows.find((r) => r.month === cycleMonthIdx)?.covered ?? 0;
+      summary[emp.id].PL = covered;
+      if (covered <= 0) return;
+      const empDays = days.filter((d) => d.employeeId === emp.id);
+      const paidMap = paidLeaveCoveredByDay(empDays, emp.halfHourConcession, covered);
+      for (const d of empDays) {
+        const portion = paidMap.get(d.id);
+        if (!portion) continue;
+        const cell = grid[emp.id]?.[d.date.toISOString().slice(0, 10)];
+        if (cell) cell.paid = portion;
+      }
+    }),
+  );
 
   const dateCells = dates.map((d) => ({
     iso: d.toISOString().slice(0, 10),

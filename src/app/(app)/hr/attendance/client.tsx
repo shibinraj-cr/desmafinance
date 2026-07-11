@@ -15,12 +15,13 @@ type GridCell = {
   late: number | null;
   remark: string | null;
   lateTag: LateTag;
+  paid: number; // paid-leave portion of this day covered by the allocation (0 / 0.5 / 1)
 };
 /// Keys are ISO date strings (YYYY-MM-DD)
 type Grid = Record<string, Record<string, GridCell>>;
 type Summary = Record<
   string,
-  { P: number; HD: number; A: number; WO: number; HL: number; LV: number; LCE: number; AL: number }
+  { P: number; HD: number; A: number; WO: number; HL: number; LV: number; LCE: number; AL: number; PL: number }
 >;
 
 type Upload = {
@@ -321,6 +322,7 @@ export function AttendanceClient({
                             c.ot ? `OT ${hhmm(c.ot)}` : null,
                             c.late ? `late ${hhmm(c.late)}` : null,
                             c.lateTag ? `tag ${c.lateTag}` : null,
+                            c.paid > 0 ? `paid leave ${c.paid} (covered by allocation)` : null,
                             c.remark ? `(${c.remark})` : null,
                           ]
                             .filter(Boolean)
@@ -387,6 +389,14 @@ export function AttendanceClient({
                                 {c.lateTag}
                               </span>
                             )}
+                            {!!c && c.paid > 0 && (
+                              <span
+                                className="text-[8px] font-extrabold text-center py-[1px] border-t border-current/10 bg-emerald-200 text-emerald-900"
+                                title={`Paid leave — ${c.paid} day covered by the monthly allocation (would otherwise be loss-of-pay)`}
+                              >
+                                {c.paid < 1 ? `PL·${c.paid}` : "PL"}
+                              </span>
+                            )}
                           </div>
                         </td>
                       );
@@ -402,11 +412,14 @@ export function AttendanceClient({
                         <span className="text-on-surface-variant"> · </span>
                         <span className="text-red-700 font-bold">A {s.A}</span>
                       </div>
-                      {/* Net Paid vs Unpaid (HD's 0.5 counts as unpaid; LV is paid) */}
+                      {/* Net Paid vs Unpaid. Loss-of-pay = A + HD·0.5 (HD already
+                          includes AL half-days); the monthly paid-leave allocation
+                          covers PL of it, so Unpaid = LOP − PL. Paid = LV + PL. */}
                       <div className="text-on-surface-variant">
-                        Paid <span className="text-purple-700 font-bold">{s.LV}</span>
+                        Paid <span className="text-purple-700 font-bold">{(s.LV + s.PL).toFixed(1)}</span>
+                        {s.PL > 0 && <span className="text-emerald-700"> (PL {s.PL.toFixed(1)})</span>}
                         {" · "}
-                        Unpaid <span className="text-red-700 font-bold">{(s.A + s.HD * 0.5).toFixed(1)}</span>
+                        Unpaid <span className="text-red-700 font-bold">{Math.max(0, s.A + s.HD * 0.5 - s.PL).toFixed(1)}</span>
                       </div>
                       {/* Late-coming summary */}
                       {(s.LCE > 0 || s.AL > 0 || e.lateEligible) && (
@@ -460,8 +473,12 @@ export function AttendanceClient({
           quota.
           {" "}<span className="font-bold text-orange-700">MP</span> (orange ring) Missing punch —
           only one of in/out recorded; needs a regularization.
-          The Summary column shows day counts on top, Paid / Unpaid totals next, and the
-          Late-Coming usage at the bottom for employees with that eligibility enabled.
+          {" "}<span className="font-bold text-emerald-700">PL</span> Paid leave — the day&apos;s
+          loss-of-pay is covered by the employee&apos;s monthly paid-leave allocation (earliest
+          first); it is paid, not docked.
+          The Summary column shows day counts on top, Paid / Unpaid totals next (Paid includes
+          the PL coverage), and the Late-Coming usage at the bottom for employees with that
+          eligibility enabled.
         </p>
       </Section>
     </>
