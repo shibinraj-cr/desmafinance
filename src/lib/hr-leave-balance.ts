@@ -30,6 +30,36 @@ export function cycleMonthLop(
 }
 
 /**
+ * Given a cycle's attendance rows and the paid-leave coverage amount for that
+ * cycle (as computed by the ledger / salary engine), return which days that
+ * coverage pays for, earliest loss-of-pay first, as `dayId → paid portion`
+ * (0 < portion ≤ the day's LOP weight: A = 1, HD / AL = 0.5). A day only appears
+ * if some of it is covered; the last covered day may be partial. This mirrors
+ * `cycleMonthLop`, so the marked days always sum to `covered`.
+ */
+export function paidLeaveCoveredByDay(
+  days: { id: string; date: Date; status: string; lateMinutes: number | null }[],
+  eligibleLce: boolean,
+  covered: number,
+): Map<string, number> {
+  const paid = new Map<string, number>();
+  if (covered <= 0) return paid;
+  const { tags } = computeLateTags(days, eligibleLce);
+  const lopDays = days
+    .filter((d) => d.status === "A" || d.status === "HD" || (d.status === "P" && tags.get(d.id) === "AL"))
+    .sort((a, b) => a.date.getTime() - b.date.getTime());
+  let remaining = covered;
+  for (const d of lopDays) {
+    if (remaining <= 1e-9) break;
+    const weight = d.status === "A" ? 1 : 0.5;
+    const portion = Math.min(weight, remaining);
+    if (portion > 0) paid.set(d.id, round2(portion));
+    remaining = round2(remaining - portion);
+  }
+  return paid;
+}
+
+/**
  * Canonical leave-balance engine.
  *
  * The stored `HrLeaveBalance` row (opening / accrued / used / balance) used to

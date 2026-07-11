@@ -25,6 +25,7 @@ import {
   accrualMonthsInYear,
   accrualCycleMonthsInYear,
   cycleMonthLop,
+  paidLeaveCoveredByDay,
   computeLeaveBalanceFor,
   computeMonthlyLeaveLedger,
 } from "@/lib/hr-leave-balance";
@@ -93,6 +94,38 @@ describe("cycleMonthLop", () => {
   });
   it("ignores late minutes within the 10-min shift grace", () => {
     expect(cycleMonthLop([day(D(2026, 4, 2), "P", 8)], false)).toBe(0);
+  });
+});
+
+describe("paidLeaveCoveredByDay", () => {
+  it("covers the earliest absence first (1 day of coverage → the first A)", () => {
+    const a1 = day(D(2026, 4, 2), "A");
+    const a2 = day(D(2026, 4, 13), "A");
+    const hd = day(D(2026, 4, 20), "HD");
+    const m = paidLeaveCoveredByDay([hd, a2, a1], true, 1);
+    expect(m.get(a1.id)).toBe(1);
+    expect(m.has(a2.id)).toBe(false);
+    expect(m.has(hd.id)).toBe(false);
+  });
+  it("spreads 1 day of coverage across two half-days", () => {
+    const hd1 = day(D(2026, 4, 2), "HD");
+    const hd2 = day(D(2026, 4, 10), "HD");
+    const m = paidLeaveCoveredByDay([hd1, hd2], true, 1);
+    expect(m.get(hd1.id)).toBe(0.5);
+    expect(m.get(hd2.id)).toBe(0.5);
+  });
+  it("marks a partially-covered day (0.5 of coverage against a full absence)", () => {
+    const a = day(D(2026, 4, 2), "A");
+    const m = paidLeaveCoveredByDay([a], true, 0.5);
+    expect(m.get(a.id)).toBe(0.5);
+  });
+  it("counts an AL present-day as a coverable 0.5 loss-of-pay", () => {
+    const al = day(D(2026, 4, 2), "P", 40); // not LCE-eligible → AL
+    const m = paidLeaveCoveredByDay([al], false, 0.5);
+    expect(m.get(al.id)).toBe(0.5);
+  });
+  it("returns empty when there is no coverage", () => {
+    expect(paidLeaveCoveredByDay([day(D(2026, 4, 2), "A")], true, 0).size).toBe(0);
   });
 });
 

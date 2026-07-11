@@ -6,6 +6,7 @@ import { employeeForUser } from "@/lib/hr-me";
 import { TopBar } from "@/components/TopBar";
 import { Section } from "@/components/Cards";
 import { cycleMonthForDate, cycleWindowForMonth } from "@/lib/hr-data";
+import { computeMonthlyLeaveLedger, paidLeaveCoveredByDay } from "@/lib/hr-leave-balance";
 
 export const dynamic = "force-dynamic";
 
@@ -53,6 +54,16 @@ export default async function MyAttendancePage({
   );
   const lateDays = days.filter((d) => (d.lateMinutes ?? 0) > 10 && (d.status === "P" || d.status === "HD"));
 
+  // Paid-leave coverage for this cycle: the monthly allocation covers the earliest
+  // loss-of-pay (absence / half-day / late). Read from the canonical ledger so it
+  // matches the Leave tab and payroll, then flag the specific covered days.
+  const [ledgerYear, ledgerMonth] = monthKey.split("-").map(Number);
+  const { rows: ledgerRows } = await computeMonthlyLeaveLedger(emp.id, ledgerYear, { fill: "full" });
+  const cycleRow = ledgerRows.find((r) => r.month === ledgerMonth);
+  const paidLeave = cycleRow?.taken ?? 0;
+  const unpaidLop = cycleRow?.unpaid ?? 0;
+  const paidByDayId = paidLeaveCoveredByDay(days, emp.halfHourConcession, cycleRow?.covered ?? 0);
+
   const [yStr, mStr] = monthKey.split("-").map(Number);
   const prevMonth = mStr === 1 ? `${yStr - 1}-12` : `${yStr}-${String(mStr - 1).padStart(2, "0")}`;
   const nextMonth = mStr === 12 ? `${yStr + 1}-01` : `${yStr}-${String(mStr + 1).padStart(2, "0")}`;
@@ -82,12 +93,19 @@ export default async function MyAttendancePage({
           <div className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-6 gap-base">
             <Stat label="Present" value={counts.P ?? 0} tone="success" />
             <Stat label="Half-day" value={counts.HD ?? 0} tone="warn" />
-            <Stat label="Leave" value={counts.LV ?? 0} tone="info" />
+            <Stat label="Paid leave" value={paidLeave} tone="info" />
             <Stat label="Absent" value={counts.A ?? 0} tone="danger" />
             <Stat label="Week off" value={counts.WO ?? 0} />
             <Stat label="Holiday" value={counts.HL ?? 0} />
           </div>
           <p className="mt-base text-caption text-on-surface-variant">
+            {paidLeave > 0 ? (
+              <>
+                <span className="font-semibold text-emerald-700">Paid leave {paidLeave.toFixed(1)}</span>{" "}
+                covered your earliest loss-of-pay this cycle ·{" "}
+              </>
+            ) : null}
+            Unpaid (loss-of-pay): <span className="font-semibold">{unpaidLop.toFixed(1)}</span> day(s) ·
             Late marks (&gt;10 min): {lateDays.length} day(s)
           </p>
         </Section>
@@ -121,7 +139,17 @@ export default async function MyAttendancePage({
                       <td className="px-sm py-xs">{["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"][d.date.getUTCDay()]}</td>
                       <td className="px-sm py-xs">{d.shiftCode ?? "—"}</td>
                       <td className="px-sm py-xs">
-                        <StatusPill status={d.status} />
+                        <span className="inline-flex items-center gap-xs">
+                          <StatusPill status={d.status} />
+                          {paidByDayId.get(d.id) ? (
+                            <span
+                              className="px-xs py-[1px] rounded text-caption font-semibold bg-emerald-100 text-emerald-800"
+                              title={`Paid leave — ${paidByDayId.get(d.id)} day covered by your monthly allocation (paid, not docked)`}
+                            >
+                              PL
+                            </span>
+                          ) : null}
+                        </span>
                       </td>
                       <td className="px-sm py-xs font-mono">{d.inTime ?? "—"}</td>
                       <td className="px-sm py-xs font-mono">{d.outTime ?? "—"}</td>
