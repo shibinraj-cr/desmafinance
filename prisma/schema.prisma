@@ -13,6 +13,10 @@ model User {
   username               String                @unique
   email                  String?               @unique
   passwordHash           String
+  // Soft-disable. An inactive user keeps ALL their data but cannot sign in and
+  // loses access on their next request. Toggled from User Management; preferred
+  // over deleting a user (delete cascades their Lead Pulse history).
+  isActive               Boolean               @default(true)
   // Legacy string role kept for backward compat — capability checks now
   // prefer the `roleRef` relation when present and fall back to this.
   role                   String                @default("executive")

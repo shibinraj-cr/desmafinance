@@ -14,6 +14,8 @@ const errorLabels: Record<string, string> = {
   cannot_delete_self: "You can't delete your own account.",
   cannot_delete_last_admin: "Refusing to delete the only remaining admin.",
   cannot_demote_last_admin: "Refusing to demote the only remaining admin.",
+  cannot_deactivate_self: "You can't deactivate your own account.",
+  cannot_deactivate_last_admin: "Refusing to deactivate the only remaining admin.",
   not_found: "User no longer exists.",
   role_not_found: "That role no longer exists.",
 };
@@ -169,16 +171,41 @@ export function UserActions({
   username,
   currentRoleId,
   isSelf,
+  isActive,
   roles,
 }: {
   userId: string;
   username: string;
   currentRoleId: string | null;
   isSelf: boolean;
+  isActive: boolean;
   roles: RoleOption[];
 }) {
   const router = useRouter();
   const [busy, setBusy] = useState(false);
+
+  async function setActive(next: boolean) {
+    const msg = next
+      ? `Reactivate ${username}? They'll be able to sign in again.`
+      : `Deactivate ${username}? They'll be signed out and blocked from logging in, but all their data is kept.`;
+    if (!confirm(msg)) return;
+    setBusy(true);
+    const res = await fetch(`/api/users/${userId}`, {
+      method: "PATCH",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ isActive: next }),
+    });
+    setBusy(false);
+    if (!res.ok) {
+      const data = await res.json().catch(() => ({}));
+      alert(
+        errorLabels[data?.error as string] ??
+          `Failed to ${next ? "reactivate" : "deactivate"} user.`,
+      );
+      return;
+    }
+    router.refresh();
+  }
 
   async function changeRole(roleId: string) {
     if (roleId === currentRoleId) return;
@@ -263,6 +290,28 @@ export function UserActions({
       </button>
       <button
         type="button"
+        onClick={() => setActive(!isActive)}
+        disabled={busy || (isActive && isSelf)}
+        title={
+          isActive
+            ? isSelf
+              ? "Can't deactivate yourself"
+              : "Deactivate (disable login, keep data)"
+            : "Reactivate"
+        }
+        className={
+          "p-xs transition disabled:opacity-40 " +
+          (isActive
+            ? "text-on-surface-variant hover:text-error"
+            : "text-green-700 hover:text-green-800")
+        }
+      >
+        <span className="material-symbols-outlined" style={{ fontSize: 18 }}>
+          {isActive ? "block" : "how_to_reg"}
+        </span>
+      </button>
+      <button
+        type="button"
         onClick={remove}
         disabled={busy || isSelf}
         title={isSelf ? "Can't delete yourself" : "Delete user"}
@@ -272,6 +321,127 @@ export function UserActions({
           delete
         </span>
       </button>
+    </div>
+  );
+}
+
+type UserRow = {
+  id: string;
+  username: string;
+  email: string | null;
+  displayRole: string;
+  badgeClass: string;
+  created: string;
+  isActive: boolean;
+  roleId: string | null;
+};
+
+/**
+ * The users table with a "Show only active users" toggle (on by default) so
+ * the page stays clean once deactivated accounts pile up. Filtering is
+ * client-side — the server hands over every user.
+ */
+export function UsersTable({
+  rows,
+  roles,
+  currentUserId,
+}: {
+  rows: UserRow[];
+  roles: RoleOption[];
+  currentUserId: string;
+}) {
+  const [onlyActive, setOnlyActive] = useState(true);
+  const shown = onlyActive ? rows.filter((r) => r.isActive) : rows;
+  const inactiveCount = rows.length - rows.filter((r) => r.isActive).length;
+
+  return (
+    <div className="space-y-sm">
+      <div className="flex items-center gap-md flex-wrap">
+        <label className="inline-flex items-center gap-xs text-label-sm font-semibold text-on-surface-variant cursor-pointer select-none">
+          <input
+            type="checkbox"
+            checked={onlyActive}
+            onChange={(e) => setOnlyActive(e.target.checked)}
+            className="w-4 h-4 accent-primary"
+          />
+          Show only active users
+        </label>
+        <span className="text-caption text-on-surface-variant">
+          {shown.length} shown
+          {onlyActive && inactiveCount > 0
+            ? ` · ${inactiveCount} inactive hidden`
+            : ""}
+        </span>
+      </div>
+
+      <div className="bg-surface-container-lowest border border-outline-variant rounded-xl shadow-sm overflow-hidden">
+        <div className="overflow-x-auto scrollbar-thin">
+          <table className="w-full text-body-md">
+            <thead className="bg-surface-container-low text-on-surface-variant">
+              <tr className="text-left">
+                <th className="px-md py-sm text-label-sm uppercase tracking-wider">Username</th>
+                <th className="px-md py-sm text-label-sm uppercase tracking-wider">Email</th>
+                <th className="px-md py-sm text-label-sm uppercase tracking-wider">Role</th>
+                <th className="px-md py-sm text-label-sm uppercase tracking-wider">Created</th>
+                <th className="px-md py-sm text-label-sm uppercase tracking-wider text-right">
+                  Actions
+                </th>
+              </tr>
+            </thead>
+            <tbody>
+              {shown.map((u) => (
+                <tr
+                  key={u.id}
+                  className={
+                    "border-t border-outline-variant/60 " +
+                    (u.isActive ? "" : "bg-surface-container-low/40")
+                  }
+                >
+                  <td className="px-md py-sm font-semibold">
+                    <span className={u.isActive ? "" : "text-on-surface-variant"}>
+                      {u.username}
+                    </span>
+                    {!u.isActive && (
+                      <span className="ml-sm text-[10px] uppercase tracking-wider font-bold text-on-surface-variant border border-outline-variant rounded-full px-xs py-[1px] align-middle">
+                        Inactive
+                      </span>
+                    )}
+                  </td>
+                  <td className="px-md py-sm text-on-surface-variant">{u.email ?? "—"}</td>
+                  <td className="px-md py-sm">
+                    <span
+                      className={
+                        "px-sm py-xs rounded-full text-label-sm font-semibold " +
+                        u.badgeClass
+                      }
+                    >
+                      {u.displayRole}
+                    </span>
+                  </td>
+                  <td className="px-md py-sm text-on-surface-variant">{u.created}</td>
+                  <td className="px-md py-sm text-right">
+                    <UserActions
+                      userId={u.id}
+                      username={u.username}
+                      currentRoleId={u.roleId}
+                      isSelf={u.id === currentUserId}
+                      isActive={u.isActive}
+                      roles={roles}
+                    />
+                  </td>
+                </tr>
+              ))}
+              {shown.length === 0 && (
+                <tr>
+                  <td colSpan={5} className="px-md py-lg text-center text-on-surface-variant">
+                    No users to show.
+                  </td>
+                </tr>
+              )}
+            </tbody>
+          </table>
+        </div>
+      </div>
     </div>
   );
 }

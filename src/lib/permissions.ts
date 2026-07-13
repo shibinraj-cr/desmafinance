@@ -18,6 +18,8 @@ export async function getCurrentUserPermissions(): Promise<Permissions | null> {
     include: { roleRef: true },
   });
   if (!user) return null;
+  // A deactivated account loses access immediately, even mid-session.
+  if (!user.isActive) return null;
   if (user.roleRef) {
     return {
       isAdmin: user.roleRef.isAdmin,
@@ -40,6 +42,8 @@ export async function getCurrentUserAndPermissions() {
     include: { roleRef: true },
   });
   if (!user) return { session, perms: null, userId: session.user.id };
+  // A deactivated account loses access immediately, even mid-session.
+  if (!user.isActive) return { session, perms: null, userId: user.id };
   const perms: Permissions = user.roleRef
     ? {
         isAdmin: user.roleRef.isAdmin,

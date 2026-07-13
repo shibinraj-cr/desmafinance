@@ -45,6 +45,8 @@ export const authOptions: NextAuthOptions = {
         if (!user) return null;
         const ok = await bcrypt.compare(credentials.password, user.passwordHash);
         if (!ok) return null;
+        // Deactivated accounts can't sign in (their data is kept, just no access).
+        if (!user.isActive) return null;
         return { id: user.id, name: user.username, email: user.email ?? undefined, role: user.role };
       },
     }),

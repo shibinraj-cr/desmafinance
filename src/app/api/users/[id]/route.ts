@@ -12,6 +12,8 @@ const PatchSchema = z.object({
   roleName: z.string().min(1).max(60).optional(),
   email: z.string().email().max(120).optional().or(z.literal("")),
   password: z.string().min(8).max(200).optional(),
+  /** Soft-disable / re-enable the account (keeps all data; blocks sign-in). */
+  isActive: z.boolean().optional(),
 });
 
 export async function PATCH(req: NextRequest, { params }: { params: { id: string } }) {
@@ -52,14 +54,30 @@ export async function PATCH(req: NextRequest, { params }: { params: { id: string
     target.roleRef?.isAdmin === true
   ) {
     const adminCount = await prisma.user.count({
-      where: { roleRef: { isAdmin: true } },
+      where: { roleRef: { isAdmin: true }, isActive: true },
     });
     if (adminCount <= 1) {
       return NextResponse.json({ error: "cannot_demote_last_admin" }, { status: 409 });
     }
   }
 
+  // Guard soft-disable: can't lock yourself out, can't disable the last admin.
+  if (data.isActive === false) {
+    if (params.id === userId) {
+      return NextResponse.json({ error: "cannot_deactivate_self" }, { status: 409 });
+    }
+    if (target.roleRef?.isAdmin) {
+      const activeAdmins = await prisma.user.count({
+        where: { roleRef: { isAdmin: true }, isActive: true },
+      });
+      if (activeAdmins <= 1) {
+        return NextResponse.json({ error: "cannot_deactivate_last_admin" }, { status: 409 });
+      }
+    }
+  }
+
   const update: Record<string, unknown> = {};
+  if (data.isActive !== undefined) update.isActive = data.isActive;
   if (newRoleRecord) {
     update.roleId = newRoleRecord.id;
     update.role = legacyForRole(newRoleRecord.name);
@@ -76,6 +94,7 @@ export async function PATCH(req: NextRequest, { params }: { params: { id: string
       email: true,
       role: true,
       roleId: true,
+      isActive: true,
       roleRef: { select: { id: true, name: true } },
       updatedAt: true,
     },
@@ -90,10 +109,12 @@ export async function PATCH(req: NextRequest, { params }: { params: { id: string
       before: {
         roleName: target.roleRef?.name ?? target.role,
         email: target.email,
+        isActive: target.isActive,
       },
       after: {
         roleName: updated.roleRef?.name ?? updated.role,
         email: updated.email,
+        isActive: updated.isActive,
       },
       passwordChanged: !!data.password,
     },
@@ -120,7 +141,7 @@ export async function DELETE(_req: NextRequest, { params }: { params: { id: stri
 
   if (target.roleRef?.isAdmin) {
     const adminCount = await prisma.user.count({
-      where: { roleRef: { isAdmin: true } },
+      where: { roleRef: { isAdmin: true }, isActive: true },
     });
     if (adminCount <= 1) {
       return NextResponse.json({ error: "cannot_delete_last_admin" }, { status: 409 });
