@@ -4,11 +4,14 @@ import { prisma } from "@/lib/prisma";
 import { getCurrentUserAndPermissions } from "@/lib/permissions";
 import { MONTHS, PAYMENT_MODES, flowFor } from "@/lib/catalog";
 import { verifyCategorySubItem } from "@/lib/master-data";
-import { canApprove } from "@/lib/rbac";
+import { canApprove, canSeePage } from "@/lib/rbac";
 import { recordAudit } from "@/lib/audit";
 import type { TxProposed } from "@/lib/approval";
 
 export const dynamic = "force-dynamic";
+
+// Collection-plan installments are submitted from the Collection Plan page.
+const PAGE = "/finance/collection-plan";
 
 const MONTH_CODES = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
 
@@ -53,6 +56,9 @@ export async function POST(
   const { perms, userId } = await getCurrentUserAndPermissions();
   if (!perms || !userId) {
     return NextResponse.json({ error: "unauthorized" }, { status: 401 });
+  }
+  if (!canSeePage(perms, PAGE)) {
+    return NextResponse.json({ error: "forbidden" }, { status: 403 });
   }
 
   // Body is optional; only required if the plan/installment don't
@@ -167,25 +173,31 @@ export async function POST(
   // which keeps the installment ↔ PendingApproval link intact.
 
   if (canApprove(perms)) {
-    const tx = await prisma.transaction.create({
-      data: {
-        date: expectedDate,
-        month: proposed.month,
-        type: "Revenue",
-        category,
-        subItem,
-        description: proposed.description ?? null,
-        paymentMode,
-        amount: amountNum,
-        flow: proposed.flow,
-        partyId: plan.partyId,
-        expDom: proposed.expDom ?? null,
-        createdById: userId,
-      },
-    });
-    const updated = await prisma.collectionPlanInstallment.update({
-      where: { id: installment.id },
-      data: { status: "received", transactionId: tx.id, pendingApprovalId: null },
+    // Atomic: create the ledger row and link the installment together. If the
+    // installment link failed after a loose create, the Transaction would be
+    // orphaned (posted revenue with no installment marked received).
+    const { tx, updated } = await prisma.$transaction(async (dbtx) => {
+      const tx = await dbtx.transaction.create({
+        data: {
+          date: expectedDate,
+          month: proposed.month,
+          type: "Revenue",
+          category,
+          subItem,
+          description: proposed.description ?? null,
+          paymentMode,
+          amount: amountNum,
+          flow: proposed.flow,
+          partyId: plan.partyId,
+          expDom: proposed.expDom ?? null,
+          createdById: userId,
+        },
+      });
+      const updated = await dbtx.collectionPlanInstallment.update({
+        where: { id: installment.id },
+        data: { status: "received", transactionId: tx.id, pendingApprovalId: null },
+      });
+      return { tx, updated };
     });
     await recordAudit({
       entityType: "Transaction",
@@ -202,19 +214,24 @@ export async function POST(
     });
   }
 
-  // Executive — enqueue.
-  const pending = await prisma.pendingApproval.create({
-    data: {
-      kind: "create",
-      status: "pending",
-      proposed: proposed as unknown as object,
-      submittedById: userId,
-      collectionInstallmentId: installment.id,
-    },
-  });
-  const updated = await prisma.collectionPlanInstallment.update({
-    where: { id: installment.id },
-    data: { status: "submitted", pendingApprovalId: pending.id },
+  // Executive — enqueue. Atomic: create the pending row and link the
+  // installment to it together, so a failure can't leave an orphaned
+  // PendingApproval or an installment pointing at a row that never committed.
+  const { pending, updated } = await prisma.$transaction(async (dbtx) => {
+    const pending = await dbtx.pendingApproval.create({
+      data: {
+        kind: "create",
+        status: "pending",
+        proposed: proposed as unknown as object,
+        submittedById: userId,
+        collectionInstallmentId: installment.id,
+      },
+    });
+    const updated = await dbtx.collectionPlanInstallment.update({
+      where: { id: installment.id },
+      data: { status: "submitted", pendingApprovalId: pending.id },
+    });
+    return { pending, updated };
   });
   await recordAudit({
     entityType: "PendingApproval",

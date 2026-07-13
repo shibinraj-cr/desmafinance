@@ -1,39 +1,21 @@
 import { NextRequest, NextResponse } from "next/server";
-import { z } from "zod";
-import { getServerSession } from "next-auth";
-import { authOptions } from "@/lib/auth";
-import { submitUpdate, submitDelete, type TxProposed } from "@/lib/approval";
+import { submitUpdate, submitDelete } from "@/lib/approval";
 import { getCurrentUserAndPermissions } from "@/lib/permissions";
-import { TYPES, FLOWS, MONTHS, PAYMENT_MODES, flowFor } from "@/lib/catalog";
-import { verifyCategorySubItem } from "@/lib/master-data";
-import { validateCounterparty } from "@/lib/tx-counterparty";
+import { canSeePage } from "@/lib/rbac";
+import { RawTxFieldsSchema, buildValidatedProposed } from "@/lib/finance-tx-validation";
+
+export const dynamic = "force-dynamic";
+
+// Transaction editing lives on the Daily Tracker page — gate the API by it.
+const PAGE = "/finance/daily-tracker";
 
 const MAX_BODY_BYTES = 10_000;
 
-const TxPatchSchema = z.object({
-  date: z
-    .string()
-    .min(1)
-    .refine((s) => !isNaN(Date.parse(s)), "Invalid date"),
-  month: z.enum(MONTHS),
-  type: z.enum(TYPES),
-  category: z.string().min(1).max(120),
-  subItem: z.string().min(1).max(160),
-  description: z.string().max(500).optional().nullable(),
-  paymentMode: z.enum(PAYMENT_MODES),
-  amount: z.coerce.number().positive().max(1_000_000_000),
-  flow: z.enum(FLOWS).optional(),
-  partyId: z.string().min(1).optional().nullable(),
-  /** Employee counterparty (Expense only). Mutually exclusive with partyId. */
-  employeeId: z.string().min(1).optional().nullable(),
-  /** EXP / DOM tag — required for Revenue rows (drives GST liability). */
-  expDom: z.enum(["EXP", "DOM"]).optional().nullable(),
-});
+// `month` is derived from `date` server-side; enum/master/amount/counterparty
+// semantics live in buildValidatedProposed, shared with create/resubmit/draft.
+const TxPatchSchema = RawTxFieldsSchema;
 
 export async function PATCH(req: NextRequest, { params }: { params: { id: string } }) {
-  const session = await getServerSession(authOptions);
-  if (!session?.user) return NextResponse.json({ error: "unauthorized" }, { status: 401 });
-
   if ((req.headers.get("content-type") ?? "").split(";")[0].trim() !== "application/json") {
     return NextResponse.json({ error: "invalid_content_type" }, { status: 415 });
   }
@@ -47,43 +29,21 @@ export async function PATCH(req: NextRequest, { params }: { params: { id: string
   if (!parsed.success) {
     return NextResponse.json({ error: "validation_failed" }, { status: 400 });
   }
-  const data = parsed.data;
   const { perms, userId } = await getCurrentUserAndPermissions();
   if (!perms || !userId) {
     return NextResponse.json({ error: "unauthorized" }, { status: 401 });
   }
-
-  const verr = await verifyCategorySubItem(data.category, data.subItem, data.type);
-  if (verr) return NextResponse.json({ error: verr }, { status: 400 });
-
-  if (data.type === "Revenue" && data.expDom !== "EXP" && data.expDom !== "DOM") {
-    return NextResponse.json({ error: "expDom_required" }, { status: 400 });
+  if (!canSeePage(perms, PAGE)) {
+    return NextResponse.json({ error: "forbidden" }, { status: 403 });
   }
 
-  // A counterparty (Party or Employee) is mandatory on every transaction.
-  const cerr = await validateCounterparty({
-    type: data.type,
-    partyId: data.partyId,
-    employeeId: data.employeeId,
-  });
-  if (cerr) return NextResponse.json({ error: cerr }, { status: 400 });
+  // Single server-authoritative validation shared with create/resubmit/draft.
+  const built = await buildValidatedProposed(parsed.data);
+  if ("error" in built) {
+    return NextResponse.json({ error: built.error }, { status: 400 });
+  }
 
-  const proposed: TxProposed = {
-    date: data.date,
-    month: data.month,
-    type: data.type,
-    category: data.category,
-    subItem: data.subItem,
-    description: data.description ?? null,
-    paymentMode: data.paymentMode,
-    amount: data.amount,
-    flow: data.flow ?? flowFor(data.type),
-    partyId: data.partyId ?? null,
-    employeeId: data.employeeId ?? null,
-    expDom: data.type === "Revenue" ? (data.expDom ?? null) : null,
-  };
-
-  const result = await submitUpdate({ txId: params.id, data: proposed, userId, perms });
+  const result = await submitUpdate({ txId: params.id, data: built.proposed, userId, perms });
   if ("error" in result) {
     return NextResponse.json({ error: result.error }, { status: 404 });
   }
@@ -100,12 +60,12 @@ export async function PATCH(req: NextRequest, { params }: { params: { id: string
 }
 
 export async function DELETE(_req: NextRequest, { params }: { params: { id: string } }) {
-  const session = await getServerSession(authOptions);
-  if (!session?.user) return NextResponse.json({ error: "unauthorized" }, { status: 401 });
-
   const { perms, userId } = await getCurrentUserAndPermissions();
   if (!perms || !userId) {
     return NextResponse.json({ error: "unauthorized" }, { status: 401 });
+  }
+  if (!canSeePage(perms, PAGE)) {
+    return NextResponse.json({ error: "forbidden" }, { status: 403 });
   }
 
   const result = await submitDelete({ txId: params.id, userId, perms });

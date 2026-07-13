@@ -1,10 +1,10 @@
 import Link from "next/link";
-import { notFound } from "next/navigation";
+import { notFound, redirect } from "next/navigation";
 import { TopBar } from "@/components/TopBar";
 import { Section } from "@/components/Cards";
 import { prisma } from "@/lib/prisma";
 import { inrFull } from "@/lib/format";
-import { canApprove } from "@/lib/rbac";
+import { canApprove, canSeePage } from "@/lib/rbac";
 import { getCurrentUserAndPermissions } from "@/lib/permissions";
 import { ApprovalActions } from "../actions";
 import { ResubmitEditor } from "../resubmit-editor";
@@ -64,6 +64,8 @@ export default async function ApprovalsPage({
   };
 }) {
   const { perms, userId } = await getCurrentUserAndPermissions();
+  if (!perms || !userId) redirect("/login");
+  if (!canSeePage(perms, "/finance/approvals")) redirect("/finance/overview");
   const reviewer = canApprove(perms);
   const tabRaw = params.tab;
   if (tabRaw !== "pending" && tabRaw !== "approved" && tabRaw !== "rejected") {

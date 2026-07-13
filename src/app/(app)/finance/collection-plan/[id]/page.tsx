@@ -2,12 +2,15 @@ import Link from "next/link";
 import { notFound, redirect } from "next/navigation";
 import { prisma } from "@/lib/prisma";
 import { getCurrentUserAndPermissions } from "@/lib/permissions";
+import { canSeePage } from "@/lib/rbac";
 import { TopBar } from "@/components/TopBar";
 import { PlanDetailClient } from "./client";
 import { PAYMENT_MODES } from "@/lib/catalog";
 import { getTransactionFormMasters } from "@/lib/master-data";
 
 export const dynamic = "force-dynamic";
+
+const PAGE = "/finance/collection-plan";
 
 export default async function CollectionPlanDetailPage({
   params,
@@ -16,6 +19,7 @@ export default async function CollectionPlanDetailPage({
 }) {
   const { perms } = await getCurrentUserAndPermissions();
   if (!perms) redirect("/login");
+  if (!canSeePage(perms, PAGE)) redirect("/finance/overview");
 
   const plan = await prisma.collectionPlan.findUnique({
     where: { id: params.id },

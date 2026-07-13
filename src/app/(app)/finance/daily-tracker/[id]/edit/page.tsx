@@ -1,4 +1,6 @@
-import { notFound } from "next/navigation";
+import { notFound, redirect } from "next/navigation";
+import { getCurrentUserPermissions } from "@/lib/permissions";
+import { canSeePage } from "@/lib/rbac";
 import { TopBar } from "@/components/TopBar";
 import { TransactionForm, type TransactionFormValues } from "@/components/TransactionForm";
 import { prisma } from "@/lib/prisma";
@@ -7,11 +9,17 @@ import type { TxType } from "@/lib/catalog";
 
 export const dynamic = "force-dynamic";
 
+const PAGE = "/finance/daily-tracker";
+
 export default async function EditTransactionPage({
   params,
 }: {
   params: { id: string };
 }) {
+  const perms = await getCurrentUserPermissions();
+  if (!perms) redirect("/login");
+  if (!canSeePage(perms, PAGE)) redirect("/finance/overview");
+
   const [t, masters] = await Promise.all([
     prisma.transaction.findUnique({ where: { id: params.id } }),
     getTransactionFormMasters(),

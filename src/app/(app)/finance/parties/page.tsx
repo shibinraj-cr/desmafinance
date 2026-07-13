@@ -1,11 +1,14 @@
 import { redirect } from "next/navigation";
 import { getCurrentUserAndPermissions } from "@/lib/permissions";
+import { canSeePage } from "@/lib/rbac";
 import { loadPartiesPayload } from "@/lib/party-data";
 import { loadEmployeeDirectory } from "@/lib/hr-data";
 import { TopBar } from "@/components/TopBar";
 import { FinancePartiesView } from "./FinancePartiesView";
 
 export const dynamic = "force-dynamic";
+
+const PAGE = "/finance/parties";
 
 /**
  * Finance "Parties" page. Combines the Candidates & Vendors editor (a mirror of
@@ -17,6 +20,7 @@ export const dynamic = "force-dynamic";
 export default async function FinancePartiesPage() {
   const { perms } = await getCurrentUserAndPermissions();
   if (!perms) redirect("/login");
+  if (!canSeePage(perms, PAGE)) redirect("/finance/overview");
 
   const [[parties, services, sources], employees] = await Promise.all([
     loadPartiesPayload(),

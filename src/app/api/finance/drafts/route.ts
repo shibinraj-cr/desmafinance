@@ -1,8 +1,11 @@
 import { NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { getCurrentUserAndPermissions } from "@/lib/permissions";
+import { canSeePage } from "@/lib/rbac";
 
 export const dynamic = "force-dynamic";
+
+const PAGE = "/finance/approvals";
 
 /**
  * GET /api/finance/drafts — list the current user's TransactionDraft rows.
@@ -11,6 +14,7 @@ export const dynamic = "force-dynamic";
 export async function GET() {
   const { perms, userId } = await getCurrentUserAndPermissions();
   if (!perms || !userId) return NextResponse.json({ error: "unauthorized" }, { status: 401 });
+  if (!canSeePage(perms, PAGE)) return NextResponse.json({ error: "forbidden" }, { status: 403 });
   if (!perms.draftFirst && !perms.isAdmin) {
     // Anyone who isn't on the draft workflow and isn't an admin has
     // no business listing drafts.

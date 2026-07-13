@@ -1,10 +1,13 @@
 import { redirect } from "next/navigation";
 import { getCurrentUserAndPermissions } from "@/lib/permissions";
+import { canSeePage } from "@/lib/rbac";
 import { getTransactionFormMasters } from "@/lib/master-data";
 import { TopBar } from "@/components/TopBar";
 import { NewPlanForm } from "./client";
 
 export const dynamic = "force-dynamic";
+
+const PAGE = "/finance/collection-plan";
 
 export default async function NewCollectionPlanPage({
   searchParams,
@@ -13,6 +16,7 @@ export default async function NewCollectionPlanPage({
 }) {
   const { perms } = await getCurrentUserAndPermissions();
   if (!perms) redirect("/login");
+  if (!canSeePage(perms, PAGE)) redirect("/finance/overview");
 
   const masters = await getTransactionFormMasters();
 

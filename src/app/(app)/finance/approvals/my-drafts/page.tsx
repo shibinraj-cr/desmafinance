@@ -2,6 +2,7 @@ import { redirect } from "next/navigation";
 import { TopBar } from "@/components/TopBar";
 import { prisma } from "@/lib/prisma";
 import { getCurrentUserAndPermissions } from "@/lib/permissions";
+import { canSeePage } from "@/lib/rbac";
 import { Tabs } from "../_tabs";
 import { MyDraftsClient } from "./client";
 
@@ -17,6 +18,7 @@ export const dynamic = "force-dynamic";
 export default async function MyDraftsPage() {
   const { perms, userId } = await getCurrentUserAndPermissions();
   if (!perms || !userId) redirect("/login");
+  if (!canSeePage(perms, "/finance/approvals")) redirect("/finance/overview");
   // Admins also see this screen for oversight — they get the full list
   // of every draft-first user's pending drafts. Anyone else without the
   // flag has nothing to do here.
