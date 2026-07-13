@@ -31,9 +31,19 @@ export default async function SalaryRunDetailPage({ params }: { params: { id: st
         include: { employee: { select: { empCode: true, name: true } } },
         orderBy: { employee: { empCode: "asc" } },
       },
+      adjustments: { orderBy: { createdAt: "asc" } },
     },
   });
   if (!run) notFound();
+
+  // Itemised adjustments are keyed by (run, employee); group them so each line
+  // carries its own rows.
+  const adjByEmployee = new Map<string, typeof run.adjustments>();
+  for (const a of run.adjustments) {
+    const list = adjByEmployee.get(a.employeeId);
+    if (list) list.push(a);
+    else adjByEmployee.set(a.employeeId, [a]);
+  }
   return (
     <>
       <TopBar
@@ -58,6 +68,7 @@ export default async function SalaryRunDetailPage({ params }: { params: { id: st
           }}
           lines={run.lines.map((l) => ({
             id: l.id,
+            employeeId: l.employeeId,
             empCode: l.employee.empCode,
             name: l.employee.name,
             daysAttended: Number(l.daysAttended),
@@ -72,7 +83,13 @@ export default async function SalaryRunDetailPage({ params }: { params: { id: st
             pfEmployee: Number(l.pfEmployee),
             professionalTax: Number(l.professionalTax),
             adjustments: Number(l.adjustments),
-            adjustmentNote: l.adjustmentNote,
+            adjustmentRows: (adjByEmployee.get(l.employeeId) ?? []).map((a) => ({
+              id: a.id,
+              kind: a.kind,
+              category: a.category,
+              amount: Number(a.amount),
+              note: a.note,
+            })),
             netSalary: Number(l.netSalary),
             bankAccount: l.bankAccount,
             bankIfsc: l.bankIfsc,

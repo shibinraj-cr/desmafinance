@@ -67,6 +67,7 @@ model User {
   hrLeaveReviews         HrLeaveRequest[]     @relation("HrLeaveReviewer")
   hrSalaryRunsCreated    HrSalaryRun[]        @relation("HrSalaryRunCreator")
   hrSalaryRunsApproved   HrSalaryRun[]        @relation("HrSalaryRunApprover")
+  hrSalaryAdjustments    HrSalaryAdjustment[] @relation("HrSalaryAdjustmentCreator")
   hrPoliciesPublished    HrPolicy[]           @relation("HrPolicyPublisher")
   hrTrainingsCreated     HrTraining[]         @relation("HrTrainingCreator")
   hrNotificationsCreated HrNotification[]     @relation("HrNotificationCreator")
@@ -970,6 +971,7 @@ model Employee {
   leaveBalances        HrLeaveBalance[]
   leaveRequests        HrLeaveRequest[]
   salaryLines          HrSalaryRunLine[]
+  salaryAdjustments    HrSalaryAdjustment[]
   policyAcks           HrPolicyAcknowledgement[]
   trainingProgress     HrTrainingProgress[]
   notificationReceipts HrNotificationReceipt[]
@@ -1232,6 +1234,7 @@ model HrSalaryRun {
   createdAt       DateTime          @default(now())
   updatedAt       DateTime          @updatedAt
   lines           HrSalaryRunLine[]
+  adjustments     HrSalaryAdjustment[]
 
   @@index([status])
 }
@@ -1261,6 +1264,11 @@ model HrSalaryRunLine {
   pfEmployer       Decimal     @default(0) @db.Decimal(10, 2)
   esiTotal         Decimal     @default(0) @db.Decimal(10, 2)
   pfTotal          Decimal     @default(0) @db.Decimal(10, 2)
+  /// Cached net effect of this employee's non-penalty HrSalaryAdjustment rows
+  /// (Σ additions − Σ non-penalty deductions). Penalty deductions are NOT here —
+  /// they reduce the pre-statutory salary and are baked into the statutory
+  /// columns above. Recomputed by computeSalaryRun; downstream (run total, Axis
+  /// export, slip) uses `netSalary + adjustments`. `adjustmentNote` is legacy.
   adjustments      Decimal     @default(0) @db.Decimal(10, 2)
   adjustmentNote   String?
   bankAccount      String?
@@ -1271,6 +1279,41 @@ model HrSalaryRunLine {
   updatedAt        DateTime    @updatedAt
 
   @@unique([runId, employeeId])
+  @@index([employeeId])
+}
+
+/// Itemised, ad-hoc pay corrections for one employee within one salary run
+/// (advance recovery, loan EMI, penalty, incentive, arrears, reimbursement…).
+/// Keyed by (run, employee) — NOT by run-line — so a Recompute, which deletes
+/// and re-creates every HrSalaryRunLine, does not wipe them. Only editable while
+/// the run is `draft`.
+///
+/// Money model:
+///   kind = "deduction", category "penalty" → reduces the salary BEFORE
+///          ESI/PF/PT (treated as monetary loss-of-pay: gross + basic shrink
+///          proportionally, so ESI/PF recompute on the reduced figures).
+///   kind = "deduction", other category      → post-net take-home reduction.
+///   kind = "addition"                        → paid on top of the final net.
+/// `amount` is always stored positive; the sign is implied by `kind`.
+model HrSalaryAdjustment {
+  id          String      @id @default(cuid())
+  runId       String
+  run         HrSalaryRun @relation(fields: [runId], references: [id], onDelete: Cascade)
+  employeeId  String
+  employee    Employee    @relation(fields: [employeeId], references: [id], onDelete: Cascade)
+  /// "deduction" (penalty = pre-statutory, others = post-net) | "addition"
+  kind        String
+  /// advance | loan | penalty | arrears | incentive | bonus | reimbursement | other
+  category    String
+  /// Always positive; sign implied by `kind`.
+  amount      Decimal     @db.Decimal(10, 2)
+  note        String?
+  createdById String?
+  createdBy   User?       @relation("HrSalaryAdjustmentCreator", fields: [createdById], references: [id], onDelete: SetNull)
+  createdAt   DateTime    @default(now())
+  updatedAt   DateTime    @updatedAt
+
+  @@index([runId, employeeId])
   @@index([employeeId])
 }
 
