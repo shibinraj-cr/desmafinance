@@ -2,6 +2,8 @@
 // pages into `src/app/(app)/<basePath>/...`, and update Role.pages on roles
 // that should see those pages.
 
+import { isAdmin, canSeePage, type Permissions } from "@/lib/rbac";
+
 export type ModuleStatus = "active" | "coming_soon";
 
 export type AppPage = {
@@ -401,4 +403,28 @@ export function activePage(mod: AppModule, pathname: string): AppPage | null {
     }
   }
   return best;
+}
+
+/**
+ * The first page within `mod` the signed-in user is allowed to open — the
+ * page a module tile / switcher should land them on. Null if the module has
+ * no page they can see.
+ */
+export function firstAllowedPage(mod: AppModule, perms: Permissions): AppPage | null {
+  return mod.pages.find((p) => canSeePage(perms, p.href)) ?? null;
+}
+
+/**
+ * Modules the signed-in user can see — shared by the sidebar switcher and the
+ * app launcher so both stay in lock-step:
+ *   • admin-only modules are hidden from non-admins,
+ *   • coming-soon modules show only to admins (so they know what's queued),
+ *   • an active module needs at least one page the user is allowed to open.
+ */
+export function visibleModules(perms: Permissions): AppModule[] {
+  return MODULES.filter((m) => {
+    if (m.adminOnly && !isAdmin(perms)) return false;
+    if (m.status === "coming_soon") return isAdmin(perms);
+    return m.pages.some((p) => canSeePage(perms, p.href));
+  });
 }
