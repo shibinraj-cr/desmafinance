@@ -212,6 +212,14 @@ export const MODULES: AppModule[] = [
         group: "ADMIN",
       },
       {
+        // Companion to Meta Reconcile: audit whether Voxbay incoming callers are
+        // in the CRM. Same page-grant gating (Admin + Marketing Admin).
+        href: "/crm/voxbay-reconcile",
+        label: "Voxbay Reconcile",
+        icon: "phone_in_talk",
+        group: "ADMIN",
+      },
+      {
         href: "/crm/settings",
         label: "Settings",
         icon: "tune",
