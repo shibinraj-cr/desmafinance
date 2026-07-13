@@ -166,6 +166,13 @@ export default function LoginPage() {
 
     // 4 — Redirect
     if (typeof window !== "undefined") {
+      // Ask the app shell to greet this session with the module launcher once.
+      // Read-and-cleared on mount by AppLauncher (key: LAUNCHER_FLAG).
+      try {
+        sessionStorage.setItem("dg:show-launcher", "1");
+      } catch {
+        /* sessionStorage unavailable — launcher just won't auto-open */
+      }
       window.location.href = resultUrl ?? callbackUrl;
     }
   }

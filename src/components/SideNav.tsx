@@ -6,7 +6,7 @@ import { usePathname } from "next/navigation";
 import { signOut } from "next-auth/react";
 import { useEffect, useMemo, useState } from "react";
 import { createPortal } from "react-dom";
-import { canApprove, canSeePage, isAdmin, roleLabel, type Permissions } from "@/lib/rbac";
+import { canApprove, canSeePage, roleLabel, type Permissions } from "@/lib/rbac";
 import {
   MODULES,
   type AppModule,
@@ -14,7 +14,9 @@ import {
   moduleGroups,
   moduleHasGroups,
   activePage,
+  visibleModules,
 } from "@/lib/modules";
+import { openAppLauncher } from "@/components/AppLauncher";
 
 type NavItem = {
   href: string;
@@ -88,17 +90,6 @@ function groupNavForModule(
         warningCount: hasApprovals && rejectedCount > 0 ? rejectedCount : null,
       };
     });
-}
-
-/** Modules the user can see (active modules with at least one allowed page, or admin sees all). */
-function visibleModules(perms: Permissions): AppModule[] {
-  return MODULES.filter((m) => {
-    if (m.adminOnly && !isAdmin(perms)) return false;
-    // Coming-soon modules: show only to admins so they know what's coming.
-    if (m.status === "coming_soon") return isAdmin(perms);
-    // Active module: show only if at least one of its pages is in role.pages
-    return m.pages.some((p) => canSeePage(perms, p.href));
-  });
 }
 
 function NavList({
@@ -243,6 +234,15 @@ function BrandHeader() {
         />
         <p className="text-caption text-on-brand-variant mt-[2px]">Desma International</p>
       </div>
+      <button
+        type="button"
+        onClick={openAppLauncher}
+        title="All modules"
+        aria-label="Open the module launcher"
+        className="ml-auto grid h-9 w-9 place-items-center rounded-lg text-on-brand-variant hover:bg-brand-elevated hover:text-on-brand transition"
+      >
+        <span className="material-symbols-outlined">grid_view</span>
+      </button>
     </div>
   );
 }
@@ -363,6 +363,14 @@ export function SideNav({
           className="p-xs rounded-lg hover:bg-brand-elevated transition"
         >
           <span className="material-symbols-outlined">menu</span>
+        </button>
+        <button
+          type="button"
+          onClick={openAppLauncher}
+          aria-label="Open the module launcher"
+          className="p-xs rounded-lg hover:bg-brand-elevated transition"
+        >
+          <span className="material-symbols-outlined">grid_view</span>
         </button>
         <div className="w-8 h-8 rounded overflow-hidden bg-brand-elevated flex items-center justify-center">
           <Image
