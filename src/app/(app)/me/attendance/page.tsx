@@ -7,6 +7,8 @@ import { TopBar } from "@/components/TopBar";
 import { Section } from "@/components/Cards";
 import { cycleMonthForDate, cycleWindowForMonth } from "@/lib/hr-data";
 import { computeMonthlyLeaveLedger, paidLeaveCoveredByDay } from "@/lib/hr-leave-balance";
+import { attendanceScoreForEmployee, ROLLING_CYCLES } from "@/lib/hr-attendance-score-data";
+import type { AttScoreBand } from "@/lib/hr-attendance-score";
 
 export const dynamic = "force-dynamic";
 
@@ -38,10 +40,13 @@ export default async function MyAttendancePage({
       ? searchParams.month
       : cycleMonthForDate(today);
   const { start, end } = cycleWindowForMonth(monthKey);
-  const days = await prisma.hrAttendanceDay.findMany({
-    where: { employeeId: emp.id, date: { gte: start, lte: end } },
-    orderBy: { date: "asc" },
-  });
+  const [days, myScore] = await Promise.all([
+    prisma.hrAttendanceDay.findMany({
+      where: { employeeId: emp.id, date: { gte: start, lte: end } },
+      orderBy: { date: "asc" },
+    }),
+    attendanceScoreForEmployee(emp.id, monthKey),
+  ]);
 
   // Counts
   const counts = days.reduce(
@@ -80,6 +85,49 @@ export default async function MyAttendancePage({
         }
       />
       <div className="p-margin space-y-lg">
+        {myScore && myScore.scored && (
+          <Section title="My attendance score">
+            <p className="text-caption text-on-surface-variant mb-md">
+              A rolling behaviour score over your last {ROLLING_CYCLES} cycles — presence, punctuality,
+              completing your shift, and punch discipline.
+            </p>
+            <div className="flex flex-col sm:flex-row sm:items-center gap-md">
+              <div className={`flex flex-col items-center justify-center rounded-xl px-lg py-md ${BAND_CHIP[myScore.band]}`}>
+                <span className="text-h1 font-extrabold leading-none tabular-nums">{myScore.score}</span>
+                <span className="text-caption uppercase tracking-wide mt-xs">{myScore.bandLabel}</span>
+              </div>
+              <div className="flex-1 min-w-0 space-y-sm">
+                <p className="text-label-sm text-on-surface">{myScore.narrative}</p>
+                <div className="grid grid-cols-2 gap-x-lg gap-y-sm">
+                  {myScore.components.map((c) => {
+                    const ratio = c.max > 0 ? c.earned / c.max : 0;
+                    return (
+                      <div key={c.key} title={c.detail}>
+                        <div className="flex items-baseline justify-between">
+                          <span className="text-caption text-on-surface-variant">{c.label}</span>
+                          <span className="text-caption font-semibold tabular-nums">
+                            {c.neutral ? "—" : c.earned}
+                            <span className="text-on-surface-variant">/{c.max}</span>
+                          </span>
+                        </div>
+                        <div className="mt-[2px] h-[6px] rounded-full bg-surface-container overflow-hidden">
+                          <div className={`h-full rounded-full ${fillTone(ratio)}`} style={{ width: `${Math.round(ratio * 100)}%` }} />
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            </div>
+          </Section>
+        )}
+        {myScore && !myScore.scored && (
+          <Section title="My attendance score">
+            <p className="text-label-sm text-on-surface-variant">
+              Your score will appear once you have about a month of attendance on record.
+            </p>
+          </Section>
+        )}
         <Section
           title=""
           action={
@@ -211,4 +259,19 @@ function minutesToHm(m: number | null | undefined): string {
   const h = Math.floor(m / 60);
   const mm = m % 60;
   return h > 0 ? `${h}h ${mm}m` : `${mm}m`;
+}
+
+const BAND_CHIP: Record<AttScoreBand, string> = {
+  excellent: "bg-green-100 text-green-800",
+  solid: "bg-blue-100 text-blue-800",
+  developing: "bg-amber-100 text-amber-800",
+  attention: "bg-red-100 text-red-800",
+};
+
+/** Colour a component bar by how full it is, so weak segments read red at a glance. */
+function fillTone(ratio: number): string {
+  if (ratio >= 0.8) return "bg-green-500";
+  if (ratio >= 0.65) return "bg-blue-500";
+  if (ratio >= 0.5) return "bg-amber-500";
+  return "bg-red-500";
 }
