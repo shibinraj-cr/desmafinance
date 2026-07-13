@@ -271,6 +271,7 @@ export const MODULES: AppModule[] = [
       { href: "/hr/leave-eligibility", label: "Leave Eligibility", icon: "auto_awesome", group: "LEAVE" },
       { href: "/hr/sandwich-policy", label: "Sandwich Policy", icon: "rule_settings", group: "LEAVE" },
       { href: "/hr/attendance", label: "Attendance", icon: "fact_check", group: "ATTENDANCE" },
+      { href: "/hr/attendance/scorecard", label: "Scorecard", icon: "scoreboard", group: "ATTENDANCE" },
       { href: "/hr/regularization", label: "Attendance Corrections", icon: "edit_calendar", group: "ATTENDANCE" },
       { href: "/hr/shifts", label: "Shifts", icon: "schedule", group: "ATTENDANCE" },
       { href: "/hr/shift-assignments", label: "Shift Assignments", icon: "schedule_send", group: "ATTENDANCE" },
