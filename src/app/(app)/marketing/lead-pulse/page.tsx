@@ -19,7 +19,7 @@ import {
   getPipelineForecast,
   monthBounds,
 } from "@/lib/lead-pulse-metrics";
-import { resolveServiceMatrix, getMetricsSource, getCrmFunnel, getCrmFunnelBySource } from "@/lib/lead-pulse-crm-metrics";
+import { resolveServiceMatrix, getMetricsSource, getCrmFunnel, getCrmFunnelBySource, getCrmEnrollmentsByService } from "@/lib/lead-pulse-crm-metrics";
 import { todayIst } from "@/lib/lead-pulse-dates";
 import {
   LeadVolumeChart,
@@ -154,6 +154,7 @@ export default async function LeadPulseHomePage() {
   const metricsSource = await getMetricsSource();
   const crmTotals = metricsSource === "crm" ? await getCrmFunnel({ start: monthStart, end: monthEnd }) : null;
   const crmBySource = metricsSource === "crm" ? await getCrmFunnelBySource({ start: monthStart, end: monthEnd }) : null;
+  const crmByService = metricsSource === "crm" ? await getCrmEnrollmentsByService({ start: monthStart, end: monthEnd }) : null;
   const closedWonValue = crmTotals ? crmTotals.enrolled : thisMonth.l2Won;
 
   // Auto-insight for the 30-day vs prior-30-day chart. Deterministic
@@ -654,30 +655,98 @@ export default async function LeadPulseHomePage() {
       </div>
       </>
       ) : (
-        <Card title="Leads & Enrollments by Source (CRM)">
-          <div className="overflow-x-auto">
-            <table className="w-full text-[13px]">
-              <thead>
-                <tr style={{ color: "var(--lp-on-surface-variant)" }}>
-                  <th className="text-left px-[10px] py-[6px]">Source</th>
-                  <th className="text-right px-[10px] py-[6px]">Leads assigned</th>
-                  <th className="text-right px-[10px] py-[6px]">Enrolled</th>
-                  <th className="text-right px-[10px] py-[6px]">Conv %</th>
-                </tr>
-              </thead>
-              <tbody>
-                {(crmBySource ?? []).filter((s) => s.leadsAssigned || s.enrolled).map((s) => (
-                  <tr key={s.sourceId} style={{ borderTop: "1px solid var(--lp-outline-variant)" }}>
-                    <td className="px-[10px] py-[6px]">{s.sourceLabel}</td>
-                    <td className="px-[10px] py-[6px] text-right">{s.leadsAssigned}</td>
-                    <td className="px-[10px] py-[6px] text-right">{s.enrolled}</td>
-                    <td className="px-[10px] py-[6px] text-right">{s.conversionPct == null ? "—" : `${s.conversionPct}%`}</td>
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-[16px]">
+          <Card title="Leads & Enrollments by Source (CRM)">
+            <div className="overflow-x-auto">
+              <table className="w-full text-[13px]">
+                <thead>
+                  <tr style={{ color: "var(--lp-on-surface-variant)" }}>
+                    <th className="text-left px-[10px] py-[6px]">Source</th>
+                    <th className="text-right px-[10px] py-[6px]">Leads assigned</th>
+                    <th className="text-right px-[10px] py-[6px]">Enrolled</th>
+                    <th className="text-right px-[10px] py-[6px]">Conv %</th>
                   </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        </Card>
+                </thead>
+                <tbody>
+                  {(crmBySource ?? []).filter((s) => s.leadsAssigned || s.enrolled).map((s) => (
+                    <tr key={s.sourceId} style={{ borderTop: "1px solid var(--lp-outline-variant)" }}>
+                      <td className="px-[10px] py-[6px]">{s.sourceLabel}</td>
+                      <td className="px-[10px] py-[6px] text-right">{s.leadsAssigned}</td>
+                      <td className="px-[10px] py-[6px] text-right">{s.enrolled}</td>
+                      <td className="px-[10px] py-[6px] text-right">{s.conversionPct == null ? "—" : `${s.conversionPct}%`}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </Card>
+
+          <Card title="Enrollments by Service (CRM)">
+            <p className="text-[11px] mb-[8px]" style={{ color: "var(--lp-on-surface-variant)" }}>
+              Closed-won enrollments this month, broken down by the service each candidate enrolled in.
+            </p>
+            <div className="overflow-x-auto">
+              <table className="w-full text-[13px] tabular-nums">
+                <thead>
+                  <tr style={{ color: "var(--lp-on-surface-variant)" }}>
+                    <th className="text-left px-[10px] py-[6px]">Service</th>
+                    <th className="text-left px-[10px] py-[6px]">Group</th>
+                    <th className="text-right px-[10px] py-[6px]">Enrolled</th>
+                    <th className="text-right px-[10px] py-[6px]">Share</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {(() => {
+                    const rows = crmByService ?? [];
+                    const total = rows.reduce((a, s) => a + s.enrolled, 0);
+                    if (rows.length === 0) {
+                      return (
+                        <tr>
+                          <td colSpan={4} className="px-[10px] py-[16px] text-center" style={{ color: "var(--lp-on-surface-variant)" }}>
+                            No enrollments recorded this month yet.
+                          </td>
+                        </tr>
+                      );
+                    }
+                    return (
+                      <>
+                        {rows.map((s) => (
+                          <tr key={s.serviceId} style={{ borderTop: "1px solid var(--lp-outline-variant)" }}>
+                            <td className="px-[10px] py-[6px]">{s.serviceName}</td>
+                            <td className="px-[10px] py-[6px]" style={{ color: "var(--lp-on-surface-variant)" }}>
+                              {s.groupName ?? "—"}
+                            </td>
+                            <td className="px-[10px] py-[6px] text-right">{s.enrolled}</td>
+                            <td className="px-[10px] py-[6px] text-right" style={{ color: "var(--lp-on-surface-variant)" }}>
+                              {total ? `${Math.round((s.enrolled / total) * 100)}%` : "—"}
+                            </td>
+                          </tr>
+                        ))}
+                        <tr
+                          style={{
+                            borderTop: "1px solid var(--lp-outline-variant)",
+                            backgroundColor: "var(--lp-surface-container-low)",
+                          }}
+                        >
+                          <td className="px-[10px] py-[6px] font-semibold uppercase text-[11px]" style={{ color: "var(--lp-on-surface-variant)" }}>
+                            Total
+                          </td>
+                          <td className="px-[10px] py-[6px]" />
+                          <td className="px-[10px] py-[6px] text-right font-semibold" style={{ color: "var(--lp-primary)" }}>
+                            {total}
+                          </td>
+                          <td className="px-[10px] py-[6px] text-right font-semibold" style={{ color: "var(--lp-on-surface-variant)" }}>
+                            100%
+                          </td>
+                        </tr>
+                      </>
+                    );
+                  })()}
+                </tbody>
+              </table>
+            </div>
+          </Card>
+        </div>
       )}
 
       {/* Monthly target achievement — shared component, mirrors Monthly Report. */}

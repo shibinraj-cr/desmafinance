@@ -252,6 +252,54 @@ export async function getCrmFunnel(opts: {
   return { leadsAssigned, enrolled, conversionPct: pct(enrolled, leadsAssigned) };
 }
 
+export type CrmServiceEnrollment = {
+  serviceId: string;
+  serviceName: string;
+  groupName: string | null;
+  enrolled: number;
+};
+
+/**
+ * Per-service enrollment counts for a date range: closed_won pipelines
+ * (CRM enrollments) grouped by the individual Service the candidate
+ * enrolled in — team-wide, or scoped to one BDE. Unlike `getCrmServiceMatrix`
+ * this collapses the BDE dimension and keys by individual Service (not
+ * ServiceGroup), so the counts sum to the same team enrollment total shown
+ * by `getCrmFunnel`. Ordered by count desc, then service name.
+ */
+export async function getCrmEnrollmentsByService(opts: {
+  start: string;
+  end: string;
+  userId?: string | null;
+}): Promise<CrmServiceEnrollment[]> {
+  const grouped = await prisma.leadPulsePipeline.groupBy({
+    by: ["serviceId"],
+    where: {
+      status: "closed_won",
+      closedDate: { gte: toPrismaDate(opts.start), lte: toPrismaDate(opts.end) },
+      ...(opts.userId ? { userId: opts.userId } : {}),
+    },
+    _count: true,
+  });
+  if (!grouped.length) return [];
+  const services = await prisma.service.findMany({
+    where: { id: { in: grouped.map((g) => g.serviceId) } },
+    select: { id: true, name: true, group: { select: { name: true } } },
+  });
+  const svcMap = new Map(services.map((s) => [s.id, s]));
+  return grouped
+    .map((g) => {
+      const svc = svcMap.get(g.serviceId);
+      return {
+        serviceId: g.serviceId,
+        serviceName: svc?.name ?? "Unknown service",
+        groupName: svc?.group?.name ?? null,
+        enrolled: g._count,
+      };
+    })
+    .sort((a, b) => b.enrolled - a.enrolled || a.serviceName.localeCompare(b.serviceName));
+}
+
 export type CrmSourceFunnel = {
   sourceId: string;
   sourceCode: string;
