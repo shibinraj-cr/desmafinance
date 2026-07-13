@@ -1,4 +1,7 @@
 import Link from "next/link";
+import { redirect } from "next/navigation";
+import { getCurrentUserPermissions } from "@/lib/permissions";
+import { canSeePage } from "@/lib/rbac";
 import { TopBar } from "@/components/TopBar";
 import { KpiCard, Section } from "@/components/Cards";
 import {
@@ -21,11 +24,19 @@ import { UpcomingCollections } from "@/components/UpcomingCollections";
 
 export const dynamic = "force-dynamic";
 
+const PAGE = "/finance/overview";
+
 export default async function OverviewPage({
   searchParams,
 }: {
   searchParams: { period?: string; from?: string; to?: string };
 }) {
+  const perms = await getCurrentUserPermissions();
+  if (!perms) redirect("/login");
+  // Overview is the finance landing page, so a denied user can't be bounced
+  // here — send them to the root, which resolves to their first allowed page.
+  if (!canSeePage(perms, PAGE)) redirect("/");
+
   const period = parsePeriod(searchParams);
   const range = rangeFor(period);
   // "Current Month Revenue" tile is anchored to the running calendar

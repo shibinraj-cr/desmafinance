@@ -1,3 +1,6 @@
+import { redirect } from "next/navigation";
+import { getCurrentUserPermissions } from "@/lib/permissions";
+import { canSeePage } from "@/lib/rbac";
 import { TopBar } from "@/components/TopBar";
 import { Section } from "@/components/Cards";
 import {
@@ -139,11 +142,17 @@ const TONE_CLS: Record<Insight["tone"], string> = {
   alert: "border-red-300 bg-red-50 text-red-800",
 };
 
+const PAGE = "/finance/ai-insights";
+
 export default async function AiInsightsPage({
   searchParams,
 }: {
   searchParams: { period?: string; from?: string; to?: string };
 }) {
+  const perms = await getCurrentUserPermissions();
+  if (!perms) redirect("/login");
+  if (!canSeePage(perms, PAGE)) redirect("/finance/overview");
+
   const period = parsePeriod(searchParams);
   const range = rangeFor(period);
   const [totals, series, topRev, expBreak, paceData] = await Promise.all([

@@ -2,11 +2,14 @@ import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 import { prisma } from "@/lib/prisma";
 import { getCurrentUserAndPermissions } from "@/lib/permissions";
+import { canSeePage } from "@/lib/rbac";
 import { PAYMENT_MODES } from "@/lib/catalog";
 import { verifyCategorySubItem } from "@/lib/master-data";
 import { recordAudit } from "@/lib/audit";
 
 export const dynamic = "force-dynamic";
+
+const PAGE = "/finance/collection-plan";
 
 const InstallmentInput = z.object({
   expectedDate: z
@@ -37,6 +40,7 @@ const PlanInput = z.object({
 export async function GET(req: NextRequest) {
   const { perms } = await getCurrentUserAndPermissions();
   if (!perms) return NextResponse.json({ error: "unauthorized" }, { status: 401 });
+  if (!canSeePage(perms, PAGE)) return NextResponse.json({ error: "forbidden" }, { status: 403 });
 
   const { searchParams } = new URL(req.url);
   const partyId = searchParams.get("partyId") ?? undefined;
@@ -70,6 +74,9 @@ export async function POST(req: NextRequest) {
   const { perms, userId } = await getCurrentUserAndPermissions();
   if (!perms || !userId) {
     return NextResponse.json({ error: "unauthorized" }, { status: 401 });
+  }
+  if (!canSeePage(perms, PAGE)) {
+    return NextResponse.json({ error: "forbidden" }, { status: 403 });
   }
 
   const body = await req.json().catch(() => null);

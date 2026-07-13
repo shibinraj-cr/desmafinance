@@ -2,10 +2,13 @@ import Link from "next/link";
 import { redirect } from "next/navigation";
 import { prisma } from "@/lib/prisma";
 import { getCurrentUserAndPermissions } from "@/lib/permissions";
+import { canSeePage } from "@/lib/rbac";
 import { TopBar } from "@/components/TopBar";
 import { inr } from "@/lib/format";
 
 export const dynamic = "force-dynamic";
+
+const PAGE = "/finance/collection-plan";
 
 function fmtDate(d: Date): string {
   const dd = String(d.getUTCDate()).padStart(2, "0");
@@ -41,6 +44,7 @@ export default async function CollectionPlanListPage({
 }) {
   const { perms } = await getCurrentUserAndPermissions();
   if (!perms) redirect("/login");
+  if (!canSeePage(perms, PAGE)) redirect("/finance/overview");
 
   // Optional installment-due-date range filter, used to cross-check the
   // collection amounts expected/received in a given window.

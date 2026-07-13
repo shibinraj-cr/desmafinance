@@ -1,9 +1,12 @@
 import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 import { getCurrentUserAndPermissions } from "@/lib/permissions";
+import { canSeePage } from "@/lib/rbac";
 import { submitDraftToPending } from "@/lib/approval";
 
 export const dynamic = "force-dynamic";
+
+const PAGE = "/finance/approvals";
 
 const BulkSchema = z.object({
   ids: z.array(z.string().min(1)).min(1).max(500),
@@ -19,6 +22,7 @@ const BulkSchema = z.object({
 export async function POST(req: NextRequest) {
   const { perms, userId } = await getCurrentUserAndPermissions();
   if (!perms || !userId) return NextResponse.json({ error: "unauthorized" }, { status: 401 });
+  if (!canSeePage(perms, PAGE)) return NextResponse.json({ error: "forbidden" }, { status: 403 });
   const body = await req.json().catch(() => null);
   const parsed = BulkSchema.safeParse(body);
   if (!parsed.success) return NextResponse.json({ error: "validation_failed" }, { status: 400 });

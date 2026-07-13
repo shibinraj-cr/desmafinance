@@ -2,9 +2,11 @@ import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 import { approvePending, rejectPending } from "@/lib/approval";
 import { getCurrentUserAndPermissions } from "@/lib/permissions";
-import { canApprove } from "@/lib/rbac";
+import { canApprove, canSeePage } from "@/lib/rbac";
 
 export const dynamic = "force-dynamic";
+
+const PAGE = "/finance/approvals";
 
 const ItemSchema = z.object({
   id: z.string().min(1),
@@ -29,7 +31,7 @@ export async function POST(req: NextRequest) {
   if (!perms || !userId) {
     return NextResponse.json({ error: "unauthorized" }, { status: 401 });
   }
-  if (!canApprove(perms)) {
+  if (!canSeePage(perms, PAGE) || !canApprove(perms)) {
     return NextResponse.json({ error: "forbidden" }, { status: 403 });
   }
 

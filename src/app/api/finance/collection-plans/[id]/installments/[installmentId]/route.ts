@@ -2,11 +2,14 @@ import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 import { prisma } from "@/lib/prisma";
 import { getCurrentUserAndPermissions } from "@/lib/permissions";
+import { canSeePage } from "@/lib/rbac";
 import { PAYMENT_MODES } from "@/lib/catalog";
 import { verifyCategorySubItem } from "@/lib/master-data";
 import { recordAudit } from "@/lib/audit";
 
 export const dynamic = "force-dynamic";
+
+const PAGE = "/finance/collection-plan";
 
 const PatchSchema = z.object({
   expectedDate: z
@@ -29,6 +32,9 @@ export async function PATCH(
   const { perms, userId } = await getCurrentUserAndPermissions();
   if (!perms || !userId) {
     return NextResponse.json({ error: "unauthorized" }, { status: 401 });
+  }
+  if (!canSeePage(perms, PAGE)) {
+    return NextResponse.json({ error: "forbidden" }, { status: 403 });
   }
   const body = await req.json().catch(() => null);
   const parsed = PatchSchema.safeParse(body);
@@ -94,6 +100,9 @@ export async function DELETE(
   const { perms, userId } = await getCurrentUserAndPermissions();
   if (!perms || !userId) {
     return NextResponse.json({ error: "unauthorized" }, { status: 401 });
+  }
+  if (!canSeePage(perms, PAGE)) {
+    return NextResponse.json({ error: "forbidden" }, { status: 403 });
   }
   const existing = await prisma.collectionPlanInstallment.findUnique({
     where: { id: params.installmentId },
