@@ -1,3 +1,6 @@
+import { redirect } from "next/navigation";
+import { getCurrentUserPermissions } from "@/lib/permissions";
+import { canSeePage } from "@/lib/rbac";
 import { TopBar } from "@/components/TopBar";
 import { KpiCard, Section } from "@/components/Cards";
 import { CategoryDonut, HorizontalBars, MonthlyRevenueExpenseBars } from "@/components/Charts";
@@ -9,11 +12,17 @@ import { DateFilter } from "@/components/DateFilter";
 
 export const dynamic = "force-dynamic";
 
+const PAGE = "/finance/expenses";
+
 export default async function ExpensesPage({
   searchParams,
 }: {
   searchParams: { period?: string; from?: string; to?: string };
 }) {
+  const perms = await getCurrentUserPermissions();
+  if (!perms) redirect("/login");
+  if (!canSeePage(perms, PAGE)) redirect("/finance/overview");
+
   const period = parsePeriod(searchParams);
   const range = rangeFor(period);
   const recentWhere = {

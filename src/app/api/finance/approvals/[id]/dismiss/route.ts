@@ -2,8 +2,11 @@ import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { recordAudit } from "@/lib/audit";
 import { getCurrentUserAndPermissions } from "@/lib/permissions";
+import { canSeePage } from "@/lib/rbac";
 
 export const dynamic = "force-dynamic";
+
+const PAGE = "/finance/approvals";
 
 /**
  * POST /api/finance/approvals/[id]/dismiss
@@ -21,6 +24,9 @@ export async function POST(
   const { perms, userId } = await getCurrentUserAndPermissions();
   if (!perms || !userId) {
     return NextResponse.json({ error: "unauthorized" }, { status: 401 });
+  }
+  if (!canSeePage(perms, PAGE)) {
+    return NextResponse.json({ error: "forbidden" }, { status: 403 });
   }
 
   const existing = await prisma.pendingApproval.findUnique({

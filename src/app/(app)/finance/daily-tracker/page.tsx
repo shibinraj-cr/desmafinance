@@ -1,4 +1,7 @@
 import Link from "next/link";
+import { redirect } from "next/navigation";
+import { getCurrentUserPermissions } from "@/lib/permissions";
+import { canSeePage } from "@/lib/rbac";
 import { TopBar } from "@/components/TopBar";
 import { prisma } from "@/lib/prisma";
 import { inrFull } from "@/lib/format";
@@ -17,6 +20,8 @@ function fmtDDMMYY(d: Date): string {
   return `${dd}-${mm}-${yy}`;
 }
 
+const PAGE = "/finance/daily-tracker";
+
 export default async function DailyTrackerPage({
   searchParams,
 }: {
@@ -32,6 +37,10 @@ export default async function DailyTrackerPage({
     flow?: string;
   };
 }) {
+  const perms = await getCurrentUserPermissions();
+  if (!perms) redirect("/login");
+  if (!canSeePage(perms, PAGE)) redirect("/finance/overview");
+
   const period = parsePeriod(searchParams);
   const range = rangeFor(period);
   const where = {

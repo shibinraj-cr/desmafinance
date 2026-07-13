@@ -2,6 +2,9 @@ import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 import { approvePending, rejectPending } from "@/lib/approval";
 import { getCurrentUserAndPermissions } from "@/lib/permissions";
+import { canSeePage } from "@/lib/rbac";
+
+const PAGE = "/finance/approvals";
 
 const ActionSchema = z.object({
   action: z.enum(["approve", "reject"]),
@@ -12,6 +15,9 @@ export async function PATCH(req: NextRequest, { params }: { params: { id: string
   const { perms, userId } = await getCurrentUserAndPermissions();
   if (!perms || !userId) {
     return NextResponse.json({ error: "unauthorized" }, { status: 401 });
+  }
+  if (!canSeePage(perms, PAGE)) {
+    return NextResponse.json({ error: "forbidden" }, { status: 403 });
   }
 
   const body = await req.json().catch(() => null);

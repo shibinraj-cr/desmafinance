@@ -1,3 +1,6 @@
+import { redirect } from "next/navigation";
+import { getCurrentUserPermissions } from "@/lib/permissions";
+import { canSeePage } from "@/lib/rbac";
 import { TopBar } from "@/components/TopBar";
 import { KpiCard, Section } from "@/components/Cards";
 import { CashflowDualLine, CategoryDonut, HorizontalBars } from "@/components/Charts";
@@ -20,11 +23,17 @@ export const dynamic = "force-dynamic";
 const GST_RATE = 0.18;
 const GST_TAXABLE_MODES = ["Axis Bank", "HDFC Bank"] as const;
 
+const PAGE = "/finance/revenue";
+
 export default async function RevenuePage({
   searchParams,
 }: {
   searchParams: { period?: string; from?: string; to?: string };
 }) {
+  const perms = await getCurrentUserPermissions();
+  if (!perms) redirect("/login");
+  if (!canSeePage(perms, PAGE)) redirect("/finance/overview");
+
   const period = parsePeriod(searchParams);
   const range = rangeFor(period);
 

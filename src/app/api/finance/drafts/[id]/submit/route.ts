@@ -1,8 +1,11 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getCurrentUserAndPermissions } from "@/lib/permissions";
+import { canSeePage } from "@/lib/rbac";
 import { submitDraftToPending } from "@/lib/approval";
 
 export const dynamic = "force-dynamic";
+
+const PAGE = "/finance/approvals";
 
 /**
  * POST /api/finance/drafts/[id]/submit
@@ -14,6 +17,7 @@ export const dynamic = "force-dynamic";
 export async function POST(_req: NextRequest, { params }: { params: { id: string } }) {
   const { perms, userId } = await getCurrentUserAndPermissions();
   if (!perms || !userId) return NextResponse.json({ error: "unauthorized" }, { status: 401 });
+  if (!canSeePage(perms, PAGE)) return NextResponse.json({ error: "forbidden" }, { status: 403 });
   const result = await submitDraftToPending({ draftId: params.id, userId, perms });
   if ("error" in result && result.error) {
     return NextResponse.json(

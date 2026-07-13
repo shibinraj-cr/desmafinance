@@ -3,34 +3,22 @@ import { z } from "zod";
 import { prisma } from "@/lib/prisma";
 import { recordAudit } from "@/lib/audit";
 import { getCurrentUserAndPermissions } from "@/lib/permissions";
-import { validateCounterparty } from "@/lib/tx-counterparty";
+import { canSeePage } from "@/lib/rbac";
+import type { TxProposed } from "@/lib/approval";
+import { RawTxFieldsSchema, buildValidatedProposed } from "@/lib/finance-tx-validation";
 
 export const dynamic = "force-dynamic";
 
-const TxFieldsSchema = z.object({
-  date: z.string().min(1),
-  month: z.string().min(1),
-  type: z.string().min(1),
-  category: z.string().min(1),
-  subItem: z.string().min(1),
-  description: z.string().nullable().optional(),
-  paymentMode: z.string().min(1),
-  amount: z.number().nonnegative(),
-  flow: z.string().min(1),
-  partyId: z.string().nullable().optional(),
-  /** Employee counterparty (Expense only). Mutually exclusive with partyId.
-   *  Like partyId, must be listed here or Zod strips it from `proposed`. */
-  employeeId: z.string().nullable().optional(),
-  /** EXP / DOM tag. Required for Revenue (checked below); null on Expense.
-   *  Without this field Zod strips it from `proposed`, blanking the tag
-   *  on every resubmitted Revenue row — drives the GST liability calc. */
-  expDom: z.enum(["EXP", "DOM"]).nullable().optional(),
-});
+// Resubmission of a rejected approval lives on the Approvals page.
+const PAGE = "/finance/approvals";
 
 const BodySchema = z.object({
   // For create/update kinds — optional, but required for resubmission of
-  // create/update. Delete kind has no editable fields.
-  proposed: TxFieldsSchema.optional(),
+  // create/update. Delete kind has no editable fields. The payload is validated
+  // by buildValidatedProposed (below), the SAME gate as normal create/update —
+  // so a rejected row can't be pushed back with a zero amount, an unknown
+  // category/sub-item, or an invalid type / payment mode / flow.
+  proposed: RawTxFieldsSchema.optional(),
   // Note attached to the resubmission so reviewers see why it's back.
   note: z.string().max(500).optional(),
 });
@@ -61,6 +49,9 @@ export async function POST(
   if (!perms || !userId) {
     return NextResponse.json({ error: "unauthorized" }, { status: 401 });
   }
+  if (!canSeePage(perms, PAGE)) {
+    return NextResponse.json({ error: "forbidden" }, { status: 403 });
+  }
 
   const body = await req.json().catch(() => null);
   const parsed = BodySchema.safeParse(body);
@@ -82,30 +73,17 @@ export async function POST(
   const previousReviewNote = existing.reviewNote;
   const previousReviewerId = existing.reviewedById;
   const note = parsed.data.note?.trim() ?? "";
-  // Normalise EXP/DOM the same way every other write path does: mandatory
-  // on Revenue, forced null on Expense. Build the stored payload from the
-  // normalised value so a missing tag can't silently blank the row.
-  const proposed = parsed.data.proposed
-    ? {
-        ...parsed.data.proposed,
-        expDom:
-          parsed.data.proposed.type === "Revenue"
-            ? (parsed.data.proposed.expDom ?? null)
-            : null,
-      }
-    : undefined;
-  if (proposed && proposed.type === "Revenue" && proposed.expDom !== "EXP" && proposed.expDom !== "DOM") {
-    return NextResponse.json({ error: "expDom_required" }, { status: 400 });
-  }
-  // A counterparty (Party or Employee) is mandatory — enforce on resubmit too
-  // so a rejected row can't be pushed back without one.
-  if (proposed) {
-    const cerr = await validateCounterparty({
-      type: proposed.type,
-      partyId: proposed.partyId,
-      employeeId: proposed.employeeId,
-    });
-    if (cerr) return NextResponse.json({ error: cerr }, { status: 400 });
+  // Run the SAME validation as normal create/update: date, derived month,
+  // type enum, category/sub-item master, payment mode enum, positive amount
+  // (rejects zero), flow enum-or-derived, counterparty, and EXP/DOM. Delete
+  // kind has no editable fields, so there's nothing to validate for it.
+  let proposed: TxProposed | undefined;
+  if (parsed.data.proposed) {
+    const built = await buildValidatedProposed(parsed.data.proposed);
+    if ("error" in built) {
+      return NextResponse.json({ error: built.error }, { status: 400 });
+    }
+    proposed = built.proposed;
   }
 
   // Build new reviewNote so the queue shows the resubmission context.
