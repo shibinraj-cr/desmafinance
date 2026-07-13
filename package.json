@@ -21,6 +21,7 @@
     "db:seed-hr-roles": "tsx prisma/seed-hr-roles.ts",
     "db:seed-salary-structures": "tsx prisma/seed-salary-structures.ts",
     "db:seed-salary-structures-v2": "tsx prisma/seed-salary-structures-v2.ts",
+    "db:seed-adjustment-demo": "tsx prisma/dev-seed-adjustment-demo.ts",
     "db:seed-holidays": "tsx prisma/seed-holidays.ts",
     "db:seed-masters": "tsx prisma/seed-masters.ts",
     "db:backfill-pending-expdom": "tsx prisma/backfill-pending-expdom.ts",

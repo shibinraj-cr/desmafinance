@@ -1,4 +1,6 @@
 import { prisma } from "./prisma";
+import { summarizeAdjustments } from "./hr-salary-engine";
+import { ADJUSTMENT_CATEGORY_LABELS, type AdjustmentCategory } from "./hr-adjustment-types";
 
 /**
  * Salary slip data resolver.
@@ -64,6 +66,31 @@ export async function loadSlipPayload(runId: string, lineId: string): Promise<Sl
   });
   if (!line) return null;
   const e = line.employee;
+
+  // Itemised ad-hoc corrections for this employee in this run.
+  //   - additions       → shown as earnings paid on top of net
+  //   - other deductions → shown alongside the statutory lines (post-net)
+  //   - penalty          → NOT itemised: it already reduced the pre-ESI salary
+  //                        (and thus PF/ESI/net), so it's surfaced as a note to
+  //                        avoid double-counting.
+  const adjustmentRows = await prisma.hrSalaryAdjustment.findMany({
+    where: { runId, employeeId: line.employeeId },
+    orderBy: { createdAt: "asc" },
+  });
+  const adj = summarizeAdjustments(adjustmentRows);
+  const adjLabel = (a: { category: string; note: string | null }) =>
+    `${ADJUSTMENT_CATEGORY_LABELS[a.category as AdjustmentCategory] ?? a.category}${a.note ? ` (${a.note})` : ""}`;
+  const additionLines = adjustmentRows
+    .filter((a) => a.kind === "addition")
+    .map((a) => ({ label: adjLabel(a), amount: Number(a.amount) }));
+  const otherDeductionLines = adjustmentRows
+    .filter((a) => a.kind === "deduction" && a.category !== "penalty")
+    .map((a) => ({ label: adjLabel(a), amount: Number(a.amount) }));
+  const penaltyNote =
+    adj.penaltyTotal > 0
+      ? `Penalty of ₹${adj.penaltyTotal.toLocaleString("en-IN")} applied before ESI/PF/PT (gross reduced accordingly).`
+      : null;
+
   const dept = e.departments[0]?.department.name ?? e.department ?? null;
   const designation = e.designationRef?.name ?? e.designation ?? null;
   const [yStr, mStr] = line.run.monthKey.split("-").map(Number);
@@ -98,15 +125,19 @@ export async function loadSlipPayload(runId: string, lineId: string): Promise<Sl
     earnings: [
       { label: "Basic", amount: Number(line.basicAfterLop) },
       {
-        label: "HRA / Allowances / Incentives",
+        label: "HRA / Allowances",
         amount: Number(line.salaryBeforeEsi) - Number(line.basicAfterLop),
       },
+      // Additions are paid on top of net and don't attract PF/ESI/PT.
+      ...additionLines,
     ],
     deductions: [
+      // Non-penalty deductions (advance/loan…) are post-net reductions listed
+      // first. Penalty is NOT here — it already shrank the figures below.
+      ...otherDeductionLines,
       { label: "Provident Fund (employee)", amount: Number(line.pfEmployee) },
       { label: "ESI (employee)", amount: Number(line.esiEmployee) },
       { label: "Professional Tax", amount: Number(line.professionalTax) },
-      { label: "Adjustments", amount: -Number(line.adjustments) },
     ],
     attendance: {
       workingDays: Number(line.totalWorkingDays),
@@ -116,8 +147,11 @@ export async function loadSlipPayload(runId: string, lineId: string): Promise<Sl
       halfDay: Number(line.halfDayLeave),
     },
     gross: Number(line.salaryBeforeEsi),
-    net: Number(line.netSalary),
-    notes: line.adjustmentNote,
+    // Take-home = penalty-adjusted statutory net + Σ additions − Σ other
+    // deductions. The penalty is already inside line.netSalary. This equals
+    // (total earnings − total deductions) on the slip, and matches the Axis file.
+    net: Number(line.netSalary) + adj.flatNet,
+    notes: [penaltyNote, line.adjustmentNote].filter(Boolean).join(" ") || null,
   };
 }
 

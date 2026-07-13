@@ -73,6 +73,15 @@ export function isOwnerDesignation(name?: string | null): boolean {
   return n !== "" && OWNER_DESIGNATION_NAMES.some((d) => d.toLowerCase() === n);
 }
 
+// Ad-hoc pay-correction vocabulary lives in a Prisma-free module so client
+// components can share it; re-exported here for server callers (API validation).
+export {
+  ADJUSTMENT_KINDS,
+  ADJUSTMENT_CATEGORIES,
+  type AdjustmentKind,
+  type AdjustmentCategory,
+} from "./hr-adjustment-types";
+
 export type SalaryBreakdown = {
   basic: number;
   hra: number;
@@ -93,6 +102,8 @@ export type SalaryCalc = SalaryBreakdown & {
   basicSalary: number; // alias for basic — kept for HrSalaryRunLine column
   basicAfterLop: number;
   dailyBasis: number;
+  /** Pre-statutory penalty (₹) folded into the calc; 0 when none. */
+  penalty: number;
   salaryBeforeEsi: number;
   esiEmployee: number;
   esiEmployer: number;
@@ -164,6 +175,14 @@ export function calcLine(args: {
   // Days of loss-of-pay (absence / half-day / late) covered by the employee's
   // paid-leave allocation this cycle — subtracted from the LOP so they're paid.
   paidLeaveCoverForLop?: number;
+  /**
+   * A pre-statutory PENALTY (₹). Reduces the salary BEFORE ESI/PF/PT and is
+   * treated as additional monetary loss-of-pay: gross and basic shrink
+   * proportionally, so ESI and PF recompute on the reduced figures. Defaults to
+   * 0 (no penalty → identical to the previous behaviour). Only "penalty"-
+   * category adjustments feed this; other deductions apply post-net.
+   */
+  penaltyBeforeStatutory?: number;
 }): SalaryCalc {
   const wd = args.workingDaysBase;
   const breakdown = deriveBreakdown(args.basic, args);
@@ -186,8 +205,18 @@ export function calcLine(args: {
   // being paid salary for 28.5. (args.daysPresent is intentionally unused;
   // unmarked days count as paid — attendance/leave marking is authoritative.)
   const daysAttended = Math.max(0, round2(wd - totalLeaveForLop));
-  const basicAfterLop = round2((args.basic * daysAttended) / wd);
-  const salaryBeforeEsi = round2(gross - dailyBasis * totalLeaveForLop);
+
+  // Loss-of-pay reduced gross (before any penalty).
+  const grossAfterLop = round2(gross - dailyBasis * totalLeaveForLop);
+  // A pre-statutory penalty is additional monetary loss-of-pay: it comes off the
+  // pre-ESI salary and can't push it below zero.
+  const penalty = Math.max(0, Math.min(args.penaltyBeforeStatutory ?? 0, grossAfterLop));
+  const salaryBeforeEsi = round2(grossAfterLop - penalty);
+  // Basic tracks the same retained fraction of gross (LOP + penalty), so PF
+  // recomputes on the reduced basic. With no penalty this equals
+  // basic × daysAttended/wd, leaving the pre-existing behaviour unchanged.
+  const retainedFraction = gross > 0 ? salaryBeforeEsi / gross : 0;
+  const basicAfterLop = round2(args.basic * retainedFraction);
 
   // ESI applies only when the structure flag is on AND gross is within the
   // statutory ₹21,000/month ceiling. Enforcing the ceiling here — not just
@@ -222,6 +251,7 @@ export function calcLine(args: {
     basicSalary: breakdown.basic,
     basicAfterLop,
     dailyBasis,
+    penalty,
     salaryBeforeEsi,
     esiEmployee,
     esiEmployer,
@@ -299,6 +329,42 @@ export function countAlHalfDays(
   return n;
 }
 
+/**
+ * Split a set of itemised HrSalaryAdjustment rows into the three ways they move
+ * pay. Amounts are stored positive with the direction in `kind`:
+ *   - additions       → paid ON TOP of net (incentive, arrears, reimbursement…)
+ *   - penaltyTotal    → "penalty"-category deductions, applied PRE-statutory
+ *                       (fed to calcLine, which recomputes ESI/PF on the reduced
+ *                       salary — see penaltyBeforeStatutory)
+ *   - otherDeductions → non-penalty deductions (advance, loan…), taken POST-net
+ * `flatNet` = additions − otherDeductions is the post-net adjustment cached on
+ * the line as `adjustments`; the penalty is NOT in it (it lives inside the
+ * recomputed statutory figures).
+ */
+export function summarizeAdjustments(rows: { kind: string; category: string; amount: unknown }[]): {
+  additions: number;
+  penaltyTotal: number;
+  otherDeductions: number;
+  flatNet: number;
+} {
+  let additions = 0;
+  let penaltyTotal = 0;
+  let otherDeductions = 0;
+  for (const r of rows) {
+    const amt = Number(r.amount);
+    if (!Number.isFinite(amt)) continue;
+    if (r.kind === "addition") additions += amt;
+    else if (r.category === "penalty") penaltyTotal += amt;
+    else otherDeductions += amt;
+  }
+  return {
+    additions: round2(additions),
+    penaltyTotal: round2(penaltyTotal),
+    otherDeductions: round2(otherDeductions),
+    flatNet: round2(additions - otherDeductions),
+  };
+}
+
 export async function computeSalaryRun(monthKey: string, userId: string | null): Promise<{
   runId: string;
   lineCount: number;
@@ -326,6 +392,19 @@ export async function computeSalaryRun(monthKey: string, userId: string | null):
     where: { active: true },
     include: { designationRef: true },
   });
+
+  // Ad-hoc, itemised pay corrections entered against this run. Keyed by
+  // (run, employee) so they survive the deleteMany above — that is the whole
+  // reason they are not attached to the line. Each line's cached `adjustments`
+  // (flat, non-penalty) is rebuilt from these below; penalty rows feed calcLine.
+  const adjRows = await prisma.hrSalaryAdjustment.findMany({ where: { runId: run.id } });
+  const adjByEmployee = new Map<string, typeof adjRows>();
+  for (const a of adjRows) {
+    const list = adjByEmployee.get(a.employeeId);
+    if (list) list.push(a);
+    else adjByEmployee.set(a.employeeId, [a]);
+  }
+
   const warnings: string[] = [];
   let totalNet = 0;
   let lineCount = 0;
@@ -402,6 +481,11 @@ export async function computeSalaryRun(monthKey: string, userId: string | null):
     const isTrainee =
       isTraineeDesignation(e.designationRef?.name) || isTraineeDesignation(e.designation);
 
+    // Itemised ad-hoc corrections. The "penalty" slice feeds the pre-statutory
+    // calc below (recomputing ESI/PF on the reduced salary); additions and other
+    // deductions are the post-net `flatNet` cached on the line as `adjustments`.
+    const adj = summarizeAdjustments(adjByEmployee.get(e.id) ?? []);
+
     const calc = calcLine({
       workingDaysBase,
       basic: Number(structure.basic),
@@ -417,12 +501,15 @@ export async function computeSalaryRun(monthKey: string, userId: string | null):
       daysHalfDay: buckets.daysHalfDay + alHalfDays,
       carriedBalanceBefore: carried,
       paidLeaveCoverForLop: lopCover,
+      // "penalty"-category deductions reduce the salary before ESI/PF/PT.
+      penaltyBeforeStatutory: adj.penaltyTotal,
     });
 
     await prisma.hrSalaryRunLine.create({
       data: {
         runId: run.id,
         employeeId: e.id,
+        adjustments: adj.flatNet,
         totalWorkingDays: calc.totalWorkingDays,
         daysAttended: calc.daysAttended,
         paidLeave: calc.paidLeave,
@@ -448,7 +535,7 @@ export async function computeSalaryRun(monthKey: string, userId: string | null):
         bankBranch: e.branch,
       },
     });
-    totalNet += calc.netSalary;
+    totalNet += calc.netSalary + adj.flatNet;
     lineCount++;
   }
 

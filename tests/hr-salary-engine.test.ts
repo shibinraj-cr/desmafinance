@@ -26,6 +26,7 @@ import {
   bucketAttendance,
   leaveUsedInYear,
   countAlHalfDays,
+  summarizeAdjustments,
   calcLine,
   DEFAULT_ALLOWANCE_PCTS,
   ESI_EMPLOYEE_RATE,
@@ -499,5 +500,89 @@ describe("calcLine", () => {
     expect(ESI_EMPLOYER_RATE).toBe(0.0375);
     expect(PF_RATE).toBe(0.12);
     expect(PF_CONTRIBUTION_CAP).toBe(1800);
+  });
+});
+
+describe("summarizeAdjustments — split by how each row moves pay", () => {
+  it("separates additions, penalty, and other deductions", () => {
+    const s = summarizeAdjustments([
+      { kind: "deduction", category: "penalty", amount: 5000 }, // pre-statutory
+      { kind: "deduction", category: "advance", amount: 2000 }, // post-net
+      { kind: "addition", category: "incentive", amount: 3000 }, // on top of net
+    ]);
+    expect(s.penaltyTotal).toBe(5000);
+    expect(s.otherDeductions).toBe(2000);
+    expect(s.additions).toBe(3000);
+    expect(s.flatNet).toBe(1000); // additions − otherDeductions = 3000 − 2000
+  });
+
+  it("keeps penalty OUT of flatNet (it lives in the recomputed statutory net)", () => {
+    const s = summarizeAdjustments([
+      { kind: "deduction", category: "penalty", amount: 10000 },
+    ]);
+    expect(s.penaltyTotal).toBe(10000);
+    expect(s.flatNet).toBe(0); // penalty is not a post-net flat deduction
+  });
+
+  it("treats a lone addition as pure top-up and an empty list as zeroes", () => {
+    expect(summarizeAdjustments([{ kind: "addition", category: "bonus", amount: 2500 }]).flatNet).toBe(2500);
+    const empty = summarizeAdjustments([]);
+    expect(empty).toEqual({ additions: 0, penaltyTotal: 0, otherDeductions: 0, flatNet: 0 });
+  });
+
+  it("coerces Decimal-like string amounts and ignores non-numeric junk", () => {
+    const s = summarizeAdjustments([
+      { kind: "addition", category: "incentive", amount: "1500.50" }, // Prisma Decimal → string
+      { kind: "deduction", category: "loan", amount: "500.25" },
+      { kind: "addition", category: "other", amount: "not-a-number" }, // skipped, not NaN-poisoned
+    ]);
+    expect(s.additions).toBe(1500.5);
+    expect(s.otherDeductions).toBe(500.25);
+    expect(s.flatNet).toBe(1000.25);
+  });
+});
+
+describe("calcLine — penalty reduces the salary before ESI/PF/PT (Option B)", () => {
+  const base = {
+    workingDaysBase: 30,
+    basic: 9000, // gross 18,000 at the 2× default → within the ₹21k ESI ceiling
+    esiApplicable: true,
+    pfApplicable: true,
+    professionalTax: 125,
+    daysPresent: 30,
+    daysHalfDay: 0,
+    daysAbsent: 0,
+    daysPaidLeave: 0,
+    carriedBalanceBefore: 0,
+  };
+
+  it("reproduces the ₹10,000 penalty case: 18,000→8,000, basic→4,000, PF 480, ESI 60, net 7,335", () => {
+    const c = calcLine({ ...base, penaltyBeforeStatutory: 10000 });
+    expect(c.penalty).toBe(10000);
+    expect(c.salaryBeforeEsi).toBe(8000); // 18,000 − 10,000
+    expect(c.basicAfterLop).toBe(4000); // basic scales proportionally 9000×8000/18000
+    expect(c.esiEmployee).toBe(60); // 0.75% × 8,000 (recomputed, was 135)
+    expect(c.pfEmployee).toBe(480); // 12% × 4,000 (recomputed, was 1,080)
+    expect(c.professionalTax).toBe(125); // flat slab, unchanged
+    expect(c.netSalary).toBe(7335); // 8,000 − 60 − 480 − 125
+  });
+
+  it("with no penalty is identical to the pre-penalty calc", () => {
+    const c = calcLine({ ...base, penaltyBeforeStatutory: 0 });
+    expect(c.penalty).toBe(0);
+    expect(c.salaryBeforeEsi).toBe(18000);
+    expect(c.basicAfterLop).toBe(9000);
+    expect(c.esiEmployee).toBe(135);
+    expect(c.pfEmployee).toBe(1080);
+    expect(c.netSalary).toBe(16660);
+  });
+
+  it("caps the penalty at the available salary (never goes negative)", () => {
+    const c = calcLine({ ...base, penaltyBeforeStatutory: 999999 });
+    expect(c.salaryBeforeEsi).toBe(0);
+    expect(c.basicAfterLop).toBe(0);
+    expect(c.pfEmployee).toBe(0);
+    expect(c.esiEmployee).toBe(0);
+    expect(c.netSalary).toBe(-125); // only PT remains
   });
 });
