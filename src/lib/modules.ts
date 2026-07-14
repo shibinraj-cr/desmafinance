@@ -341,6 +341,7 @@ export const MODULES: AppModule[] = [
     pages: [
       { href: "/users", label: "User Management", icon: "manage_accounts", adminOnly: true },
       { href: "/roles", label: "Role Management", icon: "shield_person", adminOnly: true },
+      { href: "/usage", label: "Usage", icon: "timelapse", adminOnly: true },
     ],
   },
 ];

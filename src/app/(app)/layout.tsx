@@ -6,6 +6,7 @@ import { SideNav } from "@/components/SideNav";
 import { GroupTabs } from "@/components/GroupTabs";
 import { RouteProgress } from "@/components/RouteProgress";
 import { AppLauncher } from "@/components/AppLauncher";
+import { UsageTracker } from "@/components/UsageTracker";
 
 export default async function AppLayout({ children }: { children: React.ReactNode }) {
   const { session, perms, userId } = await getCurrentUserAndPermissions();
@@ -29,6 +30,7 @@ export default async function AppLayout({ children }: { children: React.ReactNod
     // on md+ so the desktop sidebar sits to the left of main.
     <div className="flex flex-col md:flex-row min-h-screen bg-surface">
       <RouteProgress />
+      <UsageTracker />
       <AppLauncher perms={perms} userName={session.user.name} />
       <SideNav
         user={{ name: session.user.name, email: session.user.email }}
