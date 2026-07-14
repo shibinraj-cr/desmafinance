@@ -16,6 +16,7 @@ type TaskDTO = {
   startedAt: string | null;
   completedAt: string | null;
   assigneeName: string | null;
+  completedByName: string | null;
   blockedReason: string | null;
   notes: string | null;
 };
@@ -246,7 +247,11 @@ export function ProjectDetailClient({
                       {t.description && <div className="text-label-sm text-on-surface-variant mt-[2px]">{t.description}</div>}
                       <div className="text-label-sm text-on-surface-variant mt-[2px]">
                         {t.dueAt && <>due {fmtDate(t.dueAt)} · </>}
-                        {t.completedAt ? <>done {fmtDate(t.completedAt)}</> : t.slaDays != null ? <>{t.slaDays}d SLA</> : null}
+                        {t.completedAt ? (
+                          <>done {fmtDate(t.completedAt)}{t.completedByName && <> by {t.completedByName}</>}</>
+                        ) : t.slaDays != null ? (
+                          <>{t.slaDays}d SLA</>
+                        ) : null}
                         {t.blockedReason && <span className="text-error"> · blocked: {t.blockedReason}</span>}
                       </div>
                     </div>

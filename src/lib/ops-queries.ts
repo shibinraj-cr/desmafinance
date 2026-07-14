@@ -26,7 +26,10 @@ export const opsProjectDetailInclude = Prisma.validator<Prisma.OpsProjectInclude
   lead: { select: { id: true, candidateName: true } },
   tasks: {
     orderBy: { seq: "asc" },
-    include: { assignedTo: { select: { id: true, username: true } } },
+    include: {
+      assignedTo: { select: { id: true, username: true } },
+      completedBy: { select: { id: true, username: true } },
+    },
   },
   activities: {
     orderBy: { occurredAt: "desc" },
@@ -96,6 +99,8 @@ export type OpsTaskDTO = {
   startedAt: string | null;
   completedAt: string | null;
   assigneeName: string | null;
+  /** Username of who marked the step done (survives project re-assignment). */
+  completedByName: string | null;
   blockedReason: string | null;
   notes: string | null;
 };
@@ -139,6 +144,7 @@ export function serializeProjectDetail(p: DetailPayload, today: string = istDate
       startedAt: t.startedAt ? t.startedAt.toISOString() : null,
       completedAt: t.completedAt ? t.completedAt.toISOString() : null,
       assigneeName: t.assignedTo?.username ?? null,
+      completedByName: t.completedBy?.username ?? null,
       blockedReason: t.blockedReason,
       notes: t.notes,
     })),
