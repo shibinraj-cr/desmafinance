@@ -1,5 +1,6 @@
 import { Prisma } from "@prisma/client";
 import { fromPrismaDate, istDateString } from "./lead-pulse-dates";
+import { opsActionItemInclude, serializeActionItem, type OpsActionItemDTO } from "./ops-action-items";
 
 /**
  * Read-side helpers for the Operations workspace: Prisma includes, filter
@@ -29,6 +30,7 @@ export const opsProjectDetailInclude = Prisma.validator<Prisma.OpsProjectInclude
     include: {
       assignedTo: { select: { id: true, username: true } },
       completedBy: { select: { id: true, username: true } },
+      actionItems: { orderBy: { createdAt: "asc" }, include: opsActionItemInclude },
     },
   },
   activities: {
@@ -103,6 +105,8 @@ export type OpsTaskDTO = {
   completedByName: string | null;
   blockedReason: string | null;
   notes: string | null;
+  /** Ad-hoc tasks attached to this step. */
+  actionItems: OpsActionItemDTO[];
 };
 
 export type OpsActivityDTO = {
@@ -147,6 +151,7 @@ export function serializeProjectDetail(p: DetailPayload, today: string = istDate
       completedByName: t.completedBy?.username ?? null,
       blockedReason: t.blockedReason,
       notes: t.notes,
+      actionItems: t.actionItems.map(serializeActionItem),
     })),
     activities: p.activities.map((a) => ({
       id: a.id,

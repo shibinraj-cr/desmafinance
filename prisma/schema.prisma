@@ -96,6 +96,9 @@ model User {
   opsTasksCompleted      OpsTask[]            @relation("OpsTaskCompletedBy")
   opsDocumentsUploaded   OpsDocument[]        @relation("OpsDocUploadedBy")
   opsActivities          OpsTaskActivity[]    @relation("OpsActivityActor")
+  opsActionItemsAssigned  OpsActionItem[]     @relation("OpsActionAssignee")
+  opsActionItemsCreated   OpsActionItem[]     @relation("OpsActionCreatedBy")
+  opsActionItemsCompleted OpsActionItem[]     @relation("OpsActionCompletedBy")
 
   @@index([roleId])
 }
@@ -2269,6 +2272,7 @@ model OpsProject {
 
   tasks          OpsTask[]
   activities     OpsTaskActivity[]
+  actionItems    OpsActionItem[]
   createdAt      DateTime         @default(now())
   updatedAt      DateTime         @updatedAt
 
@@ -2314,6 +2318,7 @@ model OpsTask {
 
   documents      OpsDocument[]
   activities     OpsTaskActivity[]
+  actionItems    OpsActionItem[]
   createdAt      DateTime             @default(now())
   updatedAt      DateTime             @updatedAt
 
@@ -2321,6 +2326,45 @@ model OpsTask {
   @@unique([externalId])
   @@index([assignedToId, status, dueAt])
   @@index([status, completedAt])
+  @@index([projectId])
+}
+
+/// An ad-hoc task ("Task" in the UI) a team member attaches to a step (OpsTask)
+/// — the granular, assignable to-dos that live under the fixed process steps.
+/// Distinct from OpsTask (the template-snapshotted "Step"): action items are
+/// free-form, created on the fly, and assignable to a specific ops user so they
+/// surface in that user's personal task folder (/operations/my-tasks). They are
+/// advisory — an open action item never blocks its step or the project from
+/// completing. `completedById` is stamped at completion, so attribution
+/// survives project re-assignment (same pattern as OpsTask.completedBy).
+model OpsActionItem {
+  id            String     @id @default(cuid())
+  projectId     String
+  project       OpsProject @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  // The step this task hangs off. Nullable so a project-level task is possible,
+  // though v1 UI always attaches to a step.
+  taskId        String?
+  task          OpsTask?   @relation(fields: [taskId], references: [id], onDelete: Cascade)
+
+  title         String
+  description   String?
+  // 'open' | 'done' | 'cancelled'
+  status        String     @default("open")
+  assignedToId  String?
+  assignedTo    User?      @relation("OpsActionAssignee", fields: [assignedToId], references: [id], onDelete: SetNull)
+  dueAt         DateTime?
+
+  createdById   String?
+  createdBy     User?      @relation("OpsActionCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
+  completedById String?
+  completedBy   User?      @relation("OpsActionCompletedBy", fields: [completedById], references: [id], onDelete: SetNull)
+  completedAt   DateTime?
+
+  createdAt     DateTime   @default(now())
+  updatedAt     DateTime   @updatedAt
+
+  @@index([assignedToId, status, dueAt])
+  @@index([taskId])
   @@index([projectId])
 }
 

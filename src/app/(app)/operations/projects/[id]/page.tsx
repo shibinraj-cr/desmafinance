@@ -21,7 +21,9 @@ export default async function OperationsProjectDetailPage({ params }: { params: 
   const detail = serializeProjectDetail(p);
   const canEdit = canEditProject(access, { assignedToId: p.assignedToId }, userId);
 
-  const opsUsers = access.canAssign
+  // Loaded for anyone who can edit — the owner dropdown (managers) and the
+  // per-step task assignee picker (any editor) both draw from this list.
+  const opsUsers = canEdit
     ? await prisma.user.findMany({
         where: { roleRef: { pages: { hasSome: ["/operations/projects", "/operations/my-work"] } } },
         select: { id: true, username: true },

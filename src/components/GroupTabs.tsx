@@ -16,11 +16,13 @@ export function GroupTabs({
   pendingCount,
   rejectedCount,
   newLeadsCount,
+  myOpenTasksCount,
 }: {
   perms: Permissions;
   pendingCount: number;
   rejectedCount: number;
   newLeadsCount: number;
+  myOpenTasksCount: number;
 }) {
   const pathname = usePathname();
 
@@ -53,7 +55,9 @@ export function GroupTabs({
               ? pendingCount
               : p.href === "/crm/leads" && newLeadsCount > 0
                 ? newLeadsCount
-                : 0;
+                : p.href === "/operations/my-tasks" && myOpenTasksCount > 0
+                  ? myOpenTasksCount
+                  : 0;
           const showWarning =
             p.href === "/finance/approvals" && rejectedCount > 0;
           return (
@@ -82,7 +86,13 @@ export function GroupTabs({
               ) : null}
               {tabBadge > 0 ? (
                 <span
-                  title={p.href === "/crm/leads" ? `${tabBadge} new lead${tabBadge === 1 ? "" : "s"} assigned to you` : undefined}
+                  title={
+                    p.href === "/crm/leads"
+                      ? `${tabBadge} new lead${tabBadge === 1 ? "" : "s"} assigned to you`
+                      : p.href === "/operations/my-tasks"
+                        ? `${tabBadge} open task${tabBadge === 1 ? "" : "s"} assigned to you`
+                        : undefined
+                  }
                   className="text-[10px] font-bold bg-primary text-on-primary px-xs py-[1px] rounded-full min-w-[18px] text-center"
                 >
                   {tabBadge}

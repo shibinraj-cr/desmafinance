@@ -238,6 +238,7 @@ export const MODULES: AppModule[] = [
     status: "active",
     pages: [
       { href: "/operations/my-work", label: "My Work", icon: "task_alt", group: "WORK" },
+      { href: "/operations/my-tasks", label: "My Tasks", icon: "checklist_rtl", group: "WORK" },
       { href: "/operations/projects", label: "Projects", icon: "folder_managed", group: "WORK" },
       {
         href: "/operations/templates",

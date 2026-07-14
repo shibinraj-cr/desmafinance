@@ -31,8 +31,8 @@ export type OpsAccess = {
 // (assignment, template authoring, settings) — the same trick as `canManageCrm`
 // keyed on `/crm/settings`. No code change needed to mint future ops managers.
 const OPS_MANAGER_ANCHOR = "/operations/settings";
-// Either workspace page marks a role as an operations user (day-to-day worker).
-const OPS_USER_ANCHORS = ["/operations/projects", "/operations/my-work"];
+// Any workspace page marks a role as an operations user (day-to-day worker).
+const OPS_USER_ANCHORS = ["/operations/projects", "/operations/my-work", "/operations/my-tasks"];
 
 /**
  * Pure function of (userId, perms) — no DB. Operations access derives entirely
@@ -54,6 +54,18 @@ export function getOpsAccess(userId: string, perms: Permissions | null): OpsAcce
     canManageTemplates: isOpsManager,
     canAssign: isOpsManager,
   };
+}
+
+/**
+ * Whether a role — given its admin flag and granted page hrefs — counts as an
+ * operations user. Same rule as `isOpsUser` in `getOpsAccess`, but from raw
+ * role fields rather than a `Permissions` object, so it can vet an *assignee*
+ * other than the current user (e.g. validating a task's assignedTo). Tasks may
+ * only be assigned to ops users.
+ */
+export function roleIsOpsUser(isAdmin: boolean, pages: string[]): boolean {
+  if (isAdmin) return true;
+  return pages.includes(OPS_MANAGER_ANCHOR) || OPS_USER_ANCHORS.some((p) => pages.includes(p));
 }
 
 /**
