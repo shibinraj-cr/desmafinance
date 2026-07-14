@@ -23,6 +23,7 @@ type ReconcileResponse = {
 type ImportResponse = {
   totalRows: number;
   insertedRows: number;
+  assignedRows: number;
   reInquiryRows: number;
   errorRows: number;
   errors: string[];
@@ -229,9 +230,10 @@ export function VoxbayReconcileClient() {
             {importResult && (
               <div className="border-b border-outline-variant bg-green-50 px-lg py-sm text-body-sm text-green-800">
                 Created {fmtNum(importResult.insertedRows)} lead{importResult.insertedRows === 1 ? "" : "s"}
+                {importResult.assignedRows ? `, ${fmtNum(importResult.assignedRows)} auto-assigned to the answering consultant` : ""}
                 {importResult.reInquiryRows ? `, ${fmtNum(importResult.reInquiryRows)} folded into re-inquiry` : ""}
-                {importResult.errorRows ? `, ${fmtNum(importResult.errorRows)} skipped` : ""}. Source “Voxbay”, phone-only
-                — add names as they’re worked.
+                {importResult.errorRows ? `, ${fmtNum(importResult.errorRows)} skipped` : ""}. Source “Voxbay”. Answered calls
+                are assigned to the agent who picked up; missed calls stay unassigned for you to route.
               </div>
             )}
             {importError && <div className="border-b border-outline-variant px-lg py-sm text-body-sm text-error">{importError}</div>}
@@ -257,7 +259,9 @@ export function VoxbayReconcileClient() {
                       <td className="px-md py-sm tabular-nums text-on-surface">{c.phoneE164}</td>
                       <td className="px-md py-sm text-right tabular-nums text-on-surface-variant">{fmtNum(c.callCount)}</td>
                       <td className="px-md py-sm tabular-nums text-on-surface-variant">{fmtDateTime(c.lastCallAt)}</td>
-                      <td className="px-md py-sm text-on-surface-variant">{c.agents.join(", ") || "—"}</td>
+                      <td className="px-md py-sm text-on-surface-variant">
+                        {c.agents.length ? c.agents.join(", ") : <span className="italic text-on-surface-variant/70">Missed call</span>}
+                      </td>
                       <td className="px-md py-sm text-on-surface-variant">{c.contactName || "—"}</td>
                     </tr>
                   ))}
