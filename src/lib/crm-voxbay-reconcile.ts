@@ -93,8 +93,18 @@ export type VoxbayCallRow = {
   phoneE164: string | null;
   callStartTime: string | null; // ISO
   callStatus: string | null;
+  /** user_status ("ANSWERED" | "FAILED" | …) — the authoritative answered flag. */
+  userStatus: string | null;
+  /** True when user_status === ANSWERED, i.e. an agent actually picked up. */
+  answered: boolean;
   answeredDurationSec: number;
-  agent: string | null; // agentName, else last_tried, else first_tried
+  /**
+   * The agent who ANSWERED the call, from agentName — or null when the call went
+   * unanswered. Voxbay only fills agentName on answered calls; last_tried /
+   * first_tried name agents who were merely rung and did NOT pick up, so they are
+   * never credited as the handler.
+   */
+  agent: string | null;
   contactName: string | null;
 };
 
@@ -103,10 +113,11 @@ export type VoxbayCaller = {
   phoneE164: string;
   sourceNumber: string;
   callCount: number;
-  connectedCount: number; // calls an agent actually answered (answered dur > 0)
+  connectedCount: number; // calls actually answered by an agent (user_status ANSWERED)
   firstCallAt: string | null;
   lastCallAt: string | null;
   contactName: string | null;
+  /** Distinct agents who ANSWERED this caller (empty ⇒ every call was missed). */
   agents: string[];
 };
 
@@ -123,6 +134,7 @@ const HEADER_KEYS = {
   sourceNumber: "sourceNumber",
   callStartTime: "callStartTime",
   callStatus: "call_status",
+  userStatus: "user_status",
   answeredDuration: "answeredDuration",
   agentName: "agentName",
   lastTried: "last_tried_name",
@@ -139,6 +151,7 @@ export function parseVoxbayCsv(text: string): { rows: VoxbayCallRow[]; header: s
   const cSrc = idx(HEADER_KEYS.sourceNumber);
   const cStart = idx(HEADER_KEYS.callStartTime);
   const cStatus = idx(HEADER_KEYS.callStatus);
+  const cUserStatus = idx(HEADER_KEYS.userStatus);
   const cAns = idx(HEADER_KEYS.answeredDuration);
   const cAgent = idx(HEADER_KEYS.agentName);
   const cLast = idx(HEADER_KEYS.lastTried);
@@ -153,13 +166,20 @@ export function parseVoxbayCsv(text: string): { rows: VoxbayCallRow[]; header: s
     const sourceNumber = at(cSrc);
     const phoneE164 = normalizePhone(sourceNumber);
     const start = parseVoxbayDate(at(cStart));
-    const agent = at(cAgent) || at(cLast) || at(cFirst) || null;
+    const userStatus = at(cUserStatus) || null;
+    const answered = (userStatus ?? "").toUpperCase() === "ANSWERED";
+    // Credit a handler only when the call was actually answered — agentName is the
+    // agent who picked up; last_tried/first_tried are only a defensive fallback and
+    // still gated behind `answered` so a merely-rung agent is never the handler.
+    const agent = answered ? at(cAgent) || at(cLast) || at(cFirst) || null : null;
     rows.push({
       rowNumber: r + 1,
       sourceNumber,
       phoneE164,
       callStartTime: start ? start.toISOString() : null,
       callStatus: at(cStatus) || null,
+      userStatus,
+      answered,
       answeredDurationSec: hmsToSeconds(at(cAns)),
       agent,
       contactName: at(cContact) || null,
@@ -210,7 +230,7 @@ export function aggregateCallers(rows: VoxbayCallRow[], sinceStart: Date): Aggre
         phoneE164: row.phoneE164,
         sourceNumber: row.sourceNumber,
         callCount: 1,
-        connectedCount: row.answeredDurationSec > 0 ? 1 : 0,
+        connectedCount: row.answered ? 1 : 0,
         firstCallAt: row.callStartTime,
         lastCallAt: row.callStartTime,
         contactName: row.contactName,
@@ -218,7 +238,7 @@ export function aggregateCallers(rows: VoxbayCallRow[], sinceStart: Date): Aggre
       });
     } else {
       existing.callCount++;
-      if (row.answeredDurationSec > 0) existing.connectedCount++;
+      if (row.answered) existing.connectedCount++;
       if (row.callStartTime < (existing.firstCallAt ?? row.callStartTime)) existing.firstCallAt = row.callStartTime;
       if (row.callStartTime > (existing.lastCallAt ?? row.callStartTime)) existing.lastCallAt = row.callStartTime;
       if (!existing.contactName && row.contactName) existing.contactName = row.contactName;
@@ -245,4 +265,74 @@ export function reconcileCallers(callers: VoxbayCaller[], existingPhoneKeys: Set
     (keys.some((k) => existingPhoneKeys.has(k)) ? inCrm : missing).push(c);
   }
   return { missing, inCrm };
+}
+
+// ── Lead naming & consultant resolution (used by the import route) ──────────
+
+/** Display label shown to whoever handled a caller: the agent(s), or "Missed call". */
+export const MISSED_CALL_LABEL = "Missed call";
+
+/** Handler label for a caller — the answering agent(s), or "Missed call" if none answered. */
+export function callerHandledByLabel(caller: Pick<VoxbayCaller, "agents">): string {
+  return caller.agents.length ? caller.agents.join(", ") : MISSED_CALL_LABEL;
+}
+
+/**
+ * Timestamp label for a caller's last call, formatted to match the "Last call"
+ * column in the reconcile table exactly (so the generated lead name equals the
+ * value the operator sees there). Blank ISO → "".
+ */
+export function voxbayCallLabel(lastCallAtIso: string | null | undefined): string {
+  if (!lastCallAtIso) return "";
+  return lastCallAtIso.slice(0, 16).replace("T", " ");
+}
+
+/**
+ * Name for a phone-only Voxbay lead. Uses the caller's contact name when Voxbay
+ * captured one; otherwise "Voxbay call <last call>" (see {@link voxbayCallLabel}).
+ */
+export function voxbayLeadName(
+  contactName: string | null | undefined,
+  lastCallAtIso: string | null | undefined,
+): string {
+  const nm = (contactName ?? "").trim();
+  if (nm) return nm;
+  const label = voxbayCallLabel(lastCallAtIso);
+  return label ? `Voxbay call ${label}` : "Voxbay Caller";
+}
+
+export type RosterEntry = { userId: string; displayName: string };
+
+/** Trim, lowercase, and collapse internal whitespace for name matching. */
+function normName(s: string): string {
+  return s.trim().toLowerCase().replace(/\s+/g, " ");
+}
+
+/**
+ * Resolve the consultant a Voxbay-created lead should be auto-assigned to, given
+ * the distinct agents who ANSWERED that caller. The Voxbay agent name is a first
+ * name (e.g. "Sreeshma") and maps to the BDE whose roster displayName is the full
+ * name (e.g. "Sreeshma S"). Assignment is deliberately conservative — it returns
+ * a consultant ONLY when ownership is unambiguous:
+ *   - no answering agent (every call missed) → null (assign later),
+ *   - more than one distinct answering agent → null (mixed handlers),
+ *   - an agent name matching zero or several BDEs → null.
+ */
+export function resolveVoxbayAssignee(
+  answeringAgents: string[],
+  roster: RosterEntry[],
+): RosterEntry | null {
+  const distinct = [...new Set(answeringAgents.map(normName).filter(Boolean))];
+  if (distinct.length !== 1) return null;
+  const agent = distinct[0];
+  // Exact full-name match wins outright.
+  const exact = roster.filter((r) => normName(r.displayName) === agent);
+  if (exact.length === 1) return { userId: exact[0].userId, displayName: exact[0].displayName };
+  if (exact.length > 1) return null;
+  // First-name match: displayName is "<agent> <surname…>".
+  const byFirst = roster.filter((r) => {
+    const dn = normName(r.displayName);
+    return dn === agent || dn.startsWith(agent + " ");
+  });
+  return byFirst.length === 1 ? { userId: byFirst[0].userId, displayName: byFirst[0].displayName } : null;
 }

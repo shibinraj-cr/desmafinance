@@ -7,7 +7,12 @@ import { unauthorized, forbidden, badRequest } from "@/lib/http-error";
 import { getCurrentUserAndPermissions } from "@/lib/permissions";
 import { canSeePage } from "@/lib/rbac";
 import { normalizePhone, computeDedupeKey, phoneMatchKeys } from "@/lib/crm";
-import { resolveDefaultStatus } from "@/lib/crm-leads";
+import { resolveDefaultStatus, getAssignableBdes } from "@/lib/crm-leads";
+import {
+  voxbayLeadName,
+  callerHandledByLabel,
+  resolveVoxbayAssignee,
+} from "@/lib/crm-voxbay-reconcile";
 import {
   recordReInquiry,
   resolveReInquiryContext,
@@ -42,13 +47,16 @@ export const POST = withApiHandler(async (req: Request) => {
 
   const body = BodySchema.parse(await req.json().catch(() => null));
 
-  const [defStatus, voxbaySource] = await Promise.all([
+  const [defStatus, voxbaySource, roster] = await Promise.all([
     resolveDefaultStatus(),
     prisma.leadPulseSource.upsert({
       where: { code: "voxbay" },
       create: { code: "voxbay", label: "Voxbay", displayOrder: 6, active: true },
       update: {},
     }),
+    // Roster of assignable consultants — a Voxbay answering agent (first name)
+    // maps to the BDE whose display name is the full name.
+    getAssignableBdes(),
   ]);
   if (!defStatus) throw badRequest("No lead statuses configured — run db:seed-crm", "no_status_configured");
 
@@ -58,6 +66,9 @@ export const POST = withApiHandler(async (req: Request) => {
     phoneE164: string;
     dedupeKey: string | null;
     extra: Record<string, string> | null;
+    /** Consultant to auto-assign to (unambiguous single answering agent), else null. */
+    assignedToId: string | null;
+    assignedToName: string | null;
   };
   const parsed: Parsed[] = [];
   const parsedPhones: string[] = [];
@@ -71,18 +82,26 @@ export const POST = withApiHandler(async (req: Request) => {
       if (errors.length < 20) errors.push(`Row ${i + 1}: “${c.sourceNumber}” is not a valid phone number`);
       return;
     }
+    const agents = c.agents ?? [];
     const extra: Record<string, string> = { "Voxbay caller": c.sourceNumber };
     if (c.callCount) extra["Voxbay calls"] = String(c.callCount);
     if (c.lastCallAt) extra["Voxbay last call"] = c.lastCallAt;
-    if (c.agents && c.agents.length) extra["Voxbay agent"] = c.agents.join(", ");
+    // The handler: the answering agent(s), or "Missed call" when nobody picked up.
+    extra["Voxbay handled by"] = callerHandledByLabel({ agents });
+
+    // Auto-assign to the answering consultant when ownership is unambiguous;
+    // missed / mixed-handler callers stay unassigned for the marketing manager.
+    const assignee = resolveVoxbayAssignee(agents, roster);
 
     parsedPhones.push(...phoneMatchKeys(phoneE164, null));
     parsed.push({
-      candidateName: (c.contactName ?? "").trim() || "Voxbay Caller",
+      candidateName: voxbayLeadName(c.contactName, c.lastCallAt),
       phone: c.sourceNumber,
       phoneE164,
       dedupeKey: computeDedupeKey(null, phoneE164),
       extra: Object.keys(extra).length ? extra : null,
+      assignedToId: assignee?.userId ?? null,
+      assignedToName: assignee?.displayName ?? null,
     });
   });
 
@@ -131,6 +150,7 @@ export const POST = withApiHandler(async (req: Request) => {
       statusId: defStatus.id,
       extra: p.extra ?? Prisma.JsonNull,
       createdById: userId,
+      assignedToId: p.assignedToId,
     });
   }
 
@@ -154,14 +174,22 @@ export const POST = withApiHandler(async (req: Request) => {
   const CHUNK = 500;
   for (let i = 0; i < toCreate.length; i += CHUNK) {
     await prisma.lead.createMany({
-      data: toCreate.slice(i, i + CHUNK).map((d) => ({ ...d, importBatchId: batch.id })),
+      // Stamp assignedAt at insert so the "Assigned" column/filter tracks the
+      // auto-assignment, matching the /assign route's convention.
+      data: toCreate.slice(i, i + CHUNK).map((d) => ({
+        ...d,
+        importBatchId: batch.id,
+        assignedAt: d.assignedToId ? importedAt : null,
+      })),
     });
   }
 
   const created = await prisma.lead.findMany({
     where: { importBatchId: batch.id },
-    select: { id: true, phoneE164: true, altPhoneE164: true },
+    select: { id: true, phoneE164: true, altPhoneE164: true, assignedToId: true },
   });
+  const nameByUser = new Map(roster.map((r) => [r.userId, r.displayName]));
+  const assignedRows = created.filter((l) => l.assignedToId).length;
   if (created.length) {
     await prisma.leadActivity.createMany({
       data: created.map((l) => ({
@@ -171,6 +199,18 @@ export const POST = withApiHandler(async (req: Request) => {
         summary: body.fileName ? `Created from Voxbay reconciliation (${body.fileName})` : "Created from Voxbay reconciliation",
       })),
     });
+    // Log the auto-assignment alongside creation so the History tab shows who the
+    // lead was routed to, mirroring the /assign route's ASSIGNED entry.
+    const assignActivities = created
+      .filter((l) => l.assignedToId)
+      .map((l) => ({
+        leadId: l.id,
+        actorId: userId,
+        type: "ASSIGNED",
+        summary: `Assigned to ${nameByUser.get(l.assignedToId!) ?? "consultant"} (Voxbay answering agent)`,
+        metadata: { fromUserId: null, toUserId: l.assignedToId } as Prisma.InputJsonValue,
+      }));
+    if (assignActivities.length) await prisma.leadActivity.createMany({ data: assignActivities });
   }
 
   const reInquiryOutcomes: ReInquiryOutcome[] = [];
@@ -200,6 +240,7 @@ export const POST = withApiHandler(async (req: Request) => {
     batchId: batch.id,
     totalRows,
     insertedRows,
+    assignedRows,
     reInquiryRows: duplicateRows,
     errorRows,
     errors,
