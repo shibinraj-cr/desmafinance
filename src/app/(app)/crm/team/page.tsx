@@ -20,8 +20,19 @@ import {
 import { buildL2Scorecard, type L2Score, type ScoreComponent } from "@/lib/crm-score";
 import { getPipelineForecast } from "@/lib/lead-pulse-metrics";
 import { inr } from "@/lib/format";
+import { getCrmUsageByUser } from "@/lib/usage-metrics";
+import { formatActiveTime, activeHours } from "@/lib/usage-tracking";
+import { MODULES } from "@/lib/modules";
 
 export const dynamic = "force-dynamic";
+
+/** CRM sub-page href → its sidebar label, for the engagement breakdown. */
+const CRM_PAGE_LABEL: Record<string, string> = Object.fromEntries(
+  (MODULES.find((m) => m.id === "crm")?.pages ?? []).map((p) => [p.href, p.label]),
+);
+function crmPageLabel(href: string): string {
+  return CRM_PAGE_LABEL[href] ?? href.replace(/^\/crm\//, "");
+}
 
 type SP = { [k: string]: string | string[] | undefined };
 
@@ -283,6 +294,36 @@ export default async function TeamActivityPage({ searchParams }: { searchParams:
   const data = await getTeamActivity({ scope, range, now });
   const t = data.totals;
   const rangeText = periodLabel(period);
+
+  // Engagement (active time) per consultant over the range — real focused-and-
+  // interacting time, not open-tab wall-clock. Joined by userId to the outcome
+  // rows so effort sits beside output.
+  const crmUsage = await getCrmUsageByUser(
+    range,
+    data.bdeRows.map((r) => r.userId),
+  );
+  const engagement = data.bdeRows
+    .map((r) => {
+      const secs = crmUsage.get(r.userId)?.totalSeconds ?? 0;
+      const byPage = crmUsage.get(r.userId)?.byPage ?? {};
+      const topPages = Object.entries(byPage)
+        .sort((a, b) => b[1] - a[1])
+        .slice(0, 3);
+      const hrs = activeHours(secs);
+      return {
+        userId: r.userId,
+        displayName: r.displayName,
+        role: r.role,
+        seconds: secs,
+        topPages,
+        contacts: r.contacts,
+        contactsPerHour: hrs >= 0.05 ? r.contacts / hrs : null,
+        tasksCompleted: r.tasksCompleted,
+        enrolledMonth: r.enrolledMonth,
+      };
+    })
+    .sort((a, b) => b.seconds - a.seconds || a.displayName.localeCompare(b.displayName));
+  const anyEngagement = engagement.some((e) => e.seconds > 0);
   // The forecast always reflects the current calendar month (not the range filter),
   // and is always team-wide (per-L2-BDE, like the Scorecard) — the same weighted,
   // target-aware numbers as the Lead Pulse Pipeline Forecast card.
@@ -509,6 +550,72 @@ export default async function TeamActivityPage({ searchParams }: { searchParams:
               {scorecard.map((entry, i) => (
                 <ScoreCard key={entry.userId} entry={entry} rank={i + 1} />
               ))}
+            </div>
+          )}
+        </Section>
+
+        {/* Engagement — active CRM time per consultant (effort beside output) */}
+        <Section
+          title="Engagement — active CRM time"
+          action={
+            <span className="text-caption text-on-surface-variant">
+              Focused &amp; interacting only · idle/background not counted · {rangeText}
+            </span>
+          }
+        >
+          {!anyEngagement ? (
+            <p className="py-md text-center text-on-surface-variant text-label-sm">
+              No engagement data for {rangeText} yet — active time starts accruing as the team uses the CRM.
+            </p>
+          ) : (
+            <div className="overflow-x-auto">
+              <table className="w-full min-w-[760px] border-collapse text-label-sm">
+                <thead>
+                  <tr className="border-b border-outline-variant text-left text-caption uppercase tracking-wider text-on-surface-variant">
+                    <th className="py-sm pr-sm font-semibold">Consultant</th>
+                    <th className="px-sm py-sm text-right font-semibold">Active time</th>
+                    <th className="px-sm py-sm text-left font-semibold">Where the time goes</th>
+                    <th className="px-sm py-sm text-right font-semibold">Contacts</th>
+                    <th className="px-sm py-sm text-right font-semibold">Contacts / hr</th>
+                    <th className="px-sm py-sm text-right font-semibold">Tasks ✓</th>
+                    <th className="pl-sm py-sm text-right font-semibold">Enrolled (mo)</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {engagement.map((e) => (
+                    <tr key={e.userId} className="border-b border-outline-variant/60 hover:bg-surface-container-low">
+                      <td className="py-sm pr-sm">
+                        <Link href={`/crm/leads?assignee=${e.userId}`} className="font-medium text-on-surface hover:underline">
+                          {e.displayName}
+                        </Link>
+                        <span className="ml-xs text-caption uppercase text-on-surface-variant">{e.role}</span>
+                      </td>
+                      <td className="px-sm py-sm text-right font-semibold tabular-nums">{formatActiveTime(e.seconds)}</td>
+                      <td className="px-sm py-sm text-left text-caption text-on-surface-variant">
+                        {e.topPages.length === 0
+                          ? "—"
+                          : e.topPages
+                              .map(([href, secs]) => `${crmPageLabel(href)} ${formatActiveTime(secs)}`)
+                              .join(" · ")}
+                      </td>
+                      <td className="px-sm py-sm text-right tabular-nums">{e.contacts}</td>
+                      <td
+                        className="px-sm py-sm text-right tabular-nums"
+                        title="Outbound contacts logged per active CRM hour, this range"
+                      >
+                        {e.contactsPerHour === null ? "—" : e.contactsPerHour.toFixed(1)}
+                      </td>
+                      <td className="px-sm py-sm text-right tabular-nums">{e.tasksCompleted}</td>
+                      <td className="pl-sm py-sm text-right tabular-nums">{e.enrolledMonth}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+              <p className="mt-md text-caption text-on-surface-variant">
+                Active time = tab focused and the consultant interacting (mouse/keyboard/scroll) within the last minute.
+                Leaving the CRM open in the background or walking away does not count. &ldquo;Contacts / hr&rdquo; puts
+                that effort next to logged output; enrolments are this calendar month.
+              </p>
             </div>
           )}
         </Section>

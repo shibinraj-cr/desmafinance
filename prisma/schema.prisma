@@ -97,6 +97,9 @@ model User {
   opsDocumentsUploaded   OpsDocument[]        @relation("OpsDocUploadedBy")
   opsActivities          OpsTaskActivity[]    @relation("OpsActivityActor")
 
+  // Engagement telemetry (active time per module/page/day)
+  moduleUsage ModuleUsageDaily[] @relation("UserModuleUsage")
+
   @@index([roleId])
 }
 
@@ -2363,4 +2366,35 @@ model OpsTaskActivity {
   @@index([projectId, occurredAt])
   @@index([actorId, type, occurredAt])
   @@index([type])
+}
+
+/// Active-engagement time per (user, module, page, day). Written by the client
+/// heartbeat (src/components/UsageTracker.tsx) through POST /api/telemetry/activity,
+/// which only credits seconds while the browser tab was VISIBLE *and* the user
+/// interacted within the idle window (USAGE_IDLE_MS in src/lib/usage-tracking.ts).
+/// "Just keeping the tab open" — hidden tab or no input — is never counted, so
+/// this measures real engagement, not open-tab wall-clock.
+///
+/// Aggregated at day grain (one row per user × module × page × IST day) so the
+/// table stays small and the usage dashboards query cheaply. `page` is the
+/// registered page href from src/lib/modules.ts (e.g. "/crm/leads"), letting the
+/// CRM view break time down by sub-page; `moduleId` is the owning module id
+/// ("crm", "finance", …) or "unknown" for an unmatched path.
+model ModuleUsageDaily {
+  id            String   @id @default(cuid())
+  userId        String
+  user          User     @relation("UserModuleUsage", fields: [userId], references: [id], onDelete: Cascade)
+  moduleId      String
+  page          String
+  /// IST calendar day this bucket covers, stored at UTC midnight (see toPrismaDate).
+  day           DateTime @db.Date
+  /// Total active seconds credited to this bucket (atomically incremented).
+  activeSeconds Int      @default(0)
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  @@unique([userId, moduleId, page, day])
+  @@index([day, moduleId])
+  @@index([userId, day])
+  @@index([moduleId, day])
 }
