@@ -17,12 +17,15 @@ export default async function AppLayout({ children }: { children: React.ReactNod
   // they haven't resubmitted or dismissed yet).
   // New-leads count: fresh leads assigned to the signed-in BDE, for the CRM
   // nav badge (0 for anyone with no fresh assigned leads).
-  const [pendingCount, rejectedCount, newLeadsCount] = await Promise.all([
+  // Open-tasks badge: ad-hoc operations tasks assigned to the signed-in user
+  // and not yet done, for the "My Tasks" nav item (0 for anyone with none).
+  const [pendingCount, rejectedCount, newLeadsCount, myOpenTasksCount] = await Promise.all([
     prisma.pendingApproval.count({ where: { status: "pending" } }).catch(() => 0),
     prisma.pendingApproval
       .count({ where: { status: "rejected", submittedById: userId } })
       .catch(() => 0),
     countNewLeadsAssignedTo(userId),
+    prisma.opsActionItem.count({ where: { assignedToId: userId, status: "open" } }).catch(() => 0),
   ]);
 
   return (
@@ -38,6 +41,7 @@ export default async function AppLayout({ children }: { children: React.ReactNod
         pendingCount={pendingCount}
         rejectedCount={rejectedCount}
         newLeadsCount={newLeadsCount}
+        myOpenTasksCount={myOpenTasksCount}
       />
       <main className="flex-1 min-w-0 flex flex-col">
         <GroupTabs
@@ -45,6 +49,7 @@ export default async function AppLayout({ children }: { children: React.ReactNod
           pendingCount={pendingCount}
           rejectedCount={rejectedCount}
           newLeadsCount={newLeadsCount}
+          myOpenTasksCount={myOpenTasksCount}
         />
         {children}
       </main>

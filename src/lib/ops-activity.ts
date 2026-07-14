@@ -16,6 +16,13 @@ export const OPS_ACTIVITY_TYPES = [
   "STEP_REOPENED",
   "STEP_BLOCKED",
   "STEP_SKIPPED",
+  // Ad-hoc tasks ("Task" in the UI) attached to a step — distinct from the
+  // STEP_* checklist events above.
+  "TASK_ADDED",
+  "TASK_ASSIGNED",
+  "TASK_COMPLETED",
+  "TASK_REOPENED",
+  "TASK_CANCELLED",
   "DOCUMENT_ADDED",
   "NOTE_ADDED",
   "PROJECT_COMPLETED",

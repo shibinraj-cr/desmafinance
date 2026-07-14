@@ -14,7 +14,7 @@ const HR_PAGES = MODULES.find((m) => m.id === "hr")?.pages.map((p) => p.href) ??
 const ME_PAGES = MODULES.find((m) => m.id === "me")?.pages.map((p) => p.href) ?? [];
 const OPS_PAGES = MODULES.find((m) => m.id === "operations")?.pages.map((p) => p.href) ?? [];
 // Day-to-day operations worker: the workspace only (no templates/settings).
-const OPS_USER_PAGES = ["/operations/my-work", "/operations/projects"];
+const OPS_USER_PAGES = ["/operations/my-work", "/operations/my-tasks", "/operations/projects"];
 
 // System roles seed shape. The name is the *initial* name on first run; admins
 // can rename in the UI later (e.g. "Manager" → "Finance Manager"). On re-run,

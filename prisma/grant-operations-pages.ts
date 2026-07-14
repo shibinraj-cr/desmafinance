@@ -15,8 +15,8 @@ import { PrismaClient } from "@prisma/client";
 
 const prisma = new PrismaClient();
 
-const MANAGER_PAGES = ["/operations/my-work", "/operations/projects", "/operations/templates", "/operations/settings"];
-const USER_PAGES = ["/operations/my-work", "/operations/projects"];
+const MANAGER_PAGES = ["/operations/my-work", "/operations/my-tasks", "/operations/projects", "/operations/templates", "/operations/settings"];
+const USER_PAGES = ["/operations/my-work", "/operations/my-tasks", "/operations/projects"];
 
 async function main() {
   const roles = await prisma.role.findMany();

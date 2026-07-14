@@ -3,6 +3,19 @@
 import { useState } from "react";
 import { useRouter } from "next/navigation";
 
+type ActionItemDTO = {
+  id: string;
+  taskId: string | null;
+  title: string;
+  description: string | null;
+  status: string;
+  assigneeId: string | null;
+  assigneeName: string | null;
+  dueAt: string | null;
+  completedByName: string | null;
+  completedAt: string | null;
+  createdAt: string;
+};
 type TaskDTO = {
   id: string;
   seq: number;
@@ -19,6 +32,7 @@ type TaskDTO = {
   completedByName: string | null;
   blockedReason: string | null;
   notes: string | null;
+  actionItems: ActionItemDTO[];
 };
 type ActivityDTO = { id: string; type: string; summary: string | null; actorName: string | null; occurredAt: string };
 type ProjectDetail = {
@@ -135,6 +149,29 @@ export function ProjectDetailClient({
       return;
     }
     router.refresh();
+  }
+
+  // Create / update / delete an ad-hoc task on a step. `busyKey` scopes the
+  // spinner (a step's add-form uses "new:<stepId>"; a row uses the item id).
+  async function mutateActionItem(
+    busyKey: string,
+    req: { url: string; method: string; body?: Record<string, unknown> },
+  ): Promise<boolean> {
+    setBusyId(busyKey);
+    setError(null);
+    const res = await fetch(req.url, {
+      method: req.method,
+      headers: { "content-type": "application/json" },
+      body: req.body ? JSON.stringify(req.body) : undefined,
+    });
+    setBusyId(null);
+    if (!res.ok) {
+      const d = (await res.json().catch(() => ({}))) as { message?: string; error?: string };
+      setError(d.message || d.error || "Task action failed.");
+      return false;
+    }
+    router.refresh();
+    return true;
   }
 
   const pct = project.taskTotal ? Math.round((project.taskDone / project.taskTotal) * 100) : 0;
@@ -254,6 +291,13 @@ export function ProjectDetailClient({
                         ) : null}
                         {t.blockedReason && <span className="text-error"> · blocked: {t.blockedReason}</span>}
                       </div>
+                      <StepTasks
+                        step={t}
+                        canEdit={canEdit}
+                        opsUsers={opsUsers}
+                        busyId={busyId}
+                        onMutate={mutateActionItem}
+                      />
                     </div>
                     {canEdit && (
                       <div className="flex flex-wrap gap-xs justify-end pt-[2px]">
@@ -288,6 +332,151 @@ export function ProjectDetailClient({
             ))
           )}
         </div>
+      )}
+    </div>
+  );
+}
+
+type MutateFn = (
+  busyKey: string,
+  req: { url: string; method: string; body?: Record<string, unknown> },
+) => Promise<boolean>;
+
+/** Ad-hoc tasks attached to one step: the list + an inline "+ Task" form. */
+function StepTasks({
+  step,
+  canEdit,
+  opsUsers,
+  busyId,
+  onMutate,
+}: {
+  step: TaskDTO;
+  canEdit: boolean;
+  opsUsers: UserLite[];
+  busyId: string | null;
+  onMutate: MutateFn;
+}) {
+  const [adding, setAdding] = useState(false);
+  const [title, setTitle] = useState("");
+  const [assigneeId, setAssigneeId] = useState("");
+  const [dueAt, setDueAt] = useState("");
+
+  const items = step.actionItems;
+  const openCount = items.filter((i) => i.status === "open").length;
+  const newKey = `new:${step.id}`;
+  const inCls = "h-8 px-sm rounded-md border border-outline-variant bg-surface-container-lowest text-body-sm outline-none focus:border-primary";
+
+  async function submit() {
+    const t = title.trim();
+    if (!t) return;
+    const ok = await onMutate(newKey, {
+      url: "/api/operations/action-items",
+      method: "POST",
+      body: { taskId: step.id, title: t, assignedToId: assigneeId || null, dueAt: dueAt || null },
+    });
+    if (ok) {
+      setTitle("");
+      setAssigneeId("");
+      setDueAt("");
+      setAdding(false);
+    }
+  }
+
+  if (items.length === 0 && !canEdit) return null;
+
+  return (
+    <div className="mt-sm pl-md border-l-2 border-outline-variant/50 space-y-xs">
+      {items.length > 0 && (
+        <div className="text-label-sm uppercase tracking-wider text-on-surface-variant">
+          Tasks{openCount > 0 ? ` · ${openCount} open` : ""}
+        </div>
+      )}
+      {items.map((i) => (
+        <ActionItemRow key={i.id} item={i} canEdit={canEdit} busyId={busyId} onMutate={onMutate} />
+      ))}
+      {canEdit &&
+        (adding ? (
+          <div className="flex flex-wrap items-center gap-xs pt-xs">
+            <input
+              autoFocus
+              value={title}
+              onChange={(e) => setTitle(e.target.value)}
+              placeholder="Task title…"
+              onKeyDown={(e) => {
+                if (e.key === "Enter") submit();
+                if (e.key === "Escape") setAdding(false);
+              }}
+              className={inCls + " flex-1 min-w-[160px]"}
+            />
+            <select value={assigneeId} onChange={(e) => setAssigneeId(e.target.value)} className={inCls + " text-label-sm"}>
+              <option value="">Unassigned</option>
+              {opsUsers.map((u) => (
+                <option key={u.id} value={u.id}>{u.username}</option>
+              ))}
+            </select>
+            <input type="date" value={dueAt} onChange={(e) => setDueAt(e.target.value)} className={inCls + " text-label-sm"} />
+            <button disabled={busyId === newKey || !title.trim()} onClick={submit} className={actionBtn}>Add</button>
+            <button onClick={() => setAdding(false)} className={actionBtn}>Cancel</button>
+          </div>
+        ) : (
+          <button onClick={() => setAdding(true)} className="text-label-sm text-primary hover:underline">+ Task</button>
+        ))}
+    </div>
+  );
+}
+
+/** A single ad-hoc task row: a done toggle, its meta, and a delete affordance. */
+function ActionItemRow({
+  item,
+  canEdit,
+  busyId,
+  onMutate,
+}: {
+  item: ActionItemDTO;
+  canEdit: boolean;
+  busyId: string | null;
+  onMutate: MutateFn;
+}) {
+  const done = item.status === "done";
+  const cancelled = item.status === "cancelled";
+  const overdue = !done && !cancelled && !!item.dueAt && item.dueAt.slice(0, 10) < todayKey();
+  const url = `/api/operations/action-items/${item.id}`;
+
+  return (
+    <div className="flex items-start gap-xs group">
+      <button
+        disabled={!canEdit || cancelled || busyId === item.id}
+        onClick={() => onMutate(item.id, { url, method: "PATCH", body: { action: done ? "reopen" : "complete" } })}
+        title={done ? "Reopen" : "Mark done"}
+        className="mt-[1px] shrink-0 disabled:opacity-40"
+      >
+        <span className={"material-symbols-outlined text-[18px] leading-none " + (done ? "text-primary" : "text-on-surface-variant")}>
+          {done ? "check_box" : "check_box_outline_blank"}
+        </span>
+      </button>
+      <div className="flex-1 min-w-0">
+        <span className={"text-body-sm " + (done || cancelled ? "line-through text-on-surface-variant" : "text-on-surface")}>
+          {item.title}
+        </span>
+        <span className="text-label-sm text-on-surface-variant">
+          {item.assigneeName && <> · {item.assigneeName}</>}
+          {item.dueAt && <> · due {fmtDate(item.dueAt)}</>}
+          {done && item.completedByName && <> · done by {item.completedByName}</>}
+          {cancelled && <> · cancelled</>}
+        </span>
+        {overdue && <span className="ml-xs px-xs rounded text-label-sm bg-error-container text-on-error-container">overdue</span>}
+      </div>
+      {canEdit && (
+        <button
+          onClick={() => {
+            if (window.confirm(`Delete task "${item.title}"?`)) onMutate(item.id, { url, method: "DELETE" });
+          }}
+          disabled={busyId === item.id}
+          title="Delete task"
+          className="opacity-0 group-hover:opacity-100 text-on-surface-variant hover:text-error shrink-0 disabled:opacity-40"
+        >
+          <span className="material-symbols-outlined text-[16px] leading-none">delete</span>
+        </button>
       )}
     </div>
   );
