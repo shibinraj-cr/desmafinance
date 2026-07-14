@@ -26,6 +26,9 @@ const PatchSchema = z.object({
   status: z.enum(["active", "on_hold", "completed", "cancelled"]).optional(),
   // assignment: a user id, or null to unassign. `undefined` = leave unchanged.
   assignedToId: z.string().min(1).nullable().optional(),
+  // On reassignment, also move the outgoing owner's still-open tasks to the new
+  // owner (the mid-process hand-off). Ignored unless the owner is changing.
+  carryOpenTasks: z.boolean().optional(),
 });
 
 export const PATCH = withApiHandler(async (req: Request, { params }: Ctx) => {
@@ -66,6 +69,7 @@ export const PATCH = withApiHandler(async (req: Request, { params }: Ctx) => {
     include: opsProjectDetailInclude,
   });
 
+  let carriedTasks = 0;
   if (changingAssignee) {
     const type = d.assignedToId === null ? "UNASSIGNED" : project.assignedToId ? "REASSIGNED" : "ASSIGNED";
     await recordOpsActivity({
@@ -75,6 +79,24 @@ export const PATCH = withApiHandler(async (req: Request, { params }: Ctx) => {
       summary: d.assignedToId ? `Assigned to ${updated.assignedTo?.username ?? "user"}` : "Unassigned",
       metadata: { assignedToId: d.assignedToId },
     });
+
+    // Carry the outgoing owner's open tasks to the new owner, if requested.
+    if (d.carryOpenTasks && project.assignedToId && d.assignedToId) {
+      const res = await prisma.opsActionItem.updateMany({
+        where: { projectId: params.id, assignedToId: project.assignedToId, status: "open" },
+        data: { assignedToId: d.assignedToId },
+      });
+      carriedTasks = res.count;
+      if (carriedTasks > 0) {
+        await recordOpsActivity({
+          projectId: params.id,
+          actorId: userId,
+          type: "TASK_ASSIGNED",
+          summary: `${carriedTasks} open task${carriedTasks === 1 ? "" : "s"} carried to ${updated.assignedTo?.username ?? "new owner"}`,
+          metadata: { carriedCount: carriedTasks, from: project.assignedToId, to: d.assignedToId },
+        });
+      }
+    }
   }
   if (d.status !== undefined && d.status !== project.status) {
     await recordOpsActivity({
@@ -86,5 +108,5 @@ export const PATCH = withApiHandler(async (req: Request, { params }: Ctx) => {
     });
   }
 
-  return NextResponse.json({ project: serializeProjectDetail(updated) });
+  return NextResponse.json({ project: serializeProjectDetail(updated), carriedTasks });
 });
