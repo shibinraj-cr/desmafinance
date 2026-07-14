@@ -1,5 +1,6 @@
 import Link from "next/link";
 import type { ServiceMatrix } from "@/lib/lead-pulse-metrics";
+import { getScorecardExcludedUserIds } from "@/lib/crm-team";
 import { TargetAchievementChart } from "./_charts";
 
 /**
@@ -9,7 +10,7 @@ import { TargetAchievementChart } from "./_charts";
  * dashboard and the Monthly Report page so both views read off the
  * same data and styling.
  */
-export function TargetAchievementCard({
+export async function TargetAchievementCard({
   matrix,
   monthLabel,
   year,
@@ -22,7 +23,12 @@ export function TargetAchievementCard({
   year?: number;
   month?: number;
 }) {
+  // Team leads oversee the team but aren't scored individual contributors —
+  // drop them from the achievement rollup, the same rule the L2 Scorecard
+  // applies (admins + holders of the /crm/team-all marker).
+  const excludedIds = await getScorecardExcludedUserIds(matrix.bdes.map((b) => b.userId));
   const rows = matrix.bdes
+    .filter((b) => !excludedIds.has(b.userId))
     .map((b) => {
       let actual = 0;
       let target = 0;
