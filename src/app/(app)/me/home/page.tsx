@@ -5,6 +5,12 @@ import { getCurrentUserAndPermissions } from "@/lib/permissions";
 import { TopBar } from "@/components/TopBar";
 import { Section } from "@/components/Cards";
 import { cycleMonthForDate, cycleWindowForMonth } from "@/lib/hr-data";
+import {
+  attendanceScoreTrend,
+  latestCompleteCycleMonth,
+  type AttendanceScoreTrend,
+} from "@/lib/hr-attendance-score-data";
+import { AttendanceScoreTrendCard } from "@/components/AttendanceScoreTrendCard";
 
 export const dynamic = "force-dynamic";
 
@@ -39,11 +45,12 @@ export default async function MeHomePage() {
     reviewNote: string | null;
   }[] = [];
   let exceptionsCount = 0;
+  let scoreTrend: AttendanceScoreTrend | null = null;
 
   if (employee) {
     const monthKey = cycleMonthForDate(new Date());
     const { start, end } = cycleWindowForMonth(monthKey);
-    const [receipts, reqs, cycleDays, liveReq] = await Promise.all([
+    const [receipts, reqs, cycleDays, liveReq, trend] = await Promise.all([
       prisma.hrNotificationReceipt.findMany({
         where: { employeeId: employee.id },
         orderBy: { notification: { createdAt: "desc" } },
@@ -67,7 +74,9 @@ export default async function MeHomePage() {
         },
         select: { date: true },
       }),
+      attendanceScoreTrend(employee.id, latestCompleteCycleMonth(new Date())),
     ]);
+    scoreTrend = trend;
 
     notifs = receipts.map((r) => ({
       id: r.notificationId,
@@ -137,6 +146,8 @@ export default async function MeHomePage() {
                 <Stat label="Bank" value={employee.bankName ?? "—"} />
               </div>
             </Section>
+
+            {scoreTrend && <AttendanceScoreTrendCard trend={scoreTrend} />}
 
             <Section
               title="Notifications"

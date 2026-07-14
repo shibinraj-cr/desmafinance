@@ -59,6 +59,9 @@ export const MIN_ROSTERED_DAYS = 20;
 
 export type AttScoreComponentKey = "presence" | "punctuality" | "completion" | "discipline";
 
+/** A single line of the "show your working" calculation breakdown. */
+export type AttScoreStep = { label: string; value: string };
+
 export type AttScoreComponent = {
   key: AttScoreComponentKey;
   label: string;
@@ -69,6 +72,12 @@ export type AttScoreComponent = {
   neutral: boolean;
   /** One-line explanation of the underlying numbers. */
   detail: string;
+  /** The general formula for this component (for the drill-down popup). */
+  formula: string;
+  /** The formula with this employee's actual numbers plugged in, step by step. */
+  steps: AttScoreStep[];
+  /** Plain-language read: what drove the score and the fastest way to lift it. */
+  insight: string;
 };
 
 export type AttScoreBand = "excellent" | "solid" | "developing" | "attention";
@@ -153,17 +162,48 @@ function workedDays(row: AttendanceScoreRow): number {
   return row.daysPresent + row.daysHalfDay;
 }
 
+const pctStr = (n: number): string => `${Math.round(n * 100)}%`;
+/** Trim a trailing ".0" so "3.0" reads "3" but "3.3" stays. */
+const pts = (n: number): string => n.toFixed(1).replace(/\.0$/, "");
+
+/** A no-data component: scored at its midpoint, with a stub breakdown. */
+function neutralComponent(
+  key: AttScoreComponentKey,
+  label: string,
+  max: number,
+  detail: string,
+): AttScoreComponent {
+  return {
+    key,
+    label,
+    earned: max / 2,
+    max,
+    neutral: true,
+    detail,
+    formula: "No data in this period — scored at the neutral midpoint.",
+    steps: [{ label: "Earned", value: `${max / 2} of ${max} (midpoint)` }],
+    insight: "Not enough data in this period to assess this parameter — it is neither rewarded nor penalised.",
+  };
+}
+
 // ── Per-component scorers (each returns unrounded `earned`) ───────────────────
 
 function scorePresence(row: AttendanceScoreRow): AttScoreComponent {
   const max = ATT_SCORE_WEIGHTS.presence;
   const rate = attendanceRate(row);
   if (rate === null) {
-    return { key: "presence", label: "Presence", earned: max / 2, max, neutral: true, detail: "No rostered days in this window yet." };
+    return neutralComponent("presence", "Presence", max, "No rostered days in this window yet.");
   }
+  const rostered = row.daysPresent + row.daysHalfDay + row.daysAbsent;
   const span = PRESENCE_FULL_RATE - PRESENCE_ZERO_RATE;
-  const earned = clamp(((rate - PRESENCE_ZERO_RATE) / span) * max, 0, max);
+  const rampRaw = (rate - PRESENCE_ZERO_RATE) / span;
+  const earned = clamp(rampRaw * max, 0, max);
   const pct = Math.round(rate * 100);
+  const perDay = max / (span * rostered); // marginal points from converting one absent → present
+  const insight =
+    earned >= max
+      ? "Near-perfect attendance — keep it up."
+      : `Attendance is the biggest lever: ${row.daysAbsent} absent${row.daysHalfDay > 0 ? ` and ${row.daysHalfDay} half-day` : ""} pulled this down, ~${pts(perDay)} pts per absent day. Authorised paid leave is excluded, so approved leave never lowers this.`;
   return {
     key: "presence",
     label: "Presence",
@@ -171,6 +211,13 @@ function scorePresence(row: AttendanceScoreRow): AttScoreComponent {
     max,
     neutral: false,
     detail: `${pct}% attended — ${row.daysPresent} present, ${row.daysHalfDay} half-day, ${row.daysAbsent} absent over ${row.cyclesCovered} cycle${row.cyclesCovered === 1 ? "" : "s"}.`,
+    formula: `Presence = clamp((attendance% − ${pctStr(PRESENCE_ZERO_RATE)}) ÷ (${pctStr(PRESENCE_FULL_RATE)} − ${pctStr(PRESENCE_ZERO_RATE)}), 0, 1) × ${max}`,
+    steps: [
+      { label: "Attendance rate", value: `(${row.daysPresent} + 0.5 × ${row.daysHalfDay}) ÷ ${rostered} rostered = ${pct}%` },
+      { label: "Ramp position", value: `(${pct}% − ${pctStr(PRESENCE_ZERO_RATE)}) ÷ ${pctStr(span)} = ${clamp(rampRaw, 0, 1).toFixed(2)}` },
+      { label: "Earned", value: `${clamp(rampRaw, 0, 1).toFixed(2)} × ${max} = ${pts(earned)}` },
+    ],
+    insight,
   };
 }
 
@@ -178,7 +225,7 @@ function scorePunctuality(row: AttendanceScoreRow): AttScoreComponent {
   const max = ATT_SCORE_WEIGHTS.punctuality;
   const worked = workedDays(row);
   if (worked <= 0) {
-    return { key: "punctuality", label: "Punctuality", earned: max / 2, max, neutral: true, detail: "No worked days to judge punctuality." };
+    return neutralComponent("punctuality", "Punctuality", max, "No worked days to judge punctuality.");
   }
   const alRate = row.alDays / worked;
   const earned = clamp((1 - alRate / PUNCTUALITY_ZERO_RATE) * max, 0, max);
@@ -187,14 +234,34 @@ function scorePunctuality(row: AttendanceScoreRow): AttScoreComponent {
     row.alDays === 0
       ? `On time every worked day${lce ? ` (${row.lceDays} within the late-coming allowance)` : ""}.`
       : `Late beyond the allowance on ${row.alDays} of ${worked} worked days${lce}.`;
-  return { key: "punctuality", label: "Punctuality", earned, max, neutral: false, detail };
+  const perAl = max / (PUNCTUALITY_ZERO_RATE * worked);
+  const insight =
+    row.alDays === 0
+      ? `On time within the 10-min grace every day.${row.lceDays > 0 ? ` ${row.lceDays} late day(s) fell within your LCE allowance and don't count.` : ""}`
+      : `Late beyond the grace + LCE allowance (AL) on ${row.alDays} day(s), ~${pts(perAl)} pts each. Arriving within the 10-min grace — or inside your LCE allowance — keeps this full.`;
+  const steps: AttScoreStep[] = [
+    { label: "AL rate", value: `${row.alDays} AL ÷ ${worked} worked = ${pctStr(alRate)}` },
+    { label: "Earned", value: `(1 − ${pctStr(alRate)} ÷ ${pctStr(PUNCTUALITY_ZERO_RATE)}) × ${max} = ${pts(earned)}` },
+  ];
+  if (row.lceDays > 0) steps.push({ label: "LCE (free)", value: `${row.lceDays} late day(s) within the allowance — not penalised` });
+  return {
+    key: "punctuality",
+    label: "Punctuality",
+    earned,
+    max,
+    neutral: false,
+    detail,
+    formula: `Punctuality = clamp(1 − (AL ÷ worked) ÷ ${pctStr(PUNCTUALITY_ZERO_RATE)}, 0, 1) × ${max}  ·  LCE days are free`,
+    steps,
+    insight,
+  };
 }
 
 function scoreCompletion(row: AttendanceScoreRow): AttScoreComponent {
   const max = ATT_SCORE_WEIGHTS.completion;
   const worked = workedDays(row);
   if (worked <= 0) {
-    return { key: "completion", label: "Full-day", earned: max / 2, max, neutral: true, detail: "No worked days to judge early departures." };
+    return neutralComponent("completion", "Full-day", max, "No worked days to judge early departures.");
   }
   const rate = row.earlyOutDays / worked;
   const earned = clamp((1 - rate / COMPLETION_ZERO_RATE) * max, 0, max);
@@ -202,14 +269,32 @@ function scoreCompletion(row: AttendanceScoreRow): AttScoreComponent {
     row.earlyOutDays === 0
       ? `Completed the shift on all ${worked} worked days.`
       : `Left early on ${row.earlyOutDays} of ${worked} worked days.`;
-  return { key: "completion", label: "Full-day", earned, max, neutral: false, detail };
+  const perEarly = max / (COMPLETION_ZERO_RATE * worked);
+  const insight =
+    row.earlyOutDays === 0
+      ? "Worked the full shift every day."
+      : `Left early (beyond a 10-min grace) on ${row.earlyOutDays} day(s), ~${pts(perEarly)} pts each. If an early departure was approved, getting it regularised stops it counting here.`;
+  return {
+    key: "completion",
+    label: "Full-day",
+    earned,
+    max,
+    neutral: false,
+    detail,
+    formula: `Full-day = clamp(1 − (early-outs ÷ worked) ÷ ${pctStr(COMPLETION_ZERO_RATE)}, 0, 1) × ${max}`,
+    steps: [
+      { label: "Early-out rate", value: `${row.earlyOutDays} early-out ÷ ${worked} worked = ${pctStr(rate)}` },
+      { label: "Earned", value: `(1 − ${pctStr(rate)} ÷ ${pctStr(COMPLETION_ZERO_RATE)}) × ${max} = ${pts(earned)}` },
+    ],
+    insight,
+  };
 }
 
 function scoreDiscipline(row: AttendanceScoreRow): AttScoreComponent {
   const max = ATT_SCORE_WEIGHTS.discipline;
   const worked = workedDays(row);
   if (worked <= 0) {
-    return { key: "discipline", label: "Discipline", earned: max / 2, max, neutral: true, detail: "No worked days to judge punch discipline." };
+    return neutralComponent("discipline", "Discipline", max, "No worked days to judge punch discipline.");
   }
   const incidents = row.missingPunchDays + row.regRequests;
   const cap = Math.max(DISCIPLINE_CAP_FLOOR, worked * DISCIPLINE_CAP_RATE);
@@ -218,7 +303,25 @@ function scoreDiscipline(row: AttendanceScoreRow): AttScoreComponent {
     incidents === 0
       ? "Clean — no missing punches or corrections."
       : `${row.missingPunchDays} missing punch${row.missingPunchDays === 1 ? "" : "es"} · ${row.regRequests} correction${row.regRequests === 1 ? "" : "s"}.`;
-  return { key: "discipline", label: "Discipline", earned, max, neutral: false, detail };
+  const insight =
+    incidents === 0
+      ? "Clean — punched in and out every day, no corrections needed."
+      : `${row.missingPunchDays} missing punch(es) and ${row.regRequests} correction(s) this period. Punching both in and out every day keeps this full.`;
+  return {
+    key: "discipline",
+    label: "Discipline",
+    earned,
+    max,
+    neutral: false,
+    detail,
+    formula: `Discipline = clamp(1 − incidents ÷ cap, 0, 1) × ${max},  cap = max(${DISCIPLINE_CAP_FLOOR}, worked × ${pctStr(DISCIPLINE_CAP_RATE)})`,
+    steps: [
+      { label: "Incidents", value: `${row.missingPunchDays} missing punch + ${row.regRequests} correction = ${incidents}` },
+      { label: "Cap", value: `max(${DISCIPLINE_CAP_FLOOR}, ${worked} × ${pctStr(DISCIPLINE_CAP_RATE)}) = ${pts(cap)}` },
+      { label: "Earned", value: `(1 − ${incidents} ÷ ${pts(cap)}) × ${max} = ${pts(earned)}` },
+    ],
+    insight,
+  };
 }
 
 // ── Narrative ────────────────────────────────────────────────────────────────

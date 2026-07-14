@@ -159,3 +159,33 @@ describe("buildAttendanceScorecard", () => {
     expect(ranked[2].scored).toBe(false);
   });
 });
+
+describe("component calculation breakdown (drill-down popup)", () => {
+  it("every component carries a formula, plugged-in steps, and an insight", () => {
+    const s = scoreAttendance(row({ daysPresent: 50, daysHalfDay: 4, daysAbsent: 6, alDays: 4, earlyOutDays: 3, missingPunchDays: 2 }));
+    for (const c of s.components) {
+      expect(c.formula.length).toBeGreaterThan(0);
+      expect(c.steps.length).toBeGreaterThan(0);
+      expect(c.steps.every((st) => st.label.length > 0 && st.value.length > 0)).toBe(true);
+      expect(c.insight.length).toBeGreaterThan(0);
+      // The final step should resolve to the earned points.
+      expect(c.steps[c.steps.length - 1].label).toMatch(/earned/i);
+    }
+  });
+
+  it("presence breakdown shows the real attendance-rate arithmetic", () => {
+    // 54 present + 6 absent = 60 rostered → 90% attended.
+    const pres = scoreAttendance(row({ daysPresent: 54, daysAbsent: 6 })).components.find((c) => c.key === "presence")!;
+    expect(pres.steps[0].value).toContain("54");
+    expect(pres.steps[0].value).toContain("90%");
+    expect(pres.insight).toMatch(/absent/i);
+  });
+
+  it("neutral (no-data) component still carries a stub breakdown, not undefined", () => {
+    const disc = scoreAttendance(row({ daysPresent: 0, daysAbsent: 0 })).components.find((c) => c.key === "discipline")!;
+    expect(disc.neutral).toBe(true);
+    expect(disc.formula).toMatch(/no data/i);
+    expect(disc.steps.length).toBeGreaterThan(0);
+    expect(disc.insight.length).toBeGreaterThan(0);
+  });
+});
