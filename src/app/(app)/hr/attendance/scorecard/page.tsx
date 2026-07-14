@@ -59,8 +59,10 @@ export default async function HrAttendanceScorecardPage({
           nextMonth={nextMonth}
           windowLabel={windowLabel}
           cycleMonths={board.cycleMonths}
+          trendMonths={board.trendMonths}
           scores={board.scores}
           flagged={board.flagged}
+          monthlyByEmployee={board.monthlyByEmployee}
         />
       </div>
     </>

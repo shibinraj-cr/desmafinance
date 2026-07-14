@@ -21,10 +21,30 @@ import {
   scoreAttendance,
   type AttendanceScoreRow,
   type AttendanceScore,
+  type AttScoreBand,
+  type AttScoreComponent,
 } from "./hr-attendance-score";
 
 /** Number of salary cycles the rolling score spans. */
 export const ROLLING_CYCLES = 3;
+
+/** How many months of single-cycle scores the trend graph / monthly matrix show. */
+export const TREND_MONTHS = 6;
+
+const MONTH_ABBR = ["", "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+
+/** Short month name for a cycle-month key ("2026-06" → "Jun"). */
+export function monthLabel(cycleMonth: string): string {
+  const m = Number(cycleMonth.split("-")[1]);
+  return MONTH_ABBR[m] ?? cycleMonth;
+}
+
+/** The most recent salary cycle whose 26→25 window has fully elapsed. */
+export function latestCompleteCycleMonth(today: Date): string {
+  const current = cycleMonthForDate(today);
+  const end = cycleWindowForMonth(current).end;
+  return today > end ? current : addCycleMonths(current, -1);
+}
 
 /** Leaving more than this many minutes before shift end counts as an early departure. */
 const EARLY_OUT_GRACE_MINUTES = SHIFT_GRACE_MINUTES;
@@ -119,13 +139,72 @@ function buildRow(emp: EmpRef, days: AttDay[], regRequests: number, cyclesCovere
   };
 }
 
+/**
+ * One employee's score for a single salary cycle (month), for the trend graph
+ * and the admin monthly drill-down. `value`/`band` are set only when the month
+ * clears the min-data gate; `components` carry the calculation breakdown for the
+ * click-to-explain popup whenever the month has any attendance at all.
+ */
+export type MonthlyAttendanceScore = {
+  cycleMonth: string;
+  label: string;
+  scored: boolean;
+  value: number | null;
+  band: AttScoreBand | null;
+  components: AttScoreComponent[] | null;
+  narrative: string | null;
+};
+
+/**
+ * Score each of `months` (single-cycle) for one employee from days/regs already
+ * fetched across the whole window. Each month is scored standalone (cyclesCovered=1),
+ * so the LCE quota and the 20-day gate apply per month.
+ */
+function scoreMonths(emp: EmpRef, days: AttDay[], regDates: Date[], months: string[]): MonthlyAttendanceScore[] {
+  const daysByMonth = new Map<string, AttDay[]>();
+  for (const d of days) {
+    const k = cycleMonthForDate(d.date);
+    (daysByMonth.get(k) ?? daysByMonth.set(k, []).get(k)!).push(d);
+  }
+  const regByMonth = new Map<string, number>();
+  for (const dt of regDates) {
+    const k = cycleMonthForDate(dt);
+    regByMonth.set(k, (regByMonth.get(k) ?? 0) + 1);
+  }
+  return months.map((m) => {
+    const row = buildRow(emp, daysByMonth.get(m) ?? [], regByMonth.get(m) ?? 0, 1);
+    const sc = scoreAttendance(row);
+    const hasData = row.daysPresent + row.daysHalfDay + row.daysAbsent + row.daysPaidLeave > 0;
+    return {
+      cycleMonth: m,
+      label: monthLabel(m),
+      scored: sc.scored,
+      value: sc.scored ? sc.score : null,
+      band: sc.scored ? sc.band : null,
+      components: hasData ? sc.components : null,
+      narrative: hasData ? sc.narrative : null,
+    };
+  });
+}
+
+export type AttendanceScoreTrend = {
+  /** One entry per month, oldest → newest. */
+  months: MonthlyAttendanceScore[];
+  /** The newest month with a publishable score — for the headline + feedback. */
+  latest: MonthlyAttendanceScore | null;
+};
+
 export type AttendanceScorecard = {
   cycleMonth: string;
-  /** Oldest → newest cycle-month keys covered. */
+  /** Rolling window cycle-month keys, oldest → newest (length {@link ROLLING_CYCLES}). */
   cycleMonths: string[];
+  /** Wider monthly window for the drill-down, oldest → newest (length {@link TREND_MONTHS}). */
+  trendMonths: string[];
   scores: AttendanceScore[];
   /** Scored employees in the "attention" band — the disciplinary follow-up list. */
   flagged: AttendanceScore[];
+  /** employeeId → per-month scores over `trendMonths`, for the admin drill-down. */
+  monthlyByEmployee: Record<string, MonthlyAttendanceScore[]>;
 };
 
 /**
@@ -133,11 +212,14 @@ export type AttendanceScorecard = {
  * Owners (MD / Director) have no attendance and are excluded, matching the grid.
  */
 export async function loadAttendanceScorecard(cycleMonth: string): Promise<AttendanceScorecard> {
-  const cycleMonths = rollingCycleMonths(cycleMonth);
-  const start = cycleWindowForMonth(cycleMonths[0]).start;
+  const cycleMonths = rollingCycleMonths(cycleMonth); // rolling window (3)
+  const trendMonths = rollingCycleMonths(cycleMonth, TREND_MONTHS); // wider window (6)
+  // Fetch the wider 6-month window once; the rolling score reads the newest 3 of it.
+  const fetchStart = cycleWindowForMonth(trendMonths[0]).start;
+  const rollingStart = cycleWindowForMonth(cycleMonths[0]).start;
   const end = cycleWindowForMonth(cycleMonth).end;
 
-  const [employeesRaw, days, regGroups] = await Promise.all([
+  const [employeesRaw, days, regs] = await Promise.all([
     prisma.employee.findMany({
       where: { active: true },
       orderBy: { empCode: "asc" },
@@ -151,7 +233,7 @@ export async function loadAttendanceScorecard(cycleMonth: string): Promise<Atten
       },
     }),
     prisma.hrAttendanceDay.findMany({
-      where: { date: { gte: start, lte: end } },
+      where: { date: { gte: fetchStart, lte: end } },
       orderBy: [{ employeeId: "asc" }, { date: "asc" }],
       select: {
         id: true,
@@ -164,10 +246,9 @@ export async function loadAttendanceScorecard(cycleMonth: string): Promise<Atten
         earlyOutMinutes: true,
       },
     }),
-    prisma.hrAttendanceRegularization.groupBy({
-      by: ["employeeId"],
-      where: { date: { gte: start, lte: end } },
-      _count: { _all: true },
+    prisma.hrAttendanceRegularization.findMany({
+      where: { date: { gte: fetchStart, lte: end } },
+      select: { employeeId: true, date: true },
     }),
   ]);
 
@@ -177,17 +258,26 @@ export async function loadAttendanceScorecard(cycleMonth: string): Promise<Atten
 
   const daysByEmp = new Map<string, AttDay[]>();
   for (const d of days) (daysByEmp.get(d.employeeId) ?? daysByEmp.set(d.employeeId, []).get(d.employeeId)!).push(d);
-  const regByEmp = new Map<string, number>();
-  for (const g of regGroups) regByEmp.set(g.employeeId, g._count._all);
+  const regDatesByEmp = new Map<string, Date[]>();
+  for (const r of regs) (regDatesByEmp.get(r.employeeId) ?? regDatesByEmp.set(r.employeeId, []).get(r.employeeId)!).push(r.date);
 
-  const rows = employees.map((emp) =>
-    buildRow(emp, daysByEmp.get(emp.id) ?? [], regByEmp.get(emp.id) ?? 0, cycleMonths.length),
-  );
+  const rows: AttendanceScoreRow[] = [];
+  const monthlyByEmployee: Record<string, MonthlyAttendanceScore[]> = {};
+  for (const emp of employees) {
+    const empDays = daysByEmp.get(emp.id) ?? [];
+    const empRegDates = regDatesByEmp.get(emp.id) ?? [];
+    // Rolling score: the newest ROLLING_CYCLES cycles only.
+    const rollingDays = empDays.filter((d) => d.date >= rollingStart);
+    const rollingRegCount = empRegDates.filter((dt) => dt >= rollingStart).length;
+    rows.push(buildRow(emp, rollingDays, rollingRegCount, cycleMonths.length));
+    // Monthly matrix: every month in the wider window, scored standalone.
+    monthlyByEmployee[emp.id] = scoreMonths(emp, empDays, empRegDates, trendMonths);
+  }
 
   const scores = buildAttendanceScorecard(rows);
   const flagged = scores.filter((s) => s.scored && s.band === "attention");
 
-  return { cycleMonth, cycleMonths, scores, flagged };
+  return { cycleMonth, cycleMonths, trendMonths, scores, flagged, monthlyByEmployee };
 }
 
 /**
@@ -235,4 +325,56 @@ export async function attendanceScoreForEmployee(
 
   if (!emp) return null;
   return scoreAttendance(buildRow(emp, days, regCount, cycleMonths.length));
+}
+
+/**
+ * Per-month attendance scores for a single employee — the home-page trend graph.
+ * Each of the last `months` cycles is scored standalone; `latest` is the newest
+ * scored month, used for the headline + component feedback.
+ */
+export async function attendanceScoreTrend(
+  employeeId: string,
+  endCycleMonth: string,
+  months = TREND_MONTHS,
+): Promise<AttendanceScoreTrend> {
+  const monthList = rollingCycleMonths(endCycleMonth, months); // oldest → newest
+  const start = cycleWindowForMonth(monthList[0]).start;
+  const end = cycleWindowForMonth(endCycleMonth).end;
+
+  const [emp, days, regs] = await Promise.all([
+    prisma.employee.findUnique({
+      where: { id: employeeId },
+      select: {
+        id: true,
+        empCode: true,
+        name: true,
+        halfHourConcession: true,
+        designation: true,
+        designationRef: { select: { name: true } },
+      },
+    }),
+    prisma.hrAttendanceDay.findMany({
+      where: { employeeId, date: { gte: start, lte: end } },
+      orderBy: { date: "asc" },
+      select: {
+        id: true,
+        employeeId: true,
+        date: true,
+        status: true,
+        inTime: true,
+        outTime: true,
+        lateMinutes: true,
+        earlyOutMinutes: true,
+      },
+    }),
+    prisma.hrAttendanceRegularization.findMany({
+      where: { employeeId, date: { gte: start, lte: end } },
+      select: { date: true },
+    }),
+  ]);
+
+  if (!emp) return { months: [], latest: null };
+  const monthly = scoreMonths(emp, days, regs.map((r) => r.date), monthList);
+  const latest = [...monthly].reverse().find((m) => m.scored) ?? null;
+  return { months: monthly, latest };
 }
