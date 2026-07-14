@@ -174,8 +174,29 @@ export function ProjectDetailClient({
     return true;
   }
 
+  // Reassign the project owner, offering to carry the outgoing owner's still-open
+  // tasks to the new owner — the mid-process hand-off in one action. Completed
+  // steps keep their own completedBy attribution regardless.
+  async function changeOwner(newOwnerId: string | null) {
+    const body: Record<string, unknown> = { assignedToId: newOwnerId };
+    const oldOwnerId = project.assigneeId;
+    if (newOwnerId && oldOwnerId && newOwnerId !== oldOwnerId) {
+      const openForOld = project.tasks
+        .flatMap((t) => t.actionItems)
+        .filter((a) => a.status === "open" && a.assigneeId === oldOwnerId).length;
+      if (openForOld > 0) {
+        const newName = opsUsers.find((u) => u.id === newOwnerId)?.username ?? "the new owner";
+        body.carryOpenTasks = window.confirm(
+          `Move ${openForOld} open task${openForOld === 1 ? "" : "s"} from the current owner to ${newName}?`,
+        );
+      }
+    }
+    await patchProject(body);
+  }
+
   const pct = project.taskTotal ? Math.round((project.taskDone / project.taskTotal) * 100) : 0;
   const phases = groupByPhase(project.tasks);
+  const phaseStatsList = phaseStats(project.tasks);
 
   return (
     <div className="space-y-lg">
@@ -210,7 +231,7 @@ export function ProjectDetailClient({
                 <select
                   className={selCls}
                   value={project.assigneeId ?? ""}
-                  onChange={(e) => patchProject({ assignedToId: e.target.value || null })}
+                  onChange={(e) => changeOwner(e.target.value || null)}
                 >
                   <option value="">Unassigned</option>
                   {opsUsers.map((u) => (
@@ -243,6 +264,9 @@ export function ProjectDetailClient({
         </div>
         {error && <div className="mt-sm text-label-sm text-error">{error}</div>}
       </section>
+
+      {/* Phase progress — the main stages of the process */}
+      {phaseStatsList.length >= 2 && <PhaseProgress stats={phaseStatsList} />}
 
       {/* Tabs */}
       <div className="flex gap-xs border-b border-outline-variant">
@@ -494,4 +518,68 @@ function groupByPhase(tasks: TaskDTO[]): { phase: string | null; tasks: TaskDTO[
     map.get(key)!.push(t);
   }
   return order.map((phase) => ({ phase, tasks: map.get(phase)! }));
+}
+
+type PhaseStat = { phase: string; total: number; done: number; status: "done" | "active" | "pending" };
+
+/**
+ * Roll the steps up into their named phases (the "main stages" of the process),
+ * in template order. A phase is `done` when all its steps are done/skipped,
+ * `active` once any step is started or done, else `pending`.
+ */
+function phaseStats(tasks: TaskDTO[]): PhaseStat[] {
+  return groupByPhase(tasks)
+    .filter((g) => g.phase != null)
+    .map((g) => {
+      const total = g.tasks.length;
+      const done = g.tasks.filter((t) => t.status === "completed" || t.status === "skipped").length;
+      const anyActive = g.tasks.some((t) => t.status === "in_progress" || t.status === "blocked");
+      const status: PhaseStat["status"] = done === total ? "done" : done > 0 || anyActive ? "active" : "pending";
+      return { phase: g.phase as string, total, done, status };
+    });
+}
+
+/** Horizontal stepper across the process's main phases. Scrolls on overflow. */
+function PhaseProgress({ stats }: { stats: PhaseStat[] }) {
+  const currentIndex = stats.findIndex((s) => s.status !== "done");
+  const allDone = currentIndex === -1;
+  const current = allDone ? stats.length - 1 : currentIndex;
+
+  return (
+    <section className="rounded-xl border border-outline-variant bg-surface-container-lowest shadow-sm p-lg">
+      <div className="flex items-center justify-between gap-md mb-md">
+        <h3 className="text-body-sm font-semibold text-on-surface">Process stages</h3>
+        <span className="text-label-sm text-on-surface-variant text-right">
+          {allDone ? "All stages complete" : `Stage ${current + 1} of ${stats.length} · ${stats[current].phase}`}
+        </span>
+      </div>
+      <div className="flex items-start overflow-x-auto scrollbar-thin pb-xs">
+        {stats.map((s, i) => {
+          const prevDone = i > 0 && stats[i - 1].status === "done";
+          const isCurrent = i === current && !allDone;
+          const circle =
+            s.status === "done"
+              ? "bg-primary text-on-primary"
+              : isCurrent
+                ? "bg-primary/15 text-primary border-2 border-primary"
+                : "bg-surface-container-high text-on-surface-variant";
+          return (
+            <div key={s.phase} className="flex flex-col items-center flex-1 min-w-[92px]">
+              <div className="flex items-center w-full">
+                <div className={"h-0.5 flex-1 " + (i === 0 ? "opacity-0" : prevDone ? "bg-primary" : "bg-outline-variant")} />
+                <div className={"grid place-items-center w-8 h-8 rounded-full text-label-sm font-semibold shrink-0 " + circle}>
+                  {s.status === "done" ? <span className="material-symbols-outlined text-[18px] leading-none">check</span> : i + 1}
+                </div>
+                <div className={"h-0.5 flex-1 " + (i === stats.length - 1 ? "opacity-0" : s.status === "done" ? "bg-primary" : "bg-outline-variant")} />
+              </div>
+              <span className={"mt-xs text-label-sm text-center px-xs leading-tight " + (isCurrent ? "text-primary font-semibold" : "text-on-surface")}>
+                {s.phase}
+              </span>
+              <span className="text-caption text-on-surface-variant tabular-nums">{s.done}/{s.total}</span>
+            </div>
+          );
+        })}
+      </div>
+    </section>
+  );
 }
