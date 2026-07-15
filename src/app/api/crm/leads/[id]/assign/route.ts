@@ -6,6 +6,7 @@ import { unauthorized, forbidden, notFound, badRequest } from "@/lib/http-error"
 import { getCurrentUserAndPermissions } from "@/lib/permissions";
 import { getCrmAccess } from "@/lib/crm-rbac";
 import { recordLeadActivity } from "@/lib/crm-activity";
+import { notifyLeadAssigned } from "@/lib/crm-notify";
 import { leadRowInclude, serializeLead, crmTaskFollowAssignmentWhere } from "@/lib/crm-leads";
 
 export const dynamic = "force-dynamic";
@@ -92,6 +93,17 @@ export const POST = withApiHandler(async (req: Request, { params }: { params: { 
     summary,
     metadata: { fromUserId: existing.assignedToId, toUserId: target },
   });
+
+  // In-app notify the new owner (best-effort; no-op on unassign or self-assign).
+  if (target) {
+    await notifyLeadAssigned({
+      assigneeUserId: target,
+      actorUserId: userId,
+      leadId: updated.id,
+      candidateName: updated.candidateName,
+      isReassignment: wasAssigned,
+    });
+  }
 
   return NextResponse.json({ lead: serializeLead(updated) });
 });

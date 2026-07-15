@@ -86,6 +86,7 @@ model User {
   crmTasksCreated        CrmTask[]            @relation("CrmTaskCreatedBy")
   crmTasksCompleted      CrmTask[]            @relation("CrmTaskCompletedBy")
   crmMessageTemplates    CrmMessageTemplate[] @relation("CrmMessageTemplateCreatedBy")
+  crmNotifications       CrmNotification[]    @relation("CrmNotifications")
   appSettings            AppSetting[]         @relation("AppSettingEditor")
 
   // Operations relations
@@ -301,11 +302,40 @@ model LeadPulseRole {
   // CRM email/WhatsApp templates. Optional — blank renders as an empty string.
   phone       String?
   active      Boolean  @default(true)
+  // Per-user CRM notification preference: when true (default), the user gets an
+  // in-app notification each time a lead is assigned/reassigned to them. This is
+  // the "notification setting" surfaced on the personal Notifications page. Lives
+  // here because only users with a LeadPulseRole can be assigned leads.
+  notifyOnAssign Boolean @default(true)
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
 
   @@index([role])
   @@index([active])
+}
+
+/// Per-user in-app CRM notification (e.g. a lead was assigned to you). Keyed to
+/// User — NOT Employee — so it reaches BDEs who have no HR employee record,
+/// unlike the HR-scoped HrNotification/HrNotificationReceipt pair. Rows are
+/// cosmetic history written best-effort by notifyLeadAssigned(); a write failure
+/// never blocks the assignment that triggered it.
+model CrmNotification {
+  id        String    @id @default(cuid())
+  userId    String
+  user      User      @relation("CrmNotifications", fields: [userId], references: [id], onDelete: Cascade)
+  // Event discriminator for future types; today only "lead_assigned".
+  kind      String    @default("lead_assigned")
+  title     String
+  body      String
+  linkUrl   String?
+  // Convenience reference to the lead this is about; no FK relation (a deleted
+  // lead just leaves stale history, which is harmless for a notification).
+  leadId    String?
+  readAt    DateTime?
+  createdAt DateTime  @default(now())
+
+  @@index([userId, readAt])
+  @@index([userId, createdAt])
 }
 
 model LeadPulseSource {

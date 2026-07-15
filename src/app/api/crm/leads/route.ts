@@ -7,6 +7,7 @@ import { unauthorized, forbidden, badRequest } from "@/lib/http-error";
 import { getCurrentUserAndPermissions } from "@/lib/permissions";
 import { getCrmAccess } from "@/lib/crm-rbac";
 import { recordLeadActivity } from "@/lib/crm-activity";
+import { notifyLeadAssigned } from "@/lib/crm-notify";
 import { normalizePhone, computeDedupeKey, emailKeyOf, phoneMatchKeys } from "@/lib/crm";
 import { parseDobInput, parseAgeParam } from "@/lib/age";
 import { parsePeriod, rangeFor } from "@/lib/period";
@@ -216,6 +217,14 @@ export const POST = withApiHandler(async (req: Request) => {
       type: "ASSIGNED",
       summary: `Assigned to ${created.assignedTo?.leadPulseRole?.displayName ?? created.assignedTo?.username ?? "consultant"}`,
       metadata: { toUserId: assignedToId },
+    });
+    // In-app notify the owner (best-effort; no-op when a BDE self-owns the lead).
+    await notifyLeadAssigned({
+      assigneeUserId: assignedToId,
+      actorUserId: userId,
+      leadId: created.id,
+      candidateName: created.candidateName,
+      isReassignment: false,
     });
   }
 
