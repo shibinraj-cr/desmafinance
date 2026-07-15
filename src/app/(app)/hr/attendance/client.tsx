@@ -39,6 +39,13 @@ type MonthSummary = {
   unmatchedNames: string[];
 };
 
+type SalaryRunSummary = {
+  monthKey: string;
+  recomputed: boolean;
+  status: string | null;
+  warnings?: string[];
+};
+
 type DateCell = { iso: string; day: number; month: number; weekday: string };
 
 const STATUS_TONE: Record<string, string> = {
@@ -98,10 +105,13 @@ export function AttendanceClient({
     msg: string;
     tone: "info" | "ok" | "err";
     months?: MonthSummary[];
+    salaryRuns?: SalaryRunSummary[];
     unmatched?: string[];
     rangeStart?: string;
     rangeEnd?: string;
   } | null>(null);
+
+  const [syncing, setSyncing] = useState(false);
 
   async function onPick(e: React.ChangeEvent<HTMLInputElement>) {
     const f = e.target.files?.[0];
@@ -120,12 +130,48 @@ export function AttendanceClient({
       msg: `Imported ${totalInserted} day rows across ${j.months.length} cycle(s).`,
       tone: "ok",
       months: j.months,
+      salaryRuns: j.salaryRuns ?? [],
       unmatched: j.unmatchedNames ?? [],
       rangeStart: j.rangeStart ?? undefined,
       rangeEnd: j.rangeEnd ?? undefined,
     });
     if (fileRef.current) fileRef.current.value = "";
     start(() => router.refresh());
+  }
+
+  async function onSync() {
+    if (syncing) return;
+    setSyncing(true);
+    setUploadStatus({ msg: "Fetching punches from eTimeOffice…", tone: "info" });
+    try {
+      // fromDate omitted → the server defaults to (and hard-floors at) the
+      // 2026-07-01 cutover; toDate omitted → today.
+      const res = await fetch("/api/hr/attendance/etime-sync", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({}),
+      });
+      const j = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        setUploadStatus({ msg: `Sync failed: ${j.error || res.statusText}`, tone: "err" });
+        return;
+      }
+      const totalInserted = (j.months as MonthSummary[]).reduce((s, m) => s + m.inserted, 0);
+      setUploadStatus({
+        msg: `Fetched ${j.fetched ?? 0} punch records; imported ${totalInserted} day rows across ${j.months.length} cycle(s). Data before ${j.cutover} left untouched.`,
+        tone: "ok",
+        months: j.months,
+        salaryRuns: j.salaryRuns ?? [],
+        unmatched: j.unmatchedNames ?? [],
+        rangeStart: j.rangeStart ?? undefined,
+        rangeEnd: j.rangeEnd ?? undefined,
+      });
+      start(() => router.refresh());
+    } catch (err) {
+      setUploadStatus({ msg: `Sync failed: ${err instanceof Error ? err.message : "network error"}`, tone: "err" });
+    } finally {
+      setSyncing(false);
+    }
   }
 
   function gotoMonth(m: string) {
@@ -168,9 +214,18 @@ export function AttendanceClient({
             <>
               <button
                 type="button"
+                onClick={onSync}
+                disabled={syncing || pending}
+                title="Fetch in/out punches from the eTimeOffice biometric cloud (from 01 Jul 2026 onward; earlier data is never modified)"
+                className="ml-auto px-md py-sm rounded border border-primary text-primary font-bold disabled:opacity-50"
+              >
+                {syncing ? "Syncing…" : "Sync from eTimeOffice"}
+              </button>
+              <button
+                type="button"
                 onClick={() => fileRef.current?.click()}
-                disabled={pending}
-                className="ml-auto px-md py-sm rounded bg-primary text-on-primary font-bold disabled:opacity-50"
+                disabled={pending || syncing}
+                className="px-md py-sm rounded bg-primary text-on-primary font-bold disabled:opacity-50"
               >
                 Upload biometric report (.xls / .xlsx)
               </button>
@@ -181,6 +236,13 @@ export function AttendanceClient({
                 className="hidden"
                 onChange={onPick}
               />
+              <a
+                href="/hr/attendance/settings"
+                title="Configure the eTimeOffice biometric sync"
+                className="px-sm py-sm rounded border border-outline-variant text-on-surface-variant hover:bg-surface-container-low"
+              >
+                ⚙
+              </a>
             </>
           )}
         </div>
@@ -211,6 +273,21 @@ export function AttendanceClient({
                   <li key={m.monthKey}>
                     <strong>Cycle {m.monthKey}</strong>: {m.inserted} rows inserted
                     {m.unmatched > 0 ? `, ${m.unmatched} unmatched` : ""}
+                  </li>
+                ))}
+              </ul>
+            ) : null}
+            {uploadStatus.salaryRuns?.length ? (
+              <ul className="mt-xs text-caption list-disc ml-md">
+                {uploadStatus.salaryRuns.map((r) => (
+                  <li key={r.monthKey}>
+                    <strong>Salary {r.monthKey}</strong>:{" "}
+                    {r.recomputed
+                      ? "draft recomputed"
+                      : r.status
+                        ? `not recomputed (${r.status})`
+                        : "no draft run found"}
+                    {r.warnings?.length ? `, ${r.warnings.length} warning(s)` : ""}
                   </li>
                 ))}
               </ul>
@@ -302,12 +379,20 @@ export function AttendanceClient({
                     </td>
                     {dateCells.map((d) => {
                       const c = row[d.iso];
-                      const code = c?.status ?? "";
+                      // A present day flagged AL (late beyond the allowance) is a
+                      // payroll half-day — show it as HD here too (the AL badge
+                      // below still explains why). LCE days stay Present.
+                      const code = c ? (c.status === "P" && c.lateTag === "AL" ? "HD" : c.status) : "";
                       const tone = STATUS_TONE[code] ?? "bg-surface-container text-on-surface-variant";
                       const isBoundary = d.day === 1;
+                      // Missing punch: exactly one of in/out recorded — the
+                      // employee clocked one side only. Highlighted so HR (and
+                      // the employee, in My Attendance) can get it regularized.
+                      const missingPunch = !!c && !!c.in !== !!c.out;
                       const tip = c
                         ? [
                             `${d.iso} ${code}`,
+                            missingPunch ? "⚠ punch missing" : null,
                             c.in && c.out ? `${c.in} → ${c.out}` : null,
                             c.work ? `work ${hhmm(c.work)}` : null,
                             c.ot ? `OT ${hhmm(c.ot)}` : null,
@@ -337,7 +422,8 @@ export function AttendanceClient({
                             title={tip}
                             className={
                               "flex flex-col items-stretch justify-start rounded text-[9px] font-bold leading-tight w-11 mx-auto " +
-                              tone
+                              tone +
+                              (missingPunch ? " ring-2 ring-orange-500" : "")
                             }
                           >
                             <span className="text-center text-[10px] py-[1px] border-b border-current/10">
@@ -353,6 +439,14 @@ export function AttendanceClient({
                               <span className="font-normal text-[9px] text-center py-[1px] opacity-50">
                                 &nbsp;
                                 <br />&nbsp;
+                              </span>
+                            )}
+                            {missingPunch && (
+                              <span
+                                className="text-[8px] font-extrabold text-center py-[1px] border-t border-current/10 bg-orange-200 text-orange-900"
+                                title="Punch missing — only one of in/out recorded"
+                              >
+                                MP
                               </span>
                             )}
                             {c?.lateTag && (
@@ -441,6 +535,8 @@ export function AttendanceClient({
           (≤30 min late, within 3 days/cycle).
           {" "}<span className="font-bold text-red-700">AL</span> Arrived Late beyond grace or
           quota.
+          {" "}<span className="font-bold text-orange-700">MP</span> (orange ring) Missing punch —
+          only one of in/out recorded; needs a regularization.
           The Summary column shows day counts on top, Paid / Unpaid totals next, and the
           Late-Coming usage at the bottom for employees with that eligibility enabled.
         </p>

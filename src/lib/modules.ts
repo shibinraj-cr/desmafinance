@@ -264,6 +264,7 @@ export const MODULES: AppModule[] = [
       { href: "/hr/regularization", label: "Attendance Corrections", icon: "edit_calendar", group: "ATTENDANCE" },
       { href: "/hr/shifts", label: "Shifts", icon: "schedule", group: "ATTENDANCE" },
       { href: "/hr/shift-assignments", label: "Shift Assignments", icon: "schedule_send", group: "ATTENDANCE" },
+      { href: "/hr/attendance/settings", label: "Biometric Sync", icon: "fingerprint", group: "ATTENDANCE" },
       { href: "/hr/salary-structures", label: "Salary Structures", icon: "calculate", group: "PAYROLL" },
       { href: "/hr/salary", label: "Salary Runs", icon: "payments", group: "PAYROLL" },
       { href: "/hr/masters/designations", label: "Designations", icon: "stairs", group: "MASTERS" },
