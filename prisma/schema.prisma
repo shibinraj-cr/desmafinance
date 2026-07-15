@@ -991,6 +991,7 @@ model Employee {
   leaveEligibility     HrLeaveEligibility?
   leaveAccruals        HrLeaveAccrual[]
   regularizations      HrAttendanceRegularization[] @relation("RegEmployee")
+  attendanceScoreSignals HrAttendanceScoreSignal[]
   birthdayWishes       HrBirthdayWish[]          @relation("BirthdayRecipient")
   /// Finance transactions/drafts where this employee is the counterparty
   /// (salary / incentive outflows).
@@ -1222,6 +1223,43 @@ model HrAttendanceDay {
   @@unique([employeeId, date])
   @@index([date])
   @@index([status])
+}
+
+/// Score-only behavioural overlay for the Attendance Scorecard.
+///
+/// Holds the RAW biometric punch / late / early-out signals for a date. It is
+/// read ONLY by the scorecard (hr-attendance-score*.ts), which overlays these
+/// fields onto the corrected HrAttendanceDay row when scoring — so the score
+/// reflects the employee's actual behaviour (late-comings, missing punches,
+/// early departures) even after a corrected upload cleaned those signals out of
+/// the attendance record. Presence (status) is NEVER taken from here: the
+/// corrected HrAttendanceDay.status is authoritative for present/absent/half-day.
+///
+/// Payroll, leave balances and the attendance grid do NOT read this table, so it
+/// can never affect pay. Populated for the Apr–Jun 2026 backfill (source =
+/// "biometric_backfill_2026Q2"); from July 2026 employees regularise live, so
+/// no signals are stored and the scorecard reads HrAttendanceDay directly.
+model HrAttendanceScoreSignal {
+  id              String   @id @default(cuid())
+  employeeId      String
+  employee        Employee @relation(fields: [employeeId], references: [id], onDelete: Cascade)
+  date            DateTime @db.Date
+  inTime          String?
+  outTime         String?
+  /// Late minutes recomputed against the resolved HR shift start (upload-route
+  /// parity), so AL/LCE tags match how payroll would have charged them.
+  lateMinutes     Int?
+  earlyOutMinutes Int?
+  /// Raw biometric status (P/A/WO/HD…) — audit/debug only, NOT used for presence.
+  rawStatus       String?
+  shiftCode       String?
+  remark          String?
+  /// Provenance tag, e.g. "biometric_backfill_2026Q2".
+  source          String
+  createdAt       DateTime @default(now())
+
+  @@unique([employeeId, date])
+  @@index([date])
 }
 
 model HrSalaryRun {
