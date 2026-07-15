@@ -16,6 +16,22 @@ type ActionItemDTO = {
   completedAt: string | null;
   createdAt: string;
 };
+type ProofFact = { label: string; value: string };
+type DocumentDTO = {
+  id: string;
+  fileName: string;
+  fileUrl: string;
+  mimeType: string | null;
+  sizeBytes: number | null;
+  uploadedByName: string | null;
+  createdAt: string;
+  aiStatus: string;
+  aiVerdict: string | null;
+  aiSummary: string | null;
+  aiConcerns: string | null;
+  aiFacts: ProofFact[];
+  aiAnalyzedAt: string | null;
+};
 type TaskDTO = {
   id: string;
   seq: number;
@@ -33,6 +49,7 @@ type TaskDTO = {
   blockedReason: string | null;
   notes: string | null;
   actionItems: ActionItemDTO[];
+  documents: DocumentDTO[];
 };
 type ActivityDTO = { id: string; type: string; summary: string | null; actorName: string | null; occurredAt: string };
 type ProjectDetail = {
@@ -194,6 +211,56 @@ export function ProjectDetailClient({
     await patchProject(body);
   }
 
+  // Upload a proof file to a step, then auto-trigger AI analysis if the file is
+  // an image/PDF. The step area shows busy for the whole upload+analyse.
+  async function uploadProof(stepId: string, file: File) {
+    setBusyId(`upl:${stepId}`);
+    setError(null);
+    const fd = new FormData();
+    fd.append("taskId", stepId);
+    fd.append("file", file);
+    const res = await fetch("/api/operations/documents", { method: "POST", body: fd });
+    if (!res.ok) {
+      const d = (await res.json().catch(() => ({}))) as { message?: string; error?: string };
+      setError(d.message || d.error || "Upload failed.");
+      setBusyId(null);
+      return;
+    }
+    const { document } = (await res.json()) as { document: DocumentDTO };
+    router.refresh();
+    if (document?.aiStatus === "pending") {
+      await fetch(`/api/operations/documents/${document.id}/analyze`, { method: "POST" }).catch(() => {});
+      router.refresh();
+    }
+    setBusyId(null);
+  }
+
+  async function analyzeDoc(docId: string) {
+    setBusyId(`ai:${docId}`);
+    setError(null);
+    const res = await fetch(`/api/operations/documents/${docId}/analyze`, { method: "POST" });
+    setBusyId(null);
+    if (!res.ok) {
+      const d = (await res.json().catch(() => ({}))) as { message?: string; error?: string };
+      setError(d.message || d.error || "Analysis failed.");
+    }
+    router.refresh();
+  }
+
+  async function deleteDoc(docId: string, name: string) {
+    if (!window.confirm(`Delete proof "${name}"?`)) return;
+    setBusyId(`del:${docId}`);
+    setError(null);
+    const res = await fetch(`/api/operations/documents/${docId}`, { method: "DELETE" });
+    setBusyId(null);
+    if (!res.ok) {
+      const d = (await res.json().catch(() => ({}))) as { message?: string; error?: string };
+      setError(d.message || d.error || "Delete failed.");
+      return;
+    }
+    router.refresh();
+  }
+
   const pct = project.taskTotal ? Math.round((project.taskDone / project.taskTotal) * 100) : 0;
   const phases = groupByPhase(project.tasks);
   const phaseStatsList = phaseStats(project.tasks);
@@ -321,6 +388,14 @@ export function ProjectDetailClient({
                         opsUsers={opsUsers}
                         busyId={busyId}
                         onMutate={mutateActionItem}
+                      />
+                      <StepProofs
+                        step={t}
+                        canEdit={canEdit}
+                        busyId={busyId}
+                        onUpload={uploadProof}
+                        onAnalyze={analyzeDoc}
+                        onDelete={deleteDoc}
                       />
                     </div>
                     {canEdit && (
@@ -501,6 +576,143 @@ function ActionItemRow({
         >
           <span className="material-symbols-outlined text-[16px] leading-none">delete</span>
         </button>
+      )}
+    </div>
+  );
+}
+
+const VERDICT_TONE: Record<string, { label: string; cls: string }> = {
+  supports: { label: "Supports", cls: "bg-accent/20 text-accent" },
+  partial: { label: "Partial", cls: "bg-primary/15 text-primary" },
+  insufficient: { label: "Insufficient", cls: "bg-surface-container-high text-on-surface-variant" },
+  mismatch: { label: "Mismatch", cls: "bg-error-container text-on-error-container" },
+};
+
+function fmtBytes(n: number | null): string {
+  if (!n) return "";
+  if (n < 1024) return `${n} B`;
+  if (n < 1024 * 1024) return `${Math.round(n / 1024)} KB`;
+  return `${(n / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+/** Proof-of-completion files on a step: the list (with AI verdict) + an upload. */
+function StepProofs({
+  step,
+  canEdit,
+  busyId,
+  onUpload,
+  onAnalyze,
+  onDelete,
+}: {
+  step: TaskDTO;
+  canEdit: boolean;
+  busyId: string | null;
+  onUpload: (stepId: string, file: File) => void;
+  onAnalyze: (docId: string) => void;
+  onDelete: (docId: string, name: string) => void;
+}) {
+  const docs = step.documents;
+  const uploading = busyId === `upl:${step.id}`;
+  if (docs.length === 0 && !canEdit) return null;
+
+  return (
+    <div className="mt-sm pl-md border-l-2 border-outline-variant/50 space-y-xs">
+      <div className="text-label-sm uppercase tracking-wider text-on-surface-variant">Proof</div>
+      {docs.map((d) => (
+        <ProofRow key={d.id} doc={d} canEdit={canEdit} busyId={busyId} onAnalyze={onAnalyze} onDelete={onDelete} />
+      ))}
+      {canEdit && (
+        <label
+          className={
+            "inline-flex items-center gap-xs text-label-sm text-primary hover:underline cursor-pointer " +
+            (uploading ? "opacity-50 pointer-events-none" : "")
+          }
+        >
+          <span className="material-symbols-outlined text-[16px] leading-none">upload_file</span>
+          {uploading ? "Uploading & analysing…" : "Attach proof"}
+          <input
+            type="file"
+            accept="image/png,image/jpeg,image/webp,image/gif,application/pdf"
+            className="hidden"
+            disabled={uploading}
+            onChange={(e) => {
+              const f = e.target.files?.[0];
+              if (f) onUpload(step.id, f);
+              e.target.value = "";
+            }}
+          />
+        </label>
+      )}
+    </div>
+  );
+}
+
+/** One proof file row: link, AI verdict badge, expandable AI detail, actions. */
+function ProofRow({
+  doc,
+  canEdit,
+  busyId,
+  onAnalyze,
+  onDelete,
+}: {
+  doc: DocumentDTO;
+  canEdit: boolean;
+  busyId: string | null;
+  onAnalyze: (docId: string) => void;
+  onDelete: (docId: string, name: string) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const v = doc.aiVerdict ? VERDICT_TONE[doc.aiVerdict] : null;
+  const busy = busyId === `ai:${doc.id}` || busyId === `del:${doc.id}`;
+  const hasConcerns = !!doc.aiConcerns && doc.aiConcerns.trim() !== "" && doc.aiConcerns.trim().toLowerCase() !== "none.";
+  const hasDetail = !!doc.aiSummary || hasConcerns || doc.aiFacts.length > 0;
+
+  return (
+    <div className="rounded-md border border-outline-variant bg-surface-container-lowest px-sm py-xs">
+      <div className="flex items-center gap-xs flex-wrap">
+        <span className="material-symbols-outlined text-[16px] leading-none text-on-surface-variant">
+          {doc.mimeType === "application/pdf" ? "picture_as_pdf" : "image"}
+        </span>
+        <a href={doc.fileUrl} target="_blank" rel="noreferrer" className="text-body-sm text-primary hover:underline truncate max-w-[200px]">
+          {doc.fileName}
+        </a>
+        {doc.sizeBytes ? <span className="text-caption text-on-surface-variant">{fmtBytes(doc.sizeBytes)}</span> : null}
+        {doc.aiStatus === "processing" && <span className="text-label-sm text-on-surface-variant">analysing…</span>}
+        {doc.aiStatus === "pending" && <span className="text-label-sm text-on-surface-variant">queued</span>}
+        {doc.aiStatus === "failed" && <span className="px-xs rounded text-label-sm bg-error-container text-on-error-container">AI failed</span>}
+        {doc.aiStatus === "skipped" && <span className="text-label-sm text-on-surface-variant">not analysed</span>}
+        {v && <span className={"px-xs rounded text-label-sm " + v.cls}>AI: {v.label}</span>}
+        <span className="flex-1" />
+        {hasDetail && (
+          <button onClick={() => setOpen((o) => !o)} className="text-label-sm text-primary hover:underline">
+            {open ? "Hide" : "Details"}
+          </button>
+        )}
+        {canEdit && (
+          <>
+            <button disabled={busy} onClick={() => onAnalyze(doc.id)} title="Re-analyse with AI" className="text-on-surface-variant hover:text-primary shrink-0 disabled:opacity-40">
+              <span className="material-symbols-outlined text-[16px] leading-none">{busyId === `ai:${doc.id}` ? "hourglass_empty" : "auto_awesome"}</span>
+            </button>
+            <button disabled={busy} onClick={() => onDelete(doc.id, doc.fileName)} title="Delete proof" className="text-on-surface-variant hover:text-error shrink-0 disabled:opacity-40">
+              <span className="material-symbols-outlined text-[16px] leading-none">delete</span>
+            </button>
+          </>
+        )}
+      </div>
+      {open && hasDetail && (
+        <div className="mt-xs text-label-sm text-on-surface-variant space-y-[2px]">
+          {doc.aiSummary && <div>{doc.aiSummary}</div>}
+          {hasConcerns && <div className="text-error">Concerns: {doc.aiConcerns}</div>}
+          {doc.aiFacts.length > 0 && (
+            <ul className="list-disc pl-md">
+              {doc.aiFacts.map((f, i) => (
+                <li key={i}>
+                  <span className="text-on-surface">{f.label}:</span> {f.value}
+                </li>
+              ))}
+            </ul>
+          )}
+        </div>
       )}
     </div>
   );

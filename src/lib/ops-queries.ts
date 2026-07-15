@@ -1,6 +1,7 @@
 import { Prisma } from "@prisma/client";
 import { fromPrismaDate, istDateString } from "./lead-pulse-dates";
 import { opsActionItemInclude, serializeActionItem, type OpsActionItemDTO } from "./ops-action-items";
+import type { ProofFact } from "./ops-doc-ai";
 
 /**
  * Read-side helpers for the Operations workspace: Prisma includes, filter
@@ -31,6 +32,10 @@ export const opsProjectDetailInclude = Prisma.validator<Prisma.OpsProjectInclude
       assignedTo: { select: { id: true, username: true } },
       completedBy: { select: { id: true, username: true } },
       actionItems: { orderBy: { createdAt: "asc" }, include: opsActionItemInclude },
+      documents: {
+        orderBy: { createdAt: "desc" },
+        include: { uploadedBy: { select: { username: true } } },
+      },
     },
   },
   activities: {
@@ -107,6 +112,25 @@ export type OpsTaskDTO = {
   notes: string | null;
   /** Ad-hoc tasks attached to this step. */
   actionItems: OpsActionItemDTO[];
+  /** Proof-of-completion files attached to this step. */
+  documents: OpsDocumentDTO[];
+};
+
+export type OpsDocumentDTO = {
+  id: string;
+  fileName: string;
+  fileUrl: string;
+  mimeType: string | null;
+  sizeBytes: number | null;
+  uploadedByName: string | null;
+  createdAt: string;
+  /** 'pending' | 'processing' | 'done' | 'failed' | 'skipped' */
+  aiStatus: string;
+  aiVerdict: string | null;
+  aiSummary: string | null;
+  aiConcerns: string | null;
+  aiFacts: ProofFact[];
+  aiAnalyzedAt: string | null;
 };
 
 export type OpsActivityDTO = {
@@ -152,6 +176,7 @@ export function serializeProjectDetail(p: DetailPayload, today: string = istDate
       blockedReason: t.blockedReason,
       notes: t.notes,
       actionItems: t.actionItems.map(serializeActionItem),
+      documents: t.documents.map(serializeDocument),
     })),
     activities: p.activities.map((a) => ({
       id: a.id,
@@ -160,6 +185,26 @@ export function serializeProjectDetail(p: DetailPayload, today: string = istDate
       actorName: a.actor?.username ?? null,
       occurredAt: a.occurredAt.toISOString(),
     })),
+  };
+}
+
+type DocumentPayload = Prisma.OpsDocumentGetPayload<{ include: { uploadedBy: { select: { username: true } } } }>;
+
+export function serializeDocument(d: DocumentPayload): OpsDocumentDTO {
+  return {
+    id: d.id,
+    fileName: d.fileName,
+    fileUrl: d.fileUrl,
+    mimeType: d.mimeType,
+    sizeBytes: d.sizeBytes,
+    uploadedByName: d.uploadedBy?.username ?? null,
+    createdAt: d.createdAt.toISOString(),
+    aiStatus: d.aiStatus,
+    aiVerdict: d.aiVerdict,
+    aiSummary: d.aiSummary,
+    aiConcerns: d.aiConcerns,
+    aiFacts: Array.isArray(d.aiFacts) ? (d.aiFacts as unknown as ProofFact[]) : [],
+    aiAnalyzedAt: d.aiAnalyzedAt ? d.aiAnalyzedAt.toISOString() : null,
   };
 }
 
