@@ -44,6 +44,7 @@
   "dependencies": {
     "@anthropic-ai/sdk": "^0.100.1",
     "@prisma/client": "^6.19.3",
+    "@vercel/blob": "^2.6.1",
     "bcryptjs": "^2.4.3",
     "next": "14.2.18",
     "next-auth": "^4.24.10",

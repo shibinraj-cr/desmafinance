@@ -2409,8 +2409,10 @@ model OpsActionItem {
   @@index([projectId])
 }
 
-/// Evidence attached to a task. Stores only a reference (URL/key), not a blob.
-/// The upload UI / storage backend is deferred (see the module plan).
+/// Proof-of-completion evidence attached to a step (OpsTask). `fileUrl` is the
+/// Vercel Blob URL. Images and PDFs are additionally run through Claude
+/// (vision / document) to assess whether they support the step — the `ai*`
+/// fields hold that assessment.
 model OpsDocument {
   id           String   @id @default(cuid())
   taskId       String
@@ -2422,6 +2424,17 @@ model OpsDocument {
   uploadedById String?
   uploadedBy   User?    @relation("OpsDocUploadedBy", fields: [uploadedById], references: [id], onDelete: SetNull)
   createdAt    DateTime @default(now())
+
+  // AI analysis. status: 'pending' | 'processing' | 'done' | 'failed' | 'skipped'
+  // (skipped = not an image/PDF, or AI not configured). verdict: 'supports' |
+  // 'partial' | 'insufficient' | 'mismatch' | null.
+  aiStatus     String    @default("skipped")
+  aiVerdict    String?
+  aiSummary    String?
+  aiConcerns   String?
+  aiFacts      Json?
+  aiModel      String?
+  aiAnalyzedAt DateTime?
 
   @@index([taskId])
 }
