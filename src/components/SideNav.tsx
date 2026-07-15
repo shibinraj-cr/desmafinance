@@ -39,6 +39,7 @@ function navForModule(
   rejectedCount: number,
   newLeadsCount: number,
   myOpenTasksCount: number,
+  notifCount: number,
 ): NavItem[] {
   return mod.pages
     .filter((p) => canSeePage(perms, p.href))
@@ -54,7 +55,9 @@ function navForModule(
             ? newLeadsCount
             : p.href === "/operations/my-tasks"
               ? myOpenTasksCount
-              : null,
+              : p.href === "/me/notifications"
+                ? notifCount
+                : null,
       warningCount:
         p.href === "/finance/approvals" && rejectedCount > 0 ? rejectedCount : null,
     }));
@@ -74,6 +77,7 @@ function groupNavForModule(
   rejectedCount: number,
   newLeadsCount: number,
   myOpenTasksCount: number,
+  notifCount: number,
 ): NavItem[] {
   const current = activePage(mod, pathname);
   return moduleGroups(mod)
@@ -88,12 +92,15 @@ function groupNavForModule(
       // The Operations "Work" group holds My Tasks — badge it with the user's
       // open-task count.
       const hasMyTasks = g.pages.some((p) => p.href === "/operations/my-tasks");
+      // The "My Workspace" RESOURCES group holds /me/notifications — badge it
+      // with the signed-in user's unread notification count.
+      const hasNotifs = g.pages.some((p) => p.href === "/me/notifications");
       return {
         href: first.href,
         label: g.name,
         icon: first.icon,
         active: !!current && g.pages.some((p) => p.href === current.href),
-        badgeCount: hasApprovals && canApprove(perms) ? pendingCount : hasNewLeads ? newLeadsCount : hasMyTasks ? myOpenTasksCount : null,
+        badgeCount: hasApprovals && canApprove(perms) ? pendingCount : hasNewLeads ? newLeadsCount : hasMyTasks ? myOpenTasksCount : hasNotifs ? notifCount : null,
         warningCount: hasApprovals && rejectedCount > 0 ? rejectedCount : null,
       };
     });
@@ -293,6 +300,7 @@ export function SideNav({
   rejectedCount,
   newLeadsCount,
   myOpenTasksCount,
+  notifCount,
 }: {
   user: { name?: string | null; email?: string | null };
   perms: Permissions;
@@ -300,6 +308,7 @@ export function SideNav({
   rejectedCount: number;
   newLeadsCount: number;
   myOpenTasksCount: number;
+  notifCount: number;
 }) {
   const pathname = usePathname();
 
@@ -323,8 +332,8 @@ export function SideNav({
   // Grouped modules list their groups in the left bar (pages live in the top
   // tab strip); ungrouped modules keep the flat page list.
   const items = moduleHasGroups(activeModule)
-    ? groupNavForModule(activeModule, perms, pathname, pendingCount, rejectedCount, newLeadsCount, myOpenTasksCount)
-    : navForModule(activeModule, perms, pendingCount, rejectedCount, newLeadsCount, myOpenTasksCount);
+    ? groupNavForModule(activeModule, perms, pathname, pendingCount, rejectedCount, newLeadsCount, myOpenTasksCount, notifCount)
+    : navForModule(activeModule, perms, pendingCount, rejectedCount, newLeadsCount, myOpenTasksCount, notifCount);
 
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [mounted, setMounted] = useState(false);
