@@ -60,6 +60,70 @@ type AttDay = {
   earlyOutMinutes: number | null;
 };
 
+/**
+ * A score-only behavioural overlay for one (employee, date) — the RAW biometric
+ * punch / late / early-out signal, kept in HrAttendanceScoreSignal. It NEVER
+ * carries presence: the corrected HrAttendanceDay.status stays authoritative for
+ * present/absent/half-day. See {@link overlayScoreSignals}.
+ */
+type ScoreSignal = {
+  inTime: string | null;
+  outTime: string | null;
+  lateMinutes: number | null;
+  earlyOutMinutes: number | null;
+};
+
+const signalKey = (employeeId: string, date: Date): string =>
+  `${employeeId}|${date.toISOString().slice(0, 10)}`;
+
+/**
+ * Overlay raw behavioural signals onto the corrected attendance days for
+ * scoring. For any day that has a signal, the punch times, lateness and
+ * early-out are taken from the signal (so late-comings, missing punches and
+ * early departures reflect the employee's ACTUAL behaviour) while the presence
+ * status — present/absent/half-day/leave — is preserved from the corrected day.
+ * Days without a signal pass through unchanged, so this only affects the
+ * back-filled cycles; live cycles read HrAttendanceDay directly.
+ *
+ * Pure and unit-tested — the scorers in hr-attendance-score.ts see the merged
+ * rows, so late/punch/early-out signals count against Punctuality, Discipline
+ * and Full-day without ever moving Presence.
+ */
+export function overlayScoreSignals(days: AttDay[], signals: Map<string, ScoreSignal>): AttDay[] {
+  if (signals.size === 0) return days;
+  return days.map((d) => {
+    // Behaviour is only meaningful on a day actually worked per the CORRECTED
+    // record. On a non-worked day (LV / A / WO / HL) a stray raw punch must not
+    // manufacture a missing-punch, late or early-out signal — so presence gates
+    // the overlay. (AL/LCE and early-out are already worked-gated downstream;
+    // this also guards missing-punch, which is not.)
+    if (d.status !== "P" && d.status !== "HD") return d;
+    const s = signals.get(signalKey(d.employeeId, d.date));
+    if (!s) return d;
+    return {
+      ...d,
+      inTime: s.inTime,
+      outTime: s.outTime,
+      lateMinutes: s.lateMinutes,
+      earlyOutMinutes: s.earlyOutMinutes,
+    };
+  });
+}
+
+/** Load score-only behavioural signals for a window (optionally one employee). */
+async function loadScoreSignals(where: {
+  date: { gte: Date; lte: Date };
+  employeeId?: string;
+}): Promise<Map<string, ScoreSignal>> {
+  const rows = await prisma.hrAttendanceScoreSignal.findMany({
+    where,
+    select: { employeeId: true, date: true, inTime: true, outTime: true, lateMinutes: true, earlyOutMinutes: true },
+  });
+  const map = new Map<string, ScoreSignal>();
+  for (const r of rows) map.set(signalKey(r.employeeId, r.date), r);
+  return map;
+}
+
 type EmpRef = {
   id: string;
   empCode: string;
@@ -219,7 +283,7 @@ export async function loadAttendanceScorecard(cycleMonth: string): Promise<Atten
   const rollingStart = cycleWindowForMonth(cycleMonths[0]).start;
   const end = cycleWindowForMonth(cycleMonth).end;
 
-  const [employeesRaw, days, regs] = await Promise.all([
+  const [employeesRaw, daysRaw, regs, signals] = await Promise.all([
     prisma.employee.findMany({
       where: { active: true },
       orderBy: { empCode: "asc" },
@@ -250,7 +314,12 @@ export async function loadAttendanceScorecard(cycleMonth: string): Promise<Atten
       where: { date: { gte: fetchStart, lte: end } },
       select: { employeeId: true, date: true },
     }),
+    loadScoreSignals({ date: { gte: fetchStart, lte: end } }),
   ]);
+
+  // Overlay raw behavioural signals (late/punch/early-out) onto the corrected
+  // days for scoring; presence stays from HrAttendanceDay.status.
+  const days = overlayScoreSignals(daysRaw, signals);
 
   const employees = employeesRaw.filter(
     (e) => !(isOwnerDesignation(e.designationRef?.name) || isOwnerDesignation(e.designation)),
@@ -292,7 +361,7 @@ export async function attendanceScoreForEmployee(
   const start = cycleWindowForMonth(cycleMonths[0]).start;
   const end = cycleWindowForMonth(cycleMonth).end;
 
-  const [emp, days, regCount] = await Promise.all([
+  const [emp, daysRaw, regCount, signals] = await Promise.all([
     prisma.employee.findUnique({
       where: { id: employeeId },
       select: {
@@ -321,9 +390,11 @@ export async function attendanceScoreForEmployee(
     prisma.hrAttendanceRegularization.count({
       where: { employeeId, date: { gte: start, lte: end } },
     }),
+    loadScoreSignals({ employeeId, date: { gte: start, lte: end } }),
   ]);
 
   if (!emp) return null;
+  const days = overlayScoreSignals(daysRaw, signals);
   return scoreAttendance(buildRow(emp, days, regCount, cycleMonths.length));
 }
 
@@ -341,7 +412,7 @@ export async function attendanceScoreTrend(
   const start = cycleWindowForMonth(monthList[0]).start;
   const end = cycleWindowForMonth(endCycleMonth).end;
 
-  const [emp, days, regs] = await Promise.all([
+  const [emp, daysRaw, regs, signals] = await Promise.all([
     prisma.employee.findUnique({
       where: { id: employeeId },
       select: {
@@ -371,9 +442,11 @@ export async function attendanceScoreTrend(
       where: { employeeId, date: { gte: start, lte: end } },
       select: { date: true },
     }),
+    loadScoreSignals({ employeeId, date: { gte: start, lte: end } }),
   ]);
 
   if (!emp) return { months: [], latest: null };
+  const days = overlayScoreSignals(daysRaw, signals);
   const monthly = scoreMonths(emp, days, regs.map((r) => r.date), monthList);
   const latest = [...monthly].reverse().find((m) => m.scored) ?? null;
   return { months: monthly, latest };
