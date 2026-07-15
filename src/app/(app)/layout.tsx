@@ -2,6 +2,7 @@ import { redirect } from "next/navigation";
 import { prisma } from "@/lib/prisma";
 import { getCurrentUserAndPermissions } from "@/lib/permissions";
 import { countNewLeadsAssignedTo } from "@/lib/crm-leads";
+import { countUnreadNotifications } from "@/lib/notifications";
 import { SideNav } from "@/components/SideNav";
 import { GroupTabs } from "@/components/GroupTabs";
 import { RouteProgress } from "@/components/RouteProgress";
@@ -15,12 +16,15 @@ export default async function AppLayout({ children }: { children: React.ReactNod
   // they haven't resubmitted or dismissed yet).
   // New-leads count: fresh leads assigned to the signed-in BDE, for the CRM
   // nav badge (0 for anyone with no fresh assigned leads).
-  const [pendingCount, rejectedCount, newLeadsCount] = await Promise.all([
+  // Unread-notifications count: HR announcements + CRM notifications for the
+  // signed-in user, for the /me/notifications nav badge.
+  const [pendingCount, rejectedCount, newLeadsCount, notifCount] = await Promise.all([
     prisma.pendingApproval.count({ where: { status: "pending" } }).catch(() => 0),
     prisma.pendingApproval
       .count({ where: { status: "rejected", submittedById: userId } })
       .catch(() => 0),
     countNewLeadsAssignedTo(userId),
+    countUnreadNotifications(userId),
   ]);
 
   return (
@@ -34,6 +38,7 @@ export default async function AppLayout({ children }: { children: React.ReactNod
         pendingCount={pendingCount}
         rejectedCount={rejectedCount}
         newLeadsCount={newLeadsCount}
+        notifCount={notifCount}
       />
       <main className="flex-1 min-w-0 flex flex-col">
         <GroupTabs
@@ -41,6 +46,7 @@ export default async function AppLayout({ children }: { children: React.ReactNod
           pendingCount={pendingCount}
           rejectedCount={rejectedCount}
           newLeadsCount={newLeadsCount}
+          notifCount={notifCount}
         />
         {children}
       </main>

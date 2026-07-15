@@ -16,11 +16,13 @@ export function GroupTabs({
   pendingCount,
   rejectedCount,
   newLeadsCount,
+  notifCount,
 }: {
   perms: Permissions;
   pendingCount: number;
   rejectedCount: number;
   newLeadsCount: number;
+  notifCount: number;
 }) {
   const pathname = usePathname();
 
@@ -47,13 +49,16 @@ export function GroupTabs({
         {pages.map((p) => {
           const active = current.href === p.href;
           // New-leads badge on the CRM Leads tab; approvals badge on the
-          // finance Approvals tab. A tab shows at most one.
+          // finance Approvals tab; unread badge on the Notifications tab. A tab
+          // shows at most one.
           const tabBadge =
             p.href === "/finance/approvals" && canApprove(perms) && pendingCount > 0
               ? pendingCount
               : p.href === "/crm/leads" && newLeadsCount > 0
                 ? newLeadsCount
-                : 0;
+                : p.href === "/me/notifications" && notifCount > 0
+                  ? notifCount
+                  : 0;
           const showWarning =
             p.href === "/finance/approvals" && rejectedCount > 0;
           return (
@@ -82,7 +87,13 @@ export function GroupTabs({
               ) : null}
               {tabBadge > 0 ? (
                 <span
-                  title={p.href === "/crm/leads" ? `${tabBadge} new lead${tabBadge === 1 ? "" : "s"} assigned to you` : undefined}
+                  title={
+                    p.href === "/crm/leads"
+                      ? `${tabBadge} new lead${tabBadge === 1 ? "" : "s"} assigned to you`
+                      : p.href === "/me/notifications"
+                        ? `${tabBadge} unread notification${tabBadge === 1 ? "" : "s"}`
+                        : undefined
+                  }
                   className="text-[10px] font-bold bg-primary text-on-primary px-xs py-[1px] rounded-full min-w-[18px] text-center"
                 >
                   {tabBadge}
