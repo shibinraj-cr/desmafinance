@@ -18,6 +18,16 @@ describe("normalizePhone", () => {
   it("preserves an explicit international + number", () => {
     expect(normalizePhone("+44 7911 123456")).toBe("+447911123456");
   });
+  it("treats the '00' international access code like a leading +", () => {
+    // Qatar number dialled with 00 must match the same number stored bare.
+    expect(normalizePhone("0097450361786")).toBe("+97450361786");
+    expect(normalizePhone("97450361786")).toBe("+97450361786");
+    expect(normalizePhone("0097450361786")).toBe(normalizePhone("97450361786"));
+    // 00 + Indian country code collapses correctly too.
+    expect(normalizePhone("00919876543210")).toBe("+919876543210");
+    // A single domestic trunk 0 is NOT an access code.
+    expect(normalizePhone("09876543210")).toBe("+919876543210");
+  });
   it("returns null for empty / unusable input", () => {
     expect(normalizePhone("")).toBeNull();
     expect(normalizePhone(null)).toBeNull();

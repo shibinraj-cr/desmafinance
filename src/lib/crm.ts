@@ -22,6 +22,15 @@ export function normalizePhone(raw: string | null | undefined): string | null {
     // Already international — keep as-is if it looks like a valid length.
     return digits.length >= 8 && digits.length <= 15 ? `+${digits}` : null;
   }
+  // International access code "00…" is the dialling equivalent of a leading '+'
+  // (e.g. Qatar 0097450361786 → +97450361786). Strip it and treat the rest as an
+  // international number, so the same caller stored with a '+' or a bare country
+  // code is recognised as one identity — checked before the Indian defaults since
+  // a domestic trunk prefix is a single leading 0, never "00".
+  if (digits.startsWith("00")) {
+    const intl = digits.slice(2);
+    return intl.length >= 8 && intl.length <= 15 ? `+${intl}` : null;
+  }
   // Bare 10-digit Indian mobile.
   if (digits.length === 10) return `+91${digits}`;
   // Leading domestic trunk 0 (e.g. 09876543210).
