@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useTransition, useRef } from "react";
+import { useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import { Section } from "@/components/Cards";
 
@@ -41,6 +41,12 @@ type MonthSummary = {
 };
 
 type DateCell = { iso: string; day: number; month: number; weekday: string };
+type Subscription = {
+  expiry: string | null;
+  daysLeft: number | null;
+  tone: "none" | "ok" | "warn" | "expired";
+  label: string;
+};
 
 const STATUS_TONE: Record<string, string> = {
   P: "bg-green-50 text-green-700",
@@ -77,6 +83,7 @@ export function AttendanceClient({
   summary,
   lceGraceDays,
   lceGraceMinutes,
+  subscription,
 }: {
   monthKey: string;
   prevMonth: string;
@@ -90,10 +97,10 @@ export function AttendanceClient({
   summary: Summary;
   lceGraceDays: number;
   lceGraceMinutes: number;
+  subscription: Subscription;
 }) {
   const router = useRouter();
   const [pending, start] = useTransition();
-  const fileRef = useRef<HTMLInputElement | null>(null);
   const [selectedMonth, setSelectedMonth] = useState(monthKey);
   const [uploadStatus, setUploadStatus] = useState<{
     msg: string;
@@ -104,29 +111,40 @@ export function AttendanceClient({
     rangeEnd?: string;
   } | null>(null);
 
-  async function onPick(e: React.ChangeEvent<HTMLInputElement>) {
-    const f = e.target.files?.[0];
-    if (!f) return;
-    setUploadStatus({ msg: "Uploading & parsing…", tone: "info" });
-    const fd = new FormData();
-    fd.append("file", f);
-    const res = await fetch("/api/hr/attendance/upload", { method: "POST", body: fd });
-    const j = await res.json().catch(() => ({}));
-    if (!res.ok) {
-      setUploadStatus({ msg: `Failed: ${j.error || res.statusText}`, tone: "err" });
-      return;
+  const [syncing, setSyncing] = useState(false);
+
+  async function onSync() {
+    if (syncing) return;
+    setSyncing(true);
+    setUploadStatus({ msg: "Fetching punches from eTimeOffice…", tone: "info" });
+    try {
+      // fromDate omitted → the server defaults to (and hard-floors at) the
+      // cutover; toDate omitted → today.
+      const res = await fetch("/api/hr/attendance/etime-sync", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({}),
+      });
+      const j = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        setUploadStatus({ msg: `Sync failed: ${j.message || j.error || res.statusText}`, tone: "err" });
+        return;
+      }
+      const totalInserted = ((j.months ?? []) as MonthSummary[]).reduce((s, m) => s + m.inserted, 0);
+      setUploadStatus({
+        msg: `Fetched ${j.fetched ?? 0} punch records; imported ${totalInserted} day rows across ${j.months?.length ?? 0} cycle(s). Data before ${j.cutover} left untouched.`,
+        tone: "ok",
+        months: j.months,
+        unmatched: j.unmatchedNames ?? [],
+        rangeStart: j.rangeStart ?? undefined,
+        rangeEnd: j.rangeEnd ?? undefined,
+      });
+      start(() => router.refresh());
+    } catch (err) {
+      setUploadStatus({ msg: `Sync failed: ${err instanceof Error ? err.message : "network error"}`, tone: "err" });
+    } finally {
+      setSyncing(false);
     }
-    const totalInserted = (j.months as MonthSummary[]).reduce((s, m) => s + m.inserted, 0);
-    setUploadStatus({
-      msg: `Imported ${totalInserted} day rows across ${j.months.length} cycle(s).`,
-      tone: "ok",
-      months: j.months,
-      unmatched: j.unmatchedNames ?? [],
-      rangeStart: j.rangeStart ?? undefined,
-      rangeEnd: j.rangeEnd ?? undefined,
-    });
-    if (fileRef.current) fileRef.current.value = "";
-    start(() => router.refresh());
   }
 
   function gotoMonth(m: string) {
@@ -137,8 +155,49 @@ export function AttendanceClient({
   // Identify the month boundary within the date strip so we can paint a separator.
   const firstMonth = dateCells[0]?.month;
 
+  const subExpiryLabel = subscription.expiry
+    ? new Date(subscription.expiry + "T00:00:00Z").toLocaleDateString("en-IN", {
+        day: "2-digit",
+        month: "short",
+        year: "numeric",
+        timeZone: "UTC",
+      })
+    : null;
+  const subTone =
+    subscription.tone === "expired"
+      ? "bg-red-100 text-red-800 border-red-300"
+      : subscription.tone === "warn"
+        ? "bg-amber-100 text-amber-800 border-amber-300"
+        : "bg-surface-container text-on-surface-variant border-outline-variant";
+
   return (
     <>
+      {subscription.tone !== "none" && (
+        <div
+          className={
+            "flex flex-wrap items-center gap-xs rounded-lg border px-md py-sm text-label-sm " + subTone
+          }
+        >
+          <span className="material-symbols-outlined text-[18px]">fingerprint</span>
+          <span className="font-semibold">Biometric subscription:</span>
+          <span>{subscription.label}</span>
+          {subExpiryLabel && <span className="opacity-80">· renews {subExpiryLabel}</span>}
+          {canUpload && (
+            <a href="/hr/attendance/settings" className="ml-auto underline font-medium">
+              {subscription.tone === "ok" ? "Manage" : "Renew now →"}
+            </a>
+          )}
+        </div>
+      )}
+      {subscription.tone === "none" && canUpload && (
+        <div className="rounded-lg border border-dashed border-outline-variant px-md py-sm text-label-sm text-on-surface-variant">
+          Set the biometric subscription renewal date to enable expiry alerts —{" "}
+          <a href="/hr/attendance/settings" className="text-primary underline">
+            Biometric Sync settings
+          </a>
+          .
+        </div>
+      )}
       <Section title="">
         <div className="flex flex-wrap items-center gap-sm">
           <button
@@ -169,25 +228,26 @@ export function AttendanceClient({
             <>
               <button
                 type="button"
-                onClick={() => fileRef.current?.click()}
-                disabled={pending}
-                className="ml-auto px-md py-sm rounded bg-primary text-on-primary font-bold disabled:opacity-50"
+                onClick={onSync}
+                disabled={syncing || pending}
+                title="Fetch in/out punches from the eTimeOffice biometric cloud (earlier data is never modified)"
+                className="ml-auto px-md py-sm rounded border border-primary text-primary font-bold disabled:opacity-50"
               >
-                Upload biometric report (.xls / .xlsx)
+                {syncing ? "Syncing…" : "Sync from eTimeOffice"}
               </button>
-              <input
-                ref={fileRef}
-                type="file"
-                accept=".xls,.xlsx"
-                className="hidden"
-                onChange={onPick}
-              />
+              <a
+                href="/hr/attendance/settings"
+                title="Configure the eTimeOffice biometric sync"
+                className="px-sm py-sm rounded border border-outline-variant text-on-surface-variant hover:bg-surface-container-low"
+              >
+                ⚙
+              </a>
             </>
           )}
         </div>
         <p className="text-caption text-on-surface-variant mt-sm">
-          Salary cycle: 26th of previous month → 25th of current month. The file can span any
-          range; rows are bucketed into the matching cycle automatically.
+          Salary cycle: 26th of previous month → 25th of current month. Attendance is pulled
+          automatically from the eTimeOffice biometric cloud.
         </p>
         {uploadStatus && (
           <div

@@ -16,6 +16,7 @@ import {
   type LateTag,
 } from "@/lib/hr-data";
 import { computeMonthlyLeaveLedger, paidLeaveCoveredByDay } from "@/lib/hr-leave-balance";
+import { getSubscriptionStatus } from "@/lib/etimeoffice-subscription";
 import { AttendanceClient } from "./client";
 
 export const dynamic = "force-dynamic";
@@ -47,6 +48,7 @@ export default async function HrAttendancePage({
       : cycleMonthForDate(today);
   const { start, end } = cycleWindowForMonth(requested);
   const dates = cycleDates(requested);
+  const subscription = await getSubscriptionStatus();
 
   const [uploads, days, employeesRaw] = await Promise.all([
     prisma.hrAttendanceUpload.findMany({
@@ -192,6 +194,7 @@ export default async function HrAttendancePage({
           cycleLabel={cycleLabel}
           dateCells={dateCells}
           canUpload={canApproveHr(perms)}
+          subscription={subscription}
           uploads={uploads.map((u) => ({
             id: u.id,
             filename: u.filename ?? "(no filename)",
