@@ -47,7 +47,7 @@ export const ABSENT_THRESHOLD_MIN = 180; // 3 h
 // exempt below. Saturday late / early-out are recomputed against this window
 // (the biometric computes them against the weekday shift, which is wrong for
 // Saturday), and late-coming (LCE/AL) applies from 09:00.
-const SATURDAY_START_MIN = 9 * 60; // 09:00
+export const SATURDAY_START_MIN = 9 * 60; // 09:00
 export const SATURDAY_END_MIN = 16 * 60; // 16:00 — Saturday shift end / out-time cap
 
 // Employees who do NOT follow the standard 9:00–16:00 Saturday rule — their
@@ -199,6 +199,13 @@ export function normaliseStatus(
   date: Date,
   inTime: string | null,
   outTime: string | null,
+  /**
+   * Whether the day is finished. On an IN-PROGRESS day (today / future — the
+   * employee has clocked in but the out-punch simply hasn't happened yet) a lone
+   * IN punch is NOT a missing-punch violation. Only completed days treat a single
+   * punch as a half-day pending regularization. Defaults true (historical data).
+   */
+  dayComplete: boolean = true,
 ): string {
   const raw0 = String(raw ?? "").trim().toUpperCase();
   // Treat biometric placeholders ("--", "--:--") as "no status reported".
@@ -216,7 +223,13 @@ export function normaliseStatus(
   // counts as a half-day pending a punch regularization. Covers biometric P / A
   // / blank-placeholder rows alike (e.g. Sivapriya 17 Apr 2026: out-only, status
   // "--:--" — previously ignored entirely by payroll).
-  if (hasIn !== hasOut) return "HD";
+  if (hasIn !== hasOut) {
+    // …EXCEPT on an in-progress day: a lone IN punch means the employee is still
+    // at work and the OUT punch is simply in the future. Keep it Present — don't
+    // dock a half-day for a day that isn't over yet.
+    if (!dayComplete && hasIn && !hasOut) return "P";
+    return "HD";
+  }
 
   if (s === "A" || s === "AB") return "A";
   if (s === "P" || s === "PR" || s === "") {
