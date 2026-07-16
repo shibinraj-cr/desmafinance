@@ -1,6 +1,7 @@
 import Link from "next/link";
 import type { ServiceMatrix } from "@/lib/lead-pulse-metrics";
 import { getScorecardExcludedUserIds } from "@/lib/crm-team";
+import { SCORECARD_EXCLUDED_DISPLAY_NAMES } from "@/lib/crm-score";
 import { TargetAchievementChart } from "./_charts";
 
 /**
@@ -24,11 +25,16 @@ export async function TargetAchievementCard({
   month?: number;
 }) {
   // Team leads oversee the team but aren't scored individual contributors —
-  // drop them from the achievement rollup, the same rule the L2 Scorecard
-  // applies (admins + holders of the /crm/team-all marker).
+  // drop them from the achievement rollup, mirroring the L2 Scorecard's rule:
+  // the /crm/team-all role marker (getScorecardExcludedUserIds) PLUS the
+  // name-based belt-and-suspenders list, so a lead whose marker isn't set is
+  // still excluded here exactly as they are on the scorecard.
   const excludedIds = await getScorecardExcludedUserIds(matrix.bdes.map((b) => b.userId));
+  const isExcluded = (b: { userId: string; displayName: string }) =>
+    excludedIds.has(b.userId) ||
+    SCORECARD_EXCLUDED_DISPLAY_NAMES.includes(b.displayName.trim().toLowerCase());
   const rows = matrix.bdes
-    .filter((b) => !excludedIds.has(b.userId))
+    .filter((b) => !isExcluded(b))
     .map((b) => {
       let actual = 0;
       let target = 0;
