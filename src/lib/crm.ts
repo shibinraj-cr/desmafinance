@@ -22,23 +22,23 @@ export function normalizePhone(raw: string | null | undefined): string | null {
     // Already international — keep as-is if it looks like a valid length.
     return digits.length >= 8 && digits.length <= 15 ? `+${digits}` : null;
   }
-  // International access code "00…" is the dialling equivalent of a leading '+'
-  // (e.g. Qatar 0097450361786 → +97450361786). Strip it and treat the rest as an
-  // international number, so the same caller stored with a '+' or a bare country
-  // code is recognised as one identity — checked before the Indian defaults since
-  // a domestic trunk prefix is a single leading 0, never "00".
-  if (digits.startsWith("00")) {
-    const intl = digits.slice(2);
-    return intl.length >= 8 && intl.length <= 15 ? `+${intl}` : null;
-  }
-  // Bare 10-digit Indian mobile.
-  if (digits.length === 10) return `+91${digits}`;
-  // Leading domestic trunk 0 (e.g. 09876543210).
-  if (digits.length === 11 && digits.startsWith("0")) return `+91${digits.slice(1)}`;
-  // 91XXXXXXXXXX.
-  if (digits.length === 12 && digits.startsWith("91")) return `+${digits}`;
-  // Anything else of a plausible international length — pass through.
-  if (digits.length >= 11 && digits.length <= 15) return `+${digits}`;
+
+  // Strip a leading run of zeros before interpreting the number. A single 0 is a
+  // domestic trunk prefix (09876543210); a run of them (00, 000, …) is an
+  // international access code — the dialling equivalent of a leading '+'. E.164
+  // numbers never carry leading zeros after the country code, so removing them is
+  // safe and makes the same caller dialled as 9876543210 / 09876543210 /
+  // 0097450361786 / 00091… collapse to one canonical value. That way a Voxbay
+  // call written with leading zeros matches the country-coded number the CRM
+  // stored (and vice-versa).
+  const bare = digits.replace(/^0+/, "");
+  if (!bare) return null;
+
+  // A bare 10-digit number is assumed to be an Indian mobile (the default market).
+  if (bare.length === 10) return `+91${bare}`;
+  // Otherwise it already carries a country code (91XXXXXXXXXX, 97450361786,
+  // 447911123456, …) — pass it through at any plausible international length.
+  if (bare.length >= 11 && bare.length <= 15) return `+${bare}`;
   return null;
 }
 
