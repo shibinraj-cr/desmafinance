@@ -18,6 +18,21 @@ describe("normalizePhone", () => {
   it("preserves an explicit international + number", () => {
     expect(normalizePhone("+44 7911 123456")).toBe("+447911123456");
   });
+  it("collapses leading-zero access codes so they match the country-coded form", () => {
+    // A caller dialled with 00/000… must match the same number the CRM stored
+    // with a country code or bare — every variant → one canonical E.164.
+    const canonicalQatar = "+97450361786";
+    expect(normalizePhone("0097450361786")).toBe(canonicalQatar); // 00 access code
+    expect(normalizePhone("00097450361786")).toBe(canonicalQatar); // 000 access code
+    expect(normalizePhone("97450361786")).toBe(canonicalQatar); // bare country code
+    expect(normalizePhone("+974 5036 1786")).toBe(canonicalQatar); // explicit +
+    // An Indian number stored as +91… matches a Voxbay call with leading zeros.
+    const canonicalIndia = "+919876543210";
+    expect(normalizePhone("919876543210")).toBe(canonicalIndia); // country code
+    expect(normalizePhone("00919876543210")).toBe(canonicalIndia); // 00 + country code
+    expect(normalizePhone("09876543210")).toBe(canonicalIndia); // single trunk 0
+    expect(normalizePhone("9876543210")).toBe(canonicalIndia); // bare 10-digit
+  });
   it("returns null for empty / unusable input", () => {
     expect(normalizePhone("")).toBeNull();
     expect(normalizePhone(null)).toBeNull();
