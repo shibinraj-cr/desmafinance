@@ -186,6 +186,15 @@ export const MODULES: AppModule[] = [
         group: "ACTIVITY",
       },
       {
+        // Personal in-app notifications (e.g. a lead was assigned to you). Its own
+        // group so it gets a dedicated, unread-badged item in the CRM left-nav.
+        // Visibility is handled in canSeePage (any CRM user), not Role.pages.
+        href: "/crm/notifications",
+        label: "Notifications",
+        icon: "notifications",
+        group: "NOTIFICATIONS",
+      },
+      {
         href: "/crm/leads",
         label: "Leads",
         icon: "groups",

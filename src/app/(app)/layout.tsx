@@ -2,7 +2,7 @@ import { redirect } from "next/navigation";
 import { prisma } from "@/lib/prisma";
 import { getCurrentUserAndPermissions } from "@/lib/permissions";
 import { countNewLeadsAssignedTo } from "@/lib/crm-leads";
-import { countUnreadNotifications } from "@/lib/notifications";
+import { countUnreadCrmNotifications } from "@/lib/crm-notify";
 import { SideNav } from "@/components/SideNav";
 import { GroupTabs } from "@/components/GroupTabs";
 import { RouteProgress } from "@/components/RouteProgress";
@@ -20,16 +20,16 @@ export default async function AppLayout({ children }: { children: React.ReactNod
   // nav badge (0 for anyone with no fresh assigned leads).
   // Open-tasks badge: ad-hoc operations tasks assigned to the signed-in user
   // and not yet done, for the "My Tasks" nav item (0 for anyone with none).
-  // Unread-notifications count: HR announcements + CRM notifications for the
-  // signed-in user, for the /me/notifications nav badge.
-  const [pendingCount, rejectedCount, newLeadsCount, myOpenTasksCount, notifCount] = await Promise.all([
+  // Unread CRM notifications for the signed-in user, for the CRM
+  // "Notifications" nav badge (0 for anyone with none).
+  const [pendingCount, rejectedCount, newLeadsCount, myOpenTasksCount, crmNotifCount] = await Promise.all([
     prisma.pendingApproval.count({ where: { status: "pending" } }).catch(() => 0),
     prisma.pendingApproval
       .count({ where: { status: "rejected", submittedById: userId } })
       .catch(() => 0),
     countNewLeadsAssignedTo(userId),
     prisma.opsActionItem.count({ where: { assignedToId: userId, status: "open" } }).catch(() => 0),
-    countUnreadNotifications(userId),
+    countUnreadCrmNotifications(userId),
   ]);
 
   return (
@@ -46,7 +46,7 @@ export default async function AppLayout({ children }: { children: React.ReactNod
         rejectedCount={rejectedCount}
         newLeadsCount={newLeadsCount}
         myOpenTasksCount={myOpenTasksCount}
-        notifCount={notifCount}
+        crmNotifCount={crmNotifCount}
       />
       <main className="flex-1 min-w-0 flex flex-col">
         <GroupTabs
@@ -55,7 +55,7 @@ export default async function AppLayout({ children }: { children: React.ReactNod
           rejectedCount={rejectedCount}
           newLeadsCount={newLeadsCount}
           myOpenTasksCount={myOpenTasksCount}
-          notifCount={notifCount}
+          crmNotifCount={crmNotifCount}
         />
         {children}
       </main>

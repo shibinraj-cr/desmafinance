@@ -78,7 +78,7 @@ export function needsApproval(p?: Permissions | null): boolean {
 // they stay visible without having to add them to each (current or future)
 // role's Role.pages. The route-level guards on these pages already handle
 // the "login not linked to an employee" case gracefully.
-export const ALWAYS_VISIBLE_PAGES = ["/me/attendance", "/me/regularization", "/me/notifications"];
+export const ALWAYS_VISIBLE_PAGES = ["/me/attendance", "/me/regularization"];
 
 // Hard admin-only pages: hidden from EVERY non-admin's nav even when a role
 // still carries the href in Role.pages. Distinct from the cosmetic `adminOnly`
@@ -100,6 +100,12 @@ export function canSeePage(p: Permissions, href: string): boolean {
   if (ADMIN_RESTRICTED_PAGES.some((pg) => href === pg || href.startsWith(pg + "/"))) return false;
   // Self-service essentials everyone can see.
   if (ALWAYS_VISIBLE_PAGES.some((pg) => href === pg || href.startsWith(pg + "/"))) return true;
+  // CRM notifications are personal to every CRM user — visible to anyone who can
+  // reach the CRM Leads page, so they need no separate Role.pages grant (and
+  // never leak the CRM module to non-CRM users, who can't see /crm/leads).
+  if (href === "/crm/notifications" || href.startsWith("/crm/notifications/")) {
+    return p.pages.some((pg) => pg === "/crm/leads" || pg.startsWith("/crm/leads/"));
+  }
   // Exact match or prefix match (e.g. allowing /daily-tracker permits
   // /daily-tracker/[id]/edit too).
   return p.pages.some((pg) => href === pg || href.startsWith(pg + "/"));
