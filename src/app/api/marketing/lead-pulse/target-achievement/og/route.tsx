@@ -5,6 +5,7 @@ import { getLeadPulseAccess } from "@/lib/lead-pulse-rbac";
 import { getPipelineForecast } from "@/lib/lead-pulse-metrics";
 import { resolveServiceMatrix } from "@/lib/lead-pulse-crm-metrics";
 import { getScorecardExcludedUserIds } from "@/lib/crm-team";
+import { SCORECARD_EXCLUDED_DISPLAY_NAMES } from "@/lib/crm-score";
 import { prisma } from "@/lib/prisma";
 import { todayIst } from "@/lib/lead-pulse-dates";
 
@@ -62,10 +63,15 @@ export async function GET(req: NextRequest) {
   ]);
 
   // Team leads oversee the team but aren't scored individual contributors —
-  // drop them so the PNG matches the on-screen card.
+  // drop them so the PNG matches the on-screen card (role marker + the
+  // name-based belt-and-suspenders list, same as the L2 Scorecard).
   const excludedIds = await getScorecardExcludedUserIds(matrix.bdes.map((b) => b.userId));
   const rows = matrix.bdes
-    .filter((b) => !excludedIds.has(b.userId))
+    .filter(
+      (b) =>
+        !excludedIds.has(b.userId) &&
+        !SCORECARD_EXCLUDED_DISPLAY_NAMES.includes(b.displayName.trim().toLowerCase()),
+    )
     .map((b) => {
       let actual = 0;
       let target = 0;
