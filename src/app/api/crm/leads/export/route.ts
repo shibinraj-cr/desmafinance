@@ -5,6 +5,7 @@ import { withApiHandler } from "@/lib/api";
 import { unauthorized, forbidden } from "@/lib/http-error";
 import { getCurrentUserAndPermissions } from "@/lib/permissions";
 import { getCrmAccess } from "@/lib/crm-rbac";
+import { leadTemperatureMeta } from "@/lib/crm";
 import { parseAgeParam } from "@/lib/age";
 import { parsePeriod, rangeFor } from "@/lib/period";
 import {
@@ -45,6 +46,7 @@ export const GET = withApiHandler(async (req: Request) => {
     service: sp.get("service") || undefined,
     assignee: resolveAssigneeFilter(sp.get("assignee") || undefined, { isBde: access.isBde, userId }),
     campaign: sp.get("campaign") || undefined,
+    temperature: sp.get("temperature") || undefined,
     country: sp.get("country") || undefined,
     studyDestination: sp.get("studyDestination") || undefined,
     ageMin: parseAgeParam(sp.get("ageMin")),
@@ -70,6 +72,7 @@ export const GET = withApiHandler(async (req: Request) => {
       Source: l.source?.label ?? "",
       Campaign: l.campaign ?? "",
       Status: l.status.label,
+      Temperature: leadTemperatureMeta(l.temperature)?.label ?? "",
       Candidate: l.candidateName,
       Email: l.email ?? "",
       Phone: l.phone ?? "",
@@ -86,11 +89,11 @@ export const GET = withApiHandler(async (req: Request) => {
   });
 
   const ws = XLSX.utils.json_to_sheet(data, {
-    header: ["Created", "Source", "Campaign", "Status", "Candidate", "Email", "Phone", "Alt Phone", "DOB", "Age", "Country", "Study Destination", "Service", "Qualification", "Consultant", "Assigned"],
+    header: ["Created", "Source", "Campaign", "Status", "Temperature", "Candidate", "Email", "Phone", "Alt Phone", "DOB", "Age", "Country", "Study Destination", "Service", "Qualification", "Consultant", "Assigned"],
   });
   // Reasonable column widths.
   ws["!cols"] = [
-    { wch: 20 }, { wch: 14 }, { wch: 22 }, { wch: 14 }, { wch: 22 },
+    { wch: 20 }, { wch: 14 }, { wch: 22 }, { wch: 14 }, { wch: 12 }, { wch: 22 },
     { wch: 26 }, { wch: 16 }, { wch: 16 }, { wch: 12 }, { wch: 6 }, { wch: 16 }, { wch: 18 }, { wch: 22 }, { wch: 16 }, { wch: 18 }, { wch: 20 },
   ];
   const wb = XLSX.utils.book_new();

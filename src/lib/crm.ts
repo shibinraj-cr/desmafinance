@@ -88,6 +88,35 @@ export function phoneMatchKeys(
 /** Fallback pill colour for a status with no explicit `color`. */
 export const DEFAULT_STATUS_COLOR = "#9aa0a6";
 
+// ── Lead temperature (Hot / Warm / Cold) ────────────────────────────────────
+// A fixed, admin-free classification of how hot an opportunity is. Stored as a
+// lowercase code on `Lead.temperature` (null = not yet rated). These pure
+// definitions are shared by the leads list, the detail editor, and the filter
+// wiring so labels/colours never drift.
+
+export type LeadTemperature = "hot" | "warm" | "cold";
+
+/** Ordered hottest → coldest (drives dropdown order). */
+export const LEAD_TEMPERATURES: { value: LeadTemperature; label: string; color: string }[] = [
+  { value: "hot", label: "Hot", color: "#ef4444" }, // red
+  { value: "warm", label: "Warm", color: "#f59e0b" }, // amber
+  { value: "cold", label: "Cold", color: "#3b82f6" }, // blue
+];
+
+/** Just the valid codes — used for validation and `in` checks. */
+export const LEAD_TEMPERATURE_VALUES = LEAD_TEMPERATURES.map((t) => t.value) as LeadTemperature[];
+
+/** Narrow an arbitrary string to a valid temperature code, or null. */
+export function normalizeTemperature(v: string | null | undefined): LeadTemperature | null {
+  const c = v?.trim().toLowerCase();
+  return (LEAD_TEMPERATURE_VALUES as string[]).includes(c ?? "") ? (c as LeadTemperature) : null;
+}
+
+/** Label + colour for a temperature code (null for an unset/unknown value). */
+export function leadTemperatureMeta(v: string | null | undefined) {
+  return LEAD_TEMPERATURES.find((t) => t.value === v) ?? null;
+}
+
 /** Render an email/whatsapp/call template with `{name}` / `{service}` / `{consultant}` merge fields. */
 export function renderTemplate(
   template: string,

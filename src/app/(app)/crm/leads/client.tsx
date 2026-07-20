@@ -5,7 +5,7 @@ import { createPortal } from "react-dom";
 import Link from "next/link";
 import { useRouter, usePathname, useSearchParams } from "next/navigation";
 import { type LeadRow, isActionOnlyStatus } from "@/lib/crm-leads";
-import { DEFAULT_STATUS_COLOR, BULK_EMAIL_MERGE_FIELDS, fillTemplate, type MessageTemplateDTO } from "@/lib/crm";
+import { DEFAULT_STATUS_COLOR, BULK_EMAIL_MERGE_FIELDS, fillTemplate, LEAD_TEMPERATURES, leadTemperatureMeta, type MessageTemplateDTO } from "@/lib/crm";
 import { ageFromDob } from "@/lib/age";
 import { COUNTRIES } from "@/lib/countries";
 
@@ -119,6 +119,20 @@ export function StatusPill({ status }: { status: { label: string; color: string 
       style={{ backgroundColor: `${color}22`, color, border: `1px solid ${color}66` }}
     >
       {status.label}
+    </span>
+  );
+}
+
+/** Hot / Warm / Cold pill. Renders nothing (an em dash) when unrated. */
+export function TemperaturePill({ temperature }: { temperature: string | null }) {
+  const meta = leadTemperatureMeta(temperature);
+  if (!meta) return <span className="text-on-surface-variant">—</span>;
+  return (
+    <span
+      className="px-xs py-[2px] rounded-full text-[10px] font-bold uppercase tracking-wider whitespace-nowrap"
+      style={{ backgroundColor: `${meta.color}22`, color: meta.color, border: `1px solid ${meta.color}66` }}
+    >
+      {meta.label}
     </span>
   );
 }
@@ -254,6 +268,7 @@ function NewLeadButton({ masters, access }: { masters: Masters; access: LeadsAcc
     dob: "",
     country: "",
     studyDestination: "",
+    temperature: "",
     statusId: "",
     assignedToId: "",
   });
@@ -297,6 +312,7 @@ function NewLeadButton({ masters, access }: { masters: Masters; access: LeadsAcc
         dob: form.dob || undefined,
         country: form.country || undefined,
         studyDestination: isStudyAbroad ? form.studyDestination || undefined : undefined,
+        temperature: form.temperature || undefined,
         statusId: form.statusId || undefined,
         assignedToId: access.canAssign ? form.assignedToId || undefined : undefined,
       }),
@@ -318,6 +334,7 @@ function NewLeadButton({ masters, access }: { masters: Masters; access: LeadsAcc
       dob: "",
       country: "",
       studyDestination: "",
+      temperature: "",
       statusId: "",
       assignedToId: "",
     });
@@ -446,6 +463,20 @@ function NewLeadButton({ masters, access }: { masters: Masters; access: LeadsAcc
                       ))}
                   </select>
                 </Field>
+                <Field label="Temperature">
+                  <select
+                    className={inputCls}
+                    value={form.temperature}
+                    onChange={(e) => setForm({ ...form, temperature: e.target.value })}
+                  >
+                    <option value="">— Unrated</option>
+                    {LEAD_TEMPERATURES.map((t) => (
+                      <option key={t.value} value={t.value}>
+                        {t.label}
+                      </option>
+                    ))}
+                  </select>
+                </Field>
               </div>
               <Field label={`Date of birth${dobAge !== null ? ` — age ${dobAge}` : ""}`}>
                 <input
@@ -531,7 +562,7 @@ const SORT_OPTIONS: { value: string; label: string }[] = [
 // fixed). Order is remembered per browser in localStorage.
 const LEADS_COL_ORDER_KEY = "crm.leads.columnOrder.v1";
 const LEADS_DEFAULT_COLUMNS = [
-  "created", "source", "campaign", "status", "candidate", "email", "phone", "age", "country", "studyDestination", "service", "qualification", "consultant", "assigned",
+  "created", "source", "campaign", "status", "temperature", "candidate", "email", "phone", "age", "country", "studyDestination", "service", "qualification", "consultant", "assigned",
 ] as const;
 
 export function LeadsTable({
@@ -675,6 +706,7 @@ export function LeadsTable({
     !!search.get("service") ||
     assigneeIsFilter ||
     !!search.get("campaign") ||
+    !!search.get("temperature") ||
     !!search.get("country") ||
     !!search.get("studyDestination") ||
     !!search.get("ageMin") ||
@@ -724,6 +756,23 @@ export function LeadsTable({
         ),
     },
     { id: "status", label: "Status", className: "", render: (l) => <StatusPill status={l.status} /> },
+    {
+      id: "temperature",
+      label: "Temperature",
+      className: "whitespace-nowrap",
+      render: (l) =>
+        l.temperature ? (
+          <button
+            type="button"
+            onClick={() => update({ temperature: l.temperature })}
+            title={`Filter by ${leadTemperatureMeta(l.temperature)?.label ?? l.temperature}`}
+          >
+            <TemperaturePill temperature={l.temperature} />
+          </button>
+        ) : (
+          <TemperaturePill temperature={null} />
+        ),
+    },
     {
       id: "candidate",
       label: "Candidate",
@@ -907,6 +956,15 @@ export function LeadsTable({
             ))}
           </select>
         )}
+
+        <select className={selectClass} value={search.get("temperature") ?? ""} onChange={(e) => update({ temperature: e.target.value || null })}>
+          <option value="">All temperatures</option>
+          {LEAD_TEMPERATURES.map((t) => (
+            <option key={t.value} value={t.value}>
+              {t.label}
+            </option>
+          ))}
+        </select>
 
         {masters.countries.length > 0 && (
           <select className={selectClass} value={search.get("country") ?? ""} onChange={(e) => update({ country: e.target.value || null })}>

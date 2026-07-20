@@ -1,6 +1,7 @@
 import { Prisma } from "@prisma/client";
 import { prisma } from "./prisma";
 import { ageFromDob, dobRangeForAge } from "./age";
+import { normalizeTemperature, type LeadTemperature } from "./crm";
 
 // Shared include + serialiser so the list API, detail page and import flow all
 // emit the same plain (serialisable) row shape to client components.
@@ -36,6 +37,8 @@ export type LeadRow = {
   assignedAt: string | null;
   party: { id: string; name: string } | null;
   campaign: string | null;
+  /** Hot / Warm / Cold rating (`'hot' | 'warm' | 'cold'`), or null if unrated. */
+  temperature: LeadTemperature | null;
   /** Official date of birth as `YYYY-MM-DD` (date-only), or null. */
   dob: string | null;
   /** Age in whole years, derived from `dob` at serialize time (always current). */
@@ -81,6 +84,7 @@ export function serializeLead(l: LeadWithRels): LeadRow {
     assignedAt: l.assignedAt ? l.assignedAt.toISOString() : null,
     party: l.party ? { id: l.party.id, name: l.party.name } : null,
     campaign: l.campaign,
+    temperature: normalizeTemperature(l.temperature),
     // Date-only ISO (drop the time) + age derived relative to now.
     dob: l.dob ? l.dob.toISOString().slice(0, 10) : null,
     age: ageFromDob(l.dob, new Date()),
@@ -107,6 +111,8 @@ export type LeadFilterParams = {
    */
   assignee?: string;
   campaign?: string;
+  /** Lead temperature code (`'hot' | 'warm' | 'cold'`). Invalid values are ignored. */
+  temperature?: string;
   country?: string;
   studyDestination?: string;
   /** Inclusive minimum age in years (translated to a `dob` upper bound). */
@@ -149,6 +155,10 @@ export function buildLeadWhere(p: LeadFilterParams): Prisma.LeadWhereInput {
   if (p.assignee === "unassigned") where.assignedToId = null;
   else if (p.assignee && p.assignee !== "all") where.assignedToId = p.assignee;
   if (p.campaign) where.campaign = p.campaign;
+  // Only apply the temperature filter for a recognised code (guards against a
+  // stray/legacy query value silently matching nothing).
+  const temperature = normalizeTemperature(p.temperature);
+  if (temperature) where.temperature = temperature;
   if (p.country) where.country = p.country;
   if (p.studyDestination) where.studyDestination = p.studyDestination;
   // Age filter → indexed `dob` range. A candidate with no dob never matches an

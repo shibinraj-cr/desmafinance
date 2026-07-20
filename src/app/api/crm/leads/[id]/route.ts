@@ -8,7 +8,7 @@ import { getCurrentUserAndPermissions } from "@/lib/permissions";
 import { getCrmAccess, canEditLead } from "@/lib/crm-rbac";
 import { recordLeadActivity } from "@/lib/crm-activity";
 import { recordAudit } from "@/lib/audit";
-import { normalizePhone, computeDedupeKey, emailKeyOf } from "@/lib/crm";
+import { normalizePhone, computeDedupeKey, emailKeyOf, LEAD_TEMPERATURE_VALUES } from "@/lib/crm";
 import { parseDobInput } from "@/lib/age";
 import { leadRowInclude, serializeLead, isActionOnlyStatus } from "@/lib/crm-leads";
 
@@ -49,6 +49,11 @@ const PatchSchema = z.object({
   ),
   country: z.string().trim().max(100).nullable().optional(),
   studyDestination: z.string().trim().max(100).nullable().optional(),
+  // Hot / Warm / Cold rating; "" / null clears it.
+  temperature: z.preprocess(
+    (v) => (v === "" ? null : v),
+    z.enum(LEAD_TEMPERATURE_VALUES as [string, ...string[]]).nullable().optional(),
+  ),
   extra: z.record(z.string()).nullable().optional(),
 });
 
@@ -63,6 +68,7 @@ const FIELD_LABELS: Record<string, string> = {
   dob: "Date of birth",
   country: "Country",
   studyDestination: "Study Destination",
+  temperature: "Temperature",
   extra: "Extra info",
 };
 
@@ -132,6 +138,10 @@ export const PATCH = withApiHandler(async (req: Request, { params }: Ctx) => {
   if (d.studyDestination !== undefined && clean(d.studyDestination) !== existing.studyDestination) {
     update.studyDestination = clean(d.studyDestination);
     fieldDiff.studyDestination = { from: existing.studyDestination, to: clean(d.studyDestination) };
+  }
+  if (d.temperature !== undefined && clean(d.temperature) !== existing.temperature) {
+    update.temperature = clean(d.temperature);
+    fieldDiff.temperature = { from: existing.temperature, to: clean(d.temperature) };
   }
   if (d.extra !== undefined) {
     const next = d.extra ?? null;

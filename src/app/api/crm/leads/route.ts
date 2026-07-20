@@ -8,7 +8,7 @@ import { getCurrentUserAndPermissions } from "@/lib/permissions";
 import { getCrmAccess } from "@/lib/crm-rbac";
 import { recordLeadActivity } from "@/lib/crm-activity";
 import { notifyLeadAssigned } from "@/lib/crm-notify";
-import { normalizePhone, computeDedupeKey, emailKeyOf, phoneMatchKeys } from "@/lib/crm";
+import { normalizePhone, computeDedupeKey, emailKeyOf, phoneMatchKeys, LEAD_TEMPERATURE_VALUES } from "@/lib/crm";
 import { parseDobInput, parseAgeParam } from "@/lib/age";
 import { parsePeriod, rangeFor } from "@/lib/period";
 import {
@@ -52,6 +52,7 @@ export const GET = withApiHandler(async (req: Request) => {
     service: sp.get("service") || undefined,
     assignee: resolveAssigneeFilter(sp.get("assignee") || undefined, { isBde: access.isBde, userId }),
     campaign: sp.get("campaign") || undefined,
+    temperature: sp.get("temperature") || undefined,
     country: sp.get("country") || undefined,
     studyDestination: sp.get("studyDestination") || undefined,
     ageMin: parseAgeParam(sp.get("ageMin")),
@@ -96,6 +97,11 @@ const CreateSchema = z.object({
   ),
   country: z.string().trim().max(100).optional(),
   studyDestination: z.string().trim().max(100).optional(),
+  // Hot / Warm / Cold rating. "" is treated as "unset".
+  temperature: z.preprocess(
+    (v) => (v === "" ? undefined : v),
+    z.enum(LEAD_TEMPERATURE_VALUES as [string, ...string[]]).optional(),
+  ),
   extra: z.record(z.string()).optional(),
 });
 
@@ -198,6 +204,7 @@ export const POST = withApiHandler(async (req: Request) => {
       dob: parseDobInput(data.dob) ?? null,
       country: data.country || null,
       studyDestination: data.studyDestination || null,
+      temperature: data.temperature ?? null,
       extra: data.extra ?? undefined,
       createdById: userId,
     },
