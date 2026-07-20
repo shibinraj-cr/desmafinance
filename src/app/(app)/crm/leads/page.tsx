@@ -68,6 +68,7 @@ export default async function LeadsPage({ searchParams }: { searchParams: SP }) 
     // or explicitly choose "All leads"; everyone else sees all leads.
     assignee: resolveAssigneeFilter(str(searchParams, "assignee"), { isBde: access.isBde, userId }),
     campaign: str(searchParams, "campaign"),
+    temperature: str(searchParams, "temperature"),
     country: str(searchParams, "country"),
     studyDestination: str(searchParams, "studyDestination"),
     ageMin: parseAgeParam(str(searchParams, "ageMin")),

@@ -6,10 +6,10 @@ import { useRouter } from "next/navigation";
 import Link from "next/link";
 import type { LeadRow, NoteRow, ActivityRow, TaskRow } from "@/lib/crm-leads";
 import { isActionOnlyStatus } from "@/lib/crm-leads";
-import { buildLeadMergeVars, fillTemplate, type MessageTemplateDTO } from "@/lib/crm";
+import { buildLeadMergeVars, fillTemplate, LEAD_TEMPERATURES, type MessageTemplateDTO } from "@/lib/crm";
 import { ageFromDob } from "@/lib/age";
 import { COUNTRIES } from "@/lib/countries";
-import { StatusPill, type StatusOpt, type Opt, type BdeOpt } from "../client";
+import { StatusPill, TemperaturePill, type StatusOpt, type Opt, type BdeOpt } from "../client";
 import { EnrollCelebration } from "@/components/EnrollCelebration";
 import { NextStepDialog, type NextStepPayload } from "@/components/crm/NextStepDialog";
 
@@ -464,6 +464,7 @@ function SummaryCard({ lead, masters, canEdit }: { lead: LeadRow; masters: Detai
     dob: lead.dob ?? "",
     country: lead.country ?? "",
     studyDestination: lead.studyDestination ?? "",
+    temperature: lead.temperature ?? "",
     statusId: lead.status.id,
   });
 
@@ -495,6 +496,7 @@ function SummaryCard({ lead, masters, canEdit }: { lead: LeadRow; masters: Detai
         dob: draft.dob,
         country: draft.country,
         studyDestination: isStudyAbroad ? draft.studyDestination : undefined,
+        temperature: draft.temperature,
         statusId: draft.statusId,
       }),
     });
@@ -623,6 +625,16 @@ function SummaryCard({ lead, masters, canEdit }: { lead: LeadRow; masters: Detai
                 ))}
             </select>
           </Field>
+          <Field label="Temperature">
+            <select className={inputCls} value={draft.temperature} onChange={(e) => setDraft({ ...draft, temperature: e.target.value })}>
+              <option value="">— Unrated</option>
+              {LEAD_TEMPERATURES.map((t) => (
+                <option key={t.value} value={t.value}>
+                  {t.label}
+                </option>
+              ))}
+            </select>
+          </Field>
           <div className="flex justify-end gap-base">
             <button type="button" className={secondaryBtn} disabled={busy} onClick={() => setEditing(false)}>
               Cancel
@@ -641,6 +653,7 @@ function SummaryCard({ lead, masters, canEdit }: { lead: LeadRow; masters: Detai
           <Row label="Source" value={lead.source?.label ?? "—"} />
           <Row label="Service" value={lead.service?.name ?? "—"} />
           <Row label="Qualification" value={lead.qualification?.label ?? "—"} />
+          <Row label="Temperature" value={<TemperaturePill temperature={lead.temperature} />} />
           {lead.dob && <Row label="Date of birth" value={lead.dob} />}
           {lead.age !== null && <Row label="Age" value={`${lead.age} yrs`} />}
           <Row label="Country" value={lead.country ?? "—"} />
@@ -660,7 +673,7 @@ function SummaryCard({ lead, masters, canEdit }: { lead: LeadRow; masters: Detai
   );
 }
 
-function Row({ label, value }: { label: string; value: string }) {
+function Row({ label, value }: { label: string; value: React.ReactNode }) {
   return (
     <div className="flex justify-between gap-md">
       <dt className="text-on-surface-variant">{label}</dt>

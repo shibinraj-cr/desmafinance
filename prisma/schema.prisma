@@ -2039,6 +2039,12 @@ model Lead {
   // & segment by it. Same free-form name from the country dropdown.
   studyDestination String?
 
+  // Lead temperature — the consultant's read on how hot the opportunity is:
+  // 'hot' | 'warm' | 'cold' (null = not yet rated). A plain, admin-free
+  // classification (fixed value set, not a master table) that drives the
+  // leads-list Temperature column + filter and is set from the lead detail.
+  temperature String?
+
   // Re-inquiry tracking. When a candidate who already exists submits again
   // (a duplicate by email/phone), we DON'T create a new row — we fold the
   // signal onto this canonical lead: bump `inquiryCount`, stamp `lastInquiryAt`,
@@ -2077,6 +2083,7 @@ model Lead {
   @@index([dedupeKey])
   @@index([emailKey])
   @@index([campaign])
+  @@index([temperature])
   @@index([dob])
   @@index([country])
   @@index([studyDestination])
