@@ -291,6 +291,33 @@ function sanitizeResponse(body: string): string {
   return body.replace(/[\u0000-\u001F\u007F]/g, " ").slice(0, MAX_RESPONSE_CHARS);
 }
 
+/**
+ * Did this response actually mean "delivered"?
+ *
+ * Wabis answers HTTP 200 even when it rejects the request, carrying the real
+ * outcome in the body as `{"status":0,"message":"…"}` — so trusting the status
+ * code alone records a hard rejection as a successful send, hides it from the
+ * log, and skips the retry. An unparseable or empty body with a 2xx is still
+ * treated as success, since that is what a plain acknowledgement looks like.
+ */
+export function isDeliveredResponse(httpOk: boolean, body: string): boolean {
+  if (!httpOk) return false;
+  const text = body.trim();
+  if (!text) return true;
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(text);
+  } catch {
+    return true; // not JSON — the HTTP status is all we have to go on
+  }
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return true;
+  const o = parsed as Record<string, unknown>;
+  if ("status" in o && (o.status === 0 || o.status === false || o.status === "0")) return false;
+  if (o.success === false) return false;
+  if ("error" in o && o.error) return false;
+  return true;
+}
+
 /** One HTTP attempt. Never throws — a transport failure is a result, not an error. */
 async function postWebhook(
   url: string,
@@ -309,7 +336,8 @@ async function postWebhook(
       signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
     });
     const body = await res.text().catch(() => "");
-    return { ok: res.ok, status: res.status, body: sanitizeResponse(body) };
+    const clean = sanitizeResponse(body);
+    return { ok: isDeliveredResponse(res.ok, clean), status: res.status, body: clean };
   } catch (e) {
     const msg = e instanceof Error ? `${e.name}: ${e.message}` : "request failed";
     return { ok: false, status: null, body: sanitizeResponse(msg) };
