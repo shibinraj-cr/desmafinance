@@ -257,6 +257,15 @@ function NewLeadButton({ masters, access }: { masters: Masters; access: LeadsAcc
   const [mounted, setMounted] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // Set when the submission collided with an existing candidate: the server
+  // folded it onto that lead as a re-inquiry instead of creating a row. Shown
+  // as a blocking notice — silently closing the form here used to read as a
+  // successful create, so the same lead got submitted over and over.
+  const [reInquiry, setReInquiry] = useState<{
+    id: string;
+    name: string;
+    matchedOn: "phone" | "email";
+  } | null>(null);
   const [form, setForm] = useState({
     candidateName: "",
     email: "",
@@ -293,6 +302,7 @@ function NewLeadButton({ masters, access }: { masters: Masters; access: LeadsAcc
   async function submit(e: React.FormEvent) {
     e.preventDefault();
     setError(null);
+    setReInquiry(null);
     if (!form.candidateName.trim()) {
       setError("Candidate name is required.");
       return;
@@ -321,6 +331,22 @@ function NewLeadButton({ masters, access }: { masters: Masters; access: LeadsAcc
     if (!res.ok) {
       const d = (await res.json().catch(() => ({}))) as { error?: string; message?: string };
       setError(d.message || (d.error === "validation_error" ? "Please check the fields." : "Failed to create lead."));
+      return;
+    }
+    // A collision returns 200 with the EXISTING lead — no new row was created.
+    // Surface it and keep the form filled so a mistyped number can be fixed.
+    const created = (await res.json().catch(() => ({}))) as {
+      lead?: { id: string; candidateName: string };
+      reInquiry?: boolean;
+      matchedOn?: "phone" | "email";
+    };
+    if (created.reInquiry && created.lead) {
+      setReInquiry({
+        id: created.lead.id,
+        name: created.lead.candidateName,
+        matchedOn: created.matchedOn === "email" ? "email" : "phone",
+      });
+      router.refresh(); // the fold still bumped the inquiry count and raised a task
       return;
     }
     setForm({
@@ -542,6 +568,52 @@ function NewLeadButton({ masters, access }: { masters: Masters; access: LeadsAcc
                 </button>
               </div>
             </form>
+          </div>,
+          document.body,
+        )}
+      {reInquiry &&
+        mounted &&
+        createPortal(
+          <div
+            className="fixed inset-0 z-[1010] grid place-items-center bg-black/50 p-md"
+            onClick={() => setReInquiry(null)}
+            role="alertdialog"
+            aria-modal="true"
+          >
+            <div
+              onClick={(e) => e.stopPropagation()}
+              className="w-full max-w-md bg-surface-container-lowest border border-outline-variant rounded-xl shadow-lg p-lg space-y-md"
+            >
+              <div className="flex items-start gap-sm">
+                <span className="material-symbols-outlined text-error" style={{ fontSize: 24 }}>
+                  error
+                </span>
+                <h3 className="text-h3 text-on-surface">No new lead created</h3>
+              </div>
+              <p className="text-body-md text-on-surface">
+                This {reInquiry.matchedOn === "email" ? "email" : "number"} already belongs to{" "}
+                <strong>{reInquiry.name}</strong> — logged as a re-inquiry, no new lead created.
+              </p>
+              <p className="text-label-sm text-on-surface-variant">
+                If this is a different candidate, correct the{" "}
+                {reInquiry.matchedOn === "email" ? "email address" : "phone number"} and submit again.
+              </p>
+              <div className="flex justify-end gap-base pt-xs">
+                <button type="button" className={secondaryBtn} onClick={() => setReInquiry(null)}>
+                  Back to form
+                </button>
+                <Link
+                  href={`/crm/leads/${reInquiry.id}`}
+                  className={primaryBtn}
+                  onClick={() => {
+                    setReInquiry(null);
+                    setOpen(false);
+                  }}
+                >
+                  Open {reInquiry.name}
+                </Link>
+              </div>
+            </div>
           </div>,
           document.body,
         )}
