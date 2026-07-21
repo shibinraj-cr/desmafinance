@@ -15,27 +15,25 @@
  * the response is not guaranteed to finish, so an in-request retry/backoff loop
  * can be killed mid-sleep — the row in the database is what actually survives.
  *
- * Not sending twice is the design constraint throughout, because the failure is
- * a real person receiving two WhatsApp introductions. Three mechanisms carry it:
- * the `dedupeKey` unique index (same lead + same consultant), the
- * previous-delivery check in `enqueueLeadAssignedWebhook` (one introduction per
- * lead, unless an admin enables re-fire), and the conditional claim in
- * `attemptDelivery` (one in-flight attempt per row). The known gap is two
- * concurrent assignments of the same lead to *different* consultants: the
- * previous-delivery check is a read followed by an insert, and no database
- * constraint can cover it while re-fire remains a per-install setting.
+ * Routing is per consultant. Wabis's "assign conversation to a user" action is
+ * static per workflow, so one callback URL can only ever reach one agent —
+ * each consultant therefore has their own WabisWebhookEndpoint row, with a
+ * default endpoint as the fallback for anyone unmapped.
+ *
+ * A reassignment deliberately DOES send again: the new consultant's workflow is
+ * what moves the conversation into their Wabis inbox, so staying silent would
+ * leave the chat with the previous owner while the CRM says otherwise. The cost
+ * is a second introduction to the candidate, which is the accepted trade.
+ *
+ * What must never happen is the *same* consultant introducing themselves twice.
+ * Two mechanisms carry that: the `dedupeKey` unique index (lead + consultant)
+ * and the conditional claim in `attemptDelivery` (one in-flight attempt per
+ * row).
  */
 import { randomUUID } from "node:crypto";
 import { prisma } from "./prisma";
 import { normalizePhone } from "./crm";
-import {
-  getSetting,
-  WABIS_WEBHOOK_ENABLED_KEY,
-  WABIS_WEBHOOK_URL_KEY,
-  WABIS_WEBHOOK_SECRET_KEY,
-  WABIS_AGENT_OVERRIDES_KEY,
-  WABIS_WEBHOOK_REFIRE_KEY,
-} from "./app-settings";
+import { getSetting, WABIS_WEBHOOK_ENABLED_KEY, WABIS_WEBHOOK_SECRET_KEY } from "./app-settings";
 
 export const LEAD_ASSIGNED_EVENT = "lead_assigned";
 /**
@@ -123,39 +121,46 @@ export function istTimestamp(date: Date): string {
   );
 }
 
-/** An admin-supplied correction for one consultant's Wabis identity. */
-export type AgentOverride = { agent?: string; phone?: string };
-
 /**
- * Parse the override blob (AppSetting JSON, keyed by userId). Malformed or
- * partially-malformed JSON degrades to "no overrides" rather than throwing —
- * a bad settings value must never stop leads from being assigned.
+ * Is this a usable Wabis workflow callback URL?
+ *
+ * https is required — the payload carries a candidate's name and number. The
+ * host/path shape is checked only loosely: Wabis callback URLs look like
+ * `https://<host>/webhook/whatsapp-workflow/<ids>`, but hard-coding
+ * `bot.wabis.in` would break a self-hosted or rebranded instance for no real
+ * safety gain, so anything https with a `/webhook/` path is accepted.
  */
-export function parseAgentOverrides(raw: string | null | undefined): Record<string, AgentOverride> {
-  if (!raw?.trim()) return {};
+export function isWabisWebhookUrl(raw: string): boolean {
+  const t = (raw ?? "").trim();
+  if (!/^https:\/\/\S+$/i.test(t)) return false;
   try {
-    const parsed: unknown = JSON.parse(raw);
-    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return {};
-    const out: Record<string, AgentOverride> = {};
-    for (const [userId, value] of Object.entries(parsed as Record<string, unknown>)) {
-      if (!value || typeof value !== "object" || Array.isArray(value)) continue;
-      const v = value as Record<string, unknown>;
-      const agent = typeof v.agent === "string" ? v.agent.trim() : "";
-      const phone = typeof v.phone === "string" ? v.phone.trim() : "";
-      if (agent || phone) out[userId] = { ...(agent && { agent }), ...(phone && { phone }) };
-    }
-    return out;
+    return new URL(t).pathname.includes("/webhook/");
   } catch {
-    return {};
+    return false;
   }
 }
 
 /**
+ * How one consultant's messages route and read: which Wabis workflow to POST
+ * to, and the name/phone the template should show. Mirrors the columns of
+ * WabisWebhookEndpoint that the delivery path actually needs.
+ */
+export type WabisEndpoint = {
+  id: string;
+  label: string;
+  webhookUrl: string;
+  agentName: string | null;
+  agentPhone: string | null;
+  consultantId: string | null;
+  isDefault: boolean;
+};
+
+/**
  * The consultant's Wabis identity. `LeadPulseRole.displayName` / `.phone` are
  * the source of truth — they already drive the CRM's `{consultant_phone}` merge
- * field, so there is no second place to keep in sync. The override map exists
- * only for the mismatch case: the Wabis agent is registered under a different
- * spelling ("Priya" vs "Priya Example") or answers on a different number.
+ * field. The endpoint's `agentName` / `agentPhone` override them only for the
+ * mismatch case: Wabis registered the agent under a different spelling, or they
+ * answer on a different number.
  *
  * An override phone is used *verbatim*. It is the field whose whole purpose is
  * to control how the number reads inside the WhatsApp message, so normalising it
@@ -163,15 +168,14 @@ export function parseAgentOverrides(raw: string | null | undefined): Record<stri
  * anything E.164 can't express, such as a landline with an extension.
  */
 export function resolveAgent(input: {
-  userId: string;
   displayName: string | null | undefined;
   phone: string | null | undefined;
-  overrides?: Record<string, AgentOverride>;
+  endpoint?: Pick<WabisEndpoint, "agentName" | "agentPhone"> | null;
 }): { agent: string; agentPhone: string } {
-  const override = input.overrides?.[input.userId];
-  const overridePhone = override?.phone?.trim();
+  const overrideName = input.endpoint?.agentName?.trim();
+  const overridePhone = input.endpoint?.agentPhone?.trim();
   return {
-    agent: (override?.agent || input.displayName || "").trim(),
+    agent: (overrideName || input.displayName || "").trim(),
     agentPhone: overridePhone || toAgentPhone(input.phone),
   };
 }
@@ -248,33 +252,66 @@ export function nextAttemptDelayMinutes(attemptsMade: number): number | null {
 
 export type WabisWebhookConfig = {
   enabled: boolean;
-  url: string | null;
   secret: string | null;
-  refireOnReassign: boolean;
-  overrides: Record<string, AgentOverride>;
 };
 
 /**
- * Read the integration config. `enabled` requires an explicit opt-in *and* a
- * destination — a toggle switched on with no URL is treated as off rather than
- * as an error, so a half-finished setup can't start failing deliveries.
+ * Global on/off and the optional outbound secret. Destinations no longer live
+ * here — each consultant's workflow URL is a WabisWebhookEndpoint row, because
+ * Wabis can only bind one agent per workflow.
  */
 export async function getWabisWebhookConfig(): Promise<WabisWebhookConfig> {
-  const [enabled, url, secret, refire, overrides] = await Promise.all([
+  const [enabled, secret] = await Promise.all([
     getSetting(WABIS_WEBHOOK_ENABLED_KEY).catch(() => null),
-    getSetting(WABIS_WEBHOOK_URL_KEY).catch(() => null),
     getSetting(WABIS_WEBHOOK_SECRET_KEY).catch(() => null),
-    getSetting(WABIS_WEBHOOK_REFIRE_KEY).catch(() => null),
-    getSetting(WABIS_AGENT_OVERRIDES_KEY).catch(() => null),
   ]);
-  const destination = url?.trim() || null;
-  return {
-    enabled: enabled === "1" && !!destination,
-    url: destination,
-    secret: secret?.trim() || null,
-    refireOnReassign: refire === "1",
-    overrides: parseAgentOverrides(overrides),
-  };
+  return { enabled: enabled === "1", secret: secret?.trim() || null };
+}
+
+const endpointSelect = {
+  id: true,
+  label: true,
+  webhookUrl: true,
+  agentName: true,
+  agentPhone: true,
+  consultantId: true,
+  isDefault: true,
+} as const;
+
+/**
+ * Pick the workflow that should carry a consultant's leads: their own endpoint,
+ * else the default, else nothing.
+ *
+ * Kept pure and separate from the query so the precedence rule — the bit that
+ * decides whose WhatsApp inbox a candidate lands in — is directly testable.
+ */
+export function pickEndpoint<T extends { consultantId: string | null; isDefault: boolean }>(
+  activeEndpoints: readonly T[],
+  consultantId: string,
+): T | null {
+  return (
+    activeEndpoints.find((e) => e.consultantId === consultantId) ??
+    activeEndpoints.find((e) => e.isDefault) ??
+    null
+  );
+}
+
+/**
+ * Which Wabis workflow should carry this consultant's leads.
+ *
+ * Returning null is a legitimate outcome, not an error — an admin may simply not
+ * have mapped this consultant yet. The caller records that as a skipped delivery
+ * so it surfaces in the settings UI instead of vanishing into a server log.
+ *
+ * One query for the whole (small) active set, rather than a query per candidate
+ * rule; the choice itself is `pickEndpoint`.
+ */
+export async function resolveEndpointForConsultant(consultantId: string): Promise<WabisEndpoint | null> {
+  const active = await prisma.wabisWebhookEndpoint.findMany({
+    where: { isActive: true },
+    select: endpointSelect,
+  });
+  return pickEndpoint(active, consultantId);
 }
 
 // ── Delivery ────────────────────────────────────────────────────────────────
@@ -345,6 +382,41 @@ async function postWebhook(
 }
 
 /**
+ * Re-point an unsent delivery at whichever workflow currently owns this
+ * consultant, rewriting the agent identity in the payload to match.
+ *
+ * The lead's own details stay as captured — they describe the lead at the moment
+ * it was assigned — but `agent`, `agent_phone` and `consultant` come from the
+ * endpoint, so sending an old endpoint's agent through a new endpoint's workflow
+ * would introduce the candidate to the wrong person. Null when the consultant
+ * has no route at all.
+ */
+async function refreshDeliveryTarget(
+  assigneeUserId: string,
+  payload: unknown,
+): Promise<{ url: string; payload: unknown; endpointLabel: string | null } | null> {
+  const endpoint = await resolveEndpointForConsultant(assigneeUserId);
+  if (!endpoint) return null;
+
+  const role = await prisma.leadPulseRole.findUnique({
+    where: { userId: assigneeUserId },
+    select: { displayName: true, phone: true },
+  });
+  const { agent, agentPhone } = resolveAgent({
+    displayName: role?.displayName,
+    phone: role?.phone,
+    endpoint,
+  });
+
+  const base = payload && typeof payload === "object" && !Array.isArray(payload) ? payload : {};
+  return {
+    url: endpoint.webhookUrl,
+    endpointLabel: endpoint.label,
+    payload: { ...(base as Record<string, unknown>), agent, agent_phone: agentPhone, consultant: agent },
+  };
+}
+
+/**
  * Attempt one pending delivery and record the outcome. Returns true only when
  * *this* call delivered it.
  *
@@ -376,8 +448,42 @@ export async function attemptDelivery(deliveryId: string): Promise<boolean> {
   const row = await prisma.crmWebhookDelivery.findUnique({ where: { id: deliveryId } });
   if (!row) return false;
 
+  // A row that hasn't landed yet has no history to protect, so its destination
+  // and agent identity are re-resolved before every attempt. Without this, an
+  // admin who fixes a misrouted consultant — the single most likely reason a
+  // delivery failed — would still see the retry go to the retired workflow, and
+  // carry the retired endpoint's agent name into the right inbox. Frozen values
+  // are only correct once a row is 'sent'.
+  let target: { url: string; payload: unknown; endpointLabel: string | null } = {
+    url: row.url,
+    payload: row.payload,
+    endpointLabel: row.endpointLabel,
+  };
+  if (row.event === LEAD_ASSIGNED_EVENT && row.assigneeUserId) {
+    const refreshed = await refreshDeliveryTarget(row.assigneeUserId, row.payload);
+    if (!refreshed) {
+      await prisma.crmWebhookDelivery.update({
+        where: { id: row.id },
+        data: {
+          status: "failed",
+          nextAttemptAt: null,
+          responseBody:
+            "Not sent — no Wabis workflow is mapped to this consultant, and no default endpoint is configured.",
+        },
+      });
+      return false;
+    }
+    target = refreshed;
+    if (refreshed.url !== row.url || refreshed.endpointLabel !== row.endpointLabel) {
+      await prisma.crmWebhookDelivery.update({
+        where: { id: row.id },
+        data: { url: refreshed.url, endpointLabel: refreshed.endpointLabel, payload: refreshed.payload as object },
+      });
+    }
+  }
+
   const cfg = await getWabisWebhookConfig();
-  const result = await postWebhook(row.url, row.payload, cfg.secret);
+  const result = await postWebhook(target.url, target.payload, cfg.secret);
   const finishedAt = new Date();
 
   if (result.ok) {
@@ -436,31 +542,51 @@ export async function enqueueLeadAssignedWebhook(opts: {
 }): Promise<void> {
   try {
     const cfg = await getWabisWebhookConfig();
-    if (!cfg.enabled || !cfg.url) return;
+    if (!cfg.enabled) return;
 
     const dedupeKey = leadAssignedDedupeKey(opts.leadId, opts.assigneeUserId);
     // Cheap pre-check: the unique index is the real guard (below), this just
     // avoids building a payload for the overwhelmingly common repeat case.
+    // Scoped to lead+consultant, which is also what makes a reassignment send:
+    // the new consultant's workflow is what moves the WhatsApp conversation into
+    // their Wabis inbox, so suppressing it would strand the chat with the
+    // previous owner. Bouncing a lead back to someone it already reached stays
+    // silent.
     const existing = await prisma.crmWebhookDelivery.findUnique({
       where: { dedupeKey },
       select: { id: true },
     });
     if (existing) return;
 
-    // Unless re-fire is on, one introduction per lead — whoever it ends up with.
-    if (!cfg.refireOnReassign) {
-      const previous = await prisma.crmWebhookDelivery.findFirst({
-        where: { leadId: opts.leadId, event: LEAD_ASSIGNED_EVENT },
-        select: { id: true },
-      });
-      if (previous) return;
+    const endpoint = await resolveEndpointForConsultant(opts.assigneeUserId);
+
+    if (!endpoint) {
+      // Nothing to send to. Recorded rather than logged-and-forgotten, so the
+      // settings page can show the admin exactly which consultant is unmapped.
+      await prisma.crmWebhookDelivery
+        .create({
+          data: {
+            event: LEAD_SKIPPED_EVENT,
+            dedupeKey: `${LEAD_SKIPPED_EVENT}:${randomUUID()}`,
+            leadId: opts.leadId,
+            assigneeUserId: opts.assigneeUserId,
+            url: "",
+            payload: {},
+            status: "failed",
+            attempts: 0,
+            maxAttempts: 0,
+            responseBody:
+              "Not sent — no Wabis workflow is mapped to this consultant, and no default endpoint is configured.",
+          },
+        })
+        .catch(() => undefined);
+      return;
     }
 
     const { agent, agentPhone } = resolveAgent({
-      userId: opts.assigneeUserId,
       displayName: opts.agentDisplayName,
       phone: opts.agentPhone,
-      overrides: cfg.overrides,
+      endpoint,
     });
     const payload = buildLeadAssignedPayload({
       leadId: opts.leadId,
@@ -487,7 +613,8 @@ export async function enqueueLeadAssignedWebhook(opts: {
             dedupeKey: `${LEAD_SKIPPED_EVENT}:${randomUUID()}`,
             leadId: opts.leadId,
             assigneeUserId: opts.assigneeUserId,
-            url: cfg.url,
+            url: endpoint.webhookUrl,
+            endpointLabel: endpoint.label,
             payload: {},
             status: "failed",
             attempts: 0,
@@ -505,7 +632,8 @@ export async function enqueueLeadAssignedWebhook(opts: {
         dedupeKey,
         leadId: opts.leadId,
         assigneeUserId: opts.assigneeUserId,
-        url: cfg.url,
+        url: endpoint.webhookUrl,
+        endpointLabel: endpoint.label,
         payload,
       },
       select: { id: true },
@@ -567,12 +695,17 @@ export async function drainWebhookQueue(
  * any other delivery, with a unique dedupe key so tests never suppress or
  * collide with a real send.
  */
-export async function sendTestWebhook(
-  testPhone: string,
-): Promise<{ ok: boolean; status: number | null; body: string; error?: string }> {
+export async function sendTestWebhook(opts: {
+  endpointId: string;
+  phone: string;
+}): Promise<{ ok: boolean; status: number | null; body: string; error?: string }> {
   const cfg = await getWabisWebhookConfig();
-  const url = cfg.url;
-  if (!url) return { ok: false, status: null, body: "", error: "No webhook URL configured." };
+  const endpoint = await prisma.wabisWebhookEndpoint.findUnique({
+    where: { id: opts.endpointId },
+    select: endpointSelect,
+  });
+  if (!endpoint) return { ok: false, status: null, body: "", error: "That endpoint no longer exists." };
+  const url = endpoint.webhookUrl;
 
   const payload = buildLeadAssignedPayload({
     leadId: "test-lead",
@@ -580,14 +713,16 @@ export async function sendTestWebhook(
     // The admin supplies the number: a test drives Wabis all the way through to
     // sending a real WhatsApp message, so a hard-coded placeholder would mean
     // messaging whoever happens to own it.
-    phone: testPhone,
+    phone: opts.phone,
     email: "test@example.com",
     source: "Test",
     service: "",
     status: "Not Yet Started",
     assignedAt: new Date(),
-    agent: "Test Agent",
-    agentPhone: "+910000000000",
+    // The endpoint's own agent name, so the test exercises the real routing
+    // rather than a placeholder that matches no Wabis agent.
+    agent: endpoint.agentName?.trim() || "Test Agent",
+    agentPhone: endpoint.agentPhone?.trim() || "+910000000000",
   });
   if (!payload) {
     return { ok: false, status: null, body: "", error: "Enter a valid mobile number to send the test to." };
@@ -601,6 +736,7 @@ export async function sendTestWebhook(
         // Unique per test send — a test must never occupy a real lead's key.
         dedupeKey: `${TEST_EVENT}:${randomUUID()}`,
         url,
+        endpointLabel: endpoint.label,
         payload,
         status: result.ok ? "sent" : "failed",
         attempts: 1,
@@ -622,10 +758,9 @@ export async function sendTestWebhook(
  * dedupe key is kept, so re-firing is still bounded to one live delivery per
  * lead+consultant.
  *
- * The destination is re-read from settings rather than reused from the row: the
- * most likely reason a batch failed is that the URL was wrong, so retrying
- * against the address that just failed would make the button useless in exactly
- * the case it is needed.
+ * The destination and agent identity are refreshed by `attemptDelivery` on every
+ * attempt, so a retry automatically follows the consultant's current workflow
+ * rather than the one that just failed.
  *
  * Refuses rows with no payload (the leads that had no usable phone) — re-posting
  * an empty body would register a broken subscriber in Wabis. There, fix the
@@ -648,8 +783,9 @@ export async function requeueDelivery(
     return refuse("This lead had no usable phone number — fix the number on the lead and reassign it.");
   }
 
-  const cfg = await getWabisWebhookConfig();
-  if (!cfg.url) return refuse("No webhook URL configured.");
+  if (row.assigneeUserId && !(await resolveEndpointForConsultant(row.assigneeUserId))) {
+    return refuse("No Wabis workflow is mapped to this consultant, and there is no default endpoint.");
+  }
 
   if (row.leadId && row.assigneeUserId) {
     const lead = await prisma.lead.findUnique({
@@ -665,7 +801,6 @@ export async function requeueDelivery(
   await prisma.crmWebhookDelivery.update({
     where: { id },
     data: {
-      url: cfg.url,
       status: "pending",
       attempts: 0,
       maxAttempts: Math.max(1, row.maxAttempts),

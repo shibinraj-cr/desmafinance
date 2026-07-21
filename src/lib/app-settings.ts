@@ -14,27 +14,18 @@ export const SHEET_LEADS_SECRET_KEY = "sheet_leads_webhook_secret";
 export const REINQUIRY_SUPERVISOR_KEY = "crm_reinquiry_supervisor_user_id";
 
 /**
- * Outbound Wabis WhatsApp webhook (CRM → Settings → Integrations). Kept as
- * settings rather than env vars so the destination can be repointed, and the
- * automation killed, without a deploy — see src/lib/crm-webhook.ts.
+ * Outbound Wabis WhatsApp automation (CRM → Settings → Integrations). Only the
+ * global switch and the shared secret live here: destinations and per-consultant
+ * agent overrides are WabisWebhookEndpoint rows, since Wabis needs one workflow
+ * per consultant. See src/lib/crm-webhook.ts.
+ *
+ * The superseded `wabis_webhook_url` and `wabis_agent_overrides` rows are read
+ * once by the 20260722090000 migration to seed that table, then left in place —
+ * deleting configuration during a migration is irreversible and buys nothing.
  */
 export const WABIS_WEBHOOK_ENABLED_KEY = "wabis_webhook_enabled";
-export const WABIS_WEBHOOK_URL_KEY = "wabis_webhook_url";
 /** Optional shared secret, sent as the `X-Webhook-Secret` request header. */
 export const WABIS_WEBHOOK_SECRET_KEY = "wabis_webhook_secret";
-/**
- * Per-consultant overrides for the agent name/phone sent to Wabis, as JSON
- * keyed by userId. Only needed where the Wabis agent is spelled differently
- * from the CRM consultant (or uses a different number) — everyone else falls
- * through to LeadPulseRole.displayName / .phone.
- */
-export const WABIS_AGENT_OVERRIDES_KEY = "wabis_agent_overrides";
-/**
- * When "1", a reassignment re-fires the webhook (the new consultant gets their
- * own intro message). Default off: only the first unassigned → assigned
- * transition sends, which is what the WhatsApp template is written for.
- */
-export const WABIS_WEBHOOK_REFIRE_KEY = "wabis_webhook_refire_on_reassign";
 
 export async function getSetting(key: string): Promise<string | null> {
   const row = await prisma.appSetting.findUnique({ where: { key }, select: { value: true } });

@@ -3,8 +3,9 @@ import {
   toWabisPhone,
   toAgentPhone,
   istTimestamp,
-  parseAgentOverrides,
   resolveAgent,
+  isWabisWebhookUrl,
+  pickEndpoint,
   buildLeadAssignedPayload,
   leadAssignedDedupeKey,
   nextAttemptDelayMinutes,
@@ -59,56 +60,91 @@ describe("istTimestamp", () => {
   });
 });
 
-describe("parseAgentOverrides", () => {
-  it("keeps only entries that actually override something", () => {
-    const raw = JSON.stringify({
-      u1: { agent: "Priya" },
-      u2: { agent: "", phone: "" },
-      u3: { phone: "+919000000001" },
-    });
-    expect(parseAgentOverrides(raw)).toEqual({
-      u1: { agent: "Priya" },
-      u3: { phone: "+919000000001" },
-    });
-  });
-  it("degrades to no overrides rather than throwing on bad settings data", () => {
-    expect(parseAgentOverrides("not json")).toEqual({});
-    expect(parseAgentOverrides("[1,2,3]")).toEqual({});
-    expect(parseAgentOverrides(JSON.stringify({ u1: "Priya" }))).toEqual({});
-    expect(parseAgentOverrides(null)).toEqual({});
-    expect(parseAgentOverrides("")).toEqual({});
-  });
-});
-
 describe("resolveAgent", () => {
-  const role = { userId: "u1", displayName: "Priya Example", phone: "9000000001" };
+  const role = { displayName: "Priya Example", phone: "9000000001" };
 
   it("defaults to the consultant's own name and number", () => {
     expect(resolveAgent(role)).toEqual({ agent: "Priya Example", agentPhone: "+919000000001" });
+    expect(resolveAgent({ ...role, endpoint: null })).toEqual({
+      agent: "Priya Example",
+      agentPhone: "+919000000001",
+    });
   });
-  it("prefers an override where Wabis spells the agent differently", () => {
-    expect(resolveAgent({ ...role, overrides: { u1: { agent: "Priya" } } })).toEqual({
+  it("prefers the endpoint's name where Wabis spells the agent differently", () => {
+    expect(resolveAgent({ ...role, endpoint: { agentName: "Priya", agentPhone: null } })).toEqual({
       agent: "Priya",
       agentPhone: "+919000000001",
     });
   });
   it("overrides the number independently of the name", () => {
-    expect(resolveAgent({ ...role, overrides: { u1: { phone: "+919000000000" } } })).toEqual({
+    expect(resolveAgent({ ...role, endpoint: { agentName: null, agentPhone: "+919000000000" } })).toEqual({
       agent: "Priya Example",
       agentPhone: "+919000000000",
     });
   });
   it("uses an override phone verbatim — it is the exact text shown in the message", () => {
     // E.164 can't express an extension; normalising this would corrupt it.
-    expect(resolveAgent({ ...role, overrides: { u1: { phone: "0484 123 4567 ext 9" } } }).agentPhone).toBe(
-      "0484 123 4567 ext 9",
-    );
+    expect(
+      resolveAgent({ ...role, endpoint: { agentName: null, agentPhone: "0484 123 4567 ext 9" } }).agentPhone,
+    ).toBe("0484 123 4567 ext 9");
   });
-  it("ignores an override belonging to a different consultant", () => {
-    expect(resolveAgent({ ...role, overrides: { u2: { agent: "Rahul Example" } } }).agent).toBe("Priya Example");
+  it("treats blank overrides as absent rather than blanking the name", () => {
+    expect(resolveAgent({ ...role, endpoint: { agentName: "   ", agentPhone: "  " } })).toEqual({
+      agent: "Priya Example",
+      agentPhone: "+919000000001",
+    });
   });
   it("yields an empty agent phone when the consultant has no number on file", () => {
     expect(resolveAgent({ ...role, phone: null }).agentPhone).toBe("");
+  });
+});
+
+describe("pickEndpoint", () => {
+  const own = { id: "own", consultantId: "u1", isDefault: false };
+  const other = { id: "other", consultantId: "u2", isDefault: false };
+  const fallback = { id: "fallback", consultantId: null, isDefault: true };
+
+  it("routes a consultant to their own workflow", () => {
+    // The whole point of per-consultant endpoints: the chat must land in the
+    // inbox of whoever actually owns the lead.
+    expect(pickEndpoint([fallback, other, own], "u1")?.id).toBe("own");
+  });
+  it("prefers the consultant's own workflow over the default, whatever the order", () => {
+    expect(pickEndpoint([own, fallback], "u1")?.id).toBe("own");
+    expect(pickEndpoint([fallback, own], "u1")?.id).toBe("own");
+  });
+  it("falls back to the default when the consultant is unmapped", () => {
+    expect(pickEndpoint([other, fallback], "u1")?.id).toBe("fallback");
+  });
+  it("returns null when there is no match and no default", () => {
+    expect(pickEndpoint([other], "u1")).toBeNull();
+    expect(pickEndpoint([], "u1")).toBeNull();
+  });
+  it("never routes one consultant's leads to another's workflow", () => {
+    expect(pickEndpoint([other], "u1")).toBeNull();
+  });
+});
+
+describe("isWabisWebhookUrl", () => {
+  it("accepts a Wabis workflow callback URL", () => {
+    expect(isWabisWebhookUrl("https://bot.wabis.in/webhook/whatsapp-workflow/138003.145848.411309.1784625851")).toBe(
+      true,
+    );
+  });
+  it("accepts a self-hosted or rebranded Wabis host", () => {
+    // Pinning the host would break a self-hosted instance for no safety gain.
+    expect(isWabisWebhookUrl("https://chat.example.com/webhook/whatsapp-workflow/1")).toBe(true);
+  });
+  it("rejects plaintext http — the payload carries a candidate's name and number", () => {
+    expect(isWabisWebhookUrl("http://bot.wabis.in/webhook/whatsapp-workflow/1")).toBe(false);
+  });
+  it("rejects a URL that isn't a webhook path", () => {
+    expect(isWabisWebhookUrl("https://bot.wabis.in/dashboard")).toBe(false);
+  });
+  it("rejects junk", () => {
+    expect(isWabisWebhookUrl("")).toBe(false);
+    expect(isWabisWebhookUrl("   ")).toBe(false);
+    expect(isWabisWebhookUrl("not a url")).toBe(false);
   });
 });
 
