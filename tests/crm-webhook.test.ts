@@ -10,6 +10,7 @@ import {
   nextAttemptDelayMinutes,
   LEAD_ASSIGNED_EVENT,
   LEAD_SKIPPED_EVENT,
+  isDeliveredResponse,
 } from "@/lib/crm-webhook";
 
 describe("toWabisPhone", () => {
@@ -185,6 +186,31 @@ describe("nextAttemptDelayMinutes", () => {
   it("terminates for any attempt count, so a delivery can't retry forever", () => {
     expect(nextAttemptDelayMinutes(4)).toBeNull();
     expect(nextAttemptDelayMinutes(99)).toBeNull();
+  });
+});
+
+describe("isDeliveredResponse", () => {
+  it("treats Wabis's HTTP-200 rejection as a failure, not a send", () => {
+    // Wabis answers 200 and puts the real outcome in the body.
+    expect(isDeliveredResponse(true, '{"status":0,"message":"Bad request. No webhook configuration found.."}')).toBe(
+      false,
+    );
+    expect(isDeliveredResponse(true, '{"success":false}')).toBe(false);
+    expect(isDeliveredResponse(true, '{"error":"nope"}')).toBe(false);
+  });
+  it("accepts a positive status", () => {
+    expect(isDeliveredResponse(true, '{"status":1,"message":"queued"}')).toBe(true);
+    expect(isDeliveredResponse(true, '{"status":"success"}')).toBe(true);
+  });
+  it("trusts a 2xx when the body is empty or not JSON", () => {
+    expect(isDeliveredResponse(true, "")).toBe(true);
+    expect(isDeliveredResponse(true, "   ")).toBe(true);
+    expect(isDeliveredResponse(true, "OK")).toBe(true);
+    expect(isDeliveredResponse(true, "<html>fine</html>")).toBe(true);
+  });
+  it("never rescues a non-2xx", () => {
+    expect(isDeliveredResponse(false, '{"status":1}')).toBe(false);
+    expect(isDeliveredResponse(false, "")).toBe(false);
   });
 });
 
