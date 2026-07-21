@@ -88,6 +88,7 @@ model User {
   crmMessageTemplates    CrmMessageTemplate[] @relation("CrmMessageTemplateCreatedBy")
   crmNotifications       CrmNotification[]    @relation("CrmNotifications")
   appSettings            AppSetting[]         @relation("AppSettingEditor")
+  wabisEndpoints         WabisWebhookEndpoint[] @relation("WabisEndpointConsultant")
 
   // Operations relations
   opsTemplatesCreated    ProcessTemplate[]    @relation("OpsTemplateCreatedBy")
@@ -338,6 +339,53 @@ model CrmNotification {
   @@index([userId, createdAt])
 }
 
+/// One Wabis workflow, and the consultant it routes to.
+///
+/// Wabis's "assign conversation to a user" action is static per workflow — a
+/// workflow can only ever hand its conversations to one agent. So routing a
+/// candidate to the consultant who actually owns them means one workflow, and
+/// therefore one callback URL, per consultant. A row with `consultantId = null`
+/// and `isDefault` is the fallback for anyone not explicitly mapped.
+///
+/// The agent name/phone overrides live here too, rather than in a parallel
+/// settings blob: everything that decides how one consultant's message is
+/// routed and worded is then in a single row.
+///
+/// Rows are deactivated rather than deleted, so the delivery log's history
+/// stays explicable. Two partial unique indexes (see the migration) enforce at
+/// most one *active* endpoint per consultant and at most one active default —
+/// they have to be partial, since superseded rows are kept.
+///
+/// WARNING: Prisma cannot express partial indexes, so those two exist only in
+/// 20260722090000_wabis_per_consultant_endpoints. `prisma migrate dev` diffs the
+/// database against *this* file, so it will read them as drift and offer a
+/// migration that DROPs both — discarding the only real guarantee against two
+/// active defaults. If that happens, remove the generated DROPs and keep the
+/// indexes.
+model WabisWebhookEndpoint {
+  id           String  @id @default(cuid())
+  /// Friendly name, e.g. "Priya workflow".
+  label        String
+  /// Consultant whose leads route here; null on the default/fallback endpoint.
+  consultantId String?
+  consultant   User?   @relation("WabisEndpointConsultant", fields: [consultantId], references: [id], onDelete: Cascade)
+  webhookUrl   String
+  /// Overrides the consultant's LeadPulseRole.displayName when Wabis registered
+  /// the agent under a different spelling. Blank = use the CRM name.
+  agentName    String?
+  /// Overrides LeadPulseRole.phone. Used verbatim — this is the text that
+  /// appears inside the WhatsApp message, so it is never re-normalised.
+  agentPhone   String?
+  isActive     Boolean @default(true)
+  /// The fallback used when a consultant has no endpoint of their own.
+  isDefault    Boolean @default(false)
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  @@index([consultantId])
+  @@index([isActive])
+}
+
 /// One outbound webhook delivery — the transactional outbox behind the Wabis
 /// WhatsApp automation (CRM → Settings → Integrations).
 ///
@@ -348,19 +396,13 @@ model CrmNotification {
 /// in-request first keeps the common case instant; the cron is the safety net,
 /// not the primary path.
 ///
-/// Two things keep a candidate from being messaged twice, and they are not the
-/// same rule:
-///  - `dedupeKey` (`lead_assigned:<leadId>:<assigneeUserId>`) stops the *same*
-///    lead+consultant pair ever sending twice, however many times the assign
-///    endpoint is called — double-click, retry, reassign-and-back.
-///  - "one introduction per lead, whoever it ends up with" is enforced in
-///    `enqueueLeadAssignedWebhook`, which looks for any prior `lead_assigned`
-///    row for the lead unless the admin has turned re-fire on. That can't be a
-///    database constraint, because with re-fire on multiple rows per lead are
-///    exactly what's wanted.
+/// `dedupeKey` (`lead_assigned:<leadId>:<assigneeUserId>`) is what stops the
+/// same consultant introducing themselves to the same candidate twice. A
+/// reassignment to a *different* consultant is a distinct key and does send
+/// again — that is what moves the conversation into the new owner's Wabis inbox.
 ///
-/// `event` is one of `lead_assigned`, `lead_assigned_skipped` (no usable phone —
-/// diagnostic only, never sent) or `test`.
+/// `event` is one of `lead_assigned`, `lead_assigned_skipped` (nothing to send —
+/// no usable phone, or no endpoint mapped) or `test`.
 model CrmWebhookDelivery {
   id             String    @id @default(cuid())
   /// Event discriminator — see the model note.
@@ -378,6 +420,10 @@ model CrmWebhookDelivery {
   /// Destination and body captured at enqueue time, so editing the settings
   /// later never rewrites the history of what was actually sent where.
   url            String
+  /// Which endpoint was chosen, denormalised. Kept as text rather than a
+  /// relation so the log still reads correctly after an endpoint is renamed or
+  /// removed — an audit trail that changes retroactively is worthless.
+  endpointLabel  String?
   payload        Json
   /// 'pending' | 'sent' | 'failed' — 'failed' means attempts were exhausted.
   status         String    @default("pending")
