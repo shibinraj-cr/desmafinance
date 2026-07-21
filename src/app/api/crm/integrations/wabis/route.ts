@@ -19,6 +19,7 @@ import {
   resolveAgent,
   sendTestWebhook,
   requeueDelivery,
+  drainWebhookQueue,
   type AgentOverride,
 } from "@/lib/crm-webhook";
 
@@ -129,6 +130,7 @@ const PostSchema = z.discriminatedUnion("action", [
   }),
   z.object({ action: z.literal("test"), phone: z.string().trim().min(1).max(40) }),
   z.object({ action: z.literal("requeue"), id: z.string().min(1) }),
+  z.object({ action: z.literal("drain") }),
 ]);
 
 // POST /api/crm/integrations/wabis — save config, send a test, re-fire a delivery.
@@ -142,6 +144,13 @@ export const POST = withApiHandler(async (req: Request) => {
 
   if (body.action === "test") {
     const result = await sendTestWebhook(body.phone);
+    return NextResponse.json(result);
+  }
+
+  // On the Hobby plan the retry cron may only run once a day, so an admin needs
+  // a way to flush the queue immediately after fixing whatever was wrong.
+  if (body.action === "drain") {
+    const result = await drainWebhookQueue();
     return NextResponse.json(result);
   }
 

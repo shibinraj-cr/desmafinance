@@ -148,7 +148,18 @@ export function WabisWebhookCard() {
     );
   }
 
+  async function drain() {
+    const res = await post({ action: "drain" }, "");
+    if (!res) return;
+    setNote(
+      res.skipped
+        ? "Nothing sent — the automation is switched off."
+        : `Retried ${res.attempted ?? 0}, delivered ${res.sent ?? 0}.`,
+    );
+  }
+
   const missingPhone = (data?.consultants ?? []).filter((c) => !c.sendsAgentPhone);
+  const pending = (data?.deliveries ?? []).filter((d) => d.status === "pending").length;
 
   return (
     <section className={card + " p-lg space-y-md"}>
@@ -290,6 +301,18 @@ export function WabisWebhookCard() {
               A test sends a real WhatsApp message to that number.
             </span>
           </div>
+
+          {pending > 0 && (
+            <div className="rounded-lg bg-amber-50 border border-amber-200 text-amber-900 px-md py-sm text-label-sm flex flex-wrap items-center gap-base">
+              <span className="flex-1">
+                {pending} {pending === 1 ? "delivery is" : "deliveries are"} waiting to be retried. Automatic retries run
+                once a day on the current hosting plan — send them now once Wabis is reachable again.
+              </span>
+              <button className={ghost} disabled={busy} onClick={drain}>
+                Retry pending now
+              </button>
+            </div>
+          )}
 
           {/* Delivery log */}
           <div>
