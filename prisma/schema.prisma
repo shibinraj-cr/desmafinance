@@ -338,6 +338,66 @@ model CrmNotification {
   @@index([userId, createdAt])
 }
 
+/// One outbound webhook delivery — the transactional outbox behind the Wabis
+/// WhatsApp automation (CRM → Settings → Integrations).
+///
+/// The row is written the moment the triggering event happens and only *then*
+/// attempted, so a delivery survives the serverless instance being killed
+/// mid-retry: whatever is still `pending` when the next cron tick runs gets
+/// picked up (see drainWebhookQueue / /api/cron/crm-webhooks). Attempting
+/// in-request first keeps the common case instant; the cron is the safety net,
+/// not the primary path.
+///
+/// Two things keep a candidate from being messaged twice, and they are not the
+/// same rule:
+///  - `dedupeKey` (`lead_assigned:<leadId>:<assigneeUserId>`) stops the *same*
+///    lead+consultant pair ever sending twice, however many times the assign
+///    endpoint is called — double-click, retry, reassign-and-back.
+///  - "one introduction per lead, whoever it ends up with" is enforced in
+///    `enqueueLeadAssignedWebhook`, which looks for any prior `lead_assigned`
+///    row for the lead unless the admin has turned re-fire on. That can't be a
+///    database constraint, because with re-fire on multiple rows per lead are
+///    exactly what's wanted.
+///
+/// `event` is one of `lead_assigned`, `lead_assigned_skipped` (no usable phone —
+/// diagnostic only, never sent) or `test`.
+model CrmWebhookDelivery {
+  id             String    @id @default(cuid())
+  /// Event discriminator — see the model note.
+  event          String
+  /// Idempotency key — see the model note. Skipped and test rows get a unique
+  /// random key so they never collide with (or suppress) a real delivery.
+  dedupeKey      String    @unique
+  /// Lead this is about; no FK relation, so the delivery log outlives the lead.
+  leadId         String?
+  /// Consultant the payload names. Kept as a column rather than parsed back out
+  /// of `dedupeKey` so a retry can tell whether the lead has since moved to
+  /// someone else — re-sending would otherwise introduce the candidate to a
+  /// consultant who no longer owns them.
+  assigneeUserId String?
+  /// Destination and body captured at enqueue time, so editing the settings
+  /// later never rewrites the history of what was actually sent where.
+  url            String
+  payload        Json
+  /// 'pending' | 'sent' | 'failed' — 'failed' means attempts were exhausted.
+  status         String    @default("pending")
+  attempts       Int       @default(0)
+  maxAttempts    Int       @default(3)
+  /// When the cron drain may next try this row (exponential backoff).
+  nextAttemptAt  DateTime?
+  lastAttemptAt  DateTime?
+  deliveredAt    DateTime?
+  responseStatus Int?
+  /// Response body or transport error, truncated — shown in the settings log.
+  responseBody   String?
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+
+  @@index([status, nextAttemptAt])
+  @@index([leadId])
+  @@index([createdAt])
+}
+
 model LeadPulseSource {
   id                String                     @id @default(cuid())
   code              String                     @unique

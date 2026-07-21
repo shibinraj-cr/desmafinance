@@ -1,0 +1,652 @@
+/**
+ * Outbound CRM webhooks — today a single consumer: the Wabis WhatsApp
+ * automation.
+ *
+ * When a lead is assigned to a consultant we POST the lead (plus the
+ * consultant's name and number) to a Wabis Webhook Workflow. Wabis creates the
+ * WhatsApp subscriber, routes it to the matching agent, and sends one reusable
+ * approved template whose `#!agent!#` / `#!agent_phone!#` variables are filled
+ * from our payload. Wabis does NOT expose the assigned agent as a template
+ * variable, which is why the name and phone must be sent explicitly rather than
+ * inferred on their side.
+ *
+ * Delivery uses a transactional outbox (CrmWebhookDelivery): persist first,
+ * attempt inline once, let the cron drain retry. On Vercel, work started after
+ * the response is not guaranteed to finish, so an in-request retry/backoff loop
+ * can be killed mid-sleep — the row in the database is what actually survives.
+ *
+ * Not sending twice is the design constraint throughout, because the failure is
+ * a real person receiving two WhatsApp introductions. Three mechanisms carry it:
+ * the `dedupeKey` unique index (same lead + same consultant), the
+ * previous-delivery check in `enqueueLeadAssignedWebhook` (one introduction per
+ * lead, unless an admin enables re-fire), and the conditional claim in
+ * `attemptDelivery` (one in-flight attempt per row). The known gap is two
+ * concurrent assignments of the same lead to *different* consultants: the
+ * previous-delivery check is a read followed by an insert, and no database
+ * constraint can cover it while re-fire remains a per-install setting.
+ */
+import { randomUUID } from "node:crypto";
+import { prisma } from "./prisma";
+import { normalizePhone } from "./crm";
+import {
+  getSetting,
+  WABIS_WEBHOOK_ENABLED_KEY,
+  WABIS_WEBHOOK_URL_KEY,
+  WABIS_WEBHOOK_SECRET_KEY,
+  WABIS_AGENT_OVERRIDES_KEY,
+  WABIS_WEBHOOK_REFIRE_KEY,
+} from "./app-settings";
+
+export const LEAD_ASSIGNED_EVENT = "lead_assigned";
+/**
+ * A lead that couldn't be sent at all (no usable phone). Recorded under its own
+ * event so it reads as a diagnostic rather than a delivery: it must not occupy
+ * the lead's dedupe key, or fixing the number and reassigning would stay
+ * silently blocked forever.
+ */
+export const LEAD_SKIPPED_EVENT = "lead_assigned_skipped";
+export const TEST_EVENT = "test";
+
+/**
+ * One timeout for every attempt, inline or retried — and they must stay equal.
+ *
+ * Aborting only cancels our side of the connection: Wabis has already received
+ * the request and will finish creating the subscriber and sending the template.
+ * So if the inline attempt gave up *earlier* than the retry, any Wabis latency
+ * between the two values would produce a timed-out first attempt followed by a
+ * successful retry — i.e. every candidate introduced twice, deterministically.
+ * A single value makes that window empty.
+ *
+ * 8s is the compromise: far above Wabis's sub-second normal response, and the
+ * longest an assign click should ever wait when Wabis is unresponsive.
+ */
+const REQUEST_TIMEOUT_MS = 8_000;
+/**
+ * How long a claimed delivery stays claimed. If the instance dies mid-attempt
+ * the lease simply expires and the row becomes eligible again — with its
+ * attempt already counted, so a repeatedly-killed delivery still terminates
+ * instead of being retried forever.
+ */
+const CLAIM_LEASE_MINUTES = 5;
+/** Response/error text kept for the settings log. Enough to read a stack trace. */
+const MAX_RESPONSE_CHARS = 2_000;
+/**
+ * Backoff before retry N (index = attempts already made). Three attempts total,
+ * spread over ~15 minutes — long enough to ride out a Wabis restart, short
+ * enough that a consultant's intro message isn't stale when it lands.
+ */
+const BACKOFF_MINUTES = [2, 12];
+
+// ── Pure helpers (unit-tested; no I/O) ──────────────────────────────────────
+
+/**
+ * The subscriber number as Wabis wants it: full international, country code, no
+ * `+`, spaces or dashes — e.g. `919876543210`. Runs through the CRM's shared
+ * `normalizePhone` first so a bare 10-digit Indian mobile picks up +91 and a
+ * leading-zero access code (`00`, `009…`) is stripped, exactly as everywhere
+ * else in the CRM. Null when the number can't be normalised — there is nothing
+ * useful to send Wabis without a valid subscriber number.
+ */
+export function toWabisPhone(raw: string | null | undefined): string | null {
+  const e164 = normalizePhone(raw);
+  if (!e164) return null;
+  const digits = e164.replace(/\D/g, "");
+  return digits || null;
+}
+
+/**
+ * The consultant's number as it should *read inside the WhatsApp message* —
+ * E.164 with the leading `+` kept (`+919000000001`). This is display text, not
+ * a routing key, so it deliberately differs from `toWabisPhone`. Falls back to
+ * the raw string when it can't be normalised, so an admin who typed a
+ * deliberately formatted number still gets what they typed.
+ */
+export function toAgentPhone(raw: string | null | undefined): string {
+  const trimmed = (raw ?? "").trim();
+  if (!trimmed) return "";
+  return normalizePhone(trimmed) ?? trimmed;
+}
+
+/**
+ * Format an instant as an IST timestamp with an explicit offset, e.g.
+ * `2026-07-21T14:24:00+05:30`. India has no DST, so the offset is a constant —
+ * computing the wall-clock by shifting the epoch is exact, and avoids
+ * `Intl.DateTimeFormat` round-tripping just to reassemble a string.
+ */
+export function istTimestamp(date: Date): string {
+  const IST_OFFSET_MIN = 330;
+  const shifted = new Date(date.getTime() + IST_OFFSET_MIN * 60_000);
+  const p = (n: number, w = 2) => String(n).padStart(w, "0");
+  return (
+    `${shifted.getUTCFullYear()}-${p(shifted.getUTCMonth() + 1)}-${p(shifted.getUTCDate())}` +
+    `T${p(shifted.getUTCHours())}:${p(shifted.getUTCMinutes())}:${p(shifted.getUTCSeconds())}+05:30`
+  );
+}
+
+/** An admin-supplied correction for one consultant's Wabis identity. */
+export type AgentOverride = { agent?: string; phone?: string };
+
+/**
+ * Parse the override blob (AppSetting JSON, keyed by userId). Malformed or
+ * partially-malformed JSON degrades to "no overrides" rather than throwing —
+ * a bad settings value must never stop leads from being assigned.
+ */
+export function parseAgentOverrides(raw: string | null | undefined): Record<string, AgentOverride> {
+  if (!raw?.trim()) return {};
+  try {
+    const parsed: unknown = JSON.parse(raw);
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return {};
+    const out: Record<string, AgentOverride> = {};
+    for (const [userId, value] of Object.entries(parsed as Record<string, unknown>)) {
+      if (!value || typeof value !== "object" || Array.isArray(value)) continue;
+      const v = value as Record<string, unknown>;
+      const agent = typeof v.agent === "string" ? v.agent.trim() : "";
+      const phone = typeof v.phone === "string" ? v.phone.trim() : "";
+      if (agent || phone) out[userId] = { ...(agent && { agent }), ...(phone && { phone }) };
+    }
+    return out;
+  } catch {
+    return {};
+  }
+}
+
+/**
+ * The consultant's Wabis identity. `LeadPulseRole.displayName` / `.phone` are
+ * the source of truth — they already drive the CRM's `{consultant_phone}` merge
+ * field, so there is no second place to keep in sync. The override map exists
+ * only for the mismatch case: the Wabis agent is registered under a different
+ * spelling ("Priya" vs "Priya Example") or answers on a different number.
+ *
+ * An override phone is used *verbatim*. It is the field whose whole purpose is
+ * to control how the number reads inside the WhatsApp message, so normalising it
+ * would be the tool second-guessing an explicit instruction — and would corrupt
+ * anything E.164 can't express, such as a landline with an extension.
+ */
+export function resolveAgent(input: {
+  userId: string;
+  displayName: string | null | undefined;
+  phone: string | null | undefined;
+  overrides?: Record<string, AgentOverride>;
+}): { agent: string; agentPhone: string } {
+  const override = input.overrides?.[input.userId];
+  const overridePhone = override?.phone?.trim();
+  return {
+    agent: (override?.agent || input.displayName || "").trim(),
+    agentPhone: overridePhone || toAgentPhone(input.phone),
+  };
+}
+
+export type LeadAssignedPayload = {
+  name: string;
+  phone: string;
+  email: string;
+  agent: string;
+  agent_phone: string;
+  consultant: string;
+  source: string;
+  service: string;
+  status: string;
+  lead_id: string;
+  assigned_at: string;
+};
+
+/**
+ * Build the exact JSON Wabis expects. Every key is always present — Wabis binds
+ * its field mapping from a sample payload, so a key that vanishes when a lead
+ * happens to have no service would silently unmap that field. Unknown values
+ * are therefore the empty string, never `null` or omitted.
+ *
+ * Returns null when the lead has no normalisable phone: Wabis keys the
+ * subscriber on the number, so there is no subscriber to create without one.
+ */
+export function buildLeadAssignedPayload(input: {
+  leadId: string;
+  candidateName: string | null | undefined;
+  phone: string | null | undefined;
+  email: string | null | undefined;
+  source: string | null | undefined;
+  service: string | null | undefined;
+  status: string | null | undefined;
+  assignedAt: Date;
+  agent: string;
+  agentPhone: string;
+}): LeadAssignedPayload | null {
+  const phone = toWabisPhone(input.phone);
+  if (!phone) return null;
+  return {
+    name: (input.candidateName ?? "").trim(),
+    phone,
+    email: (input.email ?? "").trim(),
+    agent: input.agent,
+    agent_phone: input.agentPhone,
+    // Same value as `agent`, sent under the CRM's own vocabulary so a Wabis
+    // operator reading a raw payload can tell which system named the person.
+    consultant: input.agent,
+    source: (input.source ?? "").trim(),
+    service: (input.service ?? "").trim(),
+    status: (input.status ?? "").trim(),
+    lead_id: input.leadId,
+    assigned_at: istTimestamp(input.assignedAt),
+  };
+}
+
+/**
+ * Idempotency key. Scoped to lead *and* consultant, so the same lead can never
+ * message the same consultant twice — while a genuine reassignment to someone
+ * else (when re-fire is enabled) is still a distinct, sendable event.
+ */
+export function leadAssignedDedupeKey(leadId: string, assigneeUserId: string): string {
+  return `${LEAD_ASSIGNED_EVENT}:${leadId}:${assigneeUserId}`;
+}
+
+/** Backoff for the next retry, or null once attempts are exhausted. */
+export function nextAttemptDelayMinutes(attemptsMade: number): number | null {
+  return BACKOFF_MINUTES[attemptsMade - 1] ?? null;
+}
+
+// ── Configuration ───────────────────────────────────────────────────────────
+
+export type WabisWebhookConfig = {
+  enabled: boolean;
+  url: string | null;
+  secret: string | null;
+  refireOnReassign: boolean;
+  overrides: Record<string, AgentOverride>;
+};
+
+/**
+ * Read the integration config. `enabled` requires an explicit opt-in *and* a
+ * destination — a toggle switched on with no URL is treated as off rather than
+ * as an error, so a half-finished setup can't start failing deliveries.
+ */
+export async function getWabisWebhookConfig(): Promise<WabisWebhookConfig> {
+  const [enabled, url, secret, refire, overrides] = await Promise.all([
+    getSetting(WABIS_WEBHOOK_ENABLED_KEY).catch(() => null),
+    getSetting(WABIS_WEBHOOK_URL_KEY).catch(() => null),
+    getSetting(WABIS_WEBHOOK_SECRET_KEY).catch(() => null),
+    getSetting(WABIS_WEBHOOK_REFIRE_KEY).catch(() => null),
+    getSetting(WABIS_AGENT_OVERRIDES_KEY).catch(() => null),
+  ]);
+  const destination = url?.trim() || null;
+  return {
+    enabled: enabled === "1" && !!destination,
+    url: destination,
+    secret: secret?.trim() || null,
+    refireOnReassign: refire === "1",
+    overrides: parseAgentOverrides(overrides),
+  };
+}
+
+// ── Delivery ────────────────────────────────────────────────────────────────
+
+type PostResult = { ok: boolean; status: number | null; body: string };
+
+/**
+ * Make a sink's response safe to store. Postgres `text` rejects NUL bytes, so an
+ * unsanitised body could make the row permanently un-updatable — which would
+ * wedge the whole queue behind it, since the drain retries oldest-first.
+ */
+function sanitizeResponse(body: string): string {
+  // eslint-disable-next-line no-control-regex
+  return body.replace(/[\u0000-\u001F\u007F]/g, " ").slice(0, MAX_RESPONSE_CHARS);
+}
+
+/** One HTTP attempt. Never throws — a transport failure is a result, not an error. */
+async function postWebhook(
+  url: string,
+  payload: unknown,
+  secret: string | null,
+): Promise<PostResult> {
+  try {
+    const res = await fetch(url, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        ...(secret ? { "x-webhook-secret": secret } : {}),
+      },
+      body: JSON.stringify(payload),
+      cache: "no-store",
+      signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+    });
+    const body = await res.text().catch(() => "");
+    return { ok: res.ok, status: res.status, body: sanitizeResponse(body) };
+  } catch (e) {
+    const msg = e instanceof Error ? `${e.name}: ${e.message}` : "request failed";
+    return { ok: false, status: null, body: sanitizeResponse(msg) };
+  }
+}
+
+/**
+ * Attempt one pending delivery and record the outcome. Returns true only when
+ * *this* call delivered it.
+ *
+ * The row is claimed with a conditional `updateMany` before the request goes
+ * out — the inline attempt and a cron tick can otherwise pick up the same row
+ * at the same instant and message the candidate twice, and their two writes
+ * would each be computed from the same stale read. Claiming increments the
+ * attempt counter up front, so a delivery whose instance is killed mid-flight
+ * still converges on 'failed' rather than being resent on every tick forever.
+ */
+export async function attemptDelivery(deliveryId: string): Promise<boolean> {
+  const now = new Date();
+  const claim = await prisma.crmWebhookDelivery.updateMany({
+    where: {
+      id: deliveryId,
+      status: "pending",
+      OR: [{ nextAttemptAt: null }, { nextAttemptAt: { lte: now } }],
+    },
+    data: {
+      attempts: { increment: 1 },
+      lastAttemptAt: now,
+      // Hold the row for the lease window so nothing else picks it up mid-flight.
+      nextAttemptAt: new Date(now.getTime() + CLAIM_LEASE_MINUTES * 60_000),
+    },
+  });
+  // Someone else owns this attempt (or the row is already settled).
+  if (claim.count !== 1) return false;
+
+  const row = await prisma.crmWebhookDelivery.findUnique({ where: { id: deliveryId } });
+  if (!row) return false;
+
+  const cfg = await getWabisWebhookConfig();
+  const result = await postWebhook(row.url, row.payload, cfg.secret);
+  const finishedAt = new Date();
+
+  if (result.ok) {
+    await prisma.crmWebhookDelivery.update({
+      where: { id: row.id },
+      data: {
+        status: "sent",
+        deliveredAt: finishedAt,
+        nextAttemptAt: null,
+        responseStatus: result.status,
+        responseBody: result.body,
+      },
+    });
+    return true;
+  }
+
+  // `row.attempts` already counts this attempt — it was incremented by the claim.
+  const delay = row.attempts >= row.maxAttempts ? null : nextAttemptDelayMinutes(row.attempts);
+  await prisma.crmWebhookDelivery.update({
+    where: { id: row.id },
+    data: {
+      status: delay === null ? "failed" : "pending",
+      nextAttemptAt: delay === null ? null : new Date(finishedAt.getTime() + delay * 60_000),
+      responseStatus: result.status,
+      responseBody: result.body,
+    },
+  });
+  return false;
+}
+
+/**
+ * Enqueue (and immediately attempt) the lead-assignment webhook.
+ *
+ * Best-effort by contract: this never throws and never fails the assignment
+ * that triggered it — mirrors `notifyLeadAssigned` / `recordLeadActivity`. A
+ * duplicate `dedupeKey` is the normal no-op path, not an error.
+ *
+ * "Only the first assignment sends" is enforced here, by asking whether this
+ * lead has *ever* produced a delivery — not by looking at whether the lead was
+ * assigned a moment ago. Those differ: unassigning a lead and then giving it to
+ * someone else looks like a first assignment to the column, but is a second
+ * introduction to the candidate, which is exactly what the flag exists to stop.
+ */
+export async function enqueueLeadAssignedWebhook(opts: {
+  leadId: string;
+  assigneeUserId: string;
+  candidateName: string | null | undefined;
+  phone: string | null | undefined;
+  email: string | null | undefined;
+  source: string | null | undefined;
+  service: string | null | undefined;
+  status: string | null | undefined;
+  assignedAt: Date | null | undefined;
+  agentDisplayName: string | null | undefined;
+  agentPhone: string | null | undefined;
+}): Promise<void> {
+  try {
+    const cfg = await getWabisWebhookConfig();
+    if (!cfg.enabled || !cfg.url) return;
+
+    const dedupeKey = leadAssignedDedupeKey(opts.leadId, opts.assigneeUserId);
+    // Cheap pre-check: the unique index is the real guard (below), this just
+    // avoids building a payload for the overwhelmingly common repeat case.
+    const existing = await prisma.crmWebhookDelivery.findUnique({
+      where: { dedupeKey },
+      select: { id: true },
+    });
+    if (existing) return;
+
+    // Unless re-fire is on, one introduction per lead — whoever it ends up with.
+    if (!cfg.refireOnReassign) {
+      const previous = await prisma.crmWebhookDelivery.findFirst({
+        where: { leadId: opts.leadId, event: LEAD_ASSIGNED_EVENT },
+        select: { id: true },
+      });
+      if (previous) return;
+    }
+
+    const { agent, agentPhone } = resolveAgent({
+      userId: opts.assigneeUserId,
+      displayName: opts.agentDisplayName,
+      phone: opts.agentPhone,
+      overrides: cfg.overrides,
+    });
+    const payload = buildLeadAssignedPayload({
+      leadId: opts.leadId,
+      candidateName: opts.candidateName,
+      phone: opts.phone,
+      email: opts.email,
+      source: opts.source,
+      service: opts.service,
+      status: opts.status,
+      assignedAt: opts.assignedAt ?? new Date(),
+      agent,
+      agentPhone,
+    });
+
+    if (!payload) {
+      // Unsendable rather than transiently failed — record it so the reason is
+      // visible in the settings log instead of vanishing into the server logs.
+      // Keyed uniquely and under the skipped event, so once someone fixes the
+      // lead's number a reassignment can still send for real.
+      await prisma.crmWebhookDelivery
+        .create({
+          data: {
+            event: LEAD_SKIPPED_EVENT,
+            dedupeKey: `${LEAD_SKIPPED_EVENT}:${randomUUID()}`,
+            leadId: opts.leadId,
+            assigneeUserId: opts.assigneeUserId,
+            url: cfg.url,
+            payload: {},
+            status: "failed",
+            attempts: 0,
+            maxAttempts: 0,
+            responseBody: "Not sent — the lead has no phone number Wabis can use as a subscriber.",
+          },
+        })
+        .catch(() => undefined);
+      return;
+    }
+
+    const created = await prisma.crmWebhookDelivery.create({
+      data: {
+        event: LEAD_ASSIGNED_EVENT,
+        dedupeKey,
+        leadId: opts.leadId,
+        assigneeUserId: opts.assigneeUserId,
+        url: cfg.url,
+        payload,
+      },
+      select: { id: true },
+    });
+
+    await attemptDelivery(created.id);
+  } catch (e) {
+    // Includes the unique-constraint race (two assigns landing together): the
+    // other request already owns this delivery, so losing is the correct outcome.
+    console.error("[crm-webhook] lead-assignment webhook not enqueued:", e);
+  }
+}
+
+/**
+ * Retry deliveries the inline attempt didn't land. Driven by Vercel Cron
+ * (/api/cron/crm-webhooks) — this is what makes the outbox worth having.
+ */
+export async function drainWebhookQueue(
+  limit = 50,
+): Promise<{ attempted: number; sent: number; errored: number; skipped?: string }> {
+  // The enable toggle is a kill switch, so it has to stop work already queued
+  // too — otherwise switching the automation off still lets a backlog message
+  // candidates for the next quarter of an hour. Rows stay pending and resume if
+  // it is switched back on.
+  const cfg = await getWabisWebhookConfig();
+  if (!cfg.enabled) return { attempted: 0, sent: 0, errored: 0, skipped: "automation disabled" };
+
+  const due = await prisma.crmWebhookDelivery.findMany({
+    where: {
+      status: "pending",
+      OR: [{ nextAttemptAt: null }, { nextAttemptAt: { lte: new Date() } }],
+    },
+    orderBy: { createdAt: "asc" },
+    take: limit,
+    select: { id: true },
+  });
+
+  let sent = 0;
+  let failed = 0;
+  // Sequential on purpose: a webhook sink that is struggling should see one
+  // request at a time, not a burst of the whole backlog.
+  for (const row of due) {
+    try {
+      if (await attemptDelivery(row.id)) sent++;
+    } catch (e) {
+      // Isolate the row. The drain is oldest-first, so letting one bad row throw
+      // would re-select it at the head of every future tick and starve the whole
+      // queue behind it.
+      failed++;
+      console.error(`[crm-webhook] delivery ${row.id} errored during drain:`, e);
+    }
+  }
+  return { attempted: due.length, sent, errored: failed };
+}
+
+/**
+ * Post a sample payload to the configured URL so an admin can verify the wiring
+ * (and load Wabis's field mapping) without assigning a real lead. Logged like
+ * any other delivery, with a unique dedupe key so tests never suppress or
+ * collide with a real send.
+ */
+export async function sendTestWebhook(
+  testPhone: string,
+): Promise<{ ok: boolean; status: number | null; body: string; error?: string }> {
+  const cfg = await getWabisWebhookConfig();
+  const url = cfg.url;
+  if (!url) return { ok: false, status: null, body: "", error: "No webhook URL configured." };
+
+  const payload = buildLeadAssignedPayload({
+    leadId: "test-lead",
+    candidateName: "Test Candidate",
+    // The admin supplies the number: a test drives Wabis all the way through to
+    // sending a real WhatsApp message, so a hard-coded placeholder would mean
+    // messaging whoever happens to own it.
+    phone: testPhone,
+    email: "test@example.com",
+    source: "Test",
+    service: "",
+    status: "Not Yet Started",
+    assignedAt: new Date(),
+    agent: "Test Agent",
+    agentPhone: "+910000000000",
+  });
+  if (!payload) {
+    return { ok: false, status: null, body: "", error: "Enter a valid mobile number to send the test to." };
+  }
+
+  const result = await postWebhook(url, payload, cfg.secret);
+  await prisma.crmWebhookDelivery
+    .create({
+      data: {
+        event: TEST_EVENT,
+        // Unique per test send — a test must never occupy a real lead's key.
+        dedupeKey: `${TEST_EVENT}:${randomUUID()}`,
+        url,
+        payload,
+        status: result.ok ? "sent" : "failed",
+        attempts: 1,
+        maxAttempts: 1,
+        lastAttemptAt: new Date(),
+        deliveredAt: result.ok ? new Date() : null,
+        responseStatus: result.status,
+        responseBody: result.body,
+      },
+    })
+    .catch(() => undefined);
+
+  return result;
+}
+
+/**
+ * Reset a delivery and try again — the "re-fire" escape hatch for a send that
+ * failed for an external reason (Wabis down, template not yet approved). The
+ * dedupe key is kept, so re-firing is still bounded to one live delivery per
+ * lead+consultant.
+ *
+ * The destination is re-read from settings rather than reused from the row: the
+ * most likely reason a batch failed is that the URL was wrong, so retrying
+ * against the address that just failed would make the button useless in exactly
+ * the case it is needed.
+ *
+ * Refuses rows with no payload (the leads that had no usable phone) — re-posting
+ * an empty body would register a broken subscriber in Wabis. There, fix the
+ * lead's number and reassign; the skipped row doesn't block that.
+ *
+ * Also refuses once the lead has moved on. The payload is frozen at enqueue
+ * time, so retrying a row whose lead now belongs to someone else would route the
+ * subscriber to the old consultant and introduce them as the candidate's
+ * contact — worse than not sending at all.
+ */
+export async function requeueDelivery(
+  id: string,
+): Promise<{ requeued: boolean; delivered: boolean; reason?: string }> {
+  const refuse = (reason: string) => ({ requeued: false, delivered: false, reason });
+
+  const row = await prisma.crmWebhookDelivery.findUnique({ where: { id } });
+  if (!row) return refuse("That delivery no longer exists.");
+  const payload = row.payload as Record<string, unknown> | null;
+  if (!payload || typeof payload !== "object" || !payload.phone) {
+    return refuse("This lead had no usable phone number — fix the number on the lead and reassign it.");
+  }
+
+  const cfg = await getWabisWebhookConfig();
+  if (!cfg.url) return refuse("No webhook URL configured.");
+
+  if (row.leadId && row.assigneeUserId) {
+    const lead = await prisma.lead.findUnique({
+      where: { id: row.leadId },
+      select: { assignedToId: true },
+    });
+    if (!lead) return refuse("That lead no longer exists.");
+    if (lead.assignedToId !== row.assigneeUserId) {
+      return refuse("This lead has since been reassigned — re-sending would name the previous consultant.");
+    }
+  }
+
+  await prisma.crmWebhookDelivery.update({
+    where: { id },
+    data: {
+      url: cfg.url,
+      status: "pending",
+      attempts: 0,
+      maxAttempts: Math.max(1, row.maxAttempts),
+      nextAttemptAt: null,
+      responseStatus: null,
+      responseBody: null,
+    },
+  });
+  // A failed attempt here isn't a refusal — the row is queued either way, and
+  // the cron drain will keep trying.
+  return { requeued: true, delivered: await attemptDelivery(id) };
+}
