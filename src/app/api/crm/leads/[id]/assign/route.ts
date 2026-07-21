@@ -7,6 +7,7 @@ import { getCurrentUserAndPermissions } from "@/lib/permissions";
 import { getCrmAccess } from "@/lib/crm-rbac";
 import { recordLeadActivity } from "@/lib/crm-activity";
 import { notifyLeadAssigned } from "@/lib/crm-notify";
+import { enqueueLeadAssignedWebhook } from "@/lib/crm-webhook";
 import { leadRowInclude, serializeLead, crmTaskFollowAssignmentWhere } from "@/lib/crm-leads";
 
 export const dynamic = "force-dynamic";
@@ -102,6 +103,27 @@ export const POST = withApiHandler(async (req: Request, { params }: { params: { 
       leadId: updated.id,
       candidateName: updated.candidateName,
       isReassignment: wasAssigned,
+    });
+  }
+
+  // Wabis WhatsApp intro (best-effort; never fails the assignment). Whether a
+  // reassignment may send is decided inside the helper, which checks the lead's
+  // delivery history rather than this request's before/after state — unassigning
+  // and reassigning would otherwise look like a first assignment and send the
+  // candidate a second introduction.
+  if (target) {
+    await enqueueLeadAssignedWebhook({
+      leadId: updated.id,
+      assigneeUserId: target,
+      candidateName: updated.candidateName,
+      phone: updated.phoneE164 ?? updated.phone,
+      email: updated.email,
+      source: updated.source?.label,
+      service: updated.service?.name,
+      status: updated.status?.label,
+      assignedAt: updated.assignedAt,
+      agentDisplayName: updated.assignedTo?.leadPulseRole?.displayName,
+      agentPhone: updated.assignedTo?.leadPulseRole?.phone,
     });
   }
 

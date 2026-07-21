@@ -3,6 +3,7 @@
   "crons": [
     { "path": "/api/cron/etime-sync", "schedule": "30 4 * * *" },
     { "path": "/api/cron/etime-sync", "schedule": "30 8 * * *" },
-    { "path": "/api/cron/etime-sync", "schedule": "30 13 * * *" }
+    { "path": "/api/cron/etime-sync", "schedule": "30 13 * * *" },
+    { "path": "/api/cron/crm-webhooks", "schedule": "15 3 * * *" }
   ]
 }
