@@ -694,17 +694,29 @@ export async function drainWebhookQueue(
  * (and load Wabis's field mapping) without assigning a real lead. Logged like
  * any other delivery, with a unique dedupe key so tests never suppress or
  * collide with a real send.
+ *
+ * The endpoint must be ACTIVE. A test that passed through an inactive endpoint —
+ * which the real delivery path filters out — would report "working" for a
+ * workflow that then silently skips every real assignment, which is exactly the
+ * false confidence a test exists to prevent.
  */
 export async function sendTestWebhook(opts: {
   endpointId: string;
   phone: string;
 }): Promise<{ ok: boolean; status: number | null; body: string; error?: string }> {
   const cfg = await getWabisWebhookConfig();
-  const endpoint = await prisma.wabisWebhookEndpoint.findUnique({
-    where: { id: opts.endpointId },
+  const endpoint = await prisma.wabisWebhookEndpoint.findFirst({
+    where: { id: opts.endpointId, isActive: true },
     select: endpointSelect,
   });
-  if (!endpoint) return { ok: false, status: null, body: "", error: "That endpoint no longer exists." };
+  if (!endpoint) {
+    return {
+      ok: false,
+      status: null,
+      body: "",
+      error: "That workflow is inactive — activate it first, or a real lead assigned to this consultant won't send either.",
+    };
+  }
   const url = endpoint.webhookUrl;
 
   const payload = buildLeadAssignedPayload({
