@@ -37,14 +37,17 @@ import { CRM_TEAM_LEAD_PAGE } from "./crm-rbac";
 /**
  * Per active-status SLA: a lead untouched for MORE than this many days is
  * "breaching" its stage SLA. Keyed by `CrmLeadStatus.code`. Active statuses not
- * listed here (none today) are not SLA-monitored. Won/lost statuses are excluded
- * by construction — only `kind = 'active'` leads are ever classified.
+ * listed here are not SLA-monitored — deliberately including `re_marketing`, a
+ * slow-drip nurture/revive bucket where a weekly response deadline is noise: a
+ * planned next step is tracked by the no-next-step bucket and genuinely-dead
+ * leads still surface via the global {@link ABANDONED_DAYS} flag. Won/lost
+ * statuses are excluded by construction — only `kind = 'active'` leads are
+ * ever classified.
  */
 export const SLA_THRESHOLD_DAYS: Record<string, number> = {
   not_yet_started: 1,
   qualify: 3,
   follow_up: 2,
-  re_marketing: 7,
   pipeline: 3,
 };
 
