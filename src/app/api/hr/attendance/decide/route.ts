@@ -100,6 +100,10 @@ export async function POST(req: Request) {
           decidedById: decision === "reset" ? null : userId,
           decidedAt: decision === "reset" ? null : now,
           decisionNote: decision === "reset" ? null : note ?? null,
+          // Lock the day so the eTimeOffice sync can't revert this manual
+          // override. `reset` hands the day back to the biometric feed, so it
+          // unlocks (letting future syncs manage it again).
+          locked: decision !== "reset",
         },
       }),
     ),

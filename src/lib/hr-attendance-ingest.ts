@@ -191,8 +191,15 @@ export async function ingestParsedAttendance(
 
     // Replace any prior attendance days for this (clamped) window — idempotent
     // re-import. With a floor, rows dated before it survive untouched.
+    //
+    // `locked: false` protects HR MANUAL overrides (approved regularizations,
+    // decide/override actions) from the delete-and-replace: a locked day is
+    // never deleted here, and the matching biometric row is dropped by the
+    // createMany `skipDuplicates` below (unique employeeId+date). Without this,
+    // every sync tick reverted approved regularizations to the raw biometric
+    // value. Sandwich flips are derived (unlocked) and re-run each sync.
     await prisma.hrAttendanceDay.deleteMany({
-      where: { date: { gte: effStart, lte: end } },
+      where: { date: { gte: effStart, lte: end }, locked: false },
     });
 
     // Pull holidays in the window so we can reclassify shift=X / no-punch rows
@@ -337,7 +344,9 @@ export async function ingestParsedAttendance(
       const shiftStart = shift ? toMin(shift.startTime) : null;
       const shiftEnd = shift ? toMin(shift.endTime) : null;
       const days = await prisma.hrAttendanceDay.findMany({
-        where: { employeeId, date: { gte: effStart, lte: end } },
+        // Skip locked days: an HR manual override owns its status/lateness and
+        // must not be re-derived from the (possibly wrong) biometric punches.
+        where: { employeeId, date: { gte: effStart, lte: end }, locked: false },
         select: {
           id: true,
           date: true,
