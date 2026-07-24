@@ -749,7 +749,9 @@ model Holiday {
 // Master: parties (candidates / vendors) referenced by transactions.
 model Party {
   id              String           @id @default(cuid())
-  name            String           @unique
+  // Unique per group (see @@unique below), NOT globally: a Candidate and a
+  // Vendor may legitimately share a name (e.g. a landlord and a student).
+  name            String
   // 'Candidate' | 'Vendor'
   group           String
   // What transaction types this party may be linked to: 'Revenue' | 'Expense' | 'Both'
@@ -783,6 +785,7 @@ model Party {
   leads             Lead[]              @relation("LeadParty")
   opsProjects       OpsProject[]
 
+  @@unique([name, group])
   @@index([group])
   @@index([isActive])
   @@index([sourceId])
