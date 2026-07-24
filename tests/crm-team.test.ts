@@ -74,9 +74,13 @@ describe("classifyStaleness — per-status SLA", () => {
     expect(classifyStaleness({ statusCode: "not_yet_started", lastTouchAt: ago(1), now }).breached).toBe(false);
   });
 
-  it("uses the stage's own threshold (Re-marketing tolerates 7 days)", () => {
-    expect(classifyStaleness({ statusCode: "re_marketing", lastTouchAt: ago(5), now }).breached).toBe(false);
-    expect(classifyStaleness({ statusCode: "re_marketing", lastTouchAt: ago(8), now }).breached).toBe(true);
+  it("does not SLA-monitor Re-marketing — a slow-drip nurture bucket has no response deadline", () => {
+    // Re-marketing is intentionally absent from SLA_THRESHOLD_DAYS: no breach at any age.
+    const long = classifyStaleness({ statusCode: "re_marketing", lastTouchAt: ago(20), now });
+    expect(long.slaDays).toBeNull();
+    expect(long.breached).toBe(false);
+    // ...but a truly-dead re-marketing lead still surfaces via the global abandoned flag.
+    expect(classifyStaleness({ statusCode: "re_marketing", lastTouchAt: ago(31), now }).abandoned).toBe(true);
   });
 
   it("returns slaDays null for a status with no configured SLA", () => {
@@ -95,9 +99,10 @@ describe("classifyStaleness — per-status SLA", () => {
       not_yet_started: 1,
       qualify: 3,
       follow_up: 2,
-      re_marketing: 7,
       pipeline: 3,
     });
+    // Re-marketing is deliberately NOT SLA-monitored (nurture bucket).
+    expect(SLA_THRESHOLD_DAYS.re_marketing).toBeUndefined();
     expect(ABANDONED_DAYS).toBe(30);
     expect(STUCK_DAYS).toBe(14);
     expect(FIRST_RESPONSE_SLA_HOURS).toBe(24);
