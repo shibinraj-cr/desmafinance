@@ -134,9 +134,19 @@ export async function PATCH(req: Request, { params }: { params: { id: string } }
       const note = isLeave
         ? `Leave approved · ${parsed.data.reviewNote ?? ""}`.trim()
         : `Regularized · ${parsed.data.reviewNote ?? ""}`.trim();
-      if (reg.attendanceDayId) {
+      // Resolve the attendance row by its natural key (employeeId, date) — NOT
+      // the stored `reg.attendanceDayId`. The eTimeOffice sync delete-and-
+      // replaces the cycle window, so a request filed before a sync points at a
+      // day id that no longer exists (dangling FK → the old `update where id`
+      // threw P2025 and rolled the approval back). Look it up fresh, and re-link
+      // `attendanceDayId` if it drifted.
+      const existingDay = await tx.hrAttendanceDay.findUnique({
+        where: { employeeId_date: { employeeId: reg.employee.id, date: reg.date } },
+        select: { id: true },
+      });
+      if (existingDay) {
         await tx.hrAttendanceDay.update({
-          where: { id: reg.attendanceDayId },
+          where: { id: existingDay.id },
           data: {
             status: targetStatus,
             inTime,
@@ -149,10 +159,18 @@ export async function PATCH(req: Request, { params }: { params: { id: string } }
             decidedById: userId ?? null,
             decidedAt: now,
             decisionNote: note,
+            // Lock so the next sync can't revert this approved correction.
+            locked: true,
           },
         });
+        if (reg.attendanceDayId !== existingDay.id) {
+          await tx.hrAttendanceRegularization.update({
+            where: { id: params.id },
+            data: { attendanceDayId: existingDay.id },
+          });
+        }
       } else {
-        // No attendance row yet. Use the most recent upload as parent
+        // No attendance row for this date. Use the most recent upload as parent
         // so HrAttendanceUpload aggregations still work; if there are
         // no uploads at all, skip the day-row write and surface a
         // soft warning.
@@ -161,7 +179,7 @@ export async function PATCH(req: Request, { params }: { params: { id: string } }
           select: { id: true },
         });
         if (upload) {
-          await tx.hrAttendanceDay.create({
+          const created = await tx.hrAttendanceDay.create({
             data: {
               uploadId: upload.id,
               employeeId: reg.employee.id,
@@ -179,7 +197,13 @@ export async function PATCH(req: Request, { params }: { params: { id: string } }
               decidedById: userId ?? null,
               decidedAt: now,
               decisionNote: parsed.data.reviewNote ?? null,
+              // Lock so the next sync can't revert this approved correction.
+              locked: true,
             },
+          });
+          await tx.hrAttendanceRegularization.update({
+            where: { id: params.id },
+            data: { attendanceDayId: created.id },
           });
         }
       }

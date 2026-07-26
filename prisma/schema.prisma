@@ -1355,6 +1355,13 @@ model HrAttendanceDay {
   decidedById     String?
   decidedBy       User?              @relation("HrLeaveDecider", fields: [decidedById], references: [id], onDelete: SetNull)
   decidedAt       DateTime?
+  /// True when this day carries an authoritative HR MANUAL override — a
+  /// regularization approval or a decide/override action — that the biometric
+  /// eTimeOffice sync must NOT delete, replace, or recompute. Sandwich-rule
+  /// flips are DERIVED (re-run every sync) and stay unlocked. The `reset`
+  /// decision clears it. See ingestParsedAttendance: locked days are excluded
+  /// from the delete-and-replace window and the late/half-day recompute.
+  locked          Boolean            @default(false)
 
   @@unique([employeeId, date])
   @@index([date])
