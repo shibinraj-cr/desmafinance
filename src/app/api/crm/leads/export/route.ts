@@ -6,6 +6,7 @@ import { unauthorized, forbidden } from "@/lib/http-error";
 import { getCurrentUserAndPermissions } from "@/lib/permissions";
 import { getCrmAccess } from "@/lib/crm-rbac";
 import { leadTemperatureMeta } from "@/lib/crm";
+import { countryCodeFor } from "@/lib/countries";
 import { parseAgeParam } from "@/lib/age";
 import { parsePeriod, rangeFor } from "@/lib/period";
 import {
@@ -80,6 +81,8 @@ export const GET = withApiHandler(async (req: Request) => {
       DOB: l.dob ?? "",
       Age: l.age ?? "",
       Country: l.country ?? "",
+      // Derived ISO alpha-2 code (AU, IN, …); "" when the country is blank or unresolved.
+      "Country Code": countryCodeFor(l.country ?? ""),
       "Study Destination": l.studyDestination ?? "",
       Service: l.service?.name ?? "",
       Qualification: l.qualification?.label ?? "",
@@ -89,12 +92,12 @@ export const GET = withApiHandler(async (req: Request) => {
   });
 
   const ws = XLSX.utils.json_to_sheet(data, {
-    header: ["Created", "Source", "Campaign", "Status", "Temperature", "Candidate", "Email", "Phone", "Alt Phone", "DOB", "Age", "Country", "Study Destination", "Service", "Qualification", "Consultant", "Assigned"],
+    header: ["Created", "Source", "Campaign", "Status", "Temperature", "Candidate", "Email", "Phone", "Alt Phone", "DOB", "Age", "Country", "Country Code", "Study Destination", "Service", "Qualification", "Consultant", "Assigned"],
   });
   // Reasonable column widths.
   ws["!cols"] = [
     { wch: 20 }, { wch: 14 }, { wch: 22 }, { wch: 14 }, { wch: 12 }, { wch: 22 },
-    { wch: 26 }, { wch: 16 }, { wch: 16 }, { wch: 12 }, { wch: 6 }, { wch: 16 }, { wch: 18 }, { wch: 22 }, { wch: 16 }, { wch: 18 }, { wch: 20 },
+    { wch: 26 }, { wch: 16 }, { wch: 16 }, { wch: 12 }, { wch: 6 }, { wch: 16 }, { wch: 6 }, { wch: 18 }, { wch: 22 }, { wch: 16 }, { wch: 18 }, { wch: 20 },
   ];
   const wb = XLSX.utils.book_new();
   XLSX.utils.book_append_sheet(wb, ws, "Leads");

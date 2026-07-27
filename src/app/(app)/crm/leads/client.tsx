@@ -7,7 +7,7 @@ import { useRouter, usePathname, useSearchParams } from "next/navigation";
 import { type LeadRow, isActionOnlyStatus } from "@/lib/crm-leads";
 import { DEFAULT_STATUS_COLOR, BULK_EMAIL_MERGE_FIELDS, fillTemplate, LEAD_TEMPERATURES, leadTemperatureMeta, type MessageTemplateDTO } from "@/lib/crm";
 import { ageFromDob } from "@/lib/age";
-import { COUNTRIES } from "@/lib/countries";
+import { COUNTRIES, countryCodeFor } from "@/lib/countries";
 
 // ── Shared prop shapes ──────────────────────────────────────────────────────
 export type StatusOpt = { id: string; code: string; label: string; kind: string; color: string | null };
@@ -501,6 +501,18 @@ function NewLeadButton({ masters, access }: { masters: Masters; access: LeadsAcc
                   ))}
                 </select>
               </Field>
+              {/* Auto-derived ISO alpha-2 code for the selected country (AU, IN, …).
+                  Display-only: disabled, not held in form state, never submitted. */}
+              <Field label="Country Code">
+                <input
+                  className={inputCls}
+                  value={countryCodeFor(form.country)}
+                  readOnly
+                  disabled
+                  placeholder="—"
+                  aria-label="Country code (auto-filled from the selected country)"
+                />
+              </Field>
               {isStudyAbroad && (
                 <Field label="Study Destination">
                   <select
@@ -562,7 +574,7 @@ const SORT_OPTIONS: { value: string; label: string }[] = [
 // fixed). Order is remembered per browser in localStorage.
 const LEADS_COL_ORDER_KEY = "crm.leads.columnOrder.v1";
 const LEADS_DEFAULT_COLUMNS = [
-  "created", "source", "campaign", "status", "temperature", "candidate", "email", "phone", "age", "country", "studyDestination", "service", "qualification", "consultant", "assigned",
+  "created", "source", "campaign", "status", "temperature", "candidate", "email", "phone", "age", "country", "code", "studyDestination", "service", "qualification", "consultant", "assigned",
 ] as const;
 
 export function LeadsTable({
@@ -808,6 +820,14 @@ export function LeadsTable({
         ) : (
           "—"
         ),
+    },
+    {
+      // Derived ISO alpha-2 code for the row's country (AU, IN, …). Display-only:
+      // computed from `country`, not stored, and not a server-side filter.
+      id: "code",
+      label: "Code",
+      className: "whitespace-nowrap font-mono text-on-surface-variant",
+      render: (l) => countryCodeFor(l.country ?? "") || "—",
     },
     {
       id: "studyDestination",

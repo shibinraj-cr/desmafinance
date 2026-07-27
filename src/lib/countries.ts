@@ -1,3 +1,12 @@
+import { getAlpha2Code, registerLocale } from "i18n-iso-countries";
+import enLocale from "i18n-iso-countries/langs/en.json";
+
+// Register the English locale so `getAlpha2Code(name, "en")` can resolve country
+// names. The browser entry point (unlike the Node one) ships with NO locales
+// pre-loaded, so this explicit registration is required for the lookup to work
+// in client bundles. Idempotent and lightweight — only the "en" locale is added.
+registerLocale(enLocale);
+
 // Full list of country names for the CRM lead "Country" dropdown. Stored on the
 // lead as a plain string (the name), matching the other free-form text columns.
 // Kept as a flat, alphabetically-sorted array so every select renders the same
@@ -203,3 +212,27 @@ export const COUNTRIES: readonly string[] = [
   "Zambia",
   "Zimbabwe",
 ];
+
+// Memoised country name → ISO 3166-1 alpha-2 code lookups (e.g. "Australia" →
+// "AU"). The Map caches both hits and misses (a "" result) for the lifetime of
+// the module, so repeated calls during rendering never re-run the resolver.
+const alpha2Cache = new Map<string, string>();
+
+/**
+ * Derive the 2-letter ISO 3166-1 alpha-2 code for a country NAME — e.g.
+ * `countryCodeFor("Australia")` → `"AU"`, `countryCodeFor("India")` → `"IN"`.
+ *
+ * Returns "" when the input is blank or the name can't be resolved by
+ * i18n-iso-countries (a few informal names in {@link COUNTRIES} — e.g. some
+ * Congo/Côte d'Ivoire spellings — have no exact match). Pure and memoised, so
+ * it's safe to call on every render for a purely-derived, display-only field.
+ */
+export function countryCodeFor(country: string): string {
+  const name = country.trim();
+  if (!name) return "";
+  const cached = alpha2Cache.get(name);
+  if (cached !== undefined) return cached;
+  const code = getAlpha2Code(name, "en") ?? "";
+  alpha2Cache.set(name, code);
+  return code;
+}

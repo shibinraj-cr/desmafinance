@@ -8,7 +8,7 @@ import type { LeadRow, NoteRow, ActivityRow, TaskRow } from "@/lib/crm-leads";
 import { isActionOnlyStatus } from "@/lib/crm-leads";
 import { buildLeadMergeVars, fillTemplate, LEAD_TEMPERATURES, type MessageTemplateDTO } from "@/lib/crm";
 import { ageFromDob } from "@/lib/age";
-import { COUNTRIES } from "@/lib/countries";
+import { COUNTRIES, countryCodeFor } from "@/lib/countries";
 import { StatusPill, TemperaturePill, type StatusOpt, type Opt, type BdeOpt } from "../client";
 import { EnrollCelebration } from "@/components/EnrollCelebration";
 import { NextStepDialog, type NextStepPayload } from "@/components/crm/NextStepDialog";
@@ -595,6 +595,18 @@ function SummaryCard({ lead, masters, canEdit }: { lead: LeadRow; masters: Detai
               ))}
             </select>
           </Field>
+          {/* Auto-derived ISO alpha-2 code for the selected country (AU, IN, …).
+              Display-only: disabled, not held in draft state, never saved. */}
+          <Field label="Country Code">
+            <input
+              className={inputCls}
+              value={countryCodeFor(draft.country)}
+              readOnly
+              disabled
+              placeholder="—"
+              aria-label="Country code (auto-filled from the selected country)"
+            />
+          </Field>
           {isStudyAbroad && (
             <Field label="Study Destination">
               <select className={inputCls} value={draft.studyDestination} onChange={(e) => setDraft({ ...draft, studyDestination: e.target.value })}>
@@ -657,6 +669,7 @@ function SummaryCard({ lead, masters, canEdit }: { lead: LeadRow; masters: Detai
           {lead.dob && <Row label="Date of birth" value={lead.dob} />}
           {lead.age !== null && <Row label="Age" value={`${lead.age} yrs`} />}
           <Row label="Country" value={lead.country ?? "—"} />
+          <Row label="Country Code" value={countryCodeFor(lead.country ?? "") || "—"} />
           {(/study abroad/i.test(lead.service?.name ?? "") || lead.studyDestination) && (
             <Row label="Study Destination" value={lead.studyDestination ?? "—"} />
           )}
