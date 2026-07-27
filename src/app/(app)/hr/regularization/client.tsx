@@ -204,6 +204,7 @@ export function RegularizationReviewClient({
                   finalIn: final.finalIn || null,
                   finalOut: final.finalOut || null,
                   finalStatus: final.finalStatus,
+                  leaveStatus: final.leaveStatus,
                 }),
               });
               if (!res.ok) {
@@ -233,12 +234,19 @@ function ApproveModal({
   row: RegRow;
   busy: boolean;
   onClose: () => void;
-  onSubmit: (v: { finalIn: string; finalOut: string; finalStatus: "P" | "HD" | "REG"; reviewNote: string }) => Promise<void>;
+  onSubmit: (v: {
+    finalIn: string;
+    finalOut: string;
+    finalStatus: "P" | "HD" | "REG";
+    leaveStatus: "LV" | "A";
+    reviewNote: string;
+  }) => Promise<void>;
 }) {
   const [v, setV] = useState({
     finalIn: row.proposedIn ?? "",
     finalOut: row.proposedOut ?? "",
     finalStatus: "P" as "P" | "HD" | "REG",
+    leaveStatus: "LV" as "LV" | "A",
     reviewNote: "",
   });
   const isLeave = row.requestType === "leave";
@@ -250,10 +258,24 @@ function ApproveModal({
           {row.empCode} · {row.name} · {row.date} · {row.reasonLabel}
         </p>
         {isLeave ? (
-          <p className="text-label-sm rounded bg-purple-50 text-purple-800 px-sm py-xs">
-            Approving marks {row.date} as <strong>paid leave (LV)</strong> and deducts it from the
-            employee&apos;s leave balance.
-          </p>
+          <label className="block space-y-xs">
+            <span className="text-caption uppercase tracking-wider text-on-surface-variant">
+              Leave type
+            </span>
+            <select
+              value={v.leaveStatus}
+              onChange={(e) => setV({ ...v, leaveStatus: e.target.value as "LV" | "A" })}
+              className="w-full bg-surface-container border border-outline-variant rounded-lg px-sm py-xs"
+            >
+              <option value="LV">Paid leave (deducts leave balance)</option>
+              <option value="A">Unpaid — loss of pay</option>
+            </select>
+            <p className="text-caption text-on-surface-variant">
+              {v.leaveStatus === "LV"
+                ? `Marks ${row.date} as paid leave (LV), deducted from the employee's leave balance.`
+                : `Marks ${row.date} as unpaid leave / loss of pay (A).`}
+            </p>
+          </label>
         ) : (
           <>
             <div className="grid grid-cols-2 gap-base">

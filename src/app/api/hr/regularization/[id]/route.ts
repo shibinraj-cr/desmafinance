@@ -44,6 +44,9 @@ const Schema = z.object({
   finalOut: z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/).nullable().optional(),
   /// On approve: new status to write to the attendance day row.
   finalStatus: z.enum(["P", "HD", "REG"]).default("P"),
+  /// On approve of a LEAVE request: paid leave (LV, deducts leave balance) or
+  /// unpaid / loss-of-pay (A). HR picks this at approval; defaults to paid.
+  leaveStatus: z.enum(["LV", "A"]).default("LV"),
 });
 
 export async function PATCH(req: Request, { params }: { params: { id: string } }) {
@@ -82,7 +85,7 @@ export async function PATCH(req: Request, { params }: { params: { id: string } }
       where: { id: reg.attendanceDayId },
       select: { inTime: true, outTime: true },
     });
-    if (day && leaveStatusBlockedByPunch("LV", day.inTime, day.outTime)) {
+    if (day && leaveStatusBlockedByPunch(parsed.data.leaveStatus, day.inTime, day.outTime)) {
       return NextResponse.json(
         {
           error: `${reg.date.toISOString().slice(0, 10)} has a punch (${day.inTime ?? "—"}–${day.outTime ?? "—"}) — it's a worked day and can't be marked as leave. Use a punch correction instead.`,
@@ -125,14 +128,16 @@ export async function PATCH(req: Request, { params }: { params: { id: string } }
     });
     if (parsed.data.decision === "approve") {
       // Punch request → corrected punches resolve to the HR-chosen P/HD.
-      // Leave request → the day becomes paid leave (LV); no punch is involved.
+      // Leave request → the day becomes paid leave (LV) or unpaid loss-of-pay
+      // (A), per HR's choice; no punch is involved.
       const isLeave = reg.requestType === "leave";
       const inTime = isLeave ? null : parsed.data.finalIn ?? reg.proposedIn ?? null;
       const outTime = isLeave ? null : parsed.data.finalOut ?? reg.proposedOut ?? null;
       const workMinutes = isLeave ? null : grossWorkMinutes(inTime, outTime);
-      const targetStatus = isLeave ? "LV" : parsed.data.finalStatus;
+      const targetStatus = isLeave ? parsed.data.leaveStatus : parsed.data.finalStatus;
+      const leaveLabel = parsed.data.leaveStatus === "A" ? "Unpaid leave" : "Paid leave";
       const note = isLeave
-        ? `Leave approved · ${parsed.data.reviewNote ?? ""}`.trim()
+        ? `${leaveLabel} approved · ${parsed.data.reviewNote ?? ""}`.trim()
         : `Regularized · ${parsed.data.reviewNote ?? ""}`.trim();
       // Resolve the attendance row by its natural key (employeeId, date) — NOT
       // the stored `reg.attendanceDayId`. The eTimeOffice sync delete-and-
@@ -193,7 +198,7 @@ export async function PATCH(req: Request, { params }: { params: { id: string } }
               otMinutes: 0,
               lateMinutes,
               earlyOutMinutes: null,
-              remark: isLeave ? "Leave (regularization)" : `Regularized · ${reg.reasonType}`,
+              remark: isLeave ? `${leaveLabel} (regularization)` : `Regularized · ${reg.reasonType}`,
               decidedById: userId ?? null,
               decidedAt: now,
               decisionNote: parsed.data.reviewNote ?? null,
