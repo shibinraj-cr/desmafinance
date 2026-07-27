@@ -1,7 +1,5 @@
 "use client";
 
-import { useState, useTransition } from "react";
-import { useRouter } from "next/navigation";
 import { Section } from "@/components/Cards";
 
 type Request = {
@@ -44,48 +42,16 @@ const STATUS_TONE: Record<string, string> = {
 export function MyLeaveClient({
   balance,
   requests,
-  canApply = true,
   ledger = [],
   ledgerYear,
   ledgerOpening = 0,
 }: {
   balance: Balance | null;
   requests: Request[];
-  canApply?: boolean;
   ledger?: LedgerRow[];
   ledgerYear?: number;
   ledgerOpening?: number;
 }) {
-  const router = useRouter();
-  const [pending, start] = useTransition();
-  const [error, setError] = useState<string | null>(null);
-  const [draft, setDraft] = useState({
-    fromDate: "",
-    toDate: "",
-    halfDay: false,
-    leaveType: "CL" as "CL" | "LOP" | "SL",
-    reason: "",
-  });
-
-  async function submit() {
-    setError(null);
-    const res = await fetch("/api/me/leave", {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({
-        ...draft,
-        toDate: draft.toDate || draft.fromDate,
-      }),
-    });
-    if (!res.ok) {
-      const j = await res.json().catch(() => ({}));
-      setError(j.error || "submit failed");
-      return;
-    }
-    setDraft({ fromDate: "", toDate: "", halfDay: false, leaveType: "CL", reason: "" });
-    start(() => router.refresh());
-  }
-
   return (
     <div className="space-y-lg">
       {balance && (
@@ -152,76 +118,15 @@ export function MyLeaveClient({
         </Section>
       )}
 
-      {canApply ? (
       <Section title="Apply for leave">
-        <div className="grid grid-cols-1 md:grid-cols-4 gap-sm items-end">
-          <label className="flex flex-col gap-xs">
-            <span className="text-caption text-on-surface-variant">From</span>
-            <input
-              type="date"
-              className="px-sm py-sm rounded border border-outline-variant bg-surface"
-              value={draft.fromDate}
-              onChange={(e) => setDraft({ ...draft, fromDate: e.target.value })}
-            />
-          </label>
-          <label className="flex flex-col gap-xs">
-            <span className="text-caption text-on-surface-variant">To (optional)</span>
-            <input
-              type="date"
-              className="px-sm py-sm rounded border border-outline-variant bg-surface"
-              value={draft.toDate}
-              onChange={(e) => setDraft({ ...draft, toDate: e.target.value })}
-            />
-          </label>
-          <label className="flex flex-col gap-xs">
-            <span className="text-caption text-on-surface-variant">Type</span>
-            <select
-              className="px-sm py-sm rounded border border-outline-variant bg-surface"
-              value={draft.leaveType}
-              onChange={(e) => setDraft({ ...draft, leaveType: e.target.value as "CL" | "LOP" | "SL" })}
-              disabled={draft.halfDay}
-            >
-              <option value="CL">Casual</option>
-              <option value="SL">Sick</option>
-              <option value="LOP">Unpaid (LOP)</option>
-            </select>
-          </label>
-          <label className="flex items-center gap-xs text-label-sm">
-            <input
-              type="checkbox"
-              checked={draft.halfDay}
-              onChange={(e) => setDraft({ ...draft, halfDay: e.target.checked })}
-            />
-            Half day
-          </label>
-          <label className="flex flex-col gap-xs md:col-span-4">
-            <span className="text-caption text-on-surface-variant">Reason</span>
-            <textarea
-              rows={2}
-              className="px-sm py-sm rounded border border-outline-variant bg-surface"
-              value={draft.reason}
-              onChange={(e) => setDraft({ ...draft, reason: e.target.value })}
-            />
-          </label>
-          <div className="md:col-span-4 flex items-center gap-sm">
-            <button
-              onClick={submit}
-              disabled={pending || !draft.fromDate || !draft.reason}
-              className="px-md py-sm rounded bg-primary text-on-primary font-bold disabled:opacity-50"
-            >
-              Submit request
-            </button>
-            {error && <span className="text-red-700 text-label-sm">{error}</span>}
-          </div>
-        </div>
+        <p className="py-md text-on-surface-variant text-label-sm">
+          Leave requests have moved to the{" "}
+          <a href="/me/regularization" className="text-primary font-semibold underline">
+            Regularisation
+          </a>{" "}
+          tab. Open a leave request there for the day you were absent and HR will review it.
+        </p>
       </Section>
-      ) : (
-        <Section title="Apply for leave">
-          <p className="py-md text-on-surface-variant text-label-sm">
-            Leave does not apply to your designation.
-          </p>
-        </Section>
-      )}
 
       <Section title="My requests">
         <table className="w-full text-label-sm">

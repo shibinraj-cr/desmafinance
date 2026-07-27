@@ -52,7 +52,6 @@ export default async function MyLeavePage() {
       />
       <div className="p-margin">
         <MyLeaveClient
-          canApply={canApply}
           ledgerYear={ledgerYear}
           ledgerOpening={ledger.opening}
           ledger={ledger.rows}
