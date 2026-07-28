@@ -218,9 +218,12 @@ async function findOrCreateParty(tx: Prisma.TransactionClient, lead: LeadCore, o
   // is authoritative — it pins the second service to the intended candidate even
   // when email/phone are absent or ambiguous.
   if (lead.partyId) found = await tx.party.findUnique({ where: { id: lead.partyId }, select: { id: true } });
-  if (!found && lead.email) found = await tx.party.findFirst({ where: { email: lead.email }, select: { id: true } });
-  if (!found && lead.phone) found = await tx.party.findFirst({ where: { phone: lead.phone }, select: { id: true } });
-  if (!found) found = await tx.party.findFirst({ where: { name: lead.candidateName }, select: { id: true } });
+  // Email/phone/name lookups MUST stay within group "Candidate": the Party master
+  // also holds Vendors, and email/phone are non-unique, so a candidate that shares a
+  // contact value with a vendor would otherwise resolve to (and mutate) the vendor row.
+  if (!found && lead.email) found = await tx.party.findFirst({ where: { email: lead.email, group: "Candidate" }, select: { id: true } });
+  if (!found && lead.phone) found = await tx.party.findFirst({ where: { phone: lead.phone, group: "Candidate" }, select: { id: true } });
+  if (!found) found = await tx.party.findFirst({ where: { name: lead.candidateName, group: "Candidate" }, select: { id: true } });
 
   if (found) {
     await tx.party.update({

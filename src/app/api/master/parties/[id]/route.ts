@@ -52,7 +52,10 @@ export async function PATCH(req: NextRequest, { params }: { params: { id: string
   if (d.name !== undefined) {
     const newName = d.name.trim();
     if (newName !== party.name) {
-      const collision = await prisma.party.findUnique({ where: { name: newName } });
+      // Names are unique per group; check against the group this party will end
+      // up in (a rename may accompany a group change in the same request).
+      const nameGroup = d.group ?? party.group;
+      const collision = await prisma.party.findUnique({ where: { name_group: { name: newName, group: nameGroup } } });
       if (collision && collision.id !== party.id) {
         return NextResponse.json({ error: "name_taken" }, { status: 409 });
       }

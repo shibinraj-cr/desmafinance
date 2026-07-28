@@ -100,7 +100,9 @@ export async function POST() {
   let partyServicesReplaced = 0;
 
   for (const [name, services] of byCandidate) {
-    let party = await prisma.party.findUnique({ where: { name } });
+    // Candidate import: match only within the Candidate group so a same-named
+    // Vendor is never picked up as the candidate.
+    let party = await prisma.party.findUnique({ where: { name_group: { name, group: "Candidate" } } });
     if (party) {
       partiesUpdated++;
       // Don't mutate scalar fields on an existing party — preserve any

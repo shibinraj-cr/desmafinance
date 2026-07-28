@@ -63,7 +63,9 @@ export async function POST(req: NextRequest) {
   const d = parsed.data;
   const name = d.name.trim();
 
-  const existing = await prisma.party.findUnique({ where: { name } });
+  // Names are unique per group (a Candidate and a Vendor may share a name), so
+  // scope the duplicate check to the group being created.
+  const existing = await prisma.party.findUnique({ where: { name_group: { name, group: d.group } } });
   if (existing) return NextResponse.json({ error: "name_taken" }, { status: 409 });
 
   // Normalise services payload — prefer the new shape; fall back to
