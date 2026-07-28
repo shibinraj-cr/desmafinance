@@ -11,6 +11,8 @@ import { recordAudit } from "@/lib/audit";
 import { normalizePhone, computeDedupeKey, emailKeyOf, LEAD_TEMPERATURE_VALUES } from "@/lib/crm";
 import { parseDobInput } from "@/lib/age";
 import { leadRowInclude, serializeLead, isActionOnlyStatus } from "@/lib/crm-leads";
+import { openRemarketingCampaign, stopRemarketingCampaigns } from "@/lib/crm-remarketing";
+import { REMARKETING_STATUS_CODE } from "@/lib/crm-reinquiry";
 
 export const dynamic = "force-dynamic";
 
@@ -79,7 +81,7 @@ export const PATCH = withApiHandler(async (req: Request, { params }: Ctx) => {
 
   const existing = await prisma.lead.findUnique({
     where: { id: params.id },
-    include: { status: { select: { id: true, label: true } } },
+    include: { status: { select: { id: true, label: true, code: true } } },
   });
   if (!existing) throw notFound();
   if (!canEditLead(access, existing, userId)) throw forbidden();
@@ -181,6 +183,7 @@ export const PATCH = withApiHandler(async (req: Request, { params }: Ctx) => {
 
   // Status change.
   let statusChange: { from: string; to: string } | null = null;
+  let statusCodeChange: { fromCode: string; toCode: string } | null = null;
   if (d.statusId !== undefined && d.statusId !== existing.statusId) {
     const newStatus = await prisma.crmLeadStatus.findFirst({ where: { id: d.statusId, active: true } });
     if (!newStatus) throw badRequest("Unknown or inactive status", "invalid_status");
@@ -192,6 +195,7 @@ export const PATCH = withApiHandler(async (req: Request, { params }: Ctx) => {
     }
     update.statusId = d.statusId;
     statusChange = { from: existing.status.label, to: newStatus.label };
+    statusCodeChange = { fromCode: existing.status.code, toCode: newStatus.code };
   }
 
   if (Object.keys(update).length === 0) {
@@ -235,6 +239,17 @@ export const PATCH = withApiHandler(async (req: Request, { params }: Ctx) => {
       summary: "Linked to candidate record",
       metadata: { partyId: update.partyId },
     });
+  }
+
+  // Re-marketing campaign lifecycle: entering the stage opens a nurturing
+  // campaign (idempotent); leaving it by this manual path closes a running one.
+  // Both helpers are best-effort and never throw.
+  if (statusCodeChange) {
+    if (statusCodeChange.toCode === REMARKETING_STATUS_CODE) {
+      await openRemarketingCampaign({ leadId: updated.id, actorId: userId });
+    } else if (statusCodeChange.fromCode === REMARKETING_STATUS_CODE) {
+      await stopRemarketingCampaigns({ leadId: updated.id, actorId: userId });
+    }
   }
 
   return NextResponse.json({ lead: serializeLead(updated) });

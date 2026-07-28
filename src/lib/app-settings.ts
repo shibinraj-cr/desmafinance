@@ -27,6 +27,30 @@ export const WABIS_WEBHOOK_ENABLED_KEY = "wabis_webhook_enabled";
 /** Optional shared secret, sent as the `X-Webhook-Secret` request header. */
 export const WABIS_WEBHOOK_SECRET_KEY = "wabis_webhook_secret";
 
+/**
+ * Re-marketing nurturing engine (CRM → Settings → Integrations). Separate on/off
+ * from the lead-assignment webhook above: a site can run the assignment intro
+ * without the drip, or vice-versa. See src/lib/crm-remarketing.ts.
+ *
+ * - ENABLED_KEY: "1" to run the daily scheduler + drain remarketing touches.
+ * - URL_KEY: the single Wabis Webhook-Workflow callback URL that sends the touch
+ *   templates. The payload carries `touch` (1|2|3) so one Wabis flow can branch
+ *   to the right approved template; the owning consultant's name/phone ride along
+ *   for the template to display. Global (not per-consultant) — re-engagement is
+ *   driven back through our own inbound endpoint, not a per-agent Wabis inbox.
+ * - OFFSETS_KEY: comma-separated calendar-day offsets from remarketingStartedAt,
+ *   default "5,19,33".
+ * - KEYWORDS_KEY: comma-separated positive-intent reply keywords that auto-advance
+ *   a lead to Follow-Up. Empty = advance on ANY reply (see crm-remarketing).
+ * - INBOUND_SECRET_KEY: shared secret Wabis's inbound HTTP-API block must send
+ *   (header `x-wabis-secret` or `?key=`) to authenticate a candidate reply.
+ */
+export const WABIS_REMARKETING_ENABLED_KEY = "wabis_remarketing_enabled";
+export const WABIS_REMARKETING_URL_KEY = "wabis_remarketing_url";
+export const WABIS_REMARKETING_OFFSETS_KEY = "wabis_remarketing_offsets";
+export const WABIS_REMARKETING_KEYWORDS_KEY = "wabis_remarketing_keywords";
+export const WABIS_INBOUND_SECRET_KEY = "wabis_inbound_secret";
+
 export async function getSetting(key: string): Promise<string | null> {
   const row = await prisma.appSetting.findUnique({ where: { key }, select: { value: true } });
   return row?.value ?? null;
