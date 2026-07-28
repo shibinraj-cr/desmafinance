@@ -51,20 +51,12 @@ type Delivery = {
   candidateName: string | null;
   createdAt: string;
 };
-type Remarketing = {
-  enabled: boolean;
-  url: string;
-  offsets: string;
-  keywords: string;
-  inboundSecret: string;
-};
 type Data = {
   enabled: boolean;
   secret: string;
   endpoints: Endpoint[];
   consultants: Consultant[];
   deliveries: Delivery[];
-  remarketing: Remarketing;
 };
 
 type Draft = {
@@ -129,11 +121,6 @@ export function WabisWebhookCard() {
 
   const [enabled, setEnabled] = useState(false);
   const [secret, setSecret] = useState("");
-  const [rmEnabled, setRmEnabled] = useState(false);
-  const [rmUrl, setRmUrl] = useState("");
-  const [rmOffsets, setRmOffsets] = useState("5,19,33");
-  const [rmKeywords, setRmKeywords] = useState("");
-  const [rmInboundSecret, setRmInboundSecret] = useState("");
   const [draft, setDraft] = useState<Draft | null>(null);
   const [testPhone, setTestPhone] = useState("");
   const [testEndpointId, setTestEndpointId] = useState("");
@@ -146,11 +133,6 @@ export function WabisWebhookCard() {
       setData(d);
       setEnabled(d.enabled);
       setSecret(d.secret);
-      setRmEnabled(d.remarketing.enabled);
-      setRmUrl(d.remarketing.url);
-      setRmOffsets(d.remarketing.offsets);
-      setRmKeywords(d.remarketing.keywords);
-      setRmInboundSecret(d.remarketing.inboundSecret);
       // Re-validate rather than just defaulting: if the selected endpoint has
       // since been deactivated it drops out of the dropdown, leaving the select
       // visually blank while a stale id still fires a real WhatsApp through the
@@ -186,19 +168,6 @@ export function WabisWebhookCard() {
   }
 
   const saveConfig = () => call("/api/crm/integrations/wabis", { action: "save", enabled, secret }, "Saved.");
-  const saveRemarketing = () =>
-    call(
-      "/api/crm/integrations/wabis",
-      {
-        action: "save_remarketing",
-        enabled: rmEnabled,
-        url: rmUrl,
-        offsets: rmOffsets,
-        keywords: rmKeywords,
-        inboundSecret: rmInboundSecret,
-      },
-      "Re-marketing settings saved.",
-    );
 
   async function saveEndpoint() {
     if (!draft) return;
@@ -287,82 +256,6 @@ export function WabisWebhookCard() {
             Reassigning a lead to a different consultant sends again, so the conversation moves to the new
             consultant&apos;s Wabis inbox. The same consultant is never introduced twice for the same lead.
           </p>
-
-          {/* ── Re-marketing nurturing ────────────────────────────────── */}
-          <div className="rounded-lg border border-outline-variant bg-surface-container-low p-md space-y-md">
-            <div>
-              <div className="text-label-sm font-semibold text-on-surface">Re-marketing nurturing campaign</div>
-              <p className="text-label-sm text-on-surface-variant">
-                When a lead is moved to the Re-marketing stage, send three WhatsApp touch-points on a schedule. A
-                candidate reply in Wabis (via a keyword-reply flow that calls the inbound URL below) moves the lead
-                back to Follow-Up automatically.
-              </p>
-            </div>
-
-            <label className="flex items-center gap-xs text-body-md">
-              <input type="checkbox" checked={rmEnabled} onChange={(e) => setRmEnabled(e.target.checked)} />
-              Run re-marketing campaigns
-            </label>
-
-            <label className="block">
-              <span className="block text-label-sm text-on-surface-variant mb-xs">Wabis touch-point workflow URL</span>
-              <input
-                className={input + " w-full font-mono"}
-                value={rmUrl}
-                onChange={(e) => setRmUrl(e.target.value)}
-                placeholder="https://bot.wabis.in/webhook/whatsapp-workflow/…  (branch on the `touch` field: 1/2/3)"
-              />
-            </label>
-
-            <div className="grid gap-md md:grid-cols-2">
-              <label className="block">
-                <span className="block text-label-sm text-on-surface-variant mb-xs">
-                  Touch-point days (from stage entry)
-                </span>
-                <input
-                  className={input + " w-full font-mono"}
-                  value={rmOffsets}
-                  onChange={(e) => setRmOffsets(e.target.value)}
-                  placeholder="5,19,33"
-                />
-              </label>
-              <label className="block">
-                <span className="block text-label-sm text-on-surface-variant mb-xs">
-                  Re-engage keywords (blank = any reply advances)
-                </span>
-                <input
-                  className={input + " w-full"}
-                  value={rmKeywords}
-                  onChange={(e) => setRmKeywords(e.target.value)}
-                  placeholder="interested, yes, call me"
-                />
-              </label>
-            </div>
-
-            <label className="block">
-              <span className="block text-label-sm text-on-surface-variant mb-xs">Inbound reply secret</span>
-              <input
-                className={input + " w-full font-mono"}
-                value={rmInboundSecret}
-                onChange={(e) => setRmInboundSecret(e.target.value)}
-                placeholder="shared secret Wabis sends as the x-wabis-secret header"
-              />
-            </label>
-
-            <div className="rounded-lg bg-surface-container-lowest border border-outline-variant px-md py-sm text-label-sm text-on-surface-variant">
-              Point the Wabis keyword-reply flow&apos;s HTTP-API block at{" "}
-              <span className="font-mono">/api/crm/integrations/wabis/inbound</span>, sending back{" "}
-              <span className="font-mono">lead_id</span> (echoed from the outbound payload), the subscriber{" "}
-              <span className="font-mono">phone</span>, and the reply <span className="font-mono">message</span>, with the
-              secret above.
-            </div>
-
-            <div className="flex justify-end">
-              <button className={primary} disabled={busy} onClick={saveRemarketing}>
-                {busy ? "Saving…" : "Save re-marketing"}
-              </button>
-            </div>
-          </div>
 
           {/* ── Endpoints ─────────────────────────────────────────────── */}
           <div>
