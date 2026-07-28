@@ -35,6 +35,11 @@ export function RemarketingSettingsCard() {
   const [keywords, setKeywords] = useState("");
   const [inboundSecret, setInboundSecret] = useState("");
 
+  const [testPhone, setTestPhone] = useState("");
+  const [testTouch, setTestTouch] = useState(1);
+  const [testBusy, setTestBusy] = useState(false);
+  const [testResult, setTestResult] = useState<string | null>(null);
+
   const load = useCallback(async () => {
     setLoading(true);
     const r = await fetch("/api/crm/integrations/wabis");
@@ -69,6 +74,33 @@ export function RemarketingSettingsCard() {
     }
     setNote("Re-marketing settings saved.");
     void load();
+  }
+
+  async function sendTest() {
+    setTestBusy(true);
+    setTestResult(null);
+    const r = await fetch("/api/crm/integrations/wabis", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ action: "test_remarketing", phone: testPhone, touch: testTouch }),
+    });
+    const p = (await r.json().catch(() => ({}))) as {
+      ok?: boolean;
+      status?: number | null;
+      body?: string;
+      error?: string;
+      message?: string;
+    };
+    setTestBusy(false);
+    if (!r.ok) {
+      setTestResult(p.message ?? p.error ?? "That didn't work.");
+      return;
+    }
+    if (p.ok) {
+      setTestResult(`Test touch ${testTouch} sent — Wabis replied ${p.status ?? "OK"}. Check that number for the WhatsApp.`);
+    } else {
+      setTestResult(p.error ?? `Test failed${p.status ? ` (HTTP ${p.status})` : ""}: ${p.body || "no response"}`);
+    }
   }
 
   return (
@@ -160,6 +192,47 @@ export function RemarketingSettingsCard() {
             <button className={primary} disabled={busy} onClick={save}>
               {busy ? "Saving…" : "Save re-marketing"}
             </button>
+          </div>
+
+          {/* Test send — proves the pipeline end-to-end AND lets Wabis capture the
+              payload so you can map the template's variables. Uses the SAVED URL. */}
+          <div className="rounded-lg border border-outline-variant bg-surface-container-low p-md space-y-sm">
+            <div className="text-label-sm font-semibold text-on-surface">Send a test touch</div>
+            <p className="text-label-sm text-on-surface-variant">
+              Fires a sample touch at the <span className="font-medium">saved</span> workflow URL — sends a real
+              WhatsApp to the number below, and lets Wabis capture the payload so you can map the template variables.
+            </p>
+            <div className="flex flex-wrap items-center gap-base">
+              <select
+                className={input + " w-[120px]"}
+                value={testTouch}
+                onChange={(e) => setTestTouch(Number(e.target.value))}
+                aria-label="Which touch to simulate"
+              >
+                <option value={1}>Touch 1</option>
+                <option value={2}>Touch 2</option>
+                <option value={3}>Touch 3</option>
+              </select>
+              <input
+                className={input + " w-[190px] font-mono"}
+                value={testPhone}
+                onChange={(e) => setTestPhone(e.target.value)}
+                placeholder="Test to (your mobile)"
+                aria-label="Send the test touch to this number"
+              />
+              <button
+                className={btn + " border border-outline-variant text-on-surface-variant hover:bg-surface-container-low"}
+                disabled={testBusy || !testPhone.trim()}
+                onClick={sendTest}
+              >
+                {testBusy ? "Sending…" : "Send test touch"}
+              </button>
+            </div>
+            {testResult && (
+              <div className="rounded-lg bg-surface-container-lowest border border-outline-variant px-md py-sm text-label-sm text-on-surface-variant">
+                {testResult}
+              </div>
+            )}
           </div>
         </>
       )}

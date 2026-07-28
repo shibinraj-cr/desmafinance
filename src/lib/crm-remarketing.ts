@@ -26,6 +26,7 @@
  * recordLeadActivity — a nurturing failure must never break the user action or
  * the cron that triggered it.
  */
+import { randomUUID } from "node:crypto";
 import { prisma } from "./prisma";
 import { normalizePhone } from "./crm";
 import {
@@ -37,11 +38,14 @@ import {
 } from "./app-settings";
 import {
   REMARKETING_TOUCH_EVENT,
+  TEST_EVENT,
   toWabisPhone,
   resolveAgent,
   istTimestamp,
   isWabisWebhookUrl,
   attemptDelivery,
+  getWabisWebhookConfig,
+  postWebhook,
 } from "./crm-webhook";
 import { recordLeadActivity } from "./crm-activity";
 import { REMARKETING_STATUS_CODE } from "./crm-reinquiry";
@@ -598,4 +602,69 @@ async function notifyRemarketingResponse(
   } catch (e) {
     console.error("[crm-remarketing] notifyRemarketingResponse failed:", e);
   }
+}
+
+// ── Test send (admin "Send test touch") ─────────────────────────────────────
+
+/**
+ * POST a sample re-marketing touch to the configured workflow URL, with no real
+ * lead or campaign. Two jobs: prove the CRM → Wabis pipeline end-to-end, and give
+ * Wabis a sample payload so its "Send Template Message" step can bind our field
+ * names for mapping. Logged like any delivery (unique dedupe key) so it can never
+ * collide with — or suppress — a real touch.
+ */
+export async function sendTestRemarketingTouch(opts: {
+  phone: string;
+  touch?: number;
+}): Promise<{ ok: boolean; status: number | null; body: string; error?: string }> {
+  const config = await getRemarketingConfig();
+  if (!config.url || !isWabisWebhookUrl(config.url)) {
+    return { ok: false, status: null, body: "", error: "Set a valid re-marketing workflow URL and save it first." };
+  }
+  const phone = toWabisPhone(opts.phone);
+  if (!phone) {
+    return { ok: false, status: null, body: "", error: "Enter a valid mobile number to send the test to." };
+  }
+  const touch = opts.touch && opts.touch >= 1 && opts.touch <= 3 ? opts.touch : 1;
+  const now = new Date();
+  const payload = {
+    name: "Test Candidate",
+    phone,
+    email: "test@example.com",
+    agent: "Test Agent",
+    agent_phone: "+910000000000",
+    consultant: "Test Agent",
+    source: "Test",
+    service: "",
+    lead_id: "test-lead",
+    campaign_id: "test-campaign",
+    touch,
+    touch_label: `Touch ${touch}`,
+    sent_at: istTimestamp(now),
+  };
+
+  const wabis = await getWabisWebhookConfig();
+  const result = await postWebhook(config.url, payload, wabis.secret);
+
+  await prisma.crmWebhookDelivery
+    .create({
+      data: {
+        event: TEST_EVENT,
+        // Unique per test send — never occupies a real touch's key.
+        dedupeKey: `${TEST_EVENT}:remarketing:${randomUUID()}`,
+        url: config.url,
+        endpointLabel: `Re-marketing touch ${touch} (test)`,
+        payload,
+        status: result.ok ? "sent" : "failed",
+        attempts: 1,
+        maxAttempts: 1,
+        lastAttemptAt: now,
+        deliveredAt: result.ok ? now : null,
+        responseStatus: result.status,
+        responseBody: result.body,
+      },
+    })
+    .catch(() => undefined);
+
+  return result;
 }
