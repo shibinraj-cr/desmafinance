@@ -367,7 +367,7 @@ export function isDeliveredResponse(httpOk: boolean, body: string): boolean {
 }
 
 /** One HTTP attempt. Never throws — a transport failure is a result, not an error. */
-async function postWebhook(
+export async function postWebhook(
   url: string,
   payload: unknown,
   secret: string | null,

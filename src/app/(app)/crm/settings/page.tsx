@@ -36,7 +36,7 @@ export default async function CrmSettingsPage() {
 
   return (
     <>
-      <TopBar title="CRM Settings" subtitle="Lead statuses & qualifications" />
+      <TopBar title="CRM Settings" subtitle="Reference data & integrations" />
       <div className="p-margin space-y-lg">
         <SettingsClient
           statuses={statuses.map((s) => ({

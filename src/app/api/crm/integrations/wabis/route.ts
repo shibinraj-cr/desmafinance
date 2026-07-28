@@ -17,6 +17,7 @@ import {
   WABIS_INBOUND_SECRET_KEY,
 } from "@/lib/app-settings";
 import { resolveAgent, sendTestWebhook, requeueDelivery, drainWebhookQueue, isWabisWebhookUrl } from "@/lib/crm-webhook";
+import { sendTestRemarketingTouch } from "@/lib/crm-remarketing";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -181,6 +182,11 @@ const PostSchema = z.discriminatedUnion("action", [
     keywords: z.string().trim().max(500),
     inboundSecret: z.string().trim().max(200),
   }),
+  z.object({
+    action: z.literal("test_remarketing"),
+    phone: z.string().trim().min(1).max(40),
+    touch: z.number().int().min(1).max(3).optional(),
+  }),
 ]);
 
 // POST /api/crm/integrations/wabis — save global config, send a test, re-fire, drain.
@@ -194,6 +200,12 @@ export const POST = withApiHandler(async (req: Request) => {
 
   if (body.action === "test") {
     return NextResponse.json(await sendTestWebhook({ endpointId: body.endpointId, phone: body.phone }));
+  }
+
+  // Fire a sample re-marketing touch at the configured workflow URL — proves the
+  // pipeline end-to-end AND lets Wabis capture the payload shape for field mapping.
+  if (body.action === "test_remarketing") {
+    return NextResponse.json(await sendTestRemarketingTouch({ phone: body.phone, touch: body.touch }));
   }
 
   // On the Hobby plan the retry cron may only run once a day, so an admin needs

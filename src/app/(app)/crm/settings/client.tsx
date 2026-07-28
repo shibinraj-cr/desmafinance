@@ -5,6 +5,7 @@ import { createPortal } from "react-dom";
 import { useRouter } from "next/navigation";
 import { IntegrationsCard } from "./integrations";
 import { WabisWebhookCard } from "./wabis-webhook";
+import { RemarketingSettingsCard } from "./remarketing";
 import { EmailSenderCard } from "./email-sender";
 
 type StatusRow = {
@@ -60,14 +61,65 @@ const qualErrors: Record<string, string> = {
   in_use: "Qualification is used by leads — deactivate instead.",
 };
 
+const sectionLabel = "text-label-sm font-semibold uppercase tracking-wider text-on-surface-variant";
+
+// Anchor targets for the jump-nav. `scroll-mt` keeps the sticky nav from covering
+// the card the user jumped to.
+const anchor = "scroll-mt-24";
+
+function JumpNav() {
+  const links = [
+    { href: "#lead-statuses", label: "Lead statuses" },
+    { href: "#qualifications", label: "Qualifications" },
+    { href: "#lead-capture", label: "Lead capture" },
+    { href: "#whatsapp", label: "WhatsApp intro" },
+    { href: "#remarketing", label: "Re-marketing" },
+    { href: "#email", label: "Email sender" },
+  ];
+  return (
+    <nav className="sticky top-0 z-10 flex flex-wrap items-center gap-x-md gap-y-xs rounded-lg border border-outline-variant bg-surface-container-lowest px-md py-sm text-label-sm shadow-sm">
+      <span className="font-semibold text-on-surface-variant">On this page:</span>
+      {links.map((l) => (
+        <a key={l.href} href={l.href} className="text-primary hover:underline">
+          {l.label}
+        </a>
+      ))}
+    </nav>
+  );
+}
+
 export function SettingsClient({ statuses, qualifications }: { statuses: StatusRow[]; qualifications: QualRow[] }) {
   return (
-    <div className="space-y-lg">
-      <IntegrationsCard />
-      <WabisWebhookCard />
-      <EmailSenderCard />
-      <StatusEditor statuses={statuses} />
-      <QualificationEditor qualifications={qualifications} />
+    <div className="space-y-xl">
+      <JumpNav />
+
+      {/* Reference data — the taxonomy that classifies leads. */}
+      <section className="space-y-lg">
+        <h2 className={sectionLabel}>Reference data</h2>
+        <div id="lead-statuses" className={anchor}>
+          <StatusEditor statuses={statuses} />
+        </div>
+        <div id="qualifications" className={anchor}>
+          <QualificationEditor qualifications={qualifications} />
+        </div>
+      </section>
+
+      {/* Integrations — external connections in and out of the CRM. */}
+      <section className="space-y-lg">
+        <h2 className={sectionLabel}>Integrations</h2>
+        <div id="lead-capture" className={anchor}>
+          <IntegrationsCard />
+        </div>
+        <div id="whatsapp" className={anchor}>
+          <WabisWebhookCard />
+        </div>
+        <div id="remarketing" className={anchor}>
+          <RemarketingSettingsCard />
+        </div>
+        <div id="email" className={anchor}>
+          <EmailSenderCard />
+        </div>
+      </section>
     </div>
   );
 }
