@@ -31,6 +31,11 @@ export const CRM_ACTIVITY_TYPES = [
   "ENROLLED",
   "REVENUE_DRAFTED",
   "OPS_PROJECT_CREATED",
+  // Re-marketing nurturing campaign (src/lib/crm-remarketing.ts).
+  "REMARKETING_STARTED",
+  "REMARKETING_TOUCH_SENT",
+  "REMARKETING_RESPONSE",
+  "REMARKETING_ENDED",
 ] as const;
 
 export type CrmActivityType = (typeof CRM_ACTIVITY_TYPES)[number];

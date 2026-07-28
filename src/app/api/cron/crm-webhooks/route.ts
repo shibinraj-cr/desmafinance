@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { drainWebhookQueue } from "@/lib/crm-webhook";
+import { runRemarketingScheduler } from "@/lib/crm-remarketing";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -36,8 +37,12 @@ async function handle(req: Request): Promise<NextResponse> {
     req.headers.get("authorization") === `Bearer ${secret}` || url.searchParams.get("key") === secret;
   if (!authed) return NextResponse.json({ error: "unauthorized" }, { status: 401 });
 
+  // Advance re-marketing campaigns first (enqueue any due touch-point, complete
+  // silent ones), then drain — so a touch queued this run also gets its retry
+  // pass in the same tick. Both no-op unless their feature is enabled.
+  const remarketing = await runRemarketingScheduler();
   const result = await drainWebhookQueue();
-  return NextResponse.json({ ok: true, ...result });
+  return NextResponse.json({ ok: true, remarketing, ...result });
 }
 
 export async function GET(req: Request) {

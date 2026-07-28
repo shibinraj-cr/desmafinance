@@ -33,7 +33,12 @@
 import { randomUUID } from "node:crypto";
 import { prisma } from "./prisma";
 import { normalizePhone } from "./crm";
-import { getSetting, WABIS_WEBHOOK_ENABLED_KEY, WABIS_WEBHOOK_SECRET_KEY } from "./app-settings";
+import {
+  getSetting,
+  WABIS_WEBHOOK_ENABLED_KEY,
+  WABIS_WEBHOOK_SECRET_KEY,
+  WABIS_REMARKETING_ENABLED_KEY,
+} from "./app-settings";
 
 export const LEAD_ASSIGNED_EVENT = "lead_assigned";
 /**
@@ -44,6 +49,12 @@ export const LEAD_ASSIGNED_EVENT = "lead_assigned";
  */
 export const LEAD_SKIPPED_EVENT = "lead_assigned_skipped";
 export const TEST_EVENT = "test";
+/**
+ * A scheduled Re-marketing nurturing touch-point (see src/lib/crm-remarketing.ts).
+ * Rides the same outbox/drain as lead-assignment, but is gated by its own
+ * `wabis_remarketing_enabled` switch — dedupe key `remarketing_touch:<campaignId>:<n>`.
+ */
+export const REMARKETING_TOUCH_EVENT = "remarketing_touch";
 
 /**
  * One timeout for every attempt, inline or retried — and they must stay equal.
@@ -654,16 +665,24 @@ export async function enqueueLeadAssignedWebhook(opts: {
 export async function drainWebhookQueue(
   limit = 50,
 ): Promise<{ attempted: number; sent: number; errored: number; skipped?: string }> {
-  // The enable toggle is a kill switch, so it has to stop work already queued
-  // too — otherwise switching the automation off still lets a backlog message
-  // candidates for the next quarter of an hour. Rows stay pending and resume if
-  // it is switched back on.
+  // The queue is shared by two independently-toggled Wabis features: the
+  // lead-assignment intro (this module) and the re-marketing drip
+  // (crm-remarketing). Each is a kill switch that must also stop work already
+  // queued — so we drain only the event types whose own feature is enabled.
+  // Switching one off freezes its backlog (rows stay pending, resume when it is
+  // switched back on) without silencing the other.
   const cfg = await getWabisWebhookConfig();
-  if (!cfg.enabled) return { attempted: 0, sent: 0, errored: 0, skipped: "automation disabled" };
+  const remarketingEnabled =
+    (await getSetting(WABIS_REMARKETING_ENABLED_KEY).catch(() => null)) === "1";
+  const events: string[] = [];
+  if (cfg.enabled) events.push(LEAD_ASSIGNED_EVENT);
+  if (remarketingEnabled) events.push(REMARKETING_TOUCH_EVENT);
+  if (events.length === 0) return { attempted: 0, sent: 0, errored: 0, skipped: "automation disabled" };
 
   const due = await prisma.crmWebhookDelivery.findMany({
     where: {
       status: "pending",
+      event: { in: events },
       OR: [{ nextAttemptAt: null }, { nextAttemptAt: { lte: new Date() } }],
     },
     orderBy: { createdAt: "asc" },

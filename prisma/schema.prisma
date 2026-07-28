@@ -2107,6 +2107,12 @@ model Lead {
   // and the "assigned on <date>" filter.
   assignedAt   DateTime?
 
+  // When the lead most recently entered the Re-marketing stage. Stamped by the
+  // remarketing engine when a nurturing campaign opens (see CrmRemarketingCampaign
+  // / src/lib/crm-remarketing.ts); the touch-point schedule counts from here.
+  // Cleared when the lead leaves Re-marketing.
+  remarketingStartedAt DateTime?
+
   // Optional linkage to the canonical candidate record once enrolled.
   partyId String?
   party   Party?  @relation("LeadParty", fields: [partyId], references: [id], onDelete: SetNull)
@@ -2183,6 +2189,7 @@ model Lead {
   notes      LeadNote[]
   activities LeadActivity[]
   tasks      CrmTask[]
+  remarketingCampaigns CrmRemarketingCampaign[]
   opsProjects OpsProject[] @relation("OpsProjectLead")
 
   @@index([assignedToId])
@@ -2314,6 +2321,54 @@ model CrmTask {
   // Supports a future cross-lead "My open tasks" / overdue view.
   @@index([assignedToId, status, dueAt])
   @@index([dueAt])
+}
+
+/// One Re-marketing nurturing campaign for a lead.
+///
+/// Opened when a lead enters the Re-marketing stage: a fixed sequence of three
+/// WhatsApp touch-points sent through Wabis on a calendar schedule (default day
+/// 5 / 19 / 33 from `startedAt`, configurable via the wabis_remarketing_offsets
+/// AppSetting). The touches themselves are delivered through the shared outbound
+/// outbox (CrmWebhookDelivery, event `remarketing_touch`); this row is the
+/// per-lead campaign state the daily scheduler advances. See
+/// src/lib/crm-remarketing.ts.
+///
+/// A lead can be re-marketed more than once over its life, so there is one row
+/// per spell, not per lead — but at most one may be `running` at a time (enforced
+/// in application code: opening a campaign reuses/replaces any running one).
+///
+/// The campaign ends one of three ways, recorded in `status` + `endedReason`:
+///   - `responded` — the candidate replied inside Wabis (a keyword-reply flow
+///     called our inbound endpoint); the lead auto-advances to Follow-Up.
+///   - `completed` — all touches sent and the window elapsed with no response.
+///     The lead stays in Re-marketing; the Follow-Up centralisation sweep (built
+///     later) reads this state to move it to Centralised Re-marketing.
+///   - `stopped` — the lead left the Re-marketing stage by some other path.
+model CrmRemarketingCampaign {
+  id           String   @id @default(cuid())
+  leadId       String
+  lead         Lead     @relation(fields: [leadId], references: [id], onDelete: Cascade)
+  /// Consultant who owned the lead when the campaign opened. A plain column (no
+  /// relation) like CrmWebhookDelivery.assigneeUserId — kept for reporting even
+  /// if the user is later removed.
+  ownerUserId  String?
+  startedAt    DateTime @default(now())
+  /// 'running' | 'responded' | 'completed' | 'stopped'
+  status       String   @default("running")
+  /// Touch-point send timestamps (null = not yet enqueued). Which touch is due is
+  /// derived from `startedAt` + the configured offsets, never stored.
+  touch1SentAt DateTime?
+  touch2SentAt DateTime?
+  touch3SentAt DateTime?
+  /// Why the campaign ended: 'responded_in_wabis' | 'no_response' | 'left_stage'.
+  endedReason  String?
+  endedAt      DateTime?
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  @@index([status])
+  @@index([leadId, status])
+  @@index([startedAt])
 }
 
 // Bulk-upload batches (for "X new, Y duplicates" reporting + provenance).
