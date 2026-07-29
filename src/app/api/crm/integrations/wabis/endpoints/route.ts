@@ -19,6 +19,9 @@ export const runtime = "nodejs";
  */
 
 const BaseFields = {
+  // Which flow this workflow serves; scopes all the uniqueness rules below so a
+  // consultant can hold one intro endpoint AND one study-abroad endpoint.
+  purpose: z.enum(["lead_assigned", "study_abroad"]).default("lead_assigned"),
   label: z.string().trim().min(1).max(120),
   consultantId: z.string().trim().min(1).nullable(),
   webhookUrl: z.string().trim().min(1).max(500),
@@ -61,9 +64,11 @@ function validate(input: { webhookUrl: string; consultantId: string | null; isDe
  * un-saveable because `validate()` rejects exactly that shape. Retiring it keeps
  * the row for the audit trail without leaving an unusable one behind.
  */
-async function standDownOtherDefaults(tx: typeof prisma, exceptId?: string) {
+async function standDownOtherDefaults(tx: typeof prisma, purpose: string, exceptId?: string) {
   await tx.wabisWebhookEndpoint.updateMany({
-    where: { isDefault: true, isActive: true, ...(exceptId ? { id: { not: exceptId } } : {}) },
+    // Scoped by purpose: adding a study-abroad default must not disturb the
+    // lead-assignment default (or vice-versa) — each purpose has its own.
+    where: { isDefault: true, isActive: true, purpose, ...(exceptId ? { id: { not: exceptId } } : {}) },
     data: { isDefault: false, isActive: false },
   });
 }
@@ -94,6 +99,7 @@ export const POST = withApiHandler(async (req: Request) => {
         where: {
           isActive: true,
           id: { not: row.id },
+          purpose: row.purpose,
           ...(row.consultantId ? { consultantId: row.consultantId } : { isDefault: true }),
         },
         select: { label: true },
@@ -123,6 +129,7 @@ export const POST = withApiHandler(async (req: Request) => {
   validate(body);
 
   const data = {
+    purpose: body.purpose,
     label: body.label,
     consultantId: body.isDefault ? null : body.consultantId,
     webhookUrl: body.webhookUrl,
@@ -135,14 +142,14 @@ export const POST = withApiHandler(async (req: Request) => {
   try {
     if (body.action === "create") {
       const created = await prisma.$transaction(async (tx) => {
-        if (data.isDefault && data.isActive) await standDownOtherDefaults(tx as typeof prisma);
+        if (data.isDefault && data.isActive) await standDownOtherDefaults(tx as typeof prisma, data.purpose);
         return tx.wabisWebhookEndpoint.create({ data, select: { id: true } });
       });
       return NextResponse.json({ ok: true, id: created.id });
     }
 
     await prisma.$transaction(async (tx) => {
-      if (data.isDefault && data.isActive) await standDownOtherDefaults(tx as typeof prisma, body.id);
+      if (data.isDefault && data.isActive) await standDownOtherDefaults(tx as typeof prisma, data.purpose, body.id);
       await tx.wabisWebhookEndpoint.update({ where: { id: body.id }, data });
     });
     return NextResponse.json({ ok: true });

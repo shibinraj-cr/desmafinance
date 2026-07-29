@@ -224,6 +224,7 @@ export function LeadDetail({
   emailConfigured,
   templates,
   access,
+  studyAbroad,
 }: {
   lead: LeadRow;
   notes: NoteRow[];
@@ -235,6 +236,7 @@ export function LeadDetail({
   emailConfigured: boolean;
   templates: MessageTemplateDTO[];
   access: DetailAccess;
+  studyAbroad: { eligible: boolean; alreadySent: boolean };
 }) {
   const [tab, setTab] = useState<"overview" | "tasks" | "history">("overview");
   const [comm, setComm] = useState<null | "email" | "whatsapp" | "call">(null);
@@ -301,6 +303,7 @@ export function LeadDetail({
             <CommButton icon="mail" label="Email" onClick={() => setComm("email")} />
             <CommButton icon="chat" label="WhatsApp" onClick={() => setComm("whatsapp")} />
             <CommButton icon="call" label="Call" onClick={() => setComm("call")} />
+            {studyAbroad.eligible && <StudyAbroadButton leadId={lead.id} alreadySent={studyAbroad.alreadySent} />}
           </div>
         )}
       </div>
@@ -360,6 +363,68 @@ function CommButton({ icon, label, onClick }: { icon: string; label: string; onC
       </span>
       {label}
     </button>
+  );
+}
+
+/**
+ * Fires the study-abroad counsellor intro over WhatsApp, through the assigned
+ * consultant's Wabis study-abroad workflow. Shown only for study-abroad services
+ * on an assigned lead. One send per lead+consultant: once sent it settles into a
+ * "Sent" state, and a second click reports it was already sent rather than
+ * re-messaging the candidate.
+ */
+function StudyAbroadButton({ leadId, alreadySent }: { leadId: string; alreadySent: boolean }) {
+  const [sent, setSent] = useState(alreadySent);
+  const [busy, setBusy] = useState(false);
+  const [note, setNote] = useState<string | null>(null);
+
+  async function send() {
+    if (busy) return;
+    if (sent && !confirm("The study-abroad intro was already sent to this lead. Send it again anyway?")) return;
+    setBusy(true);
+    setNote(null);
+    try {
+      const res = await fetch(`/api/crm/leads/${leadId}/wabis/study-abroad`, { method: "POST" });
+      const data = (await res.json().catch(() => ({}))) as {
+        ok?: boolean;
+        state?: string;
+        message?: string;
+      };
+      // Any outcome that means "Wabis has it" flips the button to Sent.
+      if (data.ok && (data.state === "sent" || data.state === "queued" || data.state === "already_sent")) setSent(true);
+      setNote(data.message ?? (res.ok ? "Done." : "Couldn't send."));
+    } catch {
+      setNote("Couldn't reach the server. Try again.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <span className="relative inline-flex flex-col items-start">
+      <button
+        type="button"
+        onClick={send}
+        disabled={busy}
+        title="Send the study-abroad counsellor intro over WhatsApp"
+        className={
+          "inline-flex items-center gap-xs h-9 px-md rounded-lg text-label-sm font-semibold transition disabled:opacity-60 " +
+          (sent
+            ? "border border-green-300 bg-green-50 text-green-800 hover:bg-green-100"
+            : "border border-primary bg-primary text-on-primary hover:bg-primary-container")
+        }
+      >
+        <span className="material-symbols-outlined" style={{ fontSize: 18 }}>
+          {sent ? "check_circle" : "travel_explore"}
+        </span>
+        {busy ? "Sending…" : sent ? "Study-abroad sent" : "Study-abroad WhatsApp"}
+      </button>
+      {note && (
+        <span className="absolute top-full mt-xs right-0 z-10 whitespace-nowrap rounded-md bg-surface-container-highest px-sm py-[2px] text-label-sm text-on-surface shadow">
+          {note}
+        </span>
+      )}
+    </span>
   );
 }
 

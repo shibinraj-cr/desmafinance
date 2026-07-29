@@ -9,6 +9,7 @@ type Service = {
   name: string;
   description: string | null;
   isActive: boolean;
+  isStudyAbroad: boolean;
   subItems: { id: string; name: string; categoryName: string }[];
   txCount: number;
 };
@@ -81,6 +82,7 @@ function ServiceRow({ service }: { service: Service }) {
     name: service.name,
     description: service.description ?? "",
     isActive: service.isActive,
+    isStudyAbroad: service.isStudyAbroad,
   });
   const [error, setError] = useState<string | null>(null);
 
@@ -149,10 +151,25 @@ function ServiceRow({ service }: { service: Service }) {
                 rows={2}
                 className="w-full px-sm py-xs rounded border border-outline-variant bg-surface-container-lowest text-body-md"
               />
+              <label className="flex items-center gap-xs text-body-md">
+                <input
+                  type="checkbox"
+                  checked={draft.isStudyAbroad}
+                  onChange={(e) => setDraft({ ...draft, isStudyAbroad: e.target.checked })}
+                />
+                Study-abroad service (shows the study-abroad WhatsApp button on its leads)
+              </label>
             </div>
           ) : (
             <div>
-              <div className="font-semibold text-on-surface">{service.name}</div>
+              <div className="font-semibold text-on-surface flex items-center gap-xs">
+                {service.name}
+                {service.isStudyAbroad && (
+                  <span className="px-xs py-[1px] rounded-full text-[10px] font-bold bg-purple-100 text-purple-800">
+                    STUDY ABROAD
+                  </span>
+                )}
+              </div>
               {service.description && (
                 <div className="text-caption text-on-surface-variant mt-xs">
                   {service.description}
@@ -193,6 +210,7 @@ function ServiceRow({ service }: { service: Service }) {
                     name: service.name,
                     description: service.description ?? "",
                     isActive: service.isActive,
+                    isStudyAbroad: service.isStudyAbroad,
                   });
                   setError(null);
                 }}

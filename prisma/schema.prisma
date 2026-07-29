@@ -213,6 +213,12 @@ model Service {
   isSystem          Boolean               @default(false)
   // Whether this service appears as a column on the L2 Targets matrix.
   showInL2Targets   Boolean               @default(true)
+  // Marks this as a study-abroad / overseas-education service. When a lead's
+  // service is flagged, the lead page shows the "Study-abroad WhatsApp" button
+  // that fires the counsellor intro via the assigned consultant's Wabis
+  // study_abroad workflow. Purely a routing/UI flag — no effect on finance or
+  // targets.
+  isStudyAbroad     Boolean               @default(false)
   // Weight of this service when computing a group's actual on the
   // L2 Targets matrix. e.g. weight = 2 means a party closed against
   // this service counts as 2 toward the BDE's group total. Default
@@ -364,6 +370,14 @@ model CrmNotification {
 /// indexes.
 model WabisWebhookEndpoint {
   id           String  @id @default(cuid())
+  /// Which flow this workflow serves. A Wabis workflow is tied to one template,
+  /// so a consultant needs a separate endpoint per purpose:
+  ///   'lead_assigned' — the intro sent when a lead is assigned to them,
+  ///   'study_abroad'  — the counsellor intro fired from the per-lead button.
+  /// The active-per-consultant / active-default uniqueness (see the migration's
+  /// partial indexes) is scoped BY purpose, so the same consultant can hold one
+  /// active endpoint of each kind.
+  purpose      String  @default("lead_assigned")
   /// Friendly name, e.g. "Priya workflow".
   label        String
   /// Consultant whose leads route here; null on the default/fallback endpoint.
@@ -384,6 +398,7 @@ model WabisWebhookEndpoint {
 
   @@index([consultantId])
   @@index([isActive])
+  @@index([purpose])
 }
 
 /// One outbound webhook delivery — the transactional outbox behind the Wabis

@@ -6,6 +6,8 @@ import {
   resolveAgent,
   isWabisWebhookUrl,
   pickEndpoint,
+  STUDY_ABROAD_EVENT,
+  CONSULTANT_ROUTED_EVENTS,
   buildLeadAssignedPayload,
   leadAssignedDedupeKey,
   nextAttemptDelayMinutes,
@@ -122,6 +124,22 @@ describe("pickEndpoint", () => {
   });
   it("never routes one consultant's leads to another's workflow", () => {
     expect(pickEndpoint([other], "u1")).toBeNull();
+  });
+});
+
+describe("consultant-routed events / purposes", () => {
+  it("study-abroad is a distinct event from the assignment intro", () => {
+    // They double as endpoint `purpose` values, so they must not collide — a
+    // study-abroad send must resolve the study_abroad workflow, not the intro one.
+    expect(STUDY_ABROAD_EVENT).not.toBe(LEAD_ASSIGNED_EVENT);
+  });
+  it("both are consultant-routed (retry re-resolves their destination)", () => {
+    expect(CONSULTANT_ROUTED_EVENTS.has(LEAD_ASSIGNED_EVENT)).toBe(true);
+    expect(CONSULTANT_ROUTED_EVENTS.has(STUDY_ABROAD_EVENT)).toBe(true);
+  });
+  it("does not treat the skipped/test diagnostics as consultant-routed", () => {
+    expect(CONSULTANT_ROUTED_EVENTS.has("lead_assigned_skipped")).toBe(false);
+    expect(CONSULTANT_ROUTED_EVENTS.has("test")).toBe(false);
   });
 });
 
