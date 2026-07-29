@@ -53,9 +53,9 @@ import { REMARKETING_STATUS_CODE } from "./crm-reinquiry";
 /** The Follow-Up stage a responding lead advances to. */
 export const FOLLOW_UP_STATUS_CODE = "follow_up";
 /** Touch-point offsets (calendar days from stage entry) when none are configured. */
-const DEFAULT_OFFSETS = [5, 19, 33] as const;
-/** Fixed number of touch-points (matches the three timestamp columns). */
-const TOTAL_TOUCHES = 3;
+const DEFAULT_OFFSETS = [5, 19, 33, 45] as const;
+/** Fixed number of touch-points (matches the four timestamp columns). */
+const TOTAL_TOUCHES = 4;
 /** Days after the final touch before a silent campaign is deemed complete. */
 const COMPLETION_GRACE_DAYS = 7;
 
@@ -392,6 +392,7 @@ export async function runRemarketingScheduler(): Promise<{
       touch1SentAt: true,
       touch2SentAt: true,
       touch3SentAt: true,
+      touch4SentAt: true,
       lead: {
         select: {
           id: true,
@@ -424,7 +425,7 @@ export async function runRemarketingScheduler(): Promise<{
         continue;
       }
 
-      const sent = [!!c.touch1SentAt, !!c.touch2SentAt, !!c.touch3SentAt] as const;
+      const sent = [!!c.touch1SentAt, !!c.touch2SentAt, !!c.touch3SentAt, !!c.touch4SentAt] as const;
       const due = dueTouchIndex({ startedAt: c.startedAt, now, offsets: config.offsets, sent });
 
       if (due) {
@@ -441,7 +442,14 @@ export async function runRemarketingScheduler(): Promise<{
             where: { id: c.id },
             // Explicit per-touch field (not a computed key) so it satisfies the
             // typed update input.
-            data: due === 1 ? { touch1SentAt: now } : due === 2 ? { touch2SentAt: now } : { touch3SentAt: now },
+            data:
+              due === 1
+                ? { touch1SentAt: now }
+                : due === 2
+                  ? { touch2SentAt: now }
+                  : due === 3
+                    ? { touch3SentAt: now }
+                    : { touch4SentAt: now },
           });
           await recordLeadActivity({
             leadId: c.leadId,
@@ -625,7 +633,7 @@ export async function sendTestRemarketingTouch(opts: {
   if (!phone) {
     return { ok: false, status: null, body: "", error: "Enter a valid mobile number to send the test to." };
   }
-  const touch = opts.touch && opts.touch >= 1 && opts.touch <= 3 ? opts.touch : 1;
+  const touch = opts.touch && opts.touch >= 1 && opts.touch <= 4 ? opts.touch : 1;
   const now = new Date();
   const payload = {
     name: "Test Candidate",

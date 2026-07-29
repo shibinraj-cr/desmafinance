@@ -185,7 +185,7 @@ const PostSchema = z.discriminatedUnion("action", [
   z.object({
     action: z.literal("test_remarketing"),
     phone: z.string().trim().min(1).max(40),
-    touch: z.number().int().min(1).max(3).optional(),
+    touch: z.number().int().min(1).max(4).optional(),
   }),
 ]);
 

@@ -212,6 +212,7 @@ export function RemarketingSettingsCard() {
                 <option value={1}>Touch 1</option>
                 <option value={2}>Touch 2</option>
                 <option value={3}>Touch 3</option>
+                <option value={4}>Touch 4</option>
               </select>
               <input
                 className={input + " w-[190px] font-mono"}
