@@ -878,6 +878,11 @@ function ActivityCard({ activity }: { activity: ActivityRow }) {
       </span>
       <div className="min-w-0">
         <p className="text-body-md text-on-surface">{activity.summary ?? activity.type}</p>
+        {activity.note && (
+          <p className="mt-xs border-l-2 border-outline-variant pl-sm text-body-md text-on-surface-variant whitespace-pre-wrap">
+            {activity.note}
+          </p>
+        )}
         <p className="text-label-sm text-on-surface-variant">
           {activity.actorName ? `${activity.actorName} · ` : ""}
           {fmtRelative(activity.occurredAt)}

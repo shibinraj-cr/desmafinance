@@ -323,6 +323,8 @@ export type ActivityRow = {
   id: string;
   type: string;
   summary: string | null;
+  /** Task note text lifted out of `metadata`, shown as a sub-block on the Timeline. */
+  note: string | null;
   actorName: string | null;
   occurredAt: string;
   metadata?: unknown;
@@ -335,10 +337,15 @@ export function serializeActivity(
   a: ActivityWithActor,
   opts: { includeMetadata: boolean },
 ): ActivityRow {
+  // Task activities stash the task's note in `metadata.note`; lift it out so the
+  // Timeline can render it even when the raw metadata is withheld from the client.
+  const meta = a.metadata && typeof a.metadata === "object" ? (a.metadata as Record<string, unknown>) : null;
+  const note = meta && typeof meta.note === "string" && meta.note.trim() ? meta.note : null;
   return {
     id: a.id,
     type: a.type,
     summary: a.summary,
+    note,
     actorName: a.actor?.leadPulseRole?.displayName ?? a.actor?.username ?? null,
     occurredAt: a.occurredAt.toISOString(),
     ...(opts.includeMetadata ? { metadata: a.metadata ?? null } : {}),

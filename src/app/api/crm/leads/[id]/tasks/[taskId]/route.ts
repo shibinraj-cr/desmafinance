@@ -166,7 +166,7 @@ export const PATCH = withApiHandler(async (req: Request, { params }: Ctx) => {
       actorId: userId,
       type: "TASK_CREATED",
       summary: `Task created: “${created.subject}”`,
-      metadata: { taskId: created.id, dueAt: created.dueAt, assignedToId: created.assignedToId, priority: created.priority },
+      metadata: { taskId: created.id, dueAt: created.dueAt, assignedToId: created.assignedToId, priority: created.priority, note: created.note },
     });
   }
   if (fieldChanges.length > 0) {
@@ -175,7 +175,8 @@ export const PATCH = withApiHandler(async (req: Request, { params }: Ctx) => {
       actorId: userId,
       type: "TASK_UPDATED",
       summary: `Updated task: ${fieldChanges.join(", ")}`,
-      metadata: { taskId: task.id, fields: fieldChanges },
+      // Surface the note's new text on the Timeline when it was one of the edited fields.
+      metadata: { taskId: task.id, fields: fieldChanges, ...(fieldChanges.includes("note") ? { note: updated.note } : {}) },
     });
   }
 
