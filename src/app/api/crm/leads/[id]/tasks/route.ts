@@ -73,7 +73,7 @@ export const POST = withApiHandler(async (req: Request, { params }: { params: { 
     actorId: userId,
     type: "TASK_CREATED",
     summary: `Task created: “${task.subject}”`,
-    metadata: { taskId: task.id, dueAt: task.dueAt, assignedToId: task.assignedToId, priority: task.priority },
+    metadata: { taskId: task.id, dueAt: task.dueAt, assignedToId: task.assignedToId, priority: task.priority, note: task.note },
   });
 
   return NextResponse.json({ task: serializeTask(task) }, { status: 201 });
