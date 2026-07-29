@@ -17,6 +17,8 @@ const TASK_TYPES = ["Follow-up Call", "WhatsApp Message", "Document Request", "P
 
 const inputCls =
   "w-full h-9 px-md rounded-lg border border-outline-variant bg-surface-container-lowest text-on-surface text-label-sm focus:border-primary focus:ring-2 focus:ring-primary/30 outline-none transition";
+const textareaCls =
+  "w-full px-md py-sm rounded-lg border border-outline-variant bg-surface-container-lowest text-on-surface text-label-sm focus:border-primary focus:ring-2 focus:ring-primary/30 outline-none transition resize-y";
 
 /** Tomorrow as a yyyy-mm-dd string, the sensible default for a follow-up. */
 function tomorrowISO(): string {
@@ -25,7 +27,7 @@ function tomorrowISO(): string {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
 }
 
-export type NextStepPayload = { subject: string; dueAt: string | null; priority: string };
+export type NextStepPayload = { subject: string; dueAt: string | null; priority: string; note: string | null };
 
 export function NextStepDialog({
   leadName,
@@ -44,6 +46,7 @@ export function NextStepDialog({
   const [subject, setSubject] = useState<string>(TASK_TYPES[0]);
   const [due, setDue] = useState<string>(tomorrowISO());
   const [priority, setPriority] = useState("normal");
+  const [note, setNote] = useState("");
 
   useEffect(() => setMounted(true), []);
   useEffect(() => {
@@ -57,7 +60,7 @@ export function NextStepDialog({
 
   function submit() {
     if (!subject.trim() || busy) return;
-    onSubmit({ subject: subject.trim(), dueAt: due || null, priority });
+    onSubmit({ subject: subject.trim(), dueAt: due || null, priority, note: note.trim() || null });
   }
 
   return createPortal(
@@ -104,6 +107,18 @@ export function NextStepDialog({
                 <option value="high">High</option>
               </select>
             </div>
+          </div>
+          <div>
+            <label className="mb-[3px] block text-caption font-semibold uppercase tracking-wider text-on-surface-variant">
+              Note
+            </label>
+            <textarea
+              value={note}
+              onChange={(e) => setNote(e.target.value)}
+              placeholder="Add a note for this follow-up (optional)…"
+              rows={3}
+              className={textareaCls}
+            />
           </div>
         </div>
 
