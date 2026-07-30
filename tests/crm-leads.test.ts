@@ -81,6 +81,39 @@ describe("buildLeadWhere — country", () => {
   });
 });
 
+describe("buildLeadWhere — free-text search (q)", () => {
+  it("searches email ONLY for a query with an @ (no phone-digit leak)", () => {
+    // Regression: "srisubha1703@gmail.com" used to reduce to "1703" and match
+    // every number stored as "91703…", flooding results with unrelated leads.
+    const or = buildLeadWhere({ q: "srisubha1703@gmail.com" }).OR as Array<Record<string, unknown>>;
+    expect(or).toEqual([{ email: { contains: "srisubha1703@gmail.com", mode: "insensitive" } }]);
+    // No phone/phoneE164 clause is present.
+    expect(or.some((c) => "phoneE164" in c || "phone" in c)).toBe(false);
+  });
+
+  it("searches name + email + phone for a plain text query", () => {
+    const or = buildLeadWhere({ q: "srisubha" }).OR as Array<Record<string, unknown>>;
+    expect(or).toContainEqual({ candidateName: { contains: "srisubha", mode: "insensitive" } });
+    expect(or).toContainEqual({ email: { contains: "srisubha", mode: "insensitive" } });
+  });
+
+  it("does NOT run a digit phone-match for a mostly-alphabetic query with a few digits", () => {
+    // "srisubha1703" (partial email, no @) is 33% digits — not phone-like, so the
+    // bare-digit "1703" clause must not appear.
+    const or = buildLeadWhere({ q: "srisubha1703" }).OR as Array<Record<string, unknown>>;
+    expect(or.some((c) => JSON.stringify(c).includes('"contains":"1703"'))).toBe(false);
+  });
+
+  it("runs a format-agnostic digit phone-match for a phone-like query", () => {
+    const or = buildLeadWhere({ q: "+91 78142 95082" }).OR as Array<Record<string, unknown>>;
+    expect(or).toContainEqual({ phoneE164: { contains: "917814295082" } });
+  });
+
+  it("omits the OR when no query is given", () => {
+    expect(buildLeadWhere({}).OR).toBeUndefined();
+  });
+});
+
 describe("buildLeadWhere — age → dob range", () => {
   const now = new Date("2026-07-09T00:00:00.000Z");
 
