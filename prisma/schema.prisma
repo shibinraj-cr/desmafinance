@@ -2425,6 +2425,7 @@ model CrmRemarketingCampaign {
   touch1SentAt DateTime?
   touch2SentAt DateTime?
   touch3SentAt DateTime?
+  touch4SentAt DateTime?
   /// Why the campaign ended: 'responded_in_wabis' | 'no_response' | 'left_stage'.
   endedReason  String?
   endedAt      DateTime?

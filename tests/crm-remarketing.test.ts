@@ -2,6 +2,7 @@ import { describe, it, expect } from "vitest";
 import {
   parseOffsets,
   parseKeywords,
+  parseUrls,
   daysBetween,
   dueTouchIndex,
   isCampaignExpired,
@@ -13,18 +14,18 @@ const start = new Date("2026-01-01T00:00:00.000Z");
 const plusDays = (n: number) => new Date(start.getTime() + n * DAY);
 
 describe("parseOffsets", () => {
-  it("defaults to 5/19/33 when empty or unusable", () => {
-    expect(parseOffsets(null)).toEqual([5, 19, 33]);
-    expect(parseOffsets("")).toEqual([5, 19, 33]);
-    expect(parseOffsets("abc, x")).toEqual([5, 19, 33]);
+  it("defaults to 5/19/33/45 when empty or unusable", () => {
+    expect(parseOffsets(null)).toEqual([5, 19, 33, 45]);
+    expect(parseOffsets("")).toEqual([5, 19, 33, 45]);
+    expect(parseOffsets("abc, x")).toEqual([5, 19, 33, 45]);
   });
   it("parses, sorts ascending and de-duplicates", () => {
     expect(parseOffsets("33, 5, 19")).toEqual([5, 19, 33]);
     expect(parseOffsets("5,5,19")).toEqual([5, 19]);
   });
-  it("drops negatives and caps at three", () => {
+  it("drops negatives and caps at four", () => {
     expect(parseOffsets("-1, 5, 10")).toEqual([5, 10]);
-    expect(parseOffsets("1,2,3,4,5")).toEqual([1, 2, 3]);
+    expect(parseOffsets("1,2,3,4,5")).toEqual([1, 2, 3, 4]);
   });
   it("accepts day 0 (send immediately)", () => {
     expect(parseOffsets("0, 7, 14")).toEqual([0, 7, 14]);
@@ -39,6 +40,26 @@ describe("parseKeywords", () => {
   it("lowercases, trims, and drops blanks", () => {
     expect(parseKeywords("Interested, Yes")).toEqual(["interested", "yes"]);
     expect(parseKeywords("a,, b , ")).toEqual(["a", "b"]);
+  });
+});
+
+describe("parseUrls", () => {
+  it("returns [] when unset", () => {
+    expect(parseUrls(null)).toEqual([]);
+    expect(parseUrls("")).toEqual([]);
+  });
+  it("splits newline-separated URLs and trims each", () => {
+    expect(parseUrls("https://a/webhook/1 \n https://b/webhook/2")).toEqual([
+      "https://a/webhook/1",
+      "https://b/webhook/2",
+    ]);
+  });
+  it("keeps interior blanks (position = touch) but drops trailing ones", () => {
+    expect(parseUrls("https://a/webhook/1\n\nhttps://c/webhook/3\n\n")).toEqual([
+      "https://a/webhook/1",
+      "",
+      "https://c/webhook/3",
+    ]);
   });
 });
 
@@ -76,6 +97,12 @@ describe("dueTouchIndex", () => {
     // Way past all offsets, nothing sent → sends touch 1 first (one per run).
     expect(dueTouchIndex({ startedAt: start, now: plusDays(40), offsets, sent: [false, false, false] })).toBe(1);
   });
+  it("handles a 4th touch at day 45", () => {
+    const four = [5, 19, 33, 45];
+    expect(dueTouchIndex({ startedAt: start, now: plusDays(44), offsets: four, sent: [true, true, true, false] })).toBeNull();
+    expect(dueTouchIndex({ startedAt: start, now: plusDays(45), offsets: four, sent: [true, true, true, false] })).toBe(4);
+    expect(dueTouchIndex({ startedAt: start, now: plusDays(45), offsets: four, sent: [true, true, true, true] })).toBeNull();
+  });
 });
 
 describe("isCampaignExpired", () => {
@@ -87,6 +114,11 @@ describe("isCampaignExpired", () => {
   });
   it("is never expired while a touch is still unsent", () => {
     expect(isCampaignExpired({ startedAt: start, now: plusDays(100), offsets, sent: [true, true, false] })).toBe(false);
+  });
+  it("with 4 touches, expires 7 days after the day-45 touch", () => {
+    const four = [5, 19, 33, 45];
+    expect(isCampaignExpired({ startedAt: start, now: plusDays(51), offsets: four, sent: [true, true, true, true] })).toBe(false);
+    expect(isCampaignExpired({ startedAt: start, now: plusDays(52), offsets: four, sent: [true, true, true, true] })).toBe(true);
   });
 });
 
