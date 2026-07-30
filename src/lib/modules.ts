@@ -186,6 +186,15 @@ export const MODULES: AppModule[] = [
         group: "ACTIVITY",
       },
       {
+        // A BDE's end-of-day report (auto-filled from their activity) + manager
+        // review. Personal to every CRM user, so visibility is handled in
+        // canSeePage (any CRM user), not a per-role Role.pages grant.
+        href: "/crm/report",
+        label: "Daily Report",
+        icon: "assignment",
+        group: "ACTIVITY",
+      },
+      {
         // Personal in-app notifications (e.g. a lead was assigned to you). Its own
         // group so it gets a dedicated, unread-badged item in the CRM left-nav.
         // Visibility is handled in canSeePage (any CRM user), not Role.pages.
