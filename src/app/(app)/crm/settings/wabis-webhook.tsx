@@ -18,6 +18,7 @@ import { useCallback, useEffect, useState } from "react";
 
 type Endpoint = {
   id: string;
+  purpose: string;
   label: string;
   consultantId: string | null;
   consultantName: string | null;
@@ -61,6 +62,7 @@ type Data = {
 
 type Draft = {
   id?: string;
+  purpose: string;
   label: string;
   consultantId: string | null;
   webhookUrl: string;
@@ -69,6 +71,13 @@ type Draft = {
   isActive: boolean;
   isDefault: boolean;
 };
+
+/** Purpose → human label, used across the endpoints table and the form. */
+const PURPOSES = [
+  { value: "lead_assigned", label: "Assignment intro" },
+  { value: "study_abroad", label: "Study-abroad intro" },
+] as const;
+const purposeLabel = (p: string) => PURPOSES.find((x) => x.value === p)?.label ?? p;
 
 const card = "bg-surface-container-lowest border border-outline-variant rounded-xl shadow-sm";
 const btn = "h-9 px-md rounded-lg text-label-sm font-semibold transition disabled:opacity-60";
@@ -103,6 +112,7 @@ function StatusPill({ status }: { status: string }) {
 }
 
 const emptyDraft: Draft = {
+  purpose: "lead_assigned",
   label: "",
   consultantId: null,
   webhookUrl: "",
@@ -295,6 +305,7 @@ export function WabisWebhookCard() {
               <table className="w-full text-label-sm">
                 <thead className="bg-surface-container-low text-on-surface-variant">
                   <tr className="text-left">
+                    <th className="px-md py-xs">Purpose</th>
                     <th className="px-md py-xs">Label</th>
                     <th className="px-md py-xs">Routes for</th>
                     <th className="px-md py-xs">URL</th>
@@ -306,13 +317,23 @@ export function WabisWebhookCard() {
                 <tbody>
                   {endpoints.length === 0 ? (
                     <tr>
-                      <td colSpan={6} className="px-md py-md text-center text-on-surface-variant">
+                      <td colSpan={7} className="px-md py-md text-center text-on-surface-variant">
                         No workflows yet. Add one per consultant, plus a default.
                       </td>
                     </tr>
                   ) : (
                     endpoints.map((e) => (
                       <tr key={e.id} className={"border-t border-outline-variant/60 " + (e.isActive ? "" : "opacity-55")}>
+                        <td className="px-md py-xs whitespace-nowrap">
+                          <span
+                            className={
+                              "px-xs py-[1px] rounded-full text-[10px] font-bold " +
+                              (e.purpose === "study_abroad" ? "bg-purple-100 text-purple-800" : "bg-slate-100 text-slate-700")
+                            }
+                          >
+                            {purposeLabel(e.purpose)}
+                          </span>
+                        </td>
                         <td className="px-md py-xs">{e.label}</td>
                         <td className="px-md py-xs">
                           {e.isDefault ? (
@@ -355,6 +376,7 @@ export function WabisWebhookCard() {
                             onClick={() =>
                               setDraft({
                                 id: e.id,
+                                purpose: e.purpose,
                                 label: e.label,
                                 consultantId: e.consultantId,
                                 webhookUrl: e.webhookUrl,
@@ -407,6 +429,23 @@ export function WabisWebhookCard() {
                 {draft.id ? "Edit workflow" : "Add workflow"}
               </div>
               <div className="grid gap-md md:grid-cols-2">
+                <label className="block">
+                  <span className="block text-label-sm text-on-surface-variant mb-xs">Purpose</span>
+                  <select
+                    className={input + " w-full"}
+                    value={draft.purpose}
+                    onChange={(e) => setDraft({ ...draft, purpose: e.target.value })}
+                  >
+                    {PURPOSES.map((p) => (
+                      <option key={p.value} value={p.value}>
+                        {p.label}
+                      </option>
+                    ))}
+                  </select>
+                  <span className="block text-label-sm text-on-surface-variant mt-xs">
+                    Study-abroad is a separate Wabis workflow (different template) from the assignment intro.
+                  </span>
+                </label>
                 <label className="block">
                   <span className="block text-label-sm text-on-surface-variant mb-xs">Label</span>
                   <input

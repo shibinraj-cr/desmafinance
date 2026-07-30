@@ -19,6 +19,7 @@ import {
 } from "@/lib/crm-leads";
 import { isEmailConfigured } from "@/lib/mailer";
 import { listMessageTemplates } from "@/lib/crm-message-templates";
+import { STUDY_ABROAD_EVENT } from "@/lib/crm-webhook";
 import { LeadDetail } from "./client";
 
 export const dynamic = "force-dynamic";
@@ -135,6 +136,23 @@ export default async function LeadDetailPage({ params }: { params: { id: string 
     parties: parties.map((p) => ({ id: p.id, label: p.name, phone: p.phone })),
   };
 
+  // Study-abroad WhatsApp button: shown only for a study-abroad service on an
+  // assigned lead, to someone allowed to act on it. `alreadySent` seeds the
+  // button's "sent" state (the assigned consultant can only introduce once).
+  const saEligible =
+    !!lead.service?.isStudyAbroad && !!lead.assignedToId && canEditLead(access, lead, userId);
+  const studyAbroad = {
+    eligible: saEligible,
+    // Only a *delivered* row counts as "sent" — a failed one leaves the button
+    // active so the consultant can re-fire it (enqueueStudyAbroadWebhook retries
+    // a failed pairing rather than dead-ending).
+    alreadySent:
+      saEligible &&
+      (await prisma.crmWebhookDelivery.count({
+        where: { leadId: lead.id, assigneeUserId: lead.assignedToId, event: STUDY_ABROAD_EVENT, status: "sent" },
+      })) > 0,
+  };
+
   return (
     <>
       <TopBar
@@ -163,6 +181,7 @@ export default async function LeadDetailPage({ params }: { params: { id: string 
           canEdit={canEditLead(access, lead, userId)}
           emailConfigured={emailConfigured}
           templates={templates}
+          studyAbroad={studyAbroad}
           access={{
             isAdmin: access.isAdmin,
             canAssign: access.canAssign,

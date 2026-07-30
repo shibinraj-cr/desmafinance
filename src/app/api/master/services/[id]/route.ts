@@ -9,6 +9,7 @@ const PatchSchema = z.object({
   name: z.string().min(2).max(160).optional(),
   description: z.string().max(500).optional().or(z.literal("")),
   isActive: z.boolean().optional(),
+  isStudyAbroad: z.boolean().optional(),
 });
 
 export async function PATCH(req: NextRequest, { params }: { params: { id: string } }) {
@@ -40,6 +41,7 @@ export async function PATCH(req: NextRequest, { params }: { params: { id: string
     update.description =
       data.description && data.description.length > 0 ? data.description.trim() : null;
   if (data.isActive !== undefined) update.isActive = data.isActive;
+  if (data.isStudyAbroad !== undefined) update.isStudyAbroad = data.isStudyAbroad;
 
   const updated = await prisma.service.update({ where: { id: params.id }, data: update });
   await recordAudit({

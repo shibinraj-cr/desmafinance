@@ -16,7 +16,14 @@ import {
   WABIS_REMARKETING_KEYWORDS_KEY,
   WABIS_INBOUND_SECRET_KEY,
 } from "@/lib/app-settings";
-import { resolveAgent, sendTestWebhook, requeueDelivery, drainWebhookQueue, isWabisWebhookUrl } from "@/lib/crm-webhook";
+import {
+  resolveAgent,
+  sendTestWebhook,
+  requeueDelivery,
+  drainWebhookQueue,
+  isWabisWebhookUrl,
+  LEAD_ASSIGNED_EVENT,
+} from "@/lib/crm-webhook";
 import { sendTestRemarketingTouch } from "@/lib/crm-remarketing";
 
 export const dynamic = "force-dynamic";
@@ -42,7 +49,9 @@ async function consultantRows() {
       select: { userId: true, displayName: true, phone: true },
     }),
     prisma.wabisWebhookEndpoint.findMany({
-      where: { isActive: true },
+      // The routing table is about the lead-assignment intro; study-abroad
+      // endpoints are configured in the same list but resolved separately.
+      where: { isActive: true, purpose: LEAD_ASSIGNED_EVENT },
       select: { id: true, label: true, consultantId: true, isDefault: true, agentName: true, agentPhone: true },
     }),
   ]);
@@ -82,9 +91,10 @@ export const GET = withApiHandler(async () => {
     getSetting(WABIS_WEBHOOK_ENABLED_KEY),
     getSetting(WABIS_WEBHOOK_SECRET_KEY),
     prisma.wabisWebhookEndpoint.findMany({
-      orderBy: [{ isDefault: "desc" }, { isActive: "desc" }, { label: "asc" }],
+      orderBy: [{ purpose: "asc" }, { isDefault: "desc" }, { isActive: "desc" }, { label: "asc" }],
       select: {
         id: true,
+        purpose: true,
         label: true,
         consultantId: true,
         webhookUrl: true,
@@ -129,6 +139,7 @@ export const GET = withApiHandler(async () => {
     secret: secret ?? "",
     endpoints: endpoints.map((e) => ({
       id: e.id,
+      purpose: e.purpose,
       label: e.label,
       consultantId: e.consultantId,
       consultantName: e.consultant?.leadPulseRole?.displayName ?? e.consultant?.username ?? null,

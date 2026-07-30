@@ -7,7 +7,7 @@ import { normalizeTemperature, type LeadTemperature } from "./crm";
 // emit the same plain (serialisable) row shape to client components.
 export const leadRowInclude = Prisma.validator<Prisma.LeadInclude>()({
   source: { select: { id: true, label: true } },
-  service: { select: { id: true, name: true } },
+  service: { select: { id: true, name: true, isStudyAbroad: true } },
   qualification: { select: { id: true, label: true } },
   status: { select: { id: true, code: true, label: true, kind: true, color: true } },
   assignedTo: {

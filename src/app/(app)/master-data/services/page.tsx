@@ -74,6 +74,7 @@ export default async function ServicesPage() {
             name: s.name,
             description: s.description,
             isActive: s.isActive,
+            isStudyAbroad: s.isStudyAbroad,
             subItems: s.subItems.map((sub) => ({
               id: sub.id,
               name: sub.name,

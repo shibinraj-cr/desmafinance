@@ -42,6 +42,14 @@ import {
 
 export const LEAD_ASSIGNED_EVENT = "lead_assigned";
 /**
+ * The study-abroad counsellor intro, fired manually from the per-lead button
+ * (see /api/crm/leads/[id]/wabis/study-abroad). Consultant-routed exactly like
+ * `lead_assigned`, but through the assigned consultant's `study_abroad` Wabis
+ * workflow (a separate template), so the two events double as endpoint
+ * `purpose` values.
+ */
+export const STUDY_ABROAD_EVENT = "study_abroad";
+/**
  * A lead that couldn't be sent at all (no usable phone). Recorded under its own
  * event so it reads as a diagnostic rather than a delivery: it must not occupy
  * the lead's dedupe key, or fixing the number and reassigning would stay
@@ -49,6 +57,13 @@ export const LEAD_ASSIGNED_EVENT = "lead_assigned";
  */
 export const LEAD_SKIPPED_EVENT = "lead_assigned_skipped";
 export const TEST_EVENT = "test";
+
+/**
+ * Events that route to a consultant's own Wabis workflow, keyed by endpoint
+ * `purpose`. For these the event string IS the purpose, and an unsent retry
+ * re-resolves the destination (see attemptDelivery / refreshDeliveryTarget).
+ */
+export const CONSULTANT_ROUTED_EVENTS: ReadonlySet<string> = new Set([LEAD_ASSIGNED_EVENT, STUDY_ABROAD_EVENT]);
 /**
  * A scheduled Re-marketing nurturing touch-point (see src/lib/crm-remarketing.ts).
  * Rides the same outbox/drain as lead-assignment, but is gated by its own
@@ -164,6 +179,7 @@ export type WabisEndpoint = {
   agentPhone: string | null;
   consultantId: string | null;
   isDefault: boolean;
+  purpose: string;
 };
 
 /**
@@ -287,6 +303,7 @@ const endpointSelect = {
   agentPhone: true,
   consultantId: true,
   isDefault: true,
+  purpose: true,
 } as const;
 
 /**
@@ -316,10 +333,17 @@ export function pickEndpoint<T extends { consultantId: string | null; isDefault:
  *
  * One query for the whole (small) active set, rather than a query per candidate
  * rule; the choice itself is `pickEndpoint`.
+ *
+ * Scoped by `purpose`: the assignment intro and the study-abroad intro are
+ * separate Wabis workflows, so a consultant's `study_abroad` endpoint is
+ * resolved independently of their `lead_assigned` one.
  */
-export async function resolveEndpointForConsultant(consultantId: string): Promise<WabisEndpoint | null> {
+export async function resolveEndpointForConsultant(
+  consultantId: string,
+  purpose: string = LEAD_ASSIGNED_EVENT,
+): Promise<WabisEndpoint | null> {
   const active = await prisma.wabisWebhookEndpoint.findMany({
-    where: { isActive: true },
+    where: { isActive: true, purpose },
     select: endpointSelect,
   });
   return pickEndpoint(active, consultantId);
@@ -405,8 +429,9 @@ export async function postWebhook(
 async function refreshDeliveryTarget(
   assigneeUserId: string,
   payload: unknown,
+  purpose: string,
 ): Promise<{ url: string; payload: unknown; endpointLabel: string | null } | null> {
-  const endpoint = await resolveEndpointForConsultant(assigneeUserId);
+  const endpoint = await resolveEndpointForConsultant(assigneeUserId, purpose);
   if (!endpoint) return null;
 
   const role = await prisma.leadPulseRole.findUnique({
@@ -470,8 +495,9 @@ export async function attemptDelivery(deliveryId: string): Promise<boolean> {
     payload: row.payload,
     endpointLabel: row.endpointLabel,
   };
-  if (row.event === LEAD_ASSIGNED_EVENT && row.assigneeUserId) {
-    const refreshed = await refreshDeliveryTarget(row.assigneeUserId, row.payload);
+  if (CONSULTANT_ROUTED_EVENTS.has(row.event) && row.assigneeUserId) {
+    // For consultant-routed events the event string is the endpoint purpose.
+    const refreshed = await refreshDeliveryTarget(row.assigneeUserId, row.payload, row.event);
     if (!refreshed) {
       await prisma.crmWebhookDelivery.update({
         where: { id: row.id },
@@ -658,6 +684,120 @@ export async function enqueueLeadAssignedWebhook(opts: {
   }
 }
 
+/** Outcome of a study-abroad send, shaped for a direct user-facing message. */
+export type StudyAbroadSendResult = {
+  ok: boolean;
+  state: "sent" | "queued" | "already_sent" | "no_endpoint" | "no_phone" | "disabled" | "error";
+  message: string;
+};
+
+/**
+ * Fire the study-abroad counsellor intro for one lead, through the ASSIGNED
+ * consultant's `study_abroad` Wabis workflow.
+ *
+ * Unlike the lead-assignment webhook this is a manual, user-triggered action, so
+ * it returns a concrete result the button can show — including the "already
+ * sent" case, which is a success to report, not a silent no-op. Idempotent on
+ * (lead, consultant): a second click on the same pairing won't re-message the
+ * candidate, but a genuine reassignment to a new consultant is a new pairing and
+ * will send.
+ */
+export async function enqueueStudyAbroadWebhook(opts: {
+  leadId: string;
+  assigneeUserId: string;
+  candidateName: string | null | undefined;
+  phone: string | null | undefined;
+  email: string | null | undefined;
+  source: string | null | undefined;
+  service: string | null | undefined;
+  status: string | null | undefined;
+  agentDisplayName: string | null | undefined;
+  agentPhone: string | null | undefined;
+}): Promise<StudyAbroadSendResult> {
+  try {
+    const cfg = await getWabisWebhookConfig();
+    if (!cfg.enabled) {
+      return { ok: false, state: "disabled", message: "The WhatsApp automation is switched off in CRM settings." };
+    }
+
+    const dedupeKey = `${STUDY_ABROAD_EVENT}:${opts.leadId}:${opts.assigneeUserId}`;
+    const existing = await prisma.crmWebhookDelivery.findUnique({
+      where: { dedupeKey },
+      select: { id: true, status: true },
+    });
+    if (existing) {
+      // A row for this pairing already exists. If it landed (or is mid-flight),
+      // the candidate has it / will have it — don't re-message. If it *failed*
+      // (e.g. Wabis was down through all retries), a fresh click re-fires it
+      // rather than dead-ending: the outbox reuses the dedupe key, so there is
+      // no other recovery path for a manual send.
+      if (existing.status === "sent") {
+        return { ok: true, state: "already_sent", message: "The study-abroad intro was already sent to this lead." };
+      }
+      if (existing.status === "pending") {
+        return { ok: true, state: "queued", message: "A study-abroad intro to this lead is already queued." };
+      }
+      const retry = await requeueDelivery(existing.id);
+      if (!retry.requeued) return { ok: false, state: "error", message: retry.reason ?? "Couldn't re-send." };
+      return retry.delivered
+        ? { ok: true, state: "sent", message: "Study-abroad intro sent." }
+        : { ok: true, state: "queued", message: "Study-abroad intro queued — it'll be retried automatically." };
+    }
+
+    const endpoint = await resolveEndpointForConsultant(opts.assigneeUserId, STUDY_ABROAD_EVENT);
+    if (!endpoint) {
+      return {
+        ok: false,
+        state: "no_endpoint",
+        message: "No study-abroad Wabis workflow is mapped to this consultant (and no default). Add one in CRM → Settings.",
+      };
+    }
+
+    const { agent, agentPhone } = resolveAgent({
+      displayName: opts.agentDisplayName,
+      phone: opts.agentPhone,
+      endpoint,
+    });
+    const payload = buildLeadAssignedPayload({
+      leadId: opts.leadId,
+      candidateName: opts.candidateName,
+      phone: opts.phone,
+      email: opts.email,
+      source: opts.source,
+      service: opts.service,
+      status: opts.status,
+      assignedAt: new Date(),
+      agent,
+      agentPhone,
+    });
+    if (!payload) {
+      return { ok: false, state: "no_phone", message: "This lead has no phone number Wabis can use as a subscriber." };
+    }
+
+    const created = await prisma.crmWebhookDelivery.create({
+      data: {
+        event: STUDY_ABROAD_EVENT,
+        dedupeKey,
+        leadId: opts.leadId,
+        assigneeUserId: opts.assigneeUserId,
+        url: endpoint.webhookUrl,
+        endpointLabel: endpoint.label,
+        payload,
+      },
+      select: { id: true },
+    });
+
+    const delivered = await attemptDelivery(created.id);
+    return delivered
+      ? { ok: true, state: "sent", message: "Study-abroad intro sent." }
+      : { ok: true, state: "queued", message: "Study-abroad intro queued — it'll be retried automatically if Wabis was briefly unreachable." };
+  } catch (e) {
+    // A dedupeKey race (double-click) lands here; the other request owns the send.
+    console.error("[crm-webhook] study-abroad webhook not enqueued:", e);
+    return { ok: false, state: "error", message: "Could not send right now. Please try again in a moment." };
+  }
+}
+
 /**
  * Retry deliveries the inline attempt didn't land. Driven by Vercel Cron
  * (/api/cron/crm-webhooks) — this is what makes the outbox worth having.
@@ -675,7 +815,8 @@ export async function drainWebhookQueue(
   const remarketingEnabled =
     (await getSetting(WABIS_REMARKETING_ENABLED_KEY).catch(() => null)) === "1";
   const events: string[] = [];
-  if (cfg.enabled) events.push(LEAD_ASSIGNED_EVENT);
+  // The study-abroad intro rides the same on/off switch as the assignment intro.
+  if (cfg.enabled) events.push(LEAD_ASSIGNED_EVENT, STUDY_ABROAD_EVENT);
   if (remarketingEnabled) events.push(REMARKETING_TOUCH_EVENT);
   if (events.length === 0) return { attempted: 0, sent: 0, errored: 0, skipped: "automation disabled" };
 
@@ -802,7 +943,14 @@ export async function requeueDelivery(
     return refuse("This lead had no usable phone number — fix the number on the lead and reassign it.");
   }
 
-  if (row.assigneeUserId && !(await resolveEndpointForConsultant(row.assigneeUserId))) {
+  // Only the consultant-routed events resolve a per-consultant endpoint; a
+  // re-marketing touch carries an assigneeUserId too but sends on a global URL,
+  // so it must not be judged against the (non-existent) per-consultant workflow.
+  if (
+    CONSULTANT_ROUTED_EVENTS.has(row.event) &&
+    row.assigneeUserId &&
+    !(await resolveEndpointForConsultant(row.assigneeUserId, row.event))
+  ) {
     return refuse("No Wabis workflow is mapped to this consultant, and there is no default endpoint.");
   }
 
