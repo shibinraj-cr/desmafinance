@@ -87,6 +87,8 @@ model User {
   crmTasksCompleted      CrmTask[]            @relation("CrmTaskCompletedBy")
   crmMessageTemplates    CrmMessageTemplate[] @relation("CrmMessageTemplateCreatedBy")
   crmNotifications       CrmNotification[]    @relation("CrmNotifications")
+  crmDailyReports         CrmDailyReport[]     @relation("CrmDailyReportUser")
+  crmDailyReportsReviewed CrmDailyReport[]     @relation("CrmDailyReportReviewer")
   appSettings            AppSetting[]         @relation("AppSettingEditor")
   wabisEndpoints         WabisWebhookEndpoint[] @relation("WabisEndpointConsultant")
 
@@ -2304,6 +2306,9 @@ model LeadActivity {
   @@index([leadId, occurredAt])
   @@index([type])
   @@index([actorId])
+  // Per-BDE-per-day scans for the Daily Report (actorId + occurredAt range) go
+  // index-only instead of scanning the whole actor's history.
+  @@index([actorId, occurredAt])
 }
 
 // Per-lead tasks / follow-ups (the Dynamics "Activities → Task" concept).
@@ -2336,6 +2341,51 @@ model CrmTask {
   // Supports a future cross-lead "My open tasks" / overdue view.
   @@index([assignedToId, status, dueAt])
   @@index([dueAt])
+}
+
+/// One BDE's end-of-day report for a single IST calendar day (the surface behind
+/// `/crm/report`). The KPI summary and detail lists are AUTO-generated from the
+/// LeadActivity ledger + related tables — the BDE never re-enters activity — and
+/// are shown live until they submit. On submit, the computed `metrics`/`details`
+/// are frozen into this row (an immutable point-in-time snapshot), alongside the
+/// BDE's own narrative (summary / blockers / plan). A report is editable and
+/// re-submittable while `status = 'submitted'`; once a manager marks it
+/// 'reviewed' it is locked. Managers never submit on a BDE's behalf.
+model CrmDailyReport {
+  id           String    @id @default(cuid())
+  // The BDE the report is ABOUT and authored by (never a manager).
+  userId       String
+  user         User      @relation("CrmDailyReportUser", fields: [userId], references: [id], onDelete: Cascade)
+  // IST calendar day at UTC midnight — SAME convention as ModuleUsageDaily.day
+  // (toPrismaDate(istDay)), so a report joins cleanly to that day's active-time.
+  day          DateTime  @db.Date
+  // 'submitted' | 'reviewed'
+  status       String    @default("submitted")
+
+  // BDE narrative.
+  summary      String
+  blockers     String?
+  planNext     String?
+
+  // Frozen snapshot computed server-side at (re)submit — never trusted from the
+  // client. See DailyReportMetrics / DailyReportDetails in src/lib/crm-daily-report.ts.
+  metrics      Json
+  details      Json
+
+  submittedAt  DateTime  @default(now())
+
+  // Review.
+  reviewedById String?
+  reviewedBy   User?     @relation("CrmDailyReportReviewer", fields: [reviewedById], references: [id], onDelete: SetNull)
+  reviewedAt   DateTime?
+  reviewerNote String?
+
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
+
+  @@unique([userId, day]) // one report per BDE per day
+  @@index([day, status]) // team roll-up: all reports for a day, submitted vs reviewed
+  @@index([reviewedById])
 }
 
 /// One Re-marketing nurturing campaign for a lead.

@@ -100,10 +100,16 @@ export function canSeePage(p: Permissions, href: string): boolean {
   if (ADMIN_RESTRICTED_PAGES.some((pg) => href === pg || href.startsWith(pg + "/"))) return false;
   // Self-service essentials everyone can see.
   if (ALWAYS_VISIBLE_PAGES.some((pg) => href === pg || href.startsWith(pg + "/"))) return true;
-  // CRM notifications are personal to every CRM user — visible to anyone who can
-  // reach the CRM Leads page, so they need no separate Role.pages grant (and
-  // never leak the CRM module to non-CRM users, who can't see /crm/leads).
-  if (href === "/crm/notifications" || href.startsWith("/crm/notifications/")) {
+  // CRM notifications and the personal Daily Report are personal to every CRM
+  // user — visible to anyone who can reach the CRM Leads page, so they need no
+  // separate Role.pages grant (and never leak the CRM module to non-CRM users,
+  // who can't see /crm/leads). The page itself authorises via getCrmAccess.
+  if (
+    href === "/crm/notifications" ||
+    href.startsWith("/crm/notifications/") ||
+    href === "/crm/report" ||
+    href.startsWith("/crm/report/")
+  ) {
     return p.pages.some((pg) => pg === "/crm/leads" || pg.startsWith("/crm/leads/"));
   }
   // Exact match or prefix match (e.g. allowing /daily-tracker permits
