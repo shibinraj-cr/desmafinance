@@ -61,65 +61,79 @@ const qualErrors: Record<string, string> = {
   in_use: "Qualification is used by leads — deactivate instead.",
 };
 
-const sectionLabel = "text-label-sm font-semibold uppercase tracking-wider text-on-surface-variant";
+type TabKey = "statuses" | "qualifications" | "capture" | "whatsapp" | "remarketing" | "email";
 
-// Anchor targets for the jump-nav. `scroll-mt` keeps the sticky nav from covering
-// the card the user jumped to.
-const anchor = "scroll-mt-24";
+// One tab per settings section. `group` is a soft caption shown above the active
+// panel so the old "Reference data / Integrations" split isn't lost.
+const TABS: { key: TabKey; label: string; icon: string; group: string }[] = [
+  { key: "statuses", label: "Lead Statuses", icon: "flag", group: "Reference data" },
+  { key: "qualifications", label: "Qualifications", icon: "school", group: "Reference data" },
+  { key: "capture", label: "Lead Capture", icon: "sync_alt", group: "Integrations" },
+  { key: "whatsapp", label: "WhatsApp", icon: "forum", group: "Integrations" },
+  { key: "remarketing", label: "Re-marketing", icon: "campaign", group: "Integrations" },
+  { key: "email", label: "Email Sender", icon: "forward_to_inbox", group: "Integrations" },
+];
 
-function JumpNav() {
-  const links = [
-    { href: "#lead-statuses", label: "Lead statuses" },
-    { href: "#qualifications", label: "Qualifications" },
-    { href: "#lead-capture", label: "Lead capture" },
-    { href: "#whatsapp", label: "WhatsApp intro" },
-    { href: "#remarketing", label: "Re-marketing" },
-    { href: "#email", label: "Email sender" },
-  ];
-  return (
-    <nav className="sticky top-0 z-10 flex flex-wrap items-center gap-x-md gap-y-xs rounded-lg border border-outline-variant bg-surface-container-lowest px-md py-sm text-label-sm shadow-sm">
-      <span className="font-semibold text-on-surface-variant">On this page:</span>
-      {links.map((l) => (
-        <a key={l.href} href={l.href} className="text-primary hover:underline">
-          {l.label}
-        </a>
-      ))}
-    </nav>
-  );
-}
+const TAB_KEYS = new Set<string>(TABS.map((t) => t.key));
 
 export function SettingsClient({ statuses, qualifications }: { statuses: StatusRow[]; qualifications: QualRow[] }) {
+  const [tab, setTab] = useState<TabKey>("statuses");
+
+  // Deep-link / restore the active tab via the URL hash (e.g. #email), so a
+  // refresh or shared link lands on the same section.
+  useEffect(() => {
+    const fromHash = window.location.hash.slice(1);
+    if (TAB_KEYS.has(fromHash)) setTab(fromHash as TabKey);
+  }, []);
+
+  function select(next: TabKey) {
+    setTab(next);
+    if (typeof history !== "undefined") history.replaceState(null, "", `#${next}`);
+  }
+
+  const activeGroup = TABS.find((t) => t.key === tab)?.group;
+
   return (
-    <div className="space-y-xl">
-      <JumpNav />
+    <div className="space-y-lg">
+      <div className="overflow-x-auto border-b border-outline-variant">
+        <div role="tablist" className="flex items-center gap-xs min-w-max">
+          {TABS.map((t) => {
+            const active = tab === t.key;
+            return (
+              <button
+                key={t.key}
+                type="button"
+                role="tab"
+                aria-selected={active}
+                onClick={() => select(t.key)}
+                className={
+                  "inline-flex items-center gap-xs h-11 px-md -mb-px border-b-2 text-label-md font-semibold whitespace-nowrap transition " +
+                  (active
+                    ? "border-primary text-primary"
+                    : "border-transparent text-on-surface-variant hover:text-on-surface hover:border-outline-variant")
+                }
+              >
+                <span className="material-symbols-outlined" style={{ fontSize: 18 }}>
+                  {t.icon}
+                </span>
+                {t.label}
+              </button>
+            );
+          })}
+        </div>
+      </div>
 
-      {/* Reference data — the taxonomy that classifies leads. */}
-      <section className="space-y-lg">
-        <h2 className={sectionLabel}>Reference data</h2>
-        <div id="lead-statuses" className={anchor}>
-          <StatusEditor statuses={statuses} />
-        </div>
-        <div id="qualifications" className={anchor}>
-          <QualificationEditor qualifications={qualifications} />
-        </div>
-      </section>
-
-      {/* Integrations — external connections in and out of the CRM. */}
-      <section className="space-y-lg">
-        <h2 className={sectionLabel}>Integrations</h2>
-        <div id="lead-capture" className={anchor}>
-          <IntegrationsCard />
-        </div>
-        <div id="whatsapp" className={anchor}>
-          <WabisWebhookCard />
-        </div>
-        <div id="remarketing" className={anchor}>
-          <RemarketingSettingsCard />
-        </div>
-        <div id="email" className={anchor}>
-          <EmailSenderCard />
-        </div>
-      </section>
+      <div className="space-y-md">
+        {activeGroup && (
+          <div className="text-label-sm font-semibold uppercase tracking-wider text-on-surface-variant">{activeGroup}</div>
+        )}
+        {tab === "statuses" && <StatusEditor statuses={statuses} />}
+        {tab === "qualifications" && <QualificationEditor qualifications={qualifications} />}
+        {tab === "capture" && <IntegrationsCard />}
+        {tab === "whatsapp" && <WabisWebhookCard />}
+        {tab === "remarketing" && <RemarketingSettingsCard />}
+        {tab === "email" && <EmailSenderCard />}
+      </div>
     </div>
   );
 }
