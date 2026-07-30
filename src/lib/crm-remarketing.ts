@@ -32,7 +32,7 @@ import { normalizePhone } from "./crm";
 import {
   getSetting,
   WABIS_REMARKETING_ENABLED_KEY,
-  WABIS_REMARKETING_URL_KEY,
+  WABIS_REMARKETING_URLS_KEY,
   WABIS_REMARKETING_OFFSETS_KEY,
   WABIS_REMARKETING_KEYWORDS_KEY,
 } from "./app-settings";
@@ -63,27 +63,47 @@ const COMPLETION_GRACE_DAYS = 7;
 
 export type RemarketingConfig = {
   enabled: boolean;
-  /** Global Wabis workflow callback URL that sends the touch templates. */
-  url: string | null;
-  /** Calendar-day offsets from stage entry, ascending, ≤ 3 entries. */
+  /**
+   * One Wabis workflow callback URL PER TOUCH (positional: urls[0] = touch 1).
+   * Wabis workflows are single-template, so the routing lives here, not in Wabis.
+   */
+  urls: string[];
+  /** Calendar-day offsets from stage entry, ascending, ≤ 4 entries. */
   offsets: number[];
   /** Positive-intent reply keywords (lowercased). Empty = advance on any reply. */
   keywords: string[];
 };
 
 export async function getRemarketingConfig(): Promise<RemarketingConfig> {
-  const [enabled, url, offsets, keywords] = await Promise.all([
+  const [enabled, urls, offsets, keywords] = await Promise.all([
     getSetting(WABIS_REMARKETING_ENABLED_KEY).catch(() => null),
-    getSetting(WABIS_REMARKETING_URL_KEY).catch(() => null),
+    getSetting(WABIS_REMARKETING_URLS_KEY).catch(() => null),
     getSetting(WABIS_REMARKETING_OFFSETS_KEY).catch(() => null),
     getSetting(WABIS_REMARKETING_KEYWORDS_KEY).catch(() => null),
   ]);
   return {
     enabled: enabled === "1",
-    url: url?.trim() || null,
+    urls: parseUrls(urls),
     offsets: parseOffsets(offsets),
     keywords: parseKeywords(keywords),
   };
+}
+
+/**
+ * Newline-separated, positional touch URLs — line i (1-based) is touch i's Wabis
+ * workflow URL. Preserves interior blanks (position = touch), drops trailing ones.
+ */
+export function parseUrls(raw: string | null | undefined): string[] {
+  if (!raw) return [];
+  const lines = raw.split("\n").map((s) => s.trim());
+  while (lines.length && !lines[lines.length - 1]) lines.pop();
+  return lines;
+}
+
+/** The Wabis workflow URL for a given 1-based touch, or null if unset/invalid. */
+function urlForTouch(config: RemarketingConfig, touch: number): string | null {
+  const u = config.urls[touch - 1]?.trim();
+  return u && isWabisWebhookUrl(u) ? u : null;
 }
 
 // ── Pure helpers (unit-tested; no I/O) ──────────────────────────────────────
@@ -277,10 +297,11 @@ async function enqueueRemarketingTouch(opts: {
   const { lead, touchIndex, config } = opts;
   const dedupeKey = `${REMARKETING_TOUCH_EVENT}:${opts.campaignId}:${touchIndex}`;
 
-  if (!config.url || !isWabisWebhookUrl(config.url)) {
-    // Misconfigured destination — leave it for a future run once an admin sets the
-    // URL, rather than burning the touch. Not stamped.
-    console.warn("[crm-remarketing] no valid remarketing URL configured; touch deferred");
+  const url = urlForTouch(config, touchIndex);
+  if (!url) {
+    // No valid workflow URL for this touch — leave it for a future run once an
+    // admin sets it, rather than burning the touch. Not stamped.
+    console.warn(`[crm-remarketing] no valid workflow URL for touch ${touchIndex}; deferred`);
     return false;
   }
 
@@ -296,7 +317,7 @@ async function enqueueRemarketingTouch(opts: {
           dedupeKey,
           leadId: lead.id,
           assigneeUserId: lead.assignedToId,
-          url: config.url,
+          url,
           endpointLabel: `Re-marketing touch ${touchIndex}`,
           payload: {},
           status: "failed",
@@ -345,7 +366,7 @@ async function enqueueRemarketingTouch(opts: {
         dedupeKey,
         leadId: lead.id,
         assigneeUserId: lead.assignedToId,
-        url: config.url,
+        url,
         endpointLabel: `Re-marketing touch ${touchIndex}`,
         payload,
       },
@@ -626,14 +647,15 @@ export async function sendTestRemarketingTouch(opts: {
   touch?: number;
 }): Promise<{ ok: boolean; status: number | null; body: string; error?: string }> {
   const config = await getRemarketingConfig();
-  if (!config.url || !isWabisWebhookUrl(config.url)) {
-    return { ok: false, status: null, body: "", error: "Set a valid re-marketing workflow URL and save it first." };
+  const touch = opts.touch && opts.touch >= 1 && opts.touch <= 4 ? opts.touch : 1;
+  const url = urlForTouch(config, touch);
+  if (!url) {
+    return { ok: false, status: null, body: "", error: `Set a valid workflow URL for touch ${touch} and save it first.` };
   }
   const phone = toWabisPhone(opts.phone);
   if (!phone) {
     return { ok: false, status: null, body: "", error: "Enter a valid mobile number to send the test to." };
   }
-  const touch = opts.touch && opts.touch >= 1 && opts.touch <= 4 ? opts.touch : 1;
   const now = new Date();
   const payload = {
     name: "Test Candidate",
@@ -652,7 +674,7 @@ export async function sendTestRemarketingTouch(opts: {
   };
 
   const wabis = await getWabisWebhookConfig();
-  const result = await postWebhook(config.url, payload, wabis.secret);
+  const result = await postWebhook(url, payload, wabis.secret);
 
   await prisma.crmWebhookDelivery
     .create({
@@ -660,7 +682,7 @@ export async function sendTestRemarketingTouch(opts: {
         event: TEST_EVENT,
         // Unique per test send — never occupies a real touch's key.
         dedupeKey: `${TEST_EVENT}:remarketing:${randomUUID()}`,
-        url: config.url,
+        url,
         endpointLabel: `Re-marketing touch ${touch} (test)`,
         payload,
         status: result.ok ? "sent" : "failed",

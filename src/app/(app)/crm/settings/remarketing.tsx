@@ -4,7 +4,7 @@ import { useCallback, useEffect, useState } from "react";
 
 type Remarketing = {
   enabled: boolean;
-  url: string;
+  urls: string[];
   offsets: string;
   keywords: string;
   inboundSecret: string;
@@ -30,7 +30,7 @@ export function RemarketingSettingsCard() {
   const [error, setError] = useState<string | null>(null);
 
   const [enabled, setEnabled] = useState(false);
-  const [url, setUrl] = useState("");
+  const [urls, setUrls] = useState<string[]>(["", "", "", ""]);
   const [offsets, setOffsets] = useState("5,19,33");
   const [keywords, setKeywords] = useState("");
   const [inboundSecret, setInboundSecret] = useState("");
@@ -46,7 +46,7 @@ export function RemarketingSettingsCard() {
     if (r.ok) {
       const rm = ((await r.json()) as { remarketing: Remarketing }).remarketing;
       setEnabled(rm.enabled);
-      setUrl(rm.url);
+      setUrls([0, 1, 2, 3].map((i) => rm.urls[i] ?? ""));
       setOffsets(rm.offsets);
       setKeywords(rm.keywords);
       setInboundSecret(rm.inboundSecret);
@@ -64,7 +64,7 @@ export function RemarketingSettingsCard() {
     const r = await fetch("/api/crm/integrations/wabis", {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ action: "save_remarketing", enabled, url, offsets, keywords, inboundSecret }),
+      body: JSON.stringify({ action: "save_remarketing", enabled, urls, offsets, keywords, inboundSecret }),
     });
     const payload = (await r.json().catch(() => ({}))) as Record<string, unknown>;
     setBusy(false);
@@ -135,15 +135,24 @@ export function RemarketingSettingsCard() {
             Run re-marketing campaigns
           </label>
 
-          <label className="block">
-            <span className="block text-label-sm text-on-surface-variant mb-xs">Wabis touch-point workflow URL</span>
-            <input
-              className={input + " w-full font-mono"}
-              value={url}
-              onChange={(e) => setUrl(e.target.value)}
-              placeholder="https://bot.wabis.in/webhook/whatsapp-workflow/…  (branch on the `touch` field: 1/2/3)"
-            />
-          </label>
+          <div className="space-y-sm">
+            <div className="text-label-sm text-on-surface-variant">
+              Wabis workflow URL <span className="font-medium">per touch</span> — one Wabis workflow sends one template
+              (no in-flow branching), so each touch needs its own webhook URL. Leave a touch blank to skip it. Timing
+              comes from the offsets above.
+            </div>
+            {[0, 1, 2, 3].map((i) => (
+              <label key={i} className="flex items-center gap-base">
+                <span className="w-[64px] shrink-0 text-label-sm text-on-surface-variant">Touch {i + 1}</span>
+                <input
+                  className={input + " flex-1 font-mono"}
+                  value={urls[i] ?? ""}
+                  onChange={(e) => setUrls((prev) => prev.map((u, j) => (j === i ? e.target.value : u)))}
+                  placeholder="https://bot.wabis.in/webhook/whatsapp-workflow/…"
+                />
+              </label>
+            ))}
+          </div>
 
           <div className="grid gap-md md:grid-cols-2">
             <label className="block">

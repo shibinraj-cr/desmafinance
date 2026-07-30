@@ -2,6 +2,7 @@ import { describe, it, expect } from "vitest";
 import {
   parseOffsets,
   parseKeywords,
+  parseUrls,
   daysBetween,
   dueTouchIndex,
   isCampaignExpired,
@@ -39,6 +40,26 @@ describe("parseKeywords", () => {
   it("lowercases, trims, and drops blanks", () => {
     expect(parseKeywords("Interested, Yes")).toEqual(["interested", "yes"]);
     expect(parseKeywords("a,, b , ")).toEqual(["a", "b"]);
+  });
+});
+
+describe("parseUrls", () => {
+  it("returns [] when unset", () => {
+    expect(parseUrls(null)).toEqual([]);
+    expect(parseUrls("")).toEqual([]);
+  });
+  it("splits newline-separated URLs and trims each", () => {
+    expect(parseUrls("https://a/webhook/1 \n https://b/webhook/2")).toEqual([
+      "https://a/webhook/1",
+      "https://b/webhook/2",
+    ]);
+  });
+  it("keeps interior blanks (position = touch) but drops trailing ones", () => {
+    expect(parseUrls("https://a/webhook/1\n\nhttps://c/webhook/3\n\n")).toEqual([
+      "https://a/webhook/1",
+      "",
+      "https://c/webhook/3",
+    ]);
   });
 });
 

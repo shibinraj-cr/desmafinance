@@ -11,7 +11,7 @@ import {
   WABIS_WEBHOOK_ENABLED_KEY,
   WABIS_WEBHOOK_SECRET_KEY,
   WABIS_REMARKETING_ENABLED_KEY,
-  WABIS_REMARKETING_URL_KEY,
+  WABIS_REMARKETING_URLS_KEY,
   WABIS_REMARKETING_OFFSETS_KEY,
   WABIS_REMARKETING_KEYWORDS_KEY,
   WABIS_INBOUND_SECRET_KEY,
@@ -77,7 +77,7 @@ export const GET = withApiHandler(async () => {
   const access = await getCrmAccess(userId, perms);
   if (!access.canManageSettings) throw forbidden();
 
-  const [enabled, secret, endpoints, deliveries, consultants, rmEnabled, rmUrl, rmOffsets, rmKeywords, rmInboundSecret] =
+  const [enabled, secret, endpoints, deliveries, consultants, rmEnabled, rmUrls, rmOffsets, rmKeywords, rmInboundSecret] =
     await Promise.all([
     getSetting(WABIS_WEBHOOK_ENABLED_KEY),
     getSetting(WABIS_WEBHOOK_SECRET_KEY),
@@ -116,7 +116,7 @@ export const GET = withApiHandler(async () => {
     }),
     consultantRows(),
     getSetting(WABIS_REMARKETING_ENABLED_KEY),
-    getSetting(WABIS_REMARKETING_URL_KEY),
+    getSetting(WABIS_REMARKETING_URLS_KEY),
     getSetting(WABIS_REMARKETING_OFFSETS_KEY),
     getSetting(WABIS_REMARKETING_KEYWORDS_KEY),
     getSetting(WABIS_INBOUND_SECRET_KEY),
@@ -141,10 +141,11 @@ export const GET = withApiHandler(async () => {
     consultants,
     remarketing: {
       enabled: rmEnabled === "1",
-      // Raw stored strings — the admin edits the exact text (URL, "5,19,33",
-      // keyword list). The engine parses/validates them (see getRemarketingConfig).
-      url: rmUrl ?? "",
-      offsets: rmOffsets ?? "5,19,33",
+      // Raw stored strings — the admin edits the exact text. `urls` is exactly 4
+      // entries (one per touch) so the UI can render 4 labelled fields; the engine
+      // parses/validates them (see getRemarketingConfig / parseUrls).
+      urls: [0, 1, 2, 3].map((i) => ((rmUrls ?? "").split("\n")[i] ?? "").trim()),
+      offsets: rmOffsets ?? "5,19,33,45",
       keywords: rmKeywords ?? "",
       inboundSecret: rmInboundSecret ?? "",
     },
@@ -177,7 +178,7 @@ const PostSchema = z.discriminatedUnion("action", [
   z.object({
     action: z.literal("save_remarketing"),
     enabled: z.boolean(),
-    url: z.string().trim().max(500),
+    urls: z.array(z.string().trim().max(500)).max(8),
     offsets: z.string().trim().max(100),
     keywords: z.string().trim().max(500),
     inboundSecret: z.string().trim().max(200),
@@ -224,13 +225,16 @@ export const POST = withApiHandler(async (req: Request) => {
   }
 
   if (body.action === "save_remarketing") {
-    const url = body.url.trim();
-    if (url && !isWabisWebhookUrl(url)) {
-      throw badRequest("Enter a valid https Wabis workflow URL (must contain /webhook/).", "invalid_url");
+    const urls = body.urls.map((u) => u.trim());
+    const bad = urls.find((u) => u && !isWabisWebhookUrl(u));
+    if (bad) {
+      throw badRequest("Enter valid https Wabis workflow URLs (each must contain /webhook/).", "invalid_url");
     }
+    // Drop trailing empties; store newline-positional (line i = touch i).
+    while (urls.length && !urls[urls.length - 1]) urls.pop();
     await Promise.all([
       setSetting(WABIS_REMARKETING_ENABLED_KEY, body.enabled ? "1" : "0", userId),
-      setSetting(WABIS_REMARKETING_URL_KEY, url, userId),
+      setSetting(WABIS_REMARKETING_URLS_KEY, urls.join("\n"), userId),
       setSetting(WABIS_REMARKETING_OFFSETS_KEY, body.offsets.trim(), userId),
       setSetting(WABIS_REMARKETING_KEYWORDS_KEY, body.keywords.trim(), userId),
       setSetting(WABIS_INBOUND_SECRET_KEY, body.inboundSecret.trim(), userId),
