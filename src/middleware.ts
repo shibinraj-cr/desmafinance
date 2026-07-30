@@ -26,9 +26,10 @@ export async function middleware(req: NextRequest) {
 export const config = {
   matcher: [
     // Run on every path except: auth/health endpoints, the login page,
-    // external integration webhooks (api/integrations — they authenticate with
+    // external integration webhooks (api/integrations, and the Wabis inbound
+    // reply webhook api/crm/integrations/wabis/inbound — both authenticate with
     // their own shared secret, not a logged-in session), Next.js internal asset
     // routes, and any file with an extension (/desfin.png, /favicon.ico, fonts).
-    "/((?!login|api/auth|api/health|api/whoami|api/integrations|psych/test|api/psych/test|_next/static|_next/image|.*\\..*).*)",
+    "/((?!login|api/auth|api/health|api/whoami|api/integrations|api/crm/integrations/wabis/inbound|psych/test|api/psych/test|_next/static|_next/image|.*\\..*).*)",
   ],
 };
