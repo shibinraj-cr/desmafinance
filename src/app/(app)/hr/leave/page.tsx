@@ -2,6 +2,7 @@ import { redirect } from "next/navigation";
 import { prisma } from "@/lib/prisma";
 import { getCurrentUserAndPermissions } from "@/lib/permissions";
 import { isHrUser, canApproveHr } from "@/lib/hr-rbac";
+import { employeeForUser } from "@/lib/hr-me";
 import { TopBar } from "@/components/TopBar";
 import { Section } from "@/components/Cards";
 import { LeaveReviewer } from "./client";
@@ -9,7 +10,7 @@ import { LeaveReviewer } from "./client";
 export const dynamic = "force-dynamic";
 
 export default async function HrLeavePage() {
-  const { perms } = await getCurrentUserAndPermissions();
+  const { perms, userId } = await getCurrentUserAndPermissions();
   if (!perms) redirect("/login");
   if (!isHrUser(perms)) {
     return (
@@ -23,7 +24,13 @@ export default async function HrLeavePage() {
       </>
     );
   }
+  // No self-approval: an approver never sees their OWN leave requests, so an HR
+  // manager's leave routes only to another approver (admin). Mirrors the
+  // Attendance Corrections queue. Admins with no linked employee are unaffected.
+  const myEmp = userId ? await employeeForUser(userId) : null;
+  const notMine = myEmp ? { employeeId: { not: myEmp.id } } : {};
   const requests = await prisma.hrLeaveRequest.findMany({
+    where: notMine,
     orderBy: [{ status: "asc" }, { fromDate: "desc" }],
     take: 200,
     include: {
