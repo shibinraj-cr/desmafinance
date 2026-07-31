@@ -15,6 +15,9 @@ import {
   workedMinutesForHalfDay,
   isHalfDayDuration,
   classifyWorkedDay,
+  classifySecondHalfArrival,
+  secondHalfStatusOverride,
+  SECOND_HALF_OFFSET_MIN,
   SATURDAY_END_MIN,
 } from "@/lib/hr-attendance-parser";
 
@@ -178,5 +181,101 @@ describe("isSaturdayRuleExempt", () => {
   it("everyone else follows the standard Saturday rule", () => {
     expect(isSaturdayRuleExempt("Sivapriya Sivakumar")).toBe(false);
     expect(isSaturdayRuleExempt("")).toBe(false);
+  });
+});
+
+describe("classifySecondHalfArrival — morning-absent afternoon grading", () => {
+  const A_START = 9 * 60; //      Shift A 09:00 → second half 13:30
+  const B_START = 9 * 60 + 30; // Shift B 09:30 → second half 14:00
+  const A_END = 17 * 60 + 30; //  17:30
+  const B_END = 18 * 60; //       18:00
+  const GRACE = 10;
+  const t = (h: number, m: number) => h * 60 + m;
+
+  it("Shift A: ≤10 min late for the 13:30 second half → HD, >10 min → A", () => {
+    expect(classifySecondHalfArrival(t(13, 30), A_END, A_START, GRACE)).toEqual({ status: "HD", lateMinutes: 0 });
+    expect(classifySecondHalfArrival(t(13, 40), A_END, A_START, GRACE)).toEqual({ status: "HD", lateMinutes: 10 });
+    expect(classifySecondHalfArrival(t(13, 41), A_END, A_START, GRACE)).toEqual({ status: "A", lateMinutes: 11 });
+    expect(classifySecondHalfArrival(t(13, 49), A_END, A_START, GRACE)).toEqual({ status: "A", lateMinutes: 19 });
+  });
+
+  it("Shift B: the second-half start moves to 14:00 with the shift", () => {
+    expect(classifySecondHalfArrival(t(14, 0), B_END, B_START, GRACE)).toEqual({ status: "HD", lateMinutes: 0 });
+    expect(classifySecondHalfArrival(t(14, 10), B_END, B_START, GRACE)).toEqual({ status: "HD", lateMinutes: 10 });
+    expect(classifySecondHalfArrival(t(14, 11), B_END, B_START, GRACE)).toEqual({ status: "A", lateMinutes: 11 });
+  });
+
+  it("returns null when the in-punch is within the first half (normal duration+late rule applies)", () => {
+    expect(classifySecondHalfArrival(t(13, 19), A_END, A_START, GRACE)).toBeNull(); // 1 min before the 13:20 trigger
+    expect(classifySecondHalfArrival(t(11, 0), A_END, A_START, GRACE)).toBeNull(); //  late-morning arrival
+  });
+
+  it("is grace-tolerant on the lower edge: 13:20 (== secondHalfStart − grace) → HD, late 0", () => {
+    expect(classifySecondHalfArrival(t(13, 20), A_END, A_START, GRACE)).toEqual({ status: "HD", lateMinutes: 0 });
+  });
+
+  it("the 3h absence floor wins over punctuality: on-time for the 2nd half but under 3h → A", () => {
+    // in 13:35, out 16:00 → worked 145 (< 180) → A, even though only 5 min late.
+    expect(classifySecondHalfArrival(t(13, 35), t(16, 0), A_START, GRACE)).toEqual({ status: "A", lateMinutes: 5 });
+  });
+
+  it("uses the caller-supplied capped out-time (OT past shift end never rescues a short afternoon)", () => {
+    // caller passes min(out, shiftEnd) = 17:30 → worked 235 → HD (late 5).
+    expect(classifySecondHalfArrival(t(13, 35), A_END, A_START, GRACE)).toEqual({ status: "HD", lateMinutes: 5 });
+  });
+
+  it("SECOND_HALF_OFFSET_MIN is 4h30m after the shift start", () => {
+    expect(SECOND_HALF_OFFSET_MIN).toBe(270);
+  });
+});
+
+describe("secondHalfStatusOverride — the shared status-only downgrade", () => {
+  const A_START = 9 * 60; //     Shift A → second half 13:30
+  const A_END = 17 * 60 + 30; // 17:30
+  const WEEKDAY = 3; //          Wednesday
+  const SAT = 6;
+  const SUN = 0;
+  const GRACE = 10;
+  const t = (h: number, m: number) => h * 60 + m;
+  // args: (currentStatus, in, out, shiftStart, shiftEnd, dow, afterCutover, grace)
+
+  it("downgrades an HD afternoon-only day that is >10 min late for the 2nd half → 'A'", () => {
+    // in 13:49 = 19 min after 13:30 → A.
+    expect(secondHalfStatusOverride("HD", t(13, 49), A_END, A_START, A_END, WEEKDAY, true, GRACE)).toBe("A");
+  });
+
+  it("leaves a ≤10-min-late afternoon HD unchanged (null — it keeps its duration HD)", () => {
+    expect(secondHalfStatusOverride("HD", t(13, 40), A_END, A_START, A_END, WEEKDAY, true, GRACE)).toBeNull();
+  });
+
+  it("the 3h floor still forces 'A' even when on-time for the 2nd half", () => {
+    // in 13:35 (5 min late, within grace), out 16:00 → worked 145 < 180 → A.
+    expect(secondHalfStatusOverride("HD", t(13, 35), t(16, 0), A_START, A_END, WEEKDAY, true, GRACE)).toBe("A");
+  });
+
+  it("never fires before the cutover", () => {
+    expect(secondHalfStatusOverride("HD", t(13, 49), A_END, A_START, A_END, WEEKDAY, false, GRACE)).toBeNull();
+  });
+
+  it("never fires on Saturday or Sunday (weekdays only)", () => {
+    expect(secondHalfStatusOverride("HD", t(13, 49), A_END, A_START, A_END, SAT, true, GRACE)).toBeNull();
+    expect(secondHalfStatusOverride("HD", t(13, 49), A_END, A_START, A_END, SUN, true, GRACE)).toBeNull();
+  });
+
+  it("never touches non-worked statuses (LV / WO / HL / A stay put)", () => {
+    for (const s of ["LV", "WO", "HL", "A"]) {
+      expect(secondHalfStatusOverride(s, t(13, 49), A_END, A_START, A_END, WEEKDAY, true, GRACE)).toBeNull();
+    }
+  });
+
+  it("does not fire for a morning arrival (normal full/late day)", () => {
+    // in 09:05 → within the first half → classifySecondHalfArrival returns null.
+    expect(secondHalfStatusOverride("P", t(9, 5), A_END, A_START, A_END, WEEKDAY, true, GRACE)).toBeNull();
+  });
+
+  it("guards missing punches / bad spans (null in-or-out, out ≤ in)", () => {
+    expect(secondHalfStatusOverride("HD", null, A_END, A_START, A_END, WEEKDAY, true, GRACE)).toBeNull();
+    expect(secondHalfStatusOverride("HD", t(13, 49), null, A_START, A_END, WEEKDAY, true, GRACE)).toBeNull();
+    expect(secondHalfStatusOverride("HD", t(13, 49), t(13, 49), A_START, A_END, WEEKDAY, true, GRACE)).toBeNull();
   });
 });

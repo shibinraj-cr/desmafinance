@@ -2,11 +2,12 @@ import { prisma } from "@/lib/prisma";
 import {
   workedMinutesForHalfDay,
   classifyWorkedDay,
+  secondHalfStatusOverride,
   isSaturdayRuleExempt,
   SATURDAY_END_MIN,
   type ParsedDay,
 } from "@/lib/hr-attendance-parser";
-import { cycleMonthForDate, cycleWindowForMonth } from "@/lib/hr-data";
+import { cycleMonthForDate, cycleWindowForMonth, SHIFT_GRACE_MINUTES } from "@/lib/hr-data";
 import { recomputeAllLeaveBalances } from "@/lib/hr-leave-balance";
 import { applySandwichRule } from "@/lib/hr-sandwich";
 import { resolveShiftForDate } from "@/lib/hr-shift";
@@ -26,6 +27,25 @@ import { computeSalaryRun } from "@/lib/hr-salary-engine";
  */
 export const ATTENDANCE_API_CUTOVER: Date = (() => {
   const raw = process.env.ETIMEOFFICE_SYNC_FROM;
+  if (raw && /^\d{4}-\d{2}-\d{2}$/.test(raw)) {
+    const [y, m, d] = raw.split("-").map(Number);
+    return new Date(Date.UTC(y, m - 1, d));
+  }
+  return new Date(Date.UTC(2026, 5, 26)); // 2026-06-26
+})();
+
+/**
+ * Cutover for the "second-half absent" rule (a morning-absent weekday graded on
+ * its afternoon arrival — see `classifySecondHalfArrival`). Days BEFORE this are
+ * never re-graded by the rule, protecting already-run payroll. This gate is
+ * SEPARATE from `dateFloor`: the .xls upload path passes no `dateFloor` and
+ * reprocesses whole historical cycles, so the rule must carry its own explicit
+ * date gate. Kept distinct from `ATTENDANCE_API_CUTOVER` so moving the sync
+ * window never drags this policy date. Defaults to 2026-06-26 (July cycle start);
+ * overridable via env.
+ */
+export const SECOND_HALF_RULE_CUTOVER: Date = (() => {
+  const raw = process.env.SECOND_HALF_RULE_FROM;
   if (raw && /^\d{4}-\d{2}-\d{2}$/.test(raw)) {
     const [y, m, d] = raw.split("-").map(Number);
     return new Date(Date.UTC(y, m - 1, d));
@@ -385,6 +405,25 @@ export async function ingestParsedAttendance(
             if (newStatus !== d.status) updates.status = newStatus;
           }
         }
+
+        // (3) Second-half rule: a morning-absent WEEKDAY afternoon arrival that
+        // is >10 min late for the second-half start (shift start + 4h30m) — or
+        // worked under the 3h floor — is a full absence (A). STATUS-ONLY: it does
+        // NOT touch lateMinutes/earlyOutMinutes (so the sandwich AM/PM inference
+        // stays correct). ≤10-min-late afternoons keep their duration HD. Shared
+        // with the .xls upload route via secondHalfStatusOverride; gated to the
+        // cutover here because the upload path passes no dateFloor.
+        const secondHalfStatus = secondHalfStatusOverride(
+          d.status,
+          toMin(d.inTime),
+          toMin(d.outTime),
+          shiftStart,
+          shiftEnd,
+          dow,
+          d.date >= SECOND_HALF_RULE_CUTOVER,
+          SHIFT_GRACE_MINUTES,
+        );
+        if (secondHalfStatus) updates.status = secondHalfStatus;
 
         if (Object.keys(updates).length > 0) {
           await prisma.hrAttendanceDay.update({ where: { id: d.id }, data: updates });

@@ -3,6 +3,7 @@ import {
   clampWindowStart,
   filterRowsFromFloor,
   ATTENDANCE_API_CUTOVER,
+  SECOND_HALF_RULE_CUTOVER,
 } from "@/lib/hr-attendance-ingest";
 
 const d = (iso: string) => new Date(`${iso}T00:00:00Z`);
@@ -62,6 +63,15 @@ describe("ATTENDANCE_API_CUTOVER", () => {
     // (Unless overridden by ETIMEOFFICE_SYNC_FROM in the environment.)
     if (!process.env.ETIMEOFFICE_SYNC_FROM) {
       expect(ATTENDANCE_API_CUTOVER.toISOString()).toBe("2026-06-26T00:00:00.000Z");
+    }
+  });
+});
+
+describe("SECOND_HALF_RULE_CUTOVER", () => {
+  it("defaults to 2026-06-26 UTC midnight (July cycle start)", () => {
+    // (Unless overridden by SECOND_HALF_RULE_FROM in the environment.)
+    if (!process.env.SECOND_HALF_RULE_FROM) {
+      expect(SECOND_HALF_RULE_CUTOVER.toISOString()).toBe("2026-06-26T00:00:00.000Z");
     }
   });
 });
