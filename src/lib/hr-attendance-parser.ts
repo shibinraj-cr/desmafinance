@@ -135,6 +135,82 @@ export function classifyWorkedDay(workedMinutes: number, isSaturday: boolean): "
   return "P";
 }
 
+// Second-half (afternoon) session starts 4h30m after the shift start:
+// Shift A 09:00 → 13:30, Shift B 09:30 → 14:00. It "moves with the shift", so it
+// is derived from each shift's start rather than stored separately.
+export const SECOND_HALF_OFFSET_MIN = 270; // 4 h 30 m
+
+/**
+ * Grade a WEEKDAY where the FIRST half was absent — the employee only worked the
+ * afternoon (their in-punch lands at/after the second-half start). The afternoon
+ * arrival is judged against the second-half start (`shiftStartMin + 270`) with a
+ * `graceMin`-minute grace, instead of being measured hours-late against the 09:00
+ * morning start:
+ *
+ *   secondHalfStart = shiftStartMin + SECOND_HALF_OFFSET_MIN   (A 13:30 / B 14:00)
+ *   trigger:  inMin >= secondHalfStart - graceMin              (else the morning was
+ *             (partly) worked → return null, normal duration+late rule applies)
+ *   worked (capped) < ABSENT_THRESHOLD_MIN  → "A"   (the 3h floor still wins)
+ *   secondHalfLate > graceMin               → "A"   (second half also absent → whole day A)
+ *   otherwise                               → "HD"  (afternoon present → half day)
+ *
+ * `lateMinutes` is reframed to the (small) second-half lateness so a legitimate
+ * afternoon arrival is not recorded as ~4.8h late (which would flag AL). Returns
+ * null when the rule does not apply (arrived within the first half).
+ */
+export function classifySecondHalfArrival(
+  inMin: number,
+  cappedOutMin: number,
+  shiftStartMin: number,
+  graceMin: number,
+): { status: "HD" | "A"; lateMinutes: number } | null {
+  const secondHalfStart = shiftStartMin + SECOND_HALF_OFFSET_MIN;
+  if (inMin < secondHalfStart - graceMin) return null; // worked (part of) the first half
+  const secondHalfLate = Math.max(0, inMin - secondHalfStart);
+  const worked = cappedOutMin - inMin;
+  if (worked < ABSENT_THRESHOLD_MIN) return { status: "A", lateMinutes: secondHalfLate };
+  if (secondHalfLate > graceMin) return { status: "A", lateMinutes: secondHalfLate };
+  return { status: "HD", lateMinutes: secondHalfLate };
+}
+
+/**
+ * The status override the second-half rule applies to a stored attendance day.
+ * This is the single decision point shared by BOTH ingest pipelines (the
+ * eTimeOffice sync in hr-attendance-ingest and the .xls upload route) so they
+ * never drift. Returns "A" when a morning-absent weekday afternoon arrival is
+ * too late for (or worked too little of) the second half, else null (no change).
+ *
+ * It is a STATUS-ONLY override: `lateMinutes`/`earlyOutMinutes` are deliberately
+ * left as the morning-based values so the sandwich rule's AM/PM half-inference
+ * (`inferHdLeaveHalf`, which reads lateMinutes vs earlyOutMinutes) keeps seeing a
+ * morning-absent HD as the AM half — a legitimate ≤10-min-late second half stays
+ * HD (its existing classification), only a >10-min-late one is downgraded to A.
+ *
+ *   - only weekdays (Sun = week-off, Sat has its own 09:00–16:00 rule)
+ *   - only from the cutover (caller passes `afterCutover`)
+ *   - only worked days (current P/HD) with a valid forward punch span
+ */
+export function secondHalfStatusOverride(
+  currentStatus: string,
+  inMin: number | null,
+  outMin: number | null,
+  shiftStartMin: number | null,
+  shiftEndMin: number | null,
+  dow: number,
+  afterCutover: boolean,
+  graceMin: number,
+): "A" | null {
+  if (!afterCutover) return null;
+  if (dow === 0 || dow === 6) return null; // weekdays only
+  if (currentStatus !== "P" && currentStatus !== "HD") return null;
+  if (shiftStartMin == null || shiftEndMin == null) return null;
+  if (inMin == null || outMin == null || outMin <= inMin) return null;
+  const res = classifySecondHalfArrival(inMin, Math.min(outMin, shiftEndMin), shiftStartMin, graceMin);
+  // Only a downgrade to full absence changes the day; an HD result means the
+  // afternoon counts and the day keeps whatever the duration rule set.
+  return res && res.status === "A" ? "A" : null;
+}
+
 function cleanTime(v: unknown): string | null {
   const s = String(v ?? "").trim();
   if (!s || s === "--:--") return null;

@@ -6,11 +6,18 @@ import {
   parseAttendanceWorkbook,
   workedMinutesForHalfDay,
   classifyWorkedDay,
+  secondHalfStatusOverride,
   isSaturdayRuleExempt,
   SATURDAY_END_MIN,
   type ParsedDay,
 } from "@/lib/hr-attendance-parser";
-import { cycleMonthForDate, cycleWindowForMonth, isEarlyClosureDate } from "@/lib/hr-data";
+import {
+  cycleMonthForDate,
+  cycleWindowForMonth,
+  isEarlyClosureDate,
+  SHIFT_GRACE_MINUTES,
+} from "@/lib/hr-data";
+import { SECOND_HALF_RULE_CUTOVER } from "@/lib/hr-attendance-ingest";
 import { recomputeAllLeaveBalances } from "@/lib/hr-leave-balance";
 import { applySandwichRule } from "@/lib/hr-sandwich";
 import { resolveShiftForDate } from "@/lib/hr-shift";
@@ -324,6 +331,22 @@ export async function POST(req: Request) {
             if (newStatus !== d.status) updates.status = newStatus;
           }
         }
+
+        // (3) Second-half rule (shared with the eTimeOffice ingest): a morning-
+        // absent weekday afternoon arrival >10 min late for the second-half start
+        // (shift start + 4h30m) is a full absence (A). Status-only; gated to the
+        // cutover so pre-cutover cycles in a re-uploaded file are never re-graded.
+        const secondHalfStatus = secondHalfStatusOverride(
+          d.status,
+          toMin(d.inTime),
+          toMin(d.outTime),
+          shiftStart,
+          shiftEnd,
+          dow,
+          d.date >= SECOND_HALF_RULE_CUTOVER,
+          SHIFT_GRACE_MINUTES,
+        );
+        if (secondHalfStatus) updates.status = secondHalfStatus;
 
         if (Object.keys(updates).length > 0) {
           await prisma.hrAttendanceDay.update({ where: { id: d.id }, data: updates });
