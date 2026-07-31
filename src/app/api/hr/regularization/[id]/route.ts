@@ -95,6 +95,11 @@ export async function PATCH(req: Request, { params }: { params: { id: string } }
     }
   }
 
+  // A 'note' is an on-record explanation for a half-day / late-coming day. Its
+  // approval acknowledges the reason but must NOT touch the attendance day — the
+  // day stays as-is (HD / late penalty retained). Only the request row is updated.
+  const isNote = reg.requestType === "note";
+
   const now = new Date();
   const newStatus =
     parsed.data.decision === "approve"
@@ -107,7 +112,7 @@ export async function PATCH(req: Request, { params }: { params: { id: string } }
   // employee's shift start (Saturday = 09:00) so an approved fix clears any AL
   // half-day penalty — i.e. a regularized late day becomes full Present.
   let lateMinutes: number | null = null;
-  if (parsed.data.decision === "approve" && reg.requestType !== "leave") {
+  if (parsed.data.decision === "approve" && reg.requestType === "punch") {
     const inMin = hhmmToMin(parsed.data.finalIn ?? reg.proposedIn ?? null);
     if (inMin != null) {
       const shift = await resolveShiftForDate(reg.employee.id, reg.date);
@@ -126,7 +131,7 @@ export async function PATCH(req: Request, { params }: { params: { id: string } }
         reviewNote: parsed.data.reviewNote ?? null,
       },
     });
-    if (parsed.data.decision === "approve") {
+    if (parsed.data.decision === "approve" && !isNote) {
       // Punch request → corrected punches resolve to the HR-chosen P/HD.
       // Leave request → the day becomes paid leave (LV) or unpaid loss-of-pay
       // (A), per HR's choice; no punch is involved.
@@ -235,7 +240,7 @@ export async function PATCH(req: Request, { params }: { params: { id: string } }
   // stays frozen at the pre-correction figures. Sivapriya, Apr 2026: her 11 Apr
   // LV was regularized to P, but `used` stayed at 4 and balance at 0 because
   // this path never refreshed it.
-  if (parsed.data.decision === "approve") {
+  if (parsed.data.decision === "approve" && !isNote) {
     // The approved correction changed the day's status, which can create or
     // dissolve a sandwich bracket — re-reconcile the employee's cycle. This
     // both flips newly-sandwiched WO/HL and reverts prior flips that no longer

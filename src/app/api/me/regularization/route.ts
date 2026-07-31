@@ -15,10 +15,11 @@ const REASON_CODES = REGULARIZATION_REASONS.map((r) => r.code) as [string, ...st
 
 const Schema = z.object({
   date: z.string().regex(DATE_RE),
-  // 'punch' (correct a missing/wrong punch) or 'leave' (request paid leave for
-  // an absence). Punch requests carry a punch reasonType + proposed times; leave
-  // requests carry just a reason.
-  requestType: z.enum(["punch", "leave"]).default("punch"),
+  // 'punch' (correct a missing/wrong punch), 'leave' (request paid leave for an
+  // absence), or 'note' (put an explanation on record for a half-day / late-
+  // coming day — approval changes nothing). Punch requests carry a punch
+  // reasonType + proposed times; leave/note requests carry just a reason.
+  requestType: z.enum(["punch", "leave", "note"]).default("punch"),
   reasonType: z.string().max(40).optional(),
   reason: z.string().min(5).max(500),
   proposedIn: z.string().regex(TIME_RE).nullable().optional(),
@@ -54,14 +55,18 @@ export async function POST(req: Request) {
     return NextResponse.json({ error: "invalid", issues: parsed.error.issues }, { status: 400 });
   }
   const isLeave = parsed.data.requestType === "leave";
-  // Punch requests must name a valid punch reason; leave requests are tagged
-  // 'leave' and never carry proposed punch times.
-  const reasonType = isLeave ? "leave" : parsed.data.reasonType ?? "";
-  if (!isLeave && !REASON_CODES.includes(reasonType)) {
+  // A 'note' is an on-record explanation for a half-day / late-coming day: like a
+  // leave request it carries no proposed punch times, and it's exempt from the
+  // punch-reason validation.
+  const isNote = parsed.data.requestType === "note";
+  // Punch requests must name a valid punch reason; leave/note requests are
+  // tagged accordingly and never carry proposed punch times.
+  const reasonType = isLeave ? "leave" : isNote ? "explain" : parsed.data.reasonType ?? "";
+  if (!isLeave && !isNote && !REASON_CODES.includes(reasonType)) {
     return NextResponse.json({ error: "invalid reasonType for a punch request" }, { status: 400 });
   }
-  const proposedIn = isLeave ? null : parsed.data.proposedIn ?? null;
-  const proposedOut = isLeave ? null : parsed.data.proposedOut ?? null;
+  const proposedIn = isLeave || isNote ? null : parsed.data.proposedIn ?? null;
+  const proposedOut = isLeave || isNote ? null : parsed.data.proposedOut ?? null;
   const date = new Date(parsed.data.date);
   const inWindow = await isWithinRegularizationWindow(date);
   if (!inWindow) {
