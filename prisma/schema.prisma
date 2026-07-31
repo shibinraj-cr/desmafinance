@@ -1769,9 +1769,13 @@ model HrAttendanceRegularization {
   /// What the employee is asking for:
   ///   'punch' → correct a missing/wrong punch (approval → P/HD)
   ///   'leave' → mark an absence as paid leave (approval → LV)
+  ///   'note'  → put an explanation on record for a half-day / late-coming
+  ///             day; approval acknowledges it but changes NOTHING on the day
+  ///             (HD status + late penalty retained)
   requestType     String           @default("punch")
   /// For punch requests: 'missing_punch' | 'wrong_in_time' | 'wrong_out_time'
   /// | 'biometric_sync' | 'forgot_punch' | 'other'. For leave requests: 'leave'.
+  /// For note requests: 'explain'.
   reasonType      String
   reason          String
   proposedIn      String?

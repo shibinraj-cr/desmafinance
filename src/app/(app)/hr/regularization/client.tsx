@@ -123,10 +123,12 @@ export function RegularizationReviewClient({
                           "px-xs py-[1px] rounded text-caption font-semibold " +
                           (r.requestType === "leave"
                             ? "bg-purple-50 text-purple-700"
-                            : "bg-yellow-50 text-yellow-700")
+                            : r.requestType === "note"
+                              ? "bg-indigo-50 text-indigo-700"
+                              : "bg-yellow-50 text-yellow-700")
                         }
                       >
-                        {r.requestType === "leave" ? "Leave" : "Punch"}
+                        {r.requestType === "leave" ? "Leave" : r.requestType === "note" ? "Explain" : "Punch"}
                       </span>
                     </td>
                     <td className="px-sm py-sm">
@@ -153,14 +155,27 @@ export function RegularizationReviewClient({
                     <td className="px-sm py-sm text-right">
                       {canDecide && (r.status === "pending" || r.status === "clarification") && (
                         <span className="inline-flex flex-wrap justify-end gap-xs">
-                          <button
-                            type="button"
-                            disabled={busyId === r.id}
-                            onClick={() => setDecideOpen(r)}
-                            className="px-sm py-[2px] rounded bg-green-600 text-white text-caption font-semibold"
-                          >
-                            Approve…
-                          </button>
+                          {r.requestType === "note" ? (
+                            // A note changes nothing on the day — acknowledge it
+                            // directly, no punch/status modal.
+                            <button
+                              type="button"
+                              disabled={busyId === r.id}
+                              onClick={() => quickDecide(r, "approve")}
+                              className="px-sm py-[2px] rounded bg-green-600 text-white text-caption font-semibold"
+                            >
+                              Acknowledge
+                            </button>
+                          ) : (
+                            <button
+                              type="button"
+                              disabled={busyId === r.id}
+                              onClick={() => setDecideOpen(r)}
+                              className="px-sm py-[2px] rounded bg-green-600 text-white text-caption font-semibold"
+                            >
+                              Approve…
+                            </button>
+                          )}
                           <button
                             type="button"
                             disabled={busyId === r.id}

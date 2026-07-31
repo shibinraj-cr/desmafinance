@@ -11,7 +11,8 @@ type ExceptionRow = {
   status: string;
   in: string | null;
   out: string | null;
-  kind: "absent" | "incomplete";
+  lateMinutes: number | null;
+  kind: "absent" | "incomplete" | "halfday" | "late";
 };
 type RegRow = {
   id: string;
@@ -25,6 +26,13 @@ type RegRow = {
   status: string;
   reviewNote: string | null;
   createdAt: string;
+};
+
+const KIND_BADGE: Record<ExceptionRow["kind"], { label: string; cls: string }> = {
+  absent: { label: "Absent", cls: "bg-red-50 text-red-700" },
+  incomplete: { label: "Missing punch", cls: "bg-yellow-50 text-yellow-700" },
+  halfday: { label: "Half-day", cls: "bg-orange-50 text-orange-700" },
+  late: { label: "Late arrival (½ day)", cls: "bg-orange-50 text-orange-700" },
 };
 
 export function RegularizationRequestClient({
@@ -49,7 +57,7 @@ export function RegularizationRequestClient({
   const [err, setErr] = useState<string | null>(null);
   const [ok, setOk] = useState<string | null>(null);
   // Which exception row is open, and for which request type.
-  const [open, setOpen] = useState<{ date: string; type: "punch" | "leave" } | null>(null);
+  const [open, setOpen] = useState<{ date: string; type: "punch" | "leave" | "note" } | null>(null);
   const [rowForm, setRowForm] = useState({ in: "", out: "", reason: "" });
   const [showManual, setShowManual] = useState(false);
   const [manual, setManual] = useState({
@@ -64,7 +72,7 @@ export function RegularizationRequestClient({
     router.push(`/me/regularization?month=${m}`);
   }
 
-  function openRow(date: string, type: "punch" | "leave") {
+  function openRow(date: string, type: "punch" | "leave" | "note") {
     setOpen({ date, type });
     setRowForm({ in: "", out: "", reason: "" });
     setErr(null);
@@ -105,6 +113,8 @@ export function RegularizationRequestClient({
         proposedIn: rowForm.in || null,
         proposedOut: rowForm.out || null,
       });
+    } else if (open.type === "note") {
+      post({ date: open.date, requestType: "note", reason: rowForm.reason });
     } else {
       post({ date: open.date, requestType: "leave", reason: rowForm.reason });
     }
@@ -139,6 +149,10 @@ export function RegularizationRequestClient({
           <div className="space-y-sm">
             {exceptions.map((x) => {
               const isOpen = open?.date === x.date;
+              const badge = KIND_BADGE[x.kind];
+              // Half-day / late days already have punches → leave can't apply
+              // (a punched day can't be marked LV). Offer an on-record note.
+              const isPunched = x.kind === "halfday" || x.kind === "late";
               return (
                 <div key={x.date} className="rounded-lg border border-outline-variant p-sm">
                   <div className="flex flex-wrap items-center gap-sm">
@@ -146,17 +160,15 @@ export function RegularizationRequestClient({
                       <span className="font-semibold">{x.date}</span>
                       <span className="ml-xs text-caption text-on-surface-variant">{x.weekday}</span>
                     </div>
-                    <span
-                      className={
-                        "text-caption px-xs py-[2px] rounded font-bold " +
-                        (x.kind === "absent" ? "bg-red-50 text-red-700" : "bg-yellow-50 text-yellow-700")
-                      }
-                    >
-                      {x.kind === "absent" ? "Absent" : "Missing punch"}
+                    <span className={"text-caption px-xs py-[2px] rounded font-bold " + badge.cls}>
+                      {badge.label}
                     </span>
                     <span className="text-caption text-on-surface-variant">
                       Punch: {x.in ?? "—"} → {x.out ?? "—"}
                     </span>
+                    {isPunched && x.lateMinutes != null && x.lateMinutes > 0 && (
+                      <span className="text-caption text-orange-700">Late by {x.lateMinutes} min</span>
+                    )}
                     <div className="ml-auto flex gap-xs">
                       <button
                         onClick={() => openRow(x.date, "punch")}
@@ -169,17 +181,31 @@ export function RegularizationRequestClient({
                       >
                         Punch fix
                       </button>
-                      <button
-                        onClick={() => openRow(x.date, "leave")}
-                        className={
-                          "px-sm py-xs rounded text-label-sm font-semibold " +
-                          (isOpen && open?.type === "leave"
-                            ? "bg-primary text-on-primary"
-                            : "bg-surface-container text-on-surface")
-                        }
-                      >
-                        Request leave
-                      </button>
+                      {isPunched ? (
+                        <button
+                          onClick={() => openRow(x.date, "note")}
+                          className={
+                            "px-sm py-xs rounded text-label-sm font-semibold " +
+                            (isOpen && open?.type === "note"
+                              ? "bg-primary text-on-primary"
+                              : "bg-surface-container text-on-surface")
+                          }
+                        >
+                          Explain
+                        </button>
+                      ) : (
+                        <button
+                          onClick={() => openRow(x.date, "leave")}
+                          className={
+                            "px-sm py-xs rounded text-label-sm font-semibold " +
+                            (isOpen && open?.type === "leave"
+                              ? "bg-primary text-on-primary"
+                              : "bg-surface-container text-on-surface")
+                          }
+                        >
+                          Request leave
+                        </button>
+                      )}
                     </div>
                   </div>
 
@@ -205,7 +231,15 @@ export function RegularizationRequestClient({
                           </Field>
                         </div>
                       )}
-                      <Field label={open?.type === "leave" ? "Reason for leave" : "What happened?"}>
+                      <Field
+                        label={
+                          open?.type === "leave"
+                            ? "Reason for leave"
+                            : open?.type === "note"
+                              ? "Explanation"
+                              : "What happened?"
+                        }
+                      >
                         <textarea
                           value={rowForm.reason}
                           onChange={(e) => setRowForm({ ...rowForm, reason: e.target.value })}
@@ -213,7 +247,9 @@ export function RegularizationRequestClient({
                           placeholder={
                             open?.type === "leave"
                               ? "e.g. approved casual leave / sick leave (5+ characters)…"
-                              : "e.g. forgot to punch out (5+ characters)…"
+                              : open?.type === "note"
+                                ? "e.g. half-day leave in the morning, came late after (5+ characters)…"
+                                : "e.g. forgot to punch out (5+ characters)…"
                           }
                           className="w-full bg-surface-container border border-outline-variant rounded-lg px-sm py-xs"
                         />
@@ -227,7 +263,13 @@ export function RegularizationRequestClient({
                           disabled={busy || rowForm.reason.trim().length < 5}
                           className="px-md py-xs rounded-lg bg-primary text-on-primary font-semibold disabled:opacity-50"
                         >
-                          {busy ? "Submitting…" : open?.type === "leave" ? "Request leave" : "Submit punch fix"}
+                          {busy
+                            ? "Submitting…"
+                            : open?.type === "leave"
+                              ? "Request leave"
+                              : open?.type === "note"
+                                ? "Submit explanation"
+                                : "Submit punch fix"}
                         </button>
                       </div>
                     </div>
@@ -351,10 +393,14 @@ export function RegularizationRequestClient({
                       <span
                         className={
                           "px-xs py-[1px] rounded text-caption font-semibold " +
-                          (r.requestType === "leave" ? "bg-purple-50 text-purple-700" : "bg-yellow-50 text-yellow-700")
+                          (r.requestType === "leave"
+                            ? "bg-purple-50 text-purple-700"
+                            : r.requestType === "note"
+                              ? "bg-indigo-50 text-indigo-700"
+                              : "bg-yellow-50 text-yellow-700")
                         }
                       >
-                        {r.requestType === "leave" ? "Leave" : "Punch"}
+                        {r.requestType === "leave" ? "Leave" : r.requestType === "note" ? "Explain" : "Punch"}
                       </span>
                     </td>
                     <td className="px-sm py-xs">

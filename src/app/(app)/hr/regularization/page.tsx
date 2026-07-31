@@ -55,7 +55,7 @@ export default async function RegularizationReviewPage({
     <>
       <TopBar
         title="Attendance Corrections"
-        subtitle={`Approve punch & leave requests · Pending ${tally.pending ?? 0} · Approved ${tally.approved ?? 0} · Rejected ${tally.rejected ?? 0}`}
+        subtitle={`Approve punch, leave & explanation requests · Pending ${tally.pending ?? 0} · Approved ${tally.approved ?? 0} · Rejected ${tally.rejected ?? 0}`}
       />
       <div className="p-margin space-y-lg">
         <RegularizationReviewClient
@@ -69,7 +69,11 @@ export default async function RegularizationReviewPage({
             requestType: r.requestType,
             reasonType: r.reasonType,
             reasonLabel:
-              r.requestType === "leave" ? "Leave request" : reasonLabel[r.reasonType] ?? r.reasonType,
+              r.requestType === "leave"
+                ? "Leave request"
+                : r.requestType === "note"
+                  ? "Explanation (no change)"
+                  : reasonLabel[r.reasonType] ?? r.reasonType,
             reason: r.reason,
             proposedIn: r.proposedIn,
             proposedOut: r.proposedOut,
