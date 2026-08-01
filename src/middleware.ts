@@ -7,6 +7,11 @@ const cookieName = useSecure
   : "next-auth.session-token";
 
 export async function middleware(req: NextRequest) {
+  // getToken validates BOTH the session cookie (web) and an
+  // `Authorization: Bearer <jwt>` header (mobile) — it decodes the header token
+  // with the same secret (next-auth/jwt), so a valid mobile token passes here
+  // and a forged/expired one yields null, exactly like a bad cookie. This gate
+  // is therefore unchanged; only the *unauthenticated response* differs below.
   const token = await getToken({
     req,
     secret: process.env.NEXTAUTH_SECRET,
@@ -15,6 +20,10 @@ export async function middleware(req: NextRequest) {
   });
 
   if (!token) {
+    // JSON 401 for API callers (mobile/fetch), login redirect for page loads.
+    if (req.nextUrl.pathname.startsWith("/api/")) {
+      return NextResponse.json({ error: "unauthenticated" }, { status: 401 });
+    }
     const loginUrl = new URL("/login", req.url);
     loginUrl.searchParams.set("callbackUrl", req.nextUrl.pathname + req.nextUrl.search);
     return NextResponse.redirect(loginUrl);
