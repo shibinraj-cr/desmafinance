@@ -3,6 +3,12 @@ import { prisma } from "./prisma";
 import { ageFromDob, dobRangeForAge } from "./age";
 import { normalizeTemperature, type LeadTemperature } from "./crm";
 
+// Kept as a literal rather than importing REMARKETING_STATUS_CODE from
+// crm-reinquiry: this module is type-imported by client components, and
+// crm-reinquiry pulls in the mailer (nodemailer), which breaks the client
+// bundle. Must stay in sync with crm-reinquiry.REMARKETING_STATUS_CODE.
+const REMARKETING_STATUS_CODE = "re_marketing";
+
 // Shared include + serialiser so the list API, detail page and import flow all
 // emit the same plain (serialisable) row shape to client components.
 export const leadRowInclude = Prisma.validator<Prisma.LeadInclude>()({
@@ -405,15 +411,25 @@ export function serializeTask(t: TaskWithRels): TaskRow {
  * The "active leads always have a next step" rule. Completing a task must be
  * accompanied by a new follow-up when ALL of these hold:
  *   - it is a completion (not a reopen or a plain field edit),
- *   - the lead is still ACTIVE (won/lost leads need no further action), and
+ *   - the lead is still ACTIVE (won/lost leads need no further action),
+ *   - the lead is NOT in Re-marketing, and
  *   - no other open task remains once this one is done.
+ *
+ * Re-marketing is exempt because that stage is nurtured by the automated drip
+ * campaign (crm-remarketing), so the "never idle" guarantee is met by the
+ * campaign, not a manual task — a BDE can close the last task without booking a
+ * follow-up. `statusCode` is optional so any caller that doesn't pass it keeps
+ * the original behaviour.
+ *
  * Enforced in the task-complete route; pure so the exact exemptions are testable.
  */
 export function requiresNextStepOnComplete(opts: {
   completing: boolean;
   leadKind: string; // 'active' | 'won' | 'lost'
   remainingOpenTasks: number; // open tasks on the lead EXCLUDING the one being completed
+  statusCode?: string;
 }): boolean {
+  if (opts.statusCode === REMARKETING_STATUS_CODE) return false;
   return opts.completing && opts.leadKind === "active" && opts.remainingOpenTasks === 0;
 }
 

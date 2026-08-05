@@ -29,6 +29,28 @@ describe("requiresNextStepOnComplete — mandatory next step on an active lead",
   it("does not fire on a reopen / non-completion", () => {
     expect(requiresNextStepOnComplete({ completing: false, leadKind: "active", remainingOpenTasks: 0 })).toBe(false);
   });
+
+  it("exempts a Re-marketing lead — the automated drip is the follow-up, so no manual task is forced", () => {
+    expect(
+      requiresNextStepOnComplete({
+        completing: true,
+        leadKind: "active",
+        remainingOpenTasks: 0,
+        statusCode: "re_marketing",
+      }),
+    ).toBe(false);
+  });
+
+  it("still fires for other active statuses when a status code is supplied", () => {
+    expect(
+      requiresNextStepOnComplete({
+        completing: true,
+        leadKind: "active",
+        remainingOpenTasks: 0,
+        statusCode: "follow_up",
+      }),
+    ).toBe(true);
+  });
 });
 
 describe("resolveAssigneeFilter", () => {
