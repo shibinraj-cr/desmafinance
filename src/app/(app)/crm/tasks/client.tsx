@@ -386,6 +386,16 @@ export function TasksBoard({
                         <Link href={`/crm/leads/${t.lead.id}`} className="text-on-surface hover:text-primary hover:underline">
                           {t.lead.candidateName}
                         </Link>
+                        {t.lead.phone ? (
+                          <a
+                            href={`tel:${t.lead.phone}`}
+                            className="block font-normal font-mono tabular-nums text-label-sm text-on-surface-variant hover:text-primary"
+                          >
+                            {t.lead.phone}
+                          </a>
+                        ) : (
+                          <span className="block font-normal text-label-sm text-on-surface-variant/50">—</span>
+                        )}
                       </Td>
                       <Td className="whitespace-nowrap">
                         {t.assignedToName ?? <span className="text-on-surface-variant">Unassigned</span>}
