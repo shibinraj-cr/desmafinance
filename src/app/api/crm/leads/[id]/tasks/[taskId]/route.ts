@@ -46,7 +46,7 @@ export const PATCH = withApiHandler(async (req: Request, { params }: Ctx) => {
     where: { id: params.taskId },
     include: {
       ...taskInclude,
-      lead: { select: { id: true, assignedToId: true, status: { select: { kind: true } } } },
+      lead: { select: { id: true, assignedToId: true, status: { select: { kind: true, code: true } } } },
     },
   });
   if (!task || task.leadId !== params.id) throw notFound();
@@ -117,7 +117,14 @@ export const PATCH = withApiHandler(async (req: Request, { params }: Ctx) => {
     const remainingOpenTasks = await prisma.crmTask.count({
       where: { leadId: params.id, status: "open", id: { not: params.taskId } },
     });
-    if (requiresNextStepOnComplete({ completing, leadKind: task.lead.status.kind, remainingOpenTasks })) {
+    if (
+      requiresNextStepOnComplete({
+        completing,
+        leadKind: task.lead.status.kind,
+        remainingOpenTasks,
+        statusCode: task.lead.status.code,
+      })
+    ) {
       if (!data.nextTask) {
         throw unprocessable(
           "This lead is still active and this is its last open task. Schedule the next follow-up to complete it.",
