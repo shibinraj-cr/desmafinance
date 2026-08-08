@@ -6,6 +6,7 @@ vi.mock("@/lib/prisma", () => ({ prisma: {} }));
 
 import {
   SLA_THRESHOLD_DAYS,
+  PARKED_STATUS_CODES,
   ABANDONED_DAYS,
   STUCK_DAYS,
   FIRST_RESPONSE_SLA_HOURS,
@@ -79,7 +80,9 @@ describe("classifyStaleness — per-status SLA", () => {
     const long = classifyStaleness({ statusCode: "re_marketing", lastTouchAt: ago(20), now });
     expect(long.slaDays).toBeNull();
     expect(long.breached).toBe(false);
-    // ...but a truly-dead re-marketing lead still surfaces via the global abandoned flag.
+    // classifyStaleness is a status-agnostic freshness primitive, so it still
+    // reports `abandoned` past 30d — the PARKING (suppressing that flag for the
+    // attention list) happens one layer up in attentionFlags, tested below.
     expect(classifyStaleness({ statusCode: "re_marketing", lastTouchAt: ago(31), now }).abandoned).toBe(true);
   });
 
@@ -101,8 +104,10 @@ describe("classifyStaleness — per-status SLA", () => {
       follow_up: 2,
       pipeline: 3,
     });
-    // Re-marketing is deliberately NOT SLA-monitored (nurture bucket).
+    // Re-marketing is deliberately NOT SLA-monitored (nurture bucket)...
     expect(SLA_THRESHOLD_DAYS.re_marketing).toBeUndefined();
+    // ...and is fully parked — never surfaces on the attention list at all.
+    expect(PARKED_STATUS_CODES.has("re_marketing")).toBe(true);
     expect(ABANDONED_DAYS).toBe(30);
     expect(STUCK_DAYS).toBe(14);
     expect(FIRST_RESPONSE_SLA_HOURS).toBe(24);
@@ -190,6 +195,35 @@ describe("attentionFlags — combined bucket classification", () => {
       nextTaskDueAt: new Date(now.getFullYear(), now.getMonth(), now.getDate(), 8), // earlier today
     });
     expect(f.slaBreached).toBe(false);
+  });
+
+  it("never flags a parked (re_marketing) lead, even when every bucket condition is met", () => {
+    // Untouched 40d (abandoned), in-stage 40d (stuck), no open task (no-next-step):
+    // an active status would light up all buckets — a parked status stays silent.
+    const f = attentionFlags({
+      statusCode: "re_marketing",
+      lastTouchAt: ago(40),
+      stuckSince: ago(40),
+      hasOpenTask: false,
+      nextTaskDueAt: null,
+      now,
+    });
+    expect(f).toMatchObject({
+      slaBreached: false,
+      abandoned: false,
+      noNextStep: false,
+      stuck: false,
+      flagged: false,
+    });
+    // Display fields are still computed even though no bucket fires.
+    expect(f.daysSinceTouch).toBeGreaterThan(ABANDONED_DAYS);
+    expect(f.daysInStage).toBeGreaterThan(STUCK_DAYS);
+  });
+
+  it("parking is status-scoped — an otherwise-identical active lead is still flagged", () => {
+    const base = { lastTouchAt: ago(40), stuckSince: ago(40), hasOpenTask: false, nextTaskDueAt: null, now };
+    expect(attentionFlags({ ...base, statusCode: "re_marketing" }).flagged).toBe(false);
+    expect(attentionFlags({ ...base, statusCode: "follow_up" }).flagged).toBe(true);
   });
 });
 
