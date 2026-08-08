@@ -25,6 +25,9 @@
  *     is exempt from the SLA-breach and stuck-in-stage buckets: a planned, not-yet-
  *     lapsed next step means the consultant is on it. Abandoned and no-next-step
  *     are unaffected. See {@link hasUpcomingTask} / {@link attentionFlags}.
+ *   - A *parked* status ({@link PARKED_STATUS_CODES}, e.g. `re_marketing`) is a
+ *     deliberate slow-drip resting state that never appears on the attention list
+ *     at all — every bucket is cleared for it, not just the SLA one.
  */
 import { Prisma } from "@prisma/client";
 import { prisma } from "./prisma";
@@ -37,12 +40,11 @@ import { CRM_TEAM_LEAD_PAGE } from "./crm-rbac";
 /**
  * Per active-status SLA: a lead untouched for MORE than this many days is
  * "breaching" its stage SLA. Keyed by `CrmLeadStatus.code`. Active statuses not
- * listed here are not SLA-monitored — deliberately including `re_marketing`, a
- * slow-drip nurture/revive bucket where a weekly response deadline is noise: a
- * planned next step is tracked by the no-next-step bucket and genuinely-dead
- * leads still surface via the global {@link ABANDONED_DAYS} flag. Won/lost
- * statuses are excluded by construction — only `kind = 'active'` leads are
- * ever classified.
+ * listed here are not SLA-monitored. Won/lost statuses are excluded by
+ * construction — only `kind = 'active'` leads are ever classified. `re_marketing`
+ * is deliberately absent because it is fully PARKED (see
+ * {@link PARKED_STATUS_CODES}): it never appears on the attention list at all,
+ * not merely SLA-exempt.
  */
 export const SLA_THRESHOLD_DAYS: Record<string, number> = {
   not_yet_started: 1,
@@ -50,6 +52,17 @@ export const SLA_THRESHOLD_DAYS: Record<string, number> = {
   follow_up: 2,
   pipeline: 3,
 };
+
+/**
+ * Active statuses that are a deliberate long-horizon "parked" resting state: a
+ * lead here is being slow-drip nurtured/revived on its own cadence, not actively
+ * worked, so it must NEVER surface on the attention/flagged list — no SLA breach,
+ * stuck-in-stage, abandoned, or no-next-step nag. `re_marketing` is the
+ * revive-on-re-inquiry bucket; parking it stops a wall of dormant nurture leads
+ * from drowning the leads that actually need a consultant today. Enforced in
+ * {@link attentionFlags}, which clears every bucket for these statuses.
+ */
+export const PARKED_STATUS_CODES: ReadonlySet<string> = new Set(["re_marketing"]);
 
 /** Any active lead untouched this long is "abandoned" regardless of stage. */
 export const ABANDONED_DAYS = 30;
@@ -166,8 +179,14 @@ export type AttentionFlags = {
  * scheduled task ({@link hasUpcomingTask}, driven by `nextTaskDueAt`): a planned
  * next step that has not yet lapsed means the consultant is already on it, so the
  * lead should not nag as breached/stalled. Abandoned and no-next-step are NOT
- * suppressed — a lead untouched for a month, or with no task at all, still needs
- * a look regardless of anything scheduled.
+ * suppressed by an upcoming task — a lead untouched for a month, or with no task
+ * at all, still needs a look regardless of anything scheduled.
+ *
+ * The one exception is a PARKED status ({@link PARKED_STATUS_CODES}, e.g.
+ * `re_marketing`): a deliberate slow-drip resting state clears EVERY bucket
+ * (including abandoned and no-next-step), so it never appears on the attention
+ * list. `slaDays` / `daysSinceTouch` / `daysInStage` are still reported for
+ * display, but no bucket flag fires.
  */
 export function attentionFlags(opts: {
   statusCode: string;
@@ -180,19 +199,23 @@ export function attentionFlags(opts: {
 }): AttentionFlags {
   const v = classifyStaleness({ statusCode: opts.statusCode, lastTouchAt: opts.lastTouchAt, now: opts.now });
   const daysInStage = ageInDays(opts.now, opts.stuckSince);
+  // A parked status (e.g. re_marketing) is a deliberate resting state and never
+  // nags: clear every bucket regardless of age, stage time, or task state.
+  const parked = PARKED_STATUS_CODES.has(opts.statusCode);
   const upcoming = hasUpcomingTask(opts.nextTaskDueAt, opts.now);
-  const stuck = daysInStage > STUCK_DAYS && !upcoming;
-  const slaBreached = v.breached && !upcoming;
-  const noNextStep = !opts.hasOpenTask;
+  const stuck = !parked && daysInStage > STUCK_DAYS && !upcoming;
+  const slaBreached = !parked && v.breached && !upcoming;
+  const noNextStep = !parked && !opts.hasOpenTask;
+  const abandoned = !parked && v.abandoned;
   return {
     slaBreached,
-    abandoned: v.abandoned,
+    abandoned,
     noNextStep,
     stuck,
     slaDays: v.slaDays,
     daysSinceTouch: v.ageDays,
     daysInStage,
-    flagged: slaBreached || v.abandoned || noNextStep || stuck,
+    flagged: slaBreached || abandoned || noNextStep || stuck,
   };
 }
 
