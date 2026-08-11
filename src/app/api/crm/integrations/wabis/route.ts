@@ -24,7 +24,7 @@ import {
   isWabisWebhookUrl,
   LEAD_ASSIGNED_EVENT,
 } from "@/lib/crm-webhook";
-import { sendTestRemarketingTouch } from "@/lib/crm-remarketing";
+import { sendTestRemarketingTouch, runRemarketingScheduler } from "@/lib/crm-remarketing";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -199,6 +199,7 @@ const PostSchema = z.discriminatedUnion("action", [
     phone: z.string().trim().min(1).max(40),
     touch: z.number().int().min(1).max(4).optional(),
   }),
+  z.object({ action: z.literal("run_remarketing_now") }),
 ]);
 
 // POST /api/crm/integrations/wabis — save global config, send a test, re-fire, drain.
@@ -224,6 +225,19 @@ export const POST = withApiHandler(async (req: Request) => {
   // a way to flush the queue immediately after fixing whatever was wrong.
   if (body.action === "drain") {
     return NextResponse.json(await drainWebhookQueue());
+  }
+
+  // Run the re-marketing scheduler on demand — enqueue any due touch-point and
+  // complete silent campaigns, then drain — the exact work the daily cron does,
+  // but session-authed so an admin can fire it (and SEE the result) without the
+  // CRON_SECRET. Idempotent: a touch already sent this cycle is stamped and not
+  // re-sent. The scheduler result is returned verbatim so a `skipped` reason
+  // (e.g. "remarketing disabled") is visible rather than a silent no-op — this
+  // is the on-demand path that makes a stalled campaign diagnosable.
+  if (body.action === "run_remarketing_now") {
+    const scheduler = await runRemarketingScheduler();
+    const drain = await drainWebhookQueue();
+    return NextResponse.json({ ok: true, scheduler, drain });
   }
 
   if (body.action === "requeue") {

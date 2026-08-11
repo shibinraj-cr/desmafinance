@@ -40,6 +40,9 @@ export function RemarketingSettingsCard() {
   const [testBusy, setTestBusy] = useState(false);
   const [testResult, setTestResult] = useState<string | null>(null);
 
+  const [runBusy, setRunBusy] = useState(false);
+  const [runResult, setRunResult] = useState<string | null>(null);
+
   const load = useCallback(async () => {
     setLoading(true);
     const r = await fetch("/api/crm/integrations/wabis");
@@ -103,13 +106,48 @@ export function RemarketingSettingsCard() {
     }
   }
 
+  // Run the scheduler now — the same work the daily cron does, session-authed so
+  // it needs no CRON_SECRET. Surfaces the result (touches sent, or why not) so a
+  // stalled campaign stops being a black box: a `skipped` reason means the
+  // feature is off; touchesSent: 0 with campaigns running means nothing is due.
+  async function runNow() {
+    setRunBusy(true);
+    setRunResult(null);
+    const r = await fetch("/api/crm/integrations/wabis", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ action: "run_remarketing_now" }),
+    });
+    const p = (await r.json().catch(() => ({}))) as {
+      scheduler?: { touchesSent?: number; completed?: number; stopped?: number; skipped?: string };
+      drain?: { attempted?: number; sent?: number; errored?: number; skipped?: string };
+      message?: string;
+    };
+    setRunBusy(false);
+    if (!r.ok) {
+      setRunResult(p.message ?? "That didn't work.");
+      return;
+    }
+    const s = p.scheduler ?? {};
+    if (s.skipped) {
+      setRunResult(`Scheduler skipped: ${s.skipped}. Tick “Run re-marketing campaigns”, Save, then run again.`);
+      return;
+    }
+    const d = p.drain ?? {};
+    setRunResult(
+      `Scheduler ran — ${s.touchesSent ?? 0} touch(es) enqueued, ${s.completed ?? 0} completed, ${s.stopped ?? 0} stopped. ` +
+        `Delivery: ${d.sent ?? 0} sent / ${d.attempted ?? 0} attempted${d.errored ? `, ${d.errored} errored` : ""}. ` +
+        `Check the lead's timeline for “Re-marketing touch … sent”.`,
+    );
+  }
+
   return (
     <section className={card + " p-lg space-y-md"}>
       <div className="flex items-center justify-between gap-base">
         <div>
           <h3 className="text-h3 text-on-surface">Re-marketing nurturing (Wabis)</h3>
           <p className="text-label-sm text-on-surface-variant">
-            When a lead enters the Re-marketing stage, send three WhatsApp touch-points on a schedule. A candidate
+            When a lead enters the Re-marketing stage, send WhatsApp touch-points on a schedule. A candidate
             reply in Wabis (via a keyword-reply flow that calls the inbound URL below) moves the lead back to Follow-Up
             automatically.
           </p>
@@ -197,11 +235,24 @@ export function RemarketingSettingsCard() {
             secret above.
           </div>
 
-          <div className="flex justify-end">
+          <div className="flex flex-wrap items-center justify-end gap-base">
+            <button
+              className={btn + " border border-outline-variant text-on-surface-variant hover:bg-surface-container-low"}
+              disabled={runBusy}
+              onClick={runNow}
+              title="Run the re-marketing scheduler immediately (same as the daily cron) — enqueues any due touch-point now."
+            >
+              {runBusy ? "Running…" : "Run re-marketing now"}
+            </button>
             <button className={primary} disabled={busy} onClick={save}>
               {busy ? "Saving…" : "Save re-marketing"}
             </button>
           </div>
+          {runResult && (
+            <div className="rounded-lg bg-surface-container-lowest border border-outline-variant px-md py-sm text-label-sm text-on-surface-variant">
+              {runResult}
+            </div>
+          )}
 
           {/* Test send — proves the pipeline end-to-end AND lets Wabis capture the
               payload so you can map the template's variables. Uses the SAVED URL. */}
