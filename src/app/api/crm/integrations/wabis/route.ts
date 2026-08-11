@@ -24,10 +24,17 @@ import {
   isWabisWebhookUrl,
   LEAD_ASSIGNED_EVENT,
 } from "@/lib/crm-webhook";
-import { sendTestRemarketingTouch, runRemarketingScheduler } from "@/lib/crm-remarketing";
+import {
+  sendTestRemarketingTouch,
+  runRemarketingScheduler,
+  importWabisDeliveryReport,
+} from "@/lib/crm-remarketing";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
+// The delivery-report backfill replays rows one at a time; give it headroom
+// beyond the default so a full report doesn't time out mid-import.
+export const maxDuration = 60;
 
 /**
  * Global config, the endpoint list, and the delivery log for the settings page.
@@ -200,6 +207,12 @@ const PostSchema = z.discriminatedUnion("action", [
     touch: z.number().int().min(1).max(4).optional(),
   }),
   z.object({ action: z.literal("run_remarketing_now") }),
+  z.object({
+    action: z.literal("import_delivery_report"),
+    // A pasted/uploaded Wabis workflow CSV export (≤ ~4 MB of text).
+    csv: z.string().min(1).max(4_000_000),
+    touch: z.number().int().min(1).max(4).optional(),
+  }),
 ]);
 
 // POST /api/crm/integrations/wabis — save global config, send a test, re-fire, drain.
@@ -238,6 +251,14 @@ export const POST = withApiHandler(async (req: Request) => {
     const scheduler = await runRemarketingScheduler();
     const drain = await drainWebhookQueue();
     return NextResponse.json({ ok: true, scheduler, drain });
+  }
+
+  // One-time backfill: replay a Wabis delivery-report CSV through the live
+  // delivery-status handler so historical failures show in Campaign Delivery and
+  // bad numbers get flagged — for the window before the delivery webhook was wired.
+  if (body.action === "import_delivery_report") {
+    const summary = await importWabisDeliveryReport({ csv: body.csv, touch: body.touch });
+    return NextResponse.json({ ok: true, summary });
   }
 
   if (body.action === "requeue") {

@@ -117,7 +117,7 @@ export default async function CrmDeliveriesPage() {
     <>
       <TopBar title="Campaign Delivery" subtitle="Re-marketing touches that didn't reach the lead" />
       <div className="p-margin space-y-lg">
-        <DeliveriesClient rows={rows} />
+        <DeliveriesClient rows={rows} canImport={access.canManageCrm} />
       </div>
     </>
   );
