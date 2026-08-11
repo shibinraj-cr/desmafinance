@@ -224,6 +224,14 @@ export const MODULES: AppModule[] = [
         group: "TOOLS",
       },
       {
+        // Not adminOnly: any CRM user sees which re-marketing touches failed to
+        // reach the lead (bad number / frequency cap). Page enforces canViewLeads.
+        href: "/crm/deliveries",
+        label: "Campaign Delivery",
+        icon: "sms_failed",
+        group: "TOOLS",
+      },
+      {
         // Not adminOnly: gated by an explicit page grant so the Marketing Admin
         // can be given the Meta reconciliation tool without full CRM admin.
         href: "/crm/meta-reconcile",

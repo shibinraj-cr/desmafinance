@@ -34,6 +34,7 @@ export const CRM_ACTIVITY_TYPES = [
   // Re-marketing nurturing campaign (src/lib/crm-remarketing.ts).
   "REMARKETING_STARTED",
   "REMARKETING_TOUCH_SENT",
+  "REMARKETING_TOUCH_FAILED",
   "REMARKETING_RESPONSE",
   "REMARKETING_ENDED",
 ] as const;

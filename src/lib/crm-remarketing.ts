@@ -58,6 +58,13 @@ const DEFAULT_OFFSETS = [5, 19, 33, 45] as const;
 const TOTAL_TOUCHES = 4;
 /** Days after the final touch before a silent campaign is deemed complete. */
 const COMPLETION_GRACE_DAYS = 7;
+/**
+ * Meta error codes that mark a number PERMANENTLY undeliverable (bad number / not
+ * on WhatsApp) — these flag the lead so a future campaign also skips it. Transient
+ * codes (e.g. 131049, the marketing frequency cap) still STOP the current campaign
+ * under the "any hard failure" policy, but do not permanently flag the lead.
+ */
+const PERMANENT_UNDELIVERABLE_CODES: ReadonlySet<string> = new Set(["131026", "131000", "131047"]);
 
 // ── Config ──────────────────────────────────────────────────────────────────
 
@@ -203,9 +210,22 @@ export async function openRemarketingCampaign(opts: {
 
     const lead = await prisma.lead.findUnique({
       where: { id: opts.leadId },
-      select: { assignedToId: true },
+      select: { assignedToId: true, whatsappUndeliverableAt: true, whatsappUndeliverableReason: true },
     });
     if (!lead) return;
+
+    // A number a prior touch found undeliverable (Meta 131026) must not start a
+    // fresh drip — Wabis has nowhere to deliver it. Record why, don't open.
+    if (lead.whatsappUndeliverableAt) {
+      await recordLeadActivity({
+        leadId: opts.leadId,
+        actorId: opts.actorId ?? null,
+        type: "REMARKETING_STARTED",
+        summary: `Re-marketing not started — number flagged undeliverable${lead.whatsappUndeliverableReason ? ` (${lead.whatsappUndeliverableReason})` : ""}`,
+        metadata: { skipped: "undeliverable", reason: lead.whatsappUndeliverableReason ?? null },
+      });
+      return;
+    }
 
     const now = new Date();
     await prisma.$transaction([
@@ -421,6 +441,8 @@ export async function runRemarketingScheduler(): Promise<{
           phone: true,
           email: true,
           assignedToId: true,
+          whatsappUndeliverableAt: true,
+          whatsappUndeliverableReason: true,
           status: { select: { code: true } },
           source: { select: { label: true } },
           service: { select: { name: true } },
@@ -441,6 +463,21 @@ export async function runRemarketingScheduler(): Promise<{
         await prisma.crmRemarketingCampaign.update({
           where: { id: c.id },
           data: { status: "stopped", endedReason: "left_stage", endedAt: now },
+        });
+        stopped++;
+        continue;
+      }
+
+      // A prior touch found the number undeliverable (Meta 131026). Belt-and-braces
+      // to the webhook stop: never send a later touch to a dead number.
+      if (c.lead.whatsappUndeliverableAt) {
+        await prisma.crmRemarketingCampaign.update({
+          where: { id: c.id },
+          data: {
+            status: "stopped",
+            endedReason: `undeliverable${c.lead.whatsappUndeliverableReason ? `_${c.lead.whatsappUndeliverableReason}` : ""}`,
+            endedAt: now,
+          },
         });
         stopped++;
         continue;
@@ -630,6 +667,166 @@ async function notifyRemarketingResponse(
     });
   } catch (e) {
     console.error("[crm-remarketing] notifyRemarketingResponse failed:", e);
+  }
+}
+
+// ── Inbound delivery status (Wabis delivery webhook → guard + report) ────────
+
+/** WhatsApp/Meta message states we track, coarsened from Wabis's status strings. */
+export type WaDeliveryStatus = "sent" | "delivered" | "read" | "failed";
+
+/**
+ * Coarsen whatever a Wabis delivery-status callback sends into one of our four
+ * states. A present error code always means `failed` (a "sent"-then-131049 report
+ * is a failure). Otherwise map on the status text. Returns null when nothing is
+ * recognisable, so the caller can 400 rather than record a meaningless row.
+ */
+export function normalizeDeliveryStatus(
+  status: string | null | undefined,
+  errorCode?: string | null,
+  errorMessage?: string | null,
+): WaDeliveryStatus | null {
+  if (parseErrorCode(errorCode) || parseErrorCode(errorMessage)) return "failed";
+  const s = (status ?? "").trim().toLowerCase();
+  if (!s) return null;
+  if (s.includes("read")) return "read";
+  if (s.includes("fail") || s.includes("undeliver") || s.includes("error") || s.includes("reject")) return "failed";
+  if (s.includes("deliver")) return "delivered";
+  if (s.includes("sent") || s.includes("accept") || s.includes("queue")) return "sent";
+  return null;
+}
+
+/** Pull a Meta error code (a 6-digit 131xxx-style number) out of free text. */
+export function parseErrorCode(raw: string | null | undefined): string | null {
+  if (raw == null) return null;
+  const m = String(raw).match(/\b(1\d{5})\b/);
+  return m ? m[1] : null;
+}
+
+export type DeliveryStatusResult =
+  | { ok: true; action: "recorded" | "failed_stopped" | "ignored"; leadId?: string; waStatus?: WaDeliveryStatus; reason?: string }
+  | { ok: false; reason: string };
+
+/**
+ * Handle a Wabis delivery-status callback for a re-marketing touch. Records the
+ * async WhatsApp state on the matching delivery row, and — per the "any hard
+ * failure stops the drip" policy — closes the lead's running campaign on a
+ * `failed` status, permanently flagging the number when the code is a hard
+ * undeliverable (see PERMANENT_UNDELIVERABLE_CODES). Delivered/read are recorded
+ * only. Best-effort: a bad callback must never throw back at Wabis.
+ *
+ * The row is resolved precisely by (campaign_id, touch) echoed from our outbound
+ * payload; failing that, by echoed lead_id, then by phone → most-recent touch.
+ */
+export async function handleWabisDeliveryStatus(input: {
+  leadId?: string | null;
+  campaignId?: string | null;
+  touch?: number | null;
+  phone?: string | null;
+  status?: string | null;
+  errorCode?: string | null;
+  errorMessage?: string | null;
+}): Promise<DeliveryStatusResult> {
+  try {
+    const waStatus = normalizeDeliveryStatus(input.status, input.errorCode, input.errorMessage);
+    if (!waStatus) return { ok: false, reason: "unrecognized_status" };
+    const errorCode = parseErrorCode(input.errorCode) ?? parseErrorCode(input.errorMessage);
+    const errorMessage = (input.errorMessage ?? "").trim().slice(0, 300) || null;
+
+    // Resolve the exact delivery row when the callback echoes campaign_id + touch.
+    let delivery: { id: string; leadId: string | null } | null = null;
+    if (input.campaignId && input.touch) {
+      const dedupeKey = `${REMARKETING_TOUCH_EVENT}:${input.campaignId}:${input.touch}`;
+      delivery = await prisma.crmWebhookDelivery
+        .findUnique({ where: { dedupeKey }, select: { id: true, leadId: true } })
+        .catch(() => null);
+    }
+
+    // Resolve the lead: echoed id, the matched row's lead, then phone.
+    let leadId = input.leadId?.trim() || delivery?.leadId || null;
+    if (!leadId && input.phone) {
+      const e164 = normalizePhone(input.phone);
+      if (e164) {
+        const lead = await prisma.lead.findFirst({
+          where: { phoneE164: e164 },
+          orderBy: { remarketingStartedAt: "desc" },
+          select: { id: true },
+        });
+        leadId = lead?.id ?? null;
+      }
+    }
+
+    // Fall back to the lead's most recent re-marketing touch when we had no exact key.
+    if (!delivery && leadId) {
+      delivery = await prisma.crmWebhookDelivery
+        .findFirst({
+          where: { leadId, event: REMARKETING_TOUCH_EVENT },
+          orderBy: { createdAt: "desc" },
+          select: { id: true, leadId: true },
+        })
+        .catch(() => null);
+    }
+
+    const now = new Date();
+    if (delivery) {
+      await prisma.crmWebhookDelivery
+        .update({
+          where: { id: delivery.id },
+          data: {
+            waStatus,
+            waStatusAt: now,
+            waErrorCode: errorCode,
+            waErrorMessage: errorMessage,
+            ...(waStatus === "read" ? { readAt: now } : {}),
+          },
+        })
+        .catch(() => undefined);
+    }
+
+    if (!leadId) {
+      // Recorded on the row (if any) but no lead to guard — still a success.
+      return { ok: true, action: delivery ? "recorded" : "ignored", waStatus, reason: "no_lead_matched" };
+    }
+
+    if (waStatus !== "failed") {
+      return { ok: true, action: "recorded", leadId, waStatus };
+    }
+
+    // FAILED → stop any running campaign for this lead (any-hard-failure policy).
+    const permanent = errorCode ? PERMANENT_UNDELIVERABLE_CODES.has(errorCode) : false;
+    await prisma.crmRemarketingCampaign
+      .updateMany({
+        where: { leadId, status: "running" },
+        data: {
+          status: "stopped",
+          endedReason: `delivery_failed${errorCode ? `_${errorCode}` : ""}`,
+          endedAt: now,
+        },
+      })
+      .catch(() => undefined);
+
+    if (permanent) {
+      await prisma.lead
+        .update({
+          where: { id: leadId },
+          data: { whatsappUndeliverableAt: now, whatsappUndeliverableReason: errorCode },
+        })
+        .catch(() => undefined);
+    }
+
+    await recordLeadActivity({
+      leadId,
+      type: "REMARKETING_TOUCH_FAILED",
+      summary: permanent
+        ? `WhatsApp undeliverable (${errorCode}) — number flagged, re-marketing stopped`
+        : `WhatsApp delivery failed${errorCode ? ` (${errorCode})` : ""} — re-marketing stopped`,
+      metadata: { errorCode, errorMessage, touch: input.touch ?? null, permanent },
+    });
+
+    return { ok: true, action: "failed_stopped", leadId, waStatus, reason: errorCode ?? "failed" };
+  } catch (e) {
+    console.error("[crm-remarketing] handleWabisDeliveryStatus failed:", e);
+    return { ok: false, reason: "error" };
   }
 }
 

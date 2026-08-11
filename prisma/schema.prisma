@@ -453,12 +453,28 @@ model CrmWebhookDelivery {
   responseStatus Int?
   /// Response body or transport error, truncated — shown in the settings log.
   responseBody   String?
+  /// Async WhatsApp/Meta delivery status ('sent'|'delivered'|'read'|'failed'),
+  /// reported by Wabis's delivery-status webhook AFTER our POST was accepted —
+  /// distinct from `status`, which is only our transport/enqueue state. Null until
+  /// a status callback arrives (or forever, if none is configured in Wabis).
+  waStatus       String?
+  /// Meta error code on a failed delivery, e.g. '131026' (undeliverable) or
+  /// '131049' (marketing frequency cap). Drives the campaign-delivery report.
+  waErrorCode    String?
+  waErrorMessage String?
+  /// When the async status above last changed.
+  waStatusAt     DateTime?
+  /// When Meta reported the message READ (a stronger signal than delivered).
+  readAt         DateTime?
   createdAt      DateTime  @default(now())
   updatedAt      DateTime  @updatedAt
 
   @@index([status, nextAttemptAt])
   @@index([leadId])
   @@index([createdAt])
+  // The campaign-delivery report scans failures by event; a partial-ish composite
+  // keeps that query off a full table scan.
+  @@index([event, waStatus])
 }
 
 model LeadPulseSource {
@@ -2133,6 +2149,14 @@ model Lead {
   // / src/lib/crm-remarketing.ts); the touch-point schedule counts from here.
   // Cleared when the lead leaves Re-marketing.
   remarketingStartedAt DateTime?
+
+  // Set when a WhatsApp touch to this lead HARD-failed as undeliverable (Meta
+  // 131026 — not on WhatsApp / bad number), reported by the Wabis delivery-status
+  // webhook. The re-marketing engine refuses to open or continue a campaign for a
+  // flagged lead, so a dead number is never re-hammered on later touches or a
+  // future campaign. Cleared by fixing the phone number (a manual re-validation).
+  whatsappUndeliverableAt     DateTime?
+  whatsappUndeliverableReason String?
 
   // Optional linkage to the canonical candidate record once enrolled.
   partyId String?
