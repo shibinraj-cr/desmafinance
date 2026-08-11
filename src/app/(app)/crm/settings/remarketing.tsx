@@ -235,6 +235,17 @@ export function RemarketingSettingsCard() {
             secret above.
           </div>
 
+          <div className="rounded-lg bg-surface-container-low border border-outline-variant px-md py-sm text-label-sm text-on-surface-variant">
+            <span className="font-medium text-on-surface">Delivery status (recommended).</span> On each touch workflow&apos;s{" "}
+            <span className="font-medium">delivered / read / failed</span> event, add an HTTP-API block pointing at{" "}
+            <span className="font-mono">/api/crm/integrations/wabis/delivery-status</span> (same secret above), echoing{" "}
+            <span className="font-mono">campaign_id</span> + <span className="font-mono">touch</span> (from the outbound
+            payload), the <span className="font-mono">phone</span>, the <span className="font-mono">status</span>, and any{" "}
+            <span className="font-mono">error_code</span>. A hard failure then stops that lead&apos;s remaining touches
+            and lists it under <span className="font-medium">CRM → Campaign Delivery</span>; a 131026 also flags the
+            number as undeliverable.
+          </div>
+
           <div className="flex flex-wrap items-center justify-end gap-base">
             <button
               className={btn + " border border-outline-variant text-on-surface-variant hover:bg-surface-container-low"}

@@ -7,6 +7,8 @@ import {
   dueTouchIndex,
   isCampaignExpired,
   matchesReengageKeyword,
+  normalizeDeliveryStatus,
+  parseErrorCode,
 } from "@/lib/crm-remarketing";
 
 const DAY = 86_400_000;
@@ -135,5 +137,37 @@ describe("matchesReengageKeyword", () => {
     expect(matchesReengageKeyword("not now", ["interested"])).toBe(false);
     expect(matchesReengageKeyword("", ["interested"])).toBe(false);
     expect(matchesReengageKeyword(null, ["interested"])).toBe(false);
+  });
+});
+
+describe("parseErrorCode", () => {
+  it("pulls a Meta error code out of free text or a bare code", () => {
+    expect(parseErrorCode("131026")).toBe("131026");
+    expect(parseErrorCode("(Error Code : 131049 ) frequency cap")).toBe("131049");
+    expect(parseErrorCode(131026 as unknown as string)).toBe("131026");
+  });
+  it("returns null when there is no code", () => {
+    expect(parseErrorCode(null)).toBeNull();
+    expect(parseErrorCode("delivered")).toBeNull();
+    expect(parseErrorCode("")).toBeNull();
+  });
+});
+
+describe("normalizeDeliveryStatus", () => {
+  it("a present error code always means failed, whatever the status says", () => {
+    expect(normalizeDeliveryStatus("sent", "131049")).toBe("failed");
+    expect(normalizeDeliveryStatus("delivered", null, "(Error Code : 131026 )")).toBe("failed");
+  });
+  it("maps status text to the coarse states", () => {
+    expect(normalizeDeliveryStatus("read")).toBe("read");
+    expect(normalizeDeliveryStatus("DELIVERED")).toBe("delivered");
+    expect(normalizeDeliveryStatus("undelivered")).toBe("failed");
+    expect(normalizeDeliveryStatus("failed")).toBe("failed");
+    expect(normalizeDeliveryStatus("sent")).toBe("sent");
+  });
+  it("returns null on nothing recognisable so the caller can 400", () => {
+    expect(normalizeDeliveryStatus(null)).toBeNull();
+    expect(normalizeDeliveryStatus("")).toBeNull();
+    expect(normalizeDeliveryStatus("whatever")).toBeNull();
   });
 });
