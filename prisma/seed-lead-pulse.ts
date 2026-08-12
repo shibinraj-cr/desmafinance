@@ -23,6 +23,10 @@ const SOURCES = [
   // (preserving the original channel in Lead.originalSource) so repeat revenue
   // shows as its own bucket in the source funnel.
   { code: "existing_candidate", label: "Existing Candidate", displayOrder: 9 },
+  // Candidates who WhatsApp the Meta-marketed number with the campaign keyword
+  // (e.g. "study abroad") and are auto-captured via the Wabis inbound hook. Its
+  // own bucket so paid-WhatsApp intake shows distinctly in the source funnel.
+  { code: "meta_whatsapp", label: "Meta WhatsApp", displayOrder: 10 },
 ];
 
 const REGIONS = [

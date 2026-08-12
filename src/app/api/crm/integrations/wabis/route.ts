@@ -15,6 +15,9 @@ import {
   WABIS_REMARKETING_OFFSETS_KEY,
   WABIS_REMARKETING_KEYWORDS_KEY,
   WABIS_INBOUND_SECRET_KEY,
+  WABIS_CAPTURE_ENABLED_KEY,
+  WABIS_CAPTURE_KEYWORD_KEY,
+  WABIS_CAPTURE_CAMPAIGN_KEY,
 } from "@/lib/app-settings";
 import {
   resolveAgent,
@@ -93,8 +96,21 @@ export const GET = withApiHandler(async () => {
   const access = await getCrmAccess(userId, perms);
   if (!access.canManageSettings) throw forbidden();
 
-  const [enabled, secret, endpoints, deliveries, consultants, rmEnabled, rmUrls, rmOffsets, rmKeywords, rmInboundSecret] =
-    await Promise.all([
+  const [
+    enabled,
+    secret,
+    endpoints,
+    deliveries,
+    consultants,
+    rmEnabled,
+    rmUrls,
+    rmOffsets,
+    rmKeywords,
+    rmInboundSecret,
+    capEnabled,
+    capKeyword,
+    capCampaign,
+  ] = await Promise.all([
     getSetting(WABIS_WEBHOOK_ENABLED_KEY),
     getSetting(WABIS_WEBHOOK_SECRET_KEY),
     prisma.wabisWebhookEndpoint.findMany({
@@ -137,6 +153,9 @@ export const GET = withApiHandler(async () => {
     getSetting(WABIS_REMARKETING_OFFSETS_KEY),
     getSetting(WABIS_REMARKETING_KEYWORDS_KEY),
     getSetting(WABIS_INBOUND_SECRET_KEY),
+    getSetting(WABIS_CAPTURE_ENABLED_KEY),
+    getSetting(WABIS_CAPTURE_KEYWORD_KEY),
+    getSetting(WABIS_CAPTURE_CAMPAIGN_KEY),
   ]);
 
   return NextResponse.json({
@@ -166,6 +185,14 @@ export const GET = withApiHandler(async () => {
       offsets: rmOffsets ?? "5,19,33,45",
       keywords: rmKeywords ?? "",
       inboundSecret: rmInboundSecret ?? "",
+    },
+    // Inbound WhatsApp lead capture. Shares the re-marketing inbound secret (same
+    // Wabis account); the client builds the ready-to-paste capture URL from it.
+    capture: {
+      enabled: capEnabled === "1",
+      keyword: capKeyword ?? "study abroad",
+      campaign: capCampaign ?? "Study Abroad",
+      secret: rmInboundSecret ?? "",
     },
     deliveries: deliveries.map((d) => ({
       ...d,
@@ -212,6 +239,15 @@ const PostSchema = z.discriminatedUnion("action", [
     // A pasted/uploaded Wabis workflow CSV export (≤ ~4 MB of text).
     csv: z.string().min(1).max(4_000_000),
     touch: z.number().int().min(1).max(4).optional(),
+  }),
+  z.object({
+    action: z.literal("save_capture"),
+    enabled: z.boolean(),
+    keyword: z.string().trim().max(100),
+    campaign: z.string().trim().min(1).max(120),
+    // Shared inbound secret (same key the re-marketing card manages) — kept here
+    // so the capture card is self-sufficient for a first-time setup.
+    inboundSecret: z.string().trim().max(200),
   }),
 ]);
 
@@ -283,6 +319,16 @@ export const POST = withApiHandler(async (req: Request) => {
       setSetting(WABIS_REMARKETING_URLS_KEY, urls.join("\n"), userId),
       setSetting(WABIS_REMARKETING_OFFSETS_KEY, body.offsets.trim(), userId),
       setSetting(WABIS_REMARKETING_KEYWORDS_KEY, body.keywords.trim(), userId),
+      setSetting(WABIS_INBOUND_SECRET_KEY, body.inboundSecret.trim(), userId),
+    ]);
+    return NextResponse.json({ ok: true });
+  }
+
+  if (body.action === "save_capture") {
+    await Promise.all([
+      setSetting(WABIS_CAPTURE_ENABLED_KEY, body.enabled ? "1" : "0", userId),
+      setSetting(WABIS_CAPTURE_KEYWORD_KEY, body.keyword.trim(), userId),
+      setSetting(WABIS_CAPTURE_CAMPAIGN_KEY, body.campaign.trim(), userId),
       setSetting(WABIS_INBOUND_SECRET_KEY, body.inboundSecret.trim(), userId),
     ]);
     return NextResponse.json({ ok: true });
