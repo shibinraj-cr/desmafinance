@@ -39,6 +39,7 @@ import {
 import {
   REMARKETING_TOUCH_EVENT,
   TEST_EVENT,
+  LEAD_ASSIGNED_EVENT,
   toWabisPhone,
   resolveAgent,
   istTimestamp,
@@ -310,11 +311,17 @@ type SchedulerLead = {
 async function enqueueRemarketingTouch(opts: {
   campaignId: string;
   lead: SchedulerLead;
+  /** Owner when the campaign opened — used to name/assign the agent when the lead
+   * has since been unassigned (e.g. a centralised-pool lead). */
+  ownerUserId?: string | null;
   touchIndex: number;
   config: RemarketingConfig;
   now: Date;
 }): Promise<boolean> {
   const { lead, touchIndex, config } = opts;
+  // The agent to name in the message AND for Wabis to assign the chat to: the
+  // lead's current owner, else the owner recorded on the campaign.
+  const ownerId = lead.assignedToId ?? opts.ownerUserId ?? null;
   const dedupeKey = `${REMARKETING_TOUCH_EVENT}:${opts.campaignId}:${touchIndex}`;
 
   const url = urlForTouch(config, touchIndex);
@@ -336,7 +343,7 @@ async function enqueueRemarketingTouch(opts: {
           event: REMARKETING_TOUCH_EVENT,
           dedupeKey,
           leadId: lead.id,
-          assigneeUserId: lead.assignedToId,
+          assigneeUserId: ownerId,
           url,
           endpointLabel: `Re-marketing touch ${touchIndex}`,
           payload: {},
@@ -350,16 +357,26 @@ async function enqueueRemarketingTouch(opts: {
     return true;
   }
 
-  const role = lead.assignedToId
-    ? await prisma.leadPulseRole.findUnique({
-        where: { userId: lead.assignedToId },
-        select: { displayName: true, phone: true },
-      })
-    : null;
+  // Resolve the owning agent's identity the SAME way the lead-assignment intro
+  // does: prefer the per-consultant Wabis endpoint's agentName/agentPhone (the
+  // name Wabis actually knows the agent by — so its "assign agent" step matches),
+  // falling back to the consultant's Lead Pulse displayName/phone.
+  const [role, endpoint] = ownerId
+    ? await Promise.all([
+        prisma.leadPulseRole.findUnique({
+          where: { userId: ownerId },
+          select: { displayName: true, phone: true },
+        }),
+        prisma.wabisWebhookEndpoint.findFirst({
+          where: { consultantId: ownerId, purpose: LEAD_ASSIGNED_EVENT, isActive: true },
+          select: { agentName: true, agentPhone: true },
+        }),
+      ])
+    : [null, null];
   const { agent, agentPhone } = resolveAgent({
     displayName: role?.displayName,
     phone: role?.phone,
-    endpoint: null,
+    endpoint,
   });
 
   const payload = {
@@ -385,7 +402,7 @@ async function enqueueRemarketingTouch(opts: {
         event: REMARKETING_TOUCH_EVENT,
         dedupeKey,
         leadId: lead.id,
-        assigneeUserId: lead.assignedToId,
+        assigneeUserId: ownerId,
         url,
         endpointLabel: `Re-marketing touch ${touchIndex}`,
         payload,
@@ -429,6 +446,7 @@ export async function runRemarketingScheduler(): Promise<{
     select: {
       id: true,
       leadId: true,
+      ownerUserId: true,
       startedAt: true,
       touch1SentAt: true,
       touch2SentAt: true,
@@ -490,6 +508,7 @@ export async function runRemarketingScheduler(): Promise<{
         const handled = await enqueueRemarketingTouch({
           campaignId: c.id,
           lead: c.lead,
+          ownerUserId: c.ownerUserId,
           touchIndex: due,
           config,
           now,
