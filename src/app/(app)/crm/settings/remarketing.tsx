@@ -189,7 +189,7 @@ export function RemarketingSettingsCard() {
       setEnrolMsg(
         `Enrolled — ${s.opened} campaign(s) opened, ${s.backdated} re-dated, ${s.alreadyDue} already due` +
           `${s.capped ? " (batch capped — Preview again to enrol the rest)" : ""}. ` +
-          `Now click “Run re-marketing now” (up to 60 sent per click) to fire touch 1; touches 2–4 follow automatically.`,
+          `Now click “Run re-marketing now” (up to 600 per click, time-permitting) to fire touch 1; touches 2–4 follow automatically.`,
       );
     }
   }
@@ -327,7 +327,7 @@ export function RemarketingSettingsCard() {
               <span className="font-medium">never been sent touch 1</span> (skips anyone already touched, phone-less, or
               flagged undeliverable) and back-dates it so touch 1 is due now. Touches 2–4 then follow automatically while
               the lead stays in Re-marketing. <span className="font-medium">Preview</span> the count first — nothing
-              sends until you click <span className="font-medium">Run re-marketing now</span> (up to 60 per click).
+              sends until you click <span className="font-medium">Run re-marketing now</span> (up to 600 per click).
             </p>
             <div className="flex flex-wrap items-center gap-base">
               <button

@@ -60,12 +60,17 @@ const TOTAL_TOUCHES = 4;
 const COMPLETION_GRACE_DAYS = 7;
 /**
  * Max touch-points enqueued in ONE scheduler run. Each send is an inline Wabis
- * POST, so a large backlog (e.g. after a bulk enrolment) would otherwise blow the
- * 60s function limit and blast Meta's per-user cap all at once. Capping drains it
- * over several runs instead — the daily cron and each manual "Run now" click send
- * up to this many, and undelivered rows still get retried by the outbox drain.
+ * POST, so a large backlog (e.g. after a bulk enrolment) would otherwise blast
+ * Meta's per-user cap all at once. Capping drains it over several runs — the daily
+ * cron and each manual "Run now" click send up to this many; undelivered rows are
+ * retried by the outbox drain. A wall-clock guard (RUN_TIME_BUDGET_MS) stops the
+ * run before the platform's 60s function limit even if the count isn't reached, so
+ * a high cap can never time the function out mid-send.
  */
-const MAX_TOUCHES_PER_RUN = 60;
+const MAX_TOUCHES_PER_RUN = 600;
+/** Stop sending once this much wall-clock has elapsed in a run, leaving headroom
+ * under the 60s function limit for the response + the follow-on outbox drain. */
+const RUN_TIME_BUDGET_MS = 45_000;
 /**
  * Meta error codes that mark a number PERMANENTLY undeliverable (bad number / not
  * on WhatsApp) — these flag the lead so a future campaign also skips it. Transient
@@ -462,8 +467,11 @@ export async function runRemarketingScheduler(): Promise<{
   let touchesSent = 0;
   let completed = 0;
   let stopped = 0;
+  const deadline = Date.now() + RUN_TIME_BUDGET_MS;
 
   for (const c of campaigns) {
+    // Stop promptly when the time budget is spent — the rest catch up next run.
+    if (Date.now() > deadline) break;
     try {
       // The lead left Re-marketing without closing the campaign (e.g. a path we
       // don't hook yet). Close it rather than keep messaging.
