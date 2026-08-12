@@ -43,6 +43,11 @@ export function RemarketingSettingsCard() {
   const [runBusy, setRunBusy] = useState(false);
   const [runResult, setRunResult] = useState<string | null>(null);
 
+  const [enrolBusy, setEnrolBusy] = useState(false);
+  const [enrolCount, setEnrolCount] = useState<number | null>(null);
+  const [enrolCapped, setEnrolCapped] = useState(false);
+  const [enrolMsg, setEnrolMsg] = useState<string | null>(null);
+
   const load = useCallback(async () => {
     setLoading(true);
     const r = await fetch("/api/crm/integrations/wabis");
@@ -139,6 +144,54 @@ export function RemarketingSettingsCard() {
         `Delivery: ${d.sent ?? 0} sent / ${d.attempted ?? 0} attempted${d.errored ? `, ${d.errored} errored` : ""}. ` +
         `Check the lead's timeline for “Re-marketing touch … sent”.`,
     );
+  }
+
+  async function enrol(dryRun: boolean) {
+    setEnrolBusy(true);
+    setEnrolMsg(null);
+    if (dryRun) {
+      setEnrolCount(null);
+      setEnrolCapped(false);
+    }
+    const r = await fetch("/api/crm/integrations/wabis", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ action: "enrol_remaining_remarketing", dryRun }),
+    });
+    const p = (await r.json().catch(() => ({}))) as {
+      summary?: {
+        eligible: number;
+        opened: number;
+        backdated: number;
+        alreadyDue: number;
+        capped: boolean;
+        sample: { name: string; phone: string }[];
+      };
+      message?: string;
+    };
+    setEnrolBusy(false);
+    if (!r.ok || !p.summary) {
+      setEnrolMsg(p.message ?? "That didn't work.");
+      return;
+    }
+    const s = p.summary;
+    if (dryRun) {
+      setEnrolCount(s.eligible);
+      setEnrolCapped(s.capped);
+      setEnrolMsg(
+        s.eligible === 0
+          ? "No un-touched Re-marketing leads — everyone eligible already has touch 1."
+          : `${s.eligible} Re-marketing lead(s) have never been sent touch 1${s.capped ? " (first batch — re-run to enrol more)" : ""}. ` +
+              `Sample: ${s.sample.map((x) => x.name || x.phone).slice(0, 5).join(", ")}${s.sample.length > 5 ? "…" : ""}.`,
+      );
+    } else {
+      setEnrolCount(null);
+      setEnrolMsg(
+        `Enrolled — ${s.opened} campaign(s) opened, ${s.backdated} re-dated, ${s.alreadyDue} already due` +
+          `${s.capped ? " (batch capped — Preview again to enrol the rest)" : ""}. ` +
+          `Now click “Run re-marketing now” (up to 60 sent per click) to fire touch 1; touches 2–4 follow automatically.`,
+      );
+    }
   }
 
   return (
@@ -264,6 +317,42 @@ export function RemarketingSettingsCard() {
               {runResult}
             </div>
           )}
+
+          {/* Bulk enrolment — touch every un-touched Re-marketing lead. Preview
+              (count) first, then Enrol; the scheduler above does the sending. */}
+          <div className="rounded-lg border border-outline-variant bg-surface-container-low p-md space-y-sm">
+            <div className="text-label-sm font-semibold text-on-surface">Enrol remaining Re-marketing leads into touch 1</div>
+            <p className="text-label-sm text-on-surface-variant">
+              Opens a campaign for every lead in the Re-marketing stage that has{" "}
+              <span className="font-medium">never been sent touch 1</span> (skips anyone already touched, phone-less, or
+              flagged undeliverable) and back-dates it so touch 1 is due now. Touches 2–4 then follow automatically while
+              the lead stays in Re-marketing. <span className="font-medium">Preview</span> the count first — nothing
+              sends until you click <span className="font-medium">Run re-marketing now</span> (up to 60 per click).
+            </p>
+            <div className="flex flex-wrap items-center gap-base">
+              <button
+                className={btn + " border border-outline-variant text-on-surface-variant hover:bg-surface-container-low"}
+                disabled={enrolBusy}
+                onClick={() => enrol(true)}
+              >
+                {enrolBusy ? "Working…" : "Preview count"}
+              </button>
+              {enrolCount != null && enrolCount > 0 && (
+                <button
+                  className={primary}
+                  disabled={enrolBusy}
+                  onClick={() => enrol(false)}
+                >
+                  {enrolBusy ? "Enrolling…" : `Enrol ${enrolCount}${enrolCapped ? "+" : ""} lead(s)`}
+                </button>
+              )}
+            </div>
+            {enrolMsg && (
+              <div className="rounded-lg bg-surface-container-lowest border border-outline-variant px-md py-sm text-label-sm text-on-surface-variant">
+                {enrolMsg}
+              </div>
+            )}
+          </div>
 
           {/* Test send — proves the pipeline end-to-end AND lets Wabis capture the
               payload so you can map the template's variables. Uses the SAVED URL. */}

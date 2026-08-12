@@ -59,6 +59,14 @@ const TOTAL_TOUCHES = 4;
 /** Days after the final touch before a silent campaign is deemed complete. */
 const COMPLETION_GRACE_DAYS = 7;
 /**
+ * Max touch-points enqueued in ONE scheduler run. Each send is an inline Wabis
+ * POST, so a large backlog (e.g. after a bulk enrolment) would otherwise blow the
+ * 60s function limit and blast Meta's per-user cap all at once. Capping drains it
+ * over several runs instead — the daily cron and each manual "Run now" click send
+ * up to this many, and undelivered rows still get retried by the outbox drain.
+ */
+const MAX_TOUCHES_PER_RUN = 60;
+/**
  * Meta error codes that mark a number PERMANENTLY undeliverable (bad number / not
  * on WhatsApp) — these flag the lead so a future campaign also skips it. Transient
  * codes (e.g. 131049, the marketing frequency cap) still STOP the current campaign
@@ -487,6 +495,9 @@ export async function runRemarketingScheduler(): Promise<{
       const due = dueTouchIndex({ startedAt: c.startedAt, now, offsets: config.offsets, sent });
 
       if (due) {
+        // Cap sends per run — a lead left un-sent stays running and is caught up
+        // on the next run (cron or manual). Housekeeping closes above still run.
+        if (touchesSent >= MAX_TOUCHES_PER_RUN) continue;
         const handled = await enqueueRemarketingTouch({
           campaignId: c.id,
           lead: c.lead,
@@ -540,6 +551,129 @@ export async function runRemarketingScheduler(): Promise<{
   }
 
   return { touchesSent, completed, stopped };
+}
+
+// ── Bulk enrolment (one-off: touch every un-touched Re-marketing lead) ───────
+
+export type EnrolRemainingResult = {
+  /** Leads in Re-marketing that have never been sent touch 1 (capped by `limit`). */
+  eligible: number;
+  /** New campaigns opened (lead had none running). */
+  opened: number;
+  /** Existing young campaigns pulled back so touch 1 is due now. */
+  backdated: number;
+  /** Running campaigns already past the touch-1 offset — left for the scheduler. */
+  alreadyDue: number;
+  dryRun: boolean;
+  /** True when more leads matched than `limit` — re-run to enrol the rest. */
+  capped: boolean;
+  sample: { name: string; phone: string }[];
+};
+
+/**
+ * Enrol EVERY Re-marketing-stage lead that has never received touch 1 into the
+ * drip, back-dating the campaign start so touch 1 is immediately due — then the
+ * normal scheduler sends touch 1 (rate-capped, see MAX_TOUCHES_PER_RUN) and
+ * touches 2/3/4 follow on the offset schedule while the lead stays in the stage.
+ *
+ * Leads already sent touch 1 (yesterday's batch, or any earlier) are excluded via
+ * `remarketingCampaigns.none.touch1SentAt`. Phoneless and 131026-undeliverable
+ * leads are skipped. This OPENS campaigns only — no message is sent here; the
+ * scheduler (cron or manual "Run now") does the sending, so nothing blasts inside
+ * this request. `dryRun` returns the count + a sample without writing.
+ */
+export async function enrolRemainingRemarketing(opts: {
+  dryRun: boolean;
+  limit?: number;
+}): Promise<EnrolRemainingResult> {
+  const limit = Math.min(Math.max(opts.limit ?? 2000, 1), 5000);
+  const config = await getRemarketingConfig();
+  const firstOffset = config.offsets[0] ?? 5;
+  const now = new Date();
+  const backdate = new Date(now.getTime() - firstOffset * 86_400_000);
+
+  const empty: EnrolRemainingResult = {
+    eligible: 0,
+    opened: 0,
+    backdated: 0,
+    alreadyDue: 0,
+    dryRun: opts.dryRun,
+    capped: false,
+    sample: [],
+  };
+
+  const reStatus = await prisma.crmLeadStatus.findUnique({
+    where: { code: REMARKETING_STATUS_CODE },
+    select: { id: true },
+  });
+  if (!reStatus) return empty;
+
+  const leads = await prisma.lead.findMany({
+    where: {
+      statusId: reStatus.id,
+      phoneE164: { not: null },
+      whatsappUndeliverableAt: null,
+      remarketingCampaigns: { none: { touch1SentAt: { not: null } } },
+    },
+    select: {
+      id: true,
+      candidateName: true,
+      phone: true,
+      assignedToId: true,
+      remarketingCampaigns: {
+        where: { status: "running" },
+        select: { id: true, startedAt: true },
+        orderBy: { startedAt: "desc" },
+        take: 1,
+      },
+    },
+    orderBy: { createdAt: "asc" },
+    take: limit + 1,
+  });
+
+  const capped = leads.length > limit;
+  const targets = capped ? leads.slice(0, limit) : leads;
+
+  const result: EnrolRemainingResult = {
+    ...empty,
+    eligible: targets.length,
+    capped,
+    sample: targets.slice(0, 10).map((l) => ({ name: (l.candidateName ?? "").trim(), phone: l.phone ?? "" })),
+  };
+  if (opts.dryRun) return result;
+
+  for (const lead of targets) {
+    try {
+      const running = lead.remarketingCampaigns[0] ?? null;
+      if (!running) {
+        await prisma.$transaction([
+          prisma.crmRemarketingCampaign.create({
+            data: { leadId: lead.id, ownerUserId: lead.assignedToId, startedAt: backdate, status: "running" },
+          }),
+          prisma.lead.update({ where: { id: lead.id }, data: { remarketingStartedAt: backdate } }),
+        ]);
+        result.opened++;
+        await recordLeadActivity({
+          leadId: lead.id,
+          type: "REMARKETING_STARTED",
+          summary: "Re-marketing campaign enrolled (bulk touch-1 backfill)",
+          metadata: { startedAt: backdate.toISOString(), bulk: true },
+        });
+      } else if (running.startedAt.getTime() > backdate.getTime()) {
+        // Young campaign — pull its start back so touch 1 becomes due now.
+        await prisma.crmRemarketingCampaign.update({ where: { id: running.id }, data: { startedAt: backdate } });
+        await prisma.lead
+          .update({ where: { id: lead.id }, data: { remarketingStartedAt: backdate } })
+          .catch(() => undefined);
+        result.backdated++;
+      } else {
+        result.alreadyDue++;
+      }
+    } catch (e) {
+      console.error("[crm-remarketing] enrolRemainingRemarketing lead failed:", lead.id, e);
+    }
+  }
+  return result;
 }
 
 // ── Inbound reply (Wabis keyword flow → auto-advance) ───────────────────────

@@ -28,6 +28,7 @@ import {
   sendTestRemarketingTouch,
   runRemarketingScheduler,
   importWabisDeliveryReport,
+  enrolRemainingRemarketing,
 } from "@/lib/crm-remarketing";
 
 export const dynamic = "force-dynamic";
@@ -207,6 +208,7 @@ const PostSchema = z.discriminatedUnion("action", [
     touch: z.number().int().min(1).max(4).optional(),
   }),
   z.object({ action: z.literal("run_remarketing_now") }),
+  z.object({ action: z.literal("enrol_remaining_remarketing"), dryRun: z.boolean() }),
   z.object({
     action: z.literal("import_delivery_report"),
     // A pasted/uploaded Wabis workflow CSV export (≤ ~4 MB of text).
@@ -251,6 +253,14 @@ export const POST = withApiHandler(async (req: Request) => {
     const scheduler = await runRemarketingScheduler();
     const drain = await drainWebhookQueue();
     return NextResponse.json({ ok: true, scheduler, drain });
+  }
+
+  // Bulk-enrol every un-touched Re-marketing lead into the drip (back-dates the
+  // campaign so touch 1 is due). dryRun previews the count; commit opens campaigns
+  // only — the scheduler ("Run now" / cron, rate-capped) does the actual sending.
+  if (body.action === "enrol_remaining_remarketing") {
+    const summary = await enrolRemainingRemarketing({ dryRun: body.dryRun });
+    return NextResponse.json({ ok: true, summary });
   }
 
   // One-time backfill: replay a Wabis delivery-report CSV through the live
