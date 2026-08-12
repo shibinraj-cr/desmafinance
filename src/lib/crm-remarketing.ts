@@ -841,11 +841,17 @@ export async function handleWabisDeliveryStatus(input: {
       }
     }
 
-    // Fall back to the lead's most recent re-marketing touch when we had no exact key.
+    // Fall back to the lead's most recent re-marketing touch when we had no exact
+    // key — narrowed to the reported touch (payload.touch) when one was given, so
+    // a touch-2 callback annotates the touch-2 row, not whatever was latest.
     if (!delivery && leadId) {
       delivery = await prisma.crmWebhookDelivery
         .findFirst({
-          where: { leadId, event: REMARKETING_TOUCH_EVENT },
+          where: {
+            leadId,
+            event: REMARKETING_TOUCH_EVENT,
+            ...(input.touch ? { payload: { path: ["touch"], equals: input.touch } } : {}),
+          },
           orderBy: { createdAt: "desc" },
           select: { id: true, leadId: true },
         })
@@ -913,6 +919,143 @@ export async function handleWabisDeliveryStatus(input: {
     console.error("[crm-remarketing] handleWabisDeliveryStatus failed:", e);
     return { ok: false, reason: "error" };
   }
+}
+
+// ── Wabis delivery-report backfill (one-time CSV import) ────────────────────
+
+/** One recipient row distilled from a Wabis workflow CSV export. */
+export type WabisReportRow = {
+  phone: string;
+  status: WaDeliveryStatus;
+  errorCode: string | null;
+  errorMessage: string | null;
+};
+
+/**
+ * Minimal RFC-4180-ish CSV tokenizer: double-quoted fields, "" escapes, and
+ * commas/newlines inside quotes (Wabis error messages contain both). Returns
+ * rows of raw string cells.
+ */
+export function parseCsv(text: string): string[][] {
+  const rows: string[][] = [];
+  let row: string[] = [];
+  let field = "";
+  let inQuotes = false;
+  const s = (text ?? "").replace(/\r\n/g, "\n").replace(/\r/g, "\n");
+  for (let i = 0; i < s.length; i++) {
+    const c = s[i];
+    if (inQuotes) {
+      if (c === '"') {
+        if (s[i + 1] === '"') {
+          field += '"';
+          i++;
+        } else inQuotes = false;
+      } else field += c;
+    } else if (c === '"') inQuotes = true;
+    else if (c === ",") {
+      row.push(field);
+      field = "";
+    } else if (c === "\n") {
+      row.push(field);
+      rows.push(row);
+      row = [];
+      field = "";
+    } else field += c;
+  }
+  if (field.length || row.length) {
+    row.push(field);
+    rows.push(row);
+  }
+  return rows;
+}
+
+/**
+ * Parse a Wabis WhatsApp-workflow CSV export into recipient rows. Columns are
+ * resolved by HEADER NAME (case-insensitive substring) so a re-ordered export
+ * still maps. The Excel phone form `="9199…"` is reduced to digits; the outcome
+ * is derived from the Delivered/Read/Failed time columns and the error message
+ * (a present error code always wins as `failed`).
+ */
+export function parseWabisDeliveryReport(csv: string): WabisReportRow[] {
+  const rows = parseCsv(csv).filter((r) => r.some((c) => c.trim() !== ""));
+  if (rows.length < 2) return [];
+  const header = rows[0].map((h) => h.trim().toLowerCase());
+  const col = (name: string) => header.findIndex((h) => h.includes(name));
+  const iPhone = col("phone");
+  const iDelivered = col("delivered");
+  const iRead = col("read");
+  const iFailed = col("failed");
+  const iError = col("error");
+  if (iPhone < 0) return [];
+
+  const out: WabisReportRow[] = [];
+  for (let r = 1; r < rows.length; r++) {
+    const cells = rows[r];
+    const phone = (cells[iPhone] ?? "").replace(/\D/g, "");
+    if (!phone) continue;
+    const errorMessage = (iError >= 0 ? cells[iError] ?? "" : "").trim() || null;
+    const errorCode = parseErrorCode(errorMessage);
+    const at = (i: number) => (i >= 0 ? (cells[i] ?? "").trim() : "");
+    let status: WaDeliveryStatus;
+    if (errorCode || at(iFailed)) status = "failed";
+    else if (at(iRead)) status = "read";
+    else if (at(iDelivered)) status = "delivered";
+    else status = "sent";
+    out.push({ phone, status, errorCode, errorMessage });
+  }
+  return out;
+}
+
+export type DeliveryImportSummary = {
+  parsed: number;
+  matched: number;
+  unmatched: number;
+  failures: number;
+  flagged: number;
+  delivered: number;
+  unmatchedPhones: string[];
+};
+
+/**
+ * One-time backfill: replay a Wabis delivery-report CSV through the SAME handler
+ * the live webhook uses, so historical failures land on their delivery rows (and
+ * show in the Campaign Delivery report) and bad numbers get flagged — exactly as
+ * if the webhook had been live. Admin-only; sequential to avoid a query storm.
+ */
+export async function importWabisDeliveryReport(opts: {
+  csv: string;
+  touch?: number | null;
+}): Promise<DeliveryImportSummary> {
+  const rows = parseWabisDeliveryReport(opts.csv);
+  const touch = opts.touch && opts.touch >= 1 && opts.touch <= 4 ? opts.touch : null;
+  const summary: DeliveryImportSummary = {
+    parsed: rows.length,
+    matched: 0,
+    unmatched: 0,
+    failures: 0,
+    flagged: 0,
+    delivered: 0,
+    unmatchedPhones: [],
+  };
+  for (const row of rows) {
+    const res = await handleWabisDeliveryStatus({
+      phone: row.phone,
+      touch,
+      status: row.status,
+      errorCode: row.errorCode,
+      errorMessage: row.errorMessage,
+    });
+    if (res.ok && res.leadId) {
+      summary.matched++;
+      if (row.status === "failed") summary.failures++;
+      if (row.status === "delivered" || row.status === "read") summary.delivered++;
+      if (row.errorCode && PERMANENT_UNDELIVERABLE_CODES.has(row.errorCode)) summary.flagged++;
+    } else {
+      summary.unmatched++;
+      if (summary.unmatchedPhones.length < 100) summary.unmatchedPhones.push(row.phone);
+    }
+  }
+  return summary;
 }
 
 // ── Test send (admin "Send test touch") ─────────────────────────────────────

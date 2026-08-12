@@ -49,9 +49,55 @@ function fmt(iso: string): string {
   });
 }
 
-export function DeliveriesClient({ rows }: { rows: DeliveryRow[] }) {
+type ImportSummary = {
+  parsed: number;
+  matched: number;
+  unmatched: number;
+  failures: number;
+  flagged: number;
+  delivered: number;
+  unmatchedPhones: string[];
+};
+
+export function DeliveriesClient({ rows, canImport }: { rows: DeliveryRow[]; canImport: boolean }) {
   const [q, setQ] = useState("");
   const [codeFilter, setCodeFilter] = useState<string>("all");
+
+  const [importTouch, setImportTouch] = useState(1);
+  const [importBusy, setImportBusy] = useState(false);
+  const [importFile, setImportFile] = useState<File | null>(null);
+  const [importResult, setImportResult] = useState<string | null>(null);
+  const [importError, setImportError] = useState<string | null>(null);
+
+  async function runImport() {
+    if (!importFile) return;
+    setImportBusy(true);
+    setImportResult(null);
+    setImportError(null);
+    try {
+      const csv = await importFile.text();
+      const r = await fetch("/api/crm/integrations/wabis", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ action: "import_delivery_report", csv, touch: importTouch }),
+      });
+      const p = (await r.json().catch(() => ({}))) as { summary?: ImportSummary; message?: string };
+      if (!r.ok || !p.summary) {
+        setImportError(p.message ?? "That didn't work.");
+        return;
+      }
+      const s = p.summary;
+      setImportResult(
+        `Imported ${s.parsed} rows for Touch ${importTouch}: ${s.matched} matched to leads ` +
+          `(${s.failures} failures recorded, ${s.flagged} flagged undeliverable, ${s.delivered} delivered/read), ` +
+          `${s.unmatched} unmatched. Refresh to see them below.`,
+      );
+    } catch {
+      setImportError("Couldn't read that file — make sure it's the Wabis CSV export.");
+    } finally {
+      setImportBusy(false);
+    }
+  }
 
   const codes = useMemo(() => {
     const c = new Map<string, number>();
@@ -135,6 +181,56 @@ export function DeliveriesClient({ rows }: { rows: DeliveryRow[] }) {
         <span className="font-medium">undeliverable</span> (131026) is dropped from all further touches until its number
         is fixed. If this list is empty right after a campaign, the delivery webhook isn&apos;t wired up in Wabis yet.
       </div>
+
+      {/* Admin backfill — import a Wabis workflow CSV export from before the
+          delivery webhook was wired, so historical failures show here. */}
+      {canImport && (
+        <div className={card + " p-md space-y-sm"}>
+          <div className="text-label-sm font-semibold text-on-surface">Import a Wabis delivery report (backfill)</div>
+          <p className="text-label-sm text-on-surface-variant">
+            Upload a touch workflow&apos;s CSV export from Wabis. Rows are matched to leads by phone and replayed through
+            the same handler as the live webhook — failures appear below and 131026 numbers get flagged. Safe to re-run.
+          </p>
+          <div className="flex flex-wrap items-center gap-base">
+            <select
+              className="h-9 px-md rounded-lg border border-outline-variant bg-surface-container-lowest text-body-md outline-none focus:border-primary"
+              value={importTouch}
+              onChange={(e) => setImportTouch(Number(e.target.value))}
+              aria-label="Which touch this report is for"
+            >
+              <option value={1}>Touch 1</option>
+              <option value={2}>Touch 2</option>
+              <option value={3}>Touch 3</option>
+              <option value={4}>Touch 4</option>
+            </select>
+            <input
+              type="file"
+              accept=".csv,text/csv"
+              className="text-body-sm text-on-surface-variant file:mr-base file:h-9 file:rounded-lg file:border file:border-outline-variant file:bg-surface-container-low file:px-md file:text-label-sm file:font-semibold"
+              onChange={(e) => {
+                setImportFile(e.target.files?.[0] ?? null);
+                setImportResult(null);
+                setImportError(null);
+              }}
+            />
+            <button
+              className="h-9 px-md rounded-lg text-label-sm font-semibold bg-primary text-on-primary hover:bg-primary-container disabled:opacity-60"
+              disabled={importBusy || !importFile}
+              onClick={runImport}
+            >
+              {importBusy ? "Importing…" : "Import"}
+            </button>
+          </div>
+          {importError && (
+            <div className="rounded-lg bg-error-container text-on-error-container px-md py-sm text-label-sm">{importError}</div>
+          )}
+          {importResult && (
+            <div className="rounded-lg bg-surface-container-lowest border border-outline-variant px-md py-sm text-label-sm text-on-surface-variant">
+              {importResult}
+            </div>
+          )}
+        </div>
+      )}
 
       {/* Controls */}
       <div className="flex flex-wrap items-center gap-base">

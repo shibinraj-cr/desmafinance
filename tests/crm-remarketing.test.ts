@@ -10,6 +10,8 @@ import {
   normalizeDeliveryStatus,
   parseErrorCode,
   extractDeliveryEvents,
+  parseCsv,
+  parseWabisDeliveryReport,
 } from "@/lib/crm-remarketing";
 
 const DAY = 86_400_000;
@@ -232,5 +234,37 @@ describe("extractDeliveryEvents", () => {
     expect(extractDeliveryEvents({ status: "delivered" })).toEqual([]);
     expect(extractDeliveryEvents(null)).toEqual([]);
     expect(extractDeliveryEvents("nope")).toEqual([]);
+  });
+});
+
+describe("parseCsv", () => {
+  it("keeps commas and escaped quotes inside quoted fields", () => {
+    const rows = parseCsv('a,"b, still b","he said ""hi"""\n1,2,3');
+    expect(rows[0]).toEqual(["a", "b, still b", 'he said "hi"']);
+    expect(rows[1]).toEqual(["1", "2", "3"]);
+  });
+});
+
+describe("parseWabisDeliveryReport", () => {
+  const csv = [
+    '#,"Phone Number","Message Status","Schedule Time","Delivered Time","Read Time","Failed Time","Error Message"',
+    '1,"=""919946108136""",Completed,"28th Jul 26 17:52",,,"28th Jul 26 17:52","(Error Code : 131049 )In order to maintain a healthy ecosystem, the message failed."',
+    '2,"=""917994260775""",Completed,"29th Jul 26 09:20","29th Jul 26 09:21","29th Jul 26 09:37",,',
+    '3,"=""919995155800""",Completed,"30th Jul 26 16:55","30th Jul 26 16:55",,,',
+    '4,"=""918943420319""",Completed,"30th Jul 26 16:38",,,"30th Jul 26 16:38","(Error Code : 131026 )Message Undeliverable."',
+  ].join("\n");
+
+  it("unwraps the Excel phone form and derives outcome + error code", () => {
+    const rows = parseWabisDeliveryReport(csv);
+    expect(rows).toHaveLength(4);
+    expect(rows[0]).toMatchObject({ phone: "919946108136", status: "failed", errorCode: "131049" });
+    expect(rows[1]).toMatchObject({ phone: "917994260775", status: "read", errorCode: null });
+    expect(rows[2]).toMatchObject({ phone: "919995155800", status: "delivered", errorCode: null });
+    expect(rows[3]).toMatchObject({ phone: "918943420319", status: "failed", errorCode: "131026" });
+  });
+
+  it("returns nothing for an empty or header-only file", () => {
+    expect(parseWabisDeliveryReport("")).toEqual([]);
+    expect(parseWabisDeliveryReport('#,"Phone Number"')).toEqual([]);
   });
 });
