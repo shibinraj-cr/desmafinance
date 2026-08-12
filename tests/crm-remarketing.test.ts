@@ -9,6 +9,7 @@ import {
   matchesReengageKeyword,
   normalizeDeliveryStatus,
   parseErrorCode,
+  extractDeliveryEvents,
 } from "@/lib/crm-remarketing";
 
 const DAY = 86_400_000;
@@ -169,5 +170,67 @@ describe("normalizeDeliveryStatus", () => {
     expect(normalizeDeliveryStatus(null)).toBeNull();
     expect(normalizeDeliveryStatus("")).toBeNull();
     expect(normalizeDeliveryStatus("whatever")).toBeNull();
+  });
+});
+
+describe("extractDeliveryEvents", () => {
+  it("parses the native Meta envelope, incl. batched statuses + nested error code", () => {
+    const body = {
+      object: "whatsapp_business_account",
+      entry: [
+        {
+          changes: [
+            {
+              value: {
+                statuses: [
+                  { id: "wamid.A", status: "delivered", recipient_id: "919995155800" },
+                  {
+                    id: "wamid.B",
+                    status: "failed",
+                    recipient_id: "918943420319",
+                    errors: [{ code: 131026, title: "Message Undeliverable" }],
+                  },
+                ],
+              },
+            },
+          ],
+        },
+      ],
+    };
+    const events = extractDeliveryEvents(body);
+    expect(events).toHaveLength(2);
+    expect(events[0]).toMatchObject({ phone: "919995155800", status: "delivered", errorCode: null });
+    expect(events[1]).toMatchObject({ phone: "918943420319", status: "failed", errorCode: "131026" });
+  });
+
+  it("parses our own flat shape (per-workflow block / test curl)", () => {
+    const events = extractDeliveryEvents({
+      phone: "919946108136",
+      status: "failed",
+      error_code: "131049",
+      campaign_id: "camp1",
+      touch: "2",
+    });
+    expect(events).toHaveLength(1);
+    expect(events[0]).toMatchObject({
+      phone: "919946108136",
+      status: "failed",
+      errorCode: "131049",
+      campaignId: "camp1",
+      touch: 2,
+    });
+  });
+
+  it("parses a top-level statuses array", () => {
+    const events = extractDeliveryEvents({ statuses: [{ wa_id: "917994260775", status: "read" }] });
+    expect(events).toEqual([
+      { phone: "917994260775", status: "read", errorCode: null, errorMessage: null, campaignId: null, touch: null, leadId: null },
+    ]);
+  });
+
+  it("drops events with no phone or lead, and non-objects", () => {
+    expect(extractDeliveryEvents({ status: "delivered" })).toEqual([]);
+    expect(extractDeliveryEvents(null)).toEqual([]);
+    expect(extractDeliveryEvents("nope")).toEqual([]);
   });
 });
