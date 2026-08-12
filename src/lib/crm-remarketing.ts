@@ -703,6 +703,91 @@ export function parseErrorCode(raw: string | null | undefined): string | null {
   return m ? m[1] : null;
 }
 
+/** One delivery-status event flattened out of a webhook payload. */
+export type RawDeliveryEvent = {
+  phone: string | null;
+  status: string | null;
+  errorCode: string | null;
+  errorMessage: string | null;
+  campaignId: string | null;
+  touch: number | null;
+  leadId: string | null;
+};
+
+function firstString(obj: Record<string, unknown> | null | undefined, keys: string[]): string | null {
+  if (!obj) return null;
+  for (const k of keys) {
+    const v = obj[k];
+    if (typeof v === "string" && v.trim()) return v.trim();
+    if (typeof v === "number") return String(v);
+  }
+  return null;
+}
+
+/** Read one delivery event out of a single status object (any of the shapes). */
+function readEvent(s: Record<string, unknown>): RawDeliveryEvent {
+  // Meta status objects carry failures in an `errors: [{ code, title, message }]`.
+  const errors = Array.isArray(s.errors) ? (s.errors as Record<string, unknown>[]) : [];
+  const err0 = errors[0] ?? null;
+  const errorCode =
+    firstString(s, ["error_code", "errorCode", "code"]) ??
+    firstString(err0, ["code", "error_code"]) ??
+    parseErrorCode(firstString(s, ["error", "error_message", "errorMessage"]));
+  const touchRaw = firstString(s, ["touch", "touch_index", "touchIndex"]);
+  return {
+    phone: firstString(s, ["recipient_id", "wa_id", "phone", "mobile", "to", "number", "msisdn", "contact"]),
+    status: firstString(s, ["status", "message_status", "delivery_status", "state", "event", "type"]),
+    errorCode,
+    errorMessage:
+      firstString(s, ["error_message", "errorMessage", "reason", "description"]) ??
+      firstString(err0, ["title", "message", "error_data"]),
+    campaignId: firstString(s, ["campaign_id", "campaignId"]),
+    touch: touchRaw && /^\d+$/.test(touchRaw) ? Number(touchRaw) : null,
+    leadId: firstString(s, ["lead_id", "leadId"]),
+  };
+}
+
+/**
+ * Flatten whatever a Wabis "Message Status Change" webhook sends into zero or more
+ * delivery events. Wabis's GLOBAL status callback forwards WhatsApp/Meta's native
+ * envelope, so this must cope with all of:
+ *   - the native Meta shape  entry[].changes[].value.statuses[]
+ *   - a top-level `statuses` / `messages` / `data` array (or single object)
+ *   - our own flat shape (a per-workflow HTTP-API block, or a test curl)
+ * so a config that sends any of these still lands. Pure — unit-tested.
+ */
+export function extractDeliveryEvents(body: unknown): RawDeliveryEvent[] {
+  if (!body || typeof body !== "object") return [];
+  const b = body as Record<string, unknown>;
+  const raw: Record<string, unknown>[] = [];
+
+  // Native Meta envelope: entry[].changes[].value.statuses[]
+  const entry = Array.isArray(b.entry) ? (b.entry as Record<string, unknown>[]) : [];
+  for (const e of entry) {
+    const changes = Array.isArray(e?.changes) ? (e.changes as Record<string, unknown>[]) : [];
+    for (const c of changes) {
+      const value = (c?.value ?? null) as Record<string, unknown> | null;
+      const statuses = value && Array.isArray(value.statuses) ? (value.statuses as Record<string, unknown>[]) : [];
+      for (const st of statuses) raw.push(st);
+    }
+  }
+
+  // Top-level arrays some BSPs use.
+  for (const key of ["statuses", "messages", "data"]) {
+    const v = b[key];
+    if (Array.isArray(v)) {
+      for (const it of v) if (it && typeof it === "object") raw.push(it as Record<string, unknown>);
+    } else if (key === "data" && v && typeof v === "object") {
+      raw.push(v as Record<string, unknown>);
+    }
+  }
+
+  // Fall back to treating the body itself as one flat event (our shape / test curl).
+  if (raw.length === 0) raw.push(b);
+
+  return raw.map(readEvent).filter((e) => e.phone || e.leadId);
+}
+
 export type DeliveryStatusResult =
   | { ok: true; action: "recorded" | "failed_stopped" | "ignored"; leadId?: string; waStatus?: WaDeliveryStatus; reason?: string }
   | { ok: false; reason: string };
