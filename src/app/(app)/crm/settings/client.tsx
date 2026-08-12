@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import { createPortal } from "react-dom";
 import { useRouter } from "next/navigation";
 import { IntegrationsCard } from "./integrations";
+import { WabisCaptureCard } from "./wabis-capture";
 import { WabisWebhookCard } from "./wabis-webhook";
 import { RemarketingSettingsCard } from "./remarketing";
 import { EmailSenderCard } from "./email-sender";
@@ -129,7 +130,12 @@ export function SettingsClient({ statuses, qualifications }: { statuses: StatusR
         )}
         {tab === "statuses" && <StatusEditor statuses={statuses} />}
         {tab === "qualifications" && <QualificationEditor qualifications={qualifications} />}
-        {tab === "capture" && <IntegrationsCard />}
+        {tab === "capture" && (
+          <div className="space-y-md">
+            <IntegrationsCard />
+            <WabisCaptureCard />
+          </div>
+        )}
         {tab === "whatsapp" && <WabisWebhookCard />}
         {tab === "remarketing" && <RemarketingSettingsCard />}
         {tab === "email" && <EmailSenderCard />}
