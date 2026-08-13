@@ -59,6 +59,14 @@ export type WaSendResult = {
   body: string;
   /** Set when `ok` is false for a reason the caller should not retry. */
   unsupported?: boolean;
+  /** Meta's numeric error code, when the transport surfaces one. */
+  errorCode?: string | null;
+  /**
+   * True when the failure says nothing about the recipient — a rate limit, a
+   * timeout, an upstream fault. A campaign that drains over days must be able to
+   * tell these apart, or one blip silently drops part of the audience.
+   */
+  retryable?: boolean;
 };
 
 export type WaSendTemplateInput = {

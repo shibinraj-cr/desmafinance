@@ -203,6 +203,17 @@ export async function ingestInboundMessage(
   if (!phoneE164) return { ok: false, reason: "no_phone" };
 
   try {
+    // Opt-out is applied FIRST — ahead of the replay guard below, and not gated
+    // on a linked lead. It is idempotent (only rows not already opted out are
+    // stamped), so applying it on a redelivery costs nothing. Applying it after
+    // the guard would mean a "STOP" whose first delivery stored the message but
+    // died before the opt-out could never be recovered: every redelivery would
+    // short-circuit as a duplicate and the candidate would stay subscribed.
+    // Consent is the one thing worth a redundant write.
+    if (isOptOutMessage(msg.body)) {
+      await optOutByPhone(phoneE164, msg.body ?? "", msg.occurredAt ?? new Date());
+    }
+
     // A redelivery must be a true no-op, and "don't insert the message" is not
     // enough on its own: the upsert below also re-opens the thread and re-links
     // the lead, so a replayed message would quietly re-open a conversation
@@ -309,14 +320,6 @@ export async function ingestInboundMessage(
       },
     });
 
-    // An opt-out is the one inbound message that changes the lead itself. It is
-    // recorded on the timeline BECAUSE it is rare and consequential — the exact
-    // opposite of the ordinary chatter deliberately kept off it — and every
-    // future broadcast then skips this candidate (see skipReasonFor).
-    if (conversation.leadId && isOptOutMessage(msg.body)) {
-      await optOutLead(conversation.leadId, msg.body ?? "", occurredAt);
-    }
-
     // An inbound message is real activity: it must bump the lead out of the
     // stale-lead bucket. Deliberately no LeadActivity row per message — the
     // timeline is a summary of what was DONE, and a chatty thread would bury it.
@@ -413,29 +416,48 @@ export async function ingestInboundMessages(
 /**
  * Record that a candidate asked to stop receiving marketing.
  *
- * Only stamped once — `whatsappOptedOutAt: null` in the where — so a second
- * "STOP" does not keep rewriting the date or pile duplicate rows onto the
- * timeline. Best-effort like the rest of this module: failing to record an
- * opt-out must not cost us the message, though it is logged loudly because the
- * consequence of losing one is messaging someone who asked us not to.
+ * Scoped to the NUMBER, not to one lead. A person is a phone here, but this CRM
+ * holds several Lead rows per phone by design — re-enrollment copies phoneE164
+ * onto a brand-new lead for each additional service, and duplicates are flagged
+ * rather than rejected. Stamping only the conversation's lead would silence the
+ * row the thread happens to point at (the OLDEST, per findLeadByPhone) while
+ * leaving the newer one — the one most likely to sit in an active marketing
+ * segment — fully subscribed. The candidate then gets a campaign they opted out
+ * of, which is a consent breach, not a reporting glitch.
+ *
+ * Matched against both phone fields, since a candidate may write from the
+ * alternate number they gave us.
+ *
+ * Only stamps rows not already opted out, so a repeated "STOP" neither rewrites
+ * the date nor piles duplicate rows onto the timeline.
  */
-async function optOutLead(leadId: string, text: string, occurredAt: Date): Promise<void> {
+async function optOutByPhone(phoneE164: string, text: string, occurredAt: Date): Promise<void> {
   try {
-    const updated = await prisma.lead.updateMany({
-      where: { id: leadId, whatsappOptedOutAt: null },
+    const affected = await prisma.lead.findMany({
+      where: {
+        OR: [{ phoneE164 }, { altPhoneE164: phoneE164 }],
+        whatsappOptedOutAt: null,
+      },
+      select: { id: true },
+    });
+    if (affected.length === 0) return;
+
+    await prisma.lead.updateMany({
+      where: { id: { in: affected.map((l) => l.id) } },
       data: { whatsappOptedOutAt: occurredAt },
     });
-    if (updated.count === 0) return;
 
-    await recordLeadActivity({
-      leadId,
-      type: "FIELD_UPDATED",
-      summary: "Opted out of WhatsApp marketing",
-      metadata: { channel: "whatsapp", field: "whatsappOptedOutAt", text: text.slice(0, 200) },
-    });
+    for (const lead of affected) {
+      await recordLeadActivity({
+        leadId: lead.id,
+        type: "FIELD_UPDATED",
+        summary: "Opted out of WhatsApp marketing",
+        metadata: { channel: "whatsapp", field: "whatsappOptedOutAt", phoneE164, text: text.slice(0, 200) },
+      });
+    }
   } catch (e) {
     logger.error("wa_mirror_optout_failed", {
-      leadId,
+      phoneE164,
       message: e instanceof Error ? e.message : String(e),
     });
   }

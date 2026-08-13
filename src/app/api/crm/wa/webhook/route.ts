@@ -58,10 +58,15 @@ async function handle(req: Request): Promise<NextResponse> {
   // fail every request.
   const rawBody = req.method === "GET" ? "" : await req.text().catch(() => "");
 
-  const [sharedSecret, appSecret] = await Promise.all([
+  const [sharedSecretRaw, appSecretRaw] = await Promise.all([
     getSetting(WA_MIRROR_SECRET_KEY).catch(() => null),
     getSetting(WA_CLOUD_APP_SECRET_KEY).catch(() => null),
   ]);
+  const sharedSecret = sharedSecretRaw;
+  // Env fallback, like every other Cloud credential. Without it a deployment
+  // that sets the app secret only in the environment would silently never
+  // verify a signature — the check would report `not_configured` forever.
+  const appSecret = appSecretRaw?.trim() || process.env.WA_CLOUD_APP_SECRET || null;
 
   // Meta's HMAC when we hold an app secret and the sender signed; the shared
   // secret otherwise. Strictly a widening — a signed request is accepted on its
@@ -131,8 +136,20 @@ export async function GET(req: Request) {
   const challenge = url.searchParams.get("hub.challenge");
 
   if (mode === "subscribe" && challenge) {
-    const secret = (await getSetting(WA_MIRROR_SECRET_KEY).catch(() => null))?.trim() || null;
-    if (!secret || token?.trim() !== secret) {
+    // Either secret satisfies the handshake. Meta's verify_token is a value we
+    // choose in their dashboard, so a deployment configured for signature auth
+    // alone would otherwise be unable to complete the subscription — and would
+    // therefore never receive a signed request to verify in the first place.
+    const [mirrorSecret, appSecret] = await Promise.all([
+      getSetting(WA_MIRROR_SECRET_KEY).catch(() => null),
+      getSetting(WA_CLOUD_APP_SECRET_KEY).catch(() => null),
+    ]);
+    const accepted = [mirrorSecret?.trim(), appSecret?.trim() || process.env.WA_CLOUD_APP_SECRET]
+      .map((s) => s?.trim())
+      .filter((s): s is string => !!s);
+
+    const provided = token?.trim() ?? "";
+    if (accepted.length === 0 || !accepted.includes(provided)) {
       return NextResponse.json({ error: "unauthorized" }, { status: 401 });
     }
     return new NextResponse(challenge, { status: 200, headers: { "content-type": "text/plain" } });

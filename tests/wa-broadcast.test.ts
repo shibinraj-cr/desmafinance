@@ -1,7 +1,12 @@
 import { describe, it, expect } from "vitest";
 import { renderRecipientParams, skipReasonFor } from "@/lib/wa/broadcast";
 import { isOptOutMessage } from "@/lib/wa/inbound";
-import { buildTemplateComponents, parseGraphError, toCloudRecipient } from "@/lib/wa/cloud-provider";
+import {
+  buildTemplateComponents,
+  isRetryableGraphError,
+  parseGraphError,
+  toCloudRecipient,
+} from "@/lib/wa/cloud-provider";
 import { verifyMetaSignature } from "@/lib/wa/signature";
 import { createHmac } from "node:crypto";
 
@@ -89,6 +94,47 @@ describe("buildTemplateComponents", () => {
     expect(buildTemplateComponents({ "1": "Priya" })).toEqual([
       { type: "body", parameters: [{ type: "text", text: "Priya" }] },
     ]);
+  });
+
+  // A template with a header variable or a URL button rejects a send that omits
+  // that component, and Meta fails the WHOLE request — so body-only would break
+  // every recipient of any template that is not body-only.
+  it("emits header, body and button components in the order Meta expects", () => {
+    const out = buildTemplateComponents({
+      "button.0.1": "ref123",
+      "1": "Priya",
+      "header.1": "August Intake",
+    }) as { type: string; sub_type?: string; index?: string; parameters: { text: string }[] }[];
+
+    expect(out.map((c) => c.type)).toEqual(["header", "body", "button"]);
+    expect(out[0].parameters[0].text).toBe("August Intake");
+    expect(out[1].parameters[0].text).toBe("Priya");
+    expect(out[2]).toMatchObject({ type: "button", sub_type: "url", index: "0" });
+  });
+
+  it("keeps several buttons apart by index", () => {
+    const out = buildTemplateComponents({ "button.0.1": "a", "button.1.1": "b" }) as { index?: string }[];
+    expect(out.map((c) => c.index)).toEqual(["0", "1"]);
+  });
+});
+
+describe("isRetryableGraphError", () => {
+  it("retries rate limits and upstream faults — they say nothing about the recipient", () => {
+    expect(isRetryableGraphError("130429", 400)).toBe(true);
+    expect(isRetryableGraphError(null, 429)).toBe(true);
+    expect(isRetryableGraphError(null, 503)).toBe(true);
+  });
+
+  it("retries a request that never completed", () => {
+    expect(isRetryableGraphError(null, null)).toBe(true);
+  });
+
+  // Burning a recipient on a genuine rejection is correct; burning one on a
+  // blip silently drops part of the audience.
+  it("does NOT retry a genuine rejection", () => {
+    expect(isRetryableGraphError("131026", 400)).toBe(false); // undeliverable
+    expect(isRetryableGraphError("132001", 400)).toBe(false); // template missing
+    expect(isRetryableGraphError("190", 401)).toBe(false); // token expired
   });
 });
 

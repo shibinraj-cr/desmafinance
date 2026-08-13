@@ -100,14 +100,20 @@ export const POST = withApiHandler(async (req: Request) => {
       segment: data.segment as object,
       variableMap: data.variableMap ?? undefined,
       scheduledAt: data.scheduledAt ? new Date(data.scheduledAt) : null,
-      status: data.queue ? "scheduled" : "draft",
+      // Always born a draft — see below.
+      status: "draft",
       createdById: userId,
     },
     select: { id: true },
   });
 
   if (data.queue) {
+    // Materialise BEFORE flipping to `scheduled`. The drain picks up anything
+    // scheduled, and a campaign marked scheduled while its recipients are still
+    // being written looks like an empty one — the drain would find nothing
+    // pending, conclude it was complete, and strand the whole audience.
     const { total, skipped } = await materialiseAudience(broadcast.id);
+    await prisma.waBroadcast.update({ where: { id: broadcast.id }, data: { status: "scheduled" } });
     return NextResponse.json({ id: broadcast.id, totalRecipients: total, skipped });
   }
 

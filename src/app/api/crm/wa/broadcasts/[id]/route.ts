@@ -87,8 +87,11 @@ export const PATCH = withApiHandler(async (req: Request, { params }: { params: {
 
   if (action === "queue") {
     if (broadcast.status !== "draft") throw badRequest("Only a draft can be queued", "not_draft");
-    await prisma.waBroadcast.update({ where: { id: params.id }, data: { status: "scheduled" } });
+    // Audience first, status second — the drain must never see a scheduled
+    // campaign whose recipients are still being written, or it concludes the
+    // empty campaign is finished and strands the audience.
     const { total, skipped } = await materialiseAudience(params.id);
+    await prisma.waBroadcast.update({ where: { id: params.id }, data: { status: "scheduled" } });
     return NextResponse.json({ ok: true, totalRecipients: total, skipped });
   }
 

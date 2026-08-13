@@ -44,6 +44,13 @@ const DRAIN_TIME_BUDGET_MS = 45_000;
 /** Meta rate-limits template sends; a small gap keeps a burst from tripping it. */
 const INTER_SEND_DELAY_MS = 120;
 
+/**
+ * How many times one recipient may be retried after a transient failure before
+ * it is called failed. Without a ceiling a permanently-misclassified error would
+ * keep a campaign cycling forever.
+ */
+const MAX_SEND_ATTEMPTS = 3;
+
 export type BroadcastConfig = { enabled: boolean; batchSize: number };
 
 export async function getBroadcastConfig(): Promise<BroadcastConfig> {
@@ -58,8 +65,8 @@ export async function getBroadcastConfig(): Promise<BroadcastConfig> {
   };
 }
 
-/** Why a lead in the segment will not be messaged. Decided once, never retried. */
-export type SkipReason = "no_phone" | "opted_out" | "undeliverable";
+/** Why a lead in the segment will not be messaged. */
+export type SkipReason = "no_phone" | "opted_out" | "undeliverable" | "duplicate_number" | "cancelled";
 
 /**
  * Leads that must never receive a marketing broadcast, whatever the segment says.
@@ -160,6 +167,20 @@ export async function materialiseAudience(broadcastId: string): Promise<{ total:
   let total = 0;
   let skipped = 0;
 
+  // Numbers already given a PENDING row in this broadcast. One person is one
+  // phone, but several Lead rows can share it (re-enrollment copies the number
+  // onto a new lead per service), and the unique index is (broadcastId, leadId)
+  // — so without this the same handset receives the identical campaign twice.
+  // Seeded from what is already stored so an interrupted run resumes correctly.
+  const claimedNumbers = new Set(
+    (
+      await prisma.waBroadcastRecipient.findMany({
+        where: { broadcastId, status: "pending" },
+        select: { phoneE164: true },
+      })
+    ).map((r) => r.phoneE164),
+  );
+
   for (;;) {
     // Explicitly typed rather than spread inline: a conditional spread makes the
     // query's result type depend on `cursor`, which is itself assigned from that
@@ -176,7 +197,12 @@ export async function materialiseAudience(broadcastId: string): Promise<{ total:
     cursor = leads[leads.length - 1].id;
 
     const rows: Prisma.WaBroadcastRecipientCreateManyInput[] = leads.map((lead) => {
-      const skip = skipReasonFor(lead);
+      let skip = skipReasonFor(lead);
+      // A second lead on a number already claimed by this campaign still gets a
+      // row — recorded, not silently dropped, so the report accounts for every
+      // lead the segment matched — but it is not sent to.
+      if (!skip && lead.phoneE164 && claimedNumbers.has(lead.phoneE164)) skip = "duplicate_number";
+      if (!skip && lead.phoneE164) claimedNumbers.add(lead.phoneE164);
       if (skip) skipped++;
       return {
         broadcastId,
@@ -191,13 +217,17 @@ export async function materialiseAudience(broadcastId: string): Promise<{ total:
     const inserted = await prisma.waBroadcastRecipient.createMany({ data: rows, skipDuplicates: true });
     total += inserted.count;
 
+    // Counters are written per chunk, not once at the end. A lambda killed
+    // mid-loop leaves the inserted rows committed, and a broadcast still showing
+    // totalRecipients 0 would look like an empty campaign that the drain then
+    // marks complete — stranding an audience that is really sitting there.
+    await prisma.waBroadcast.update({
+      where: { id: broadcastId },
+      data: { totalRecipients: total, skippedCount: skipped },
+    });
+
     if (leads.length < CHUNK) break;
   }
-
-  await prisma.waBroadcast.update({
-    where: { id: broadcastId },
-    data: { totalRecipients: total, skippedCount: skipped },
-  });
 
   return { total, skipped };
 }
@@ -278,13 +308,31 @@ async function drainOne(
     where: { broadcastId, status: "pending" },
     orderBy: { id: "asc" },
     take: batchSize,
-    select: { id: true, phoneE164: true, renderedParams: true },
+    select: {
+      id: true,
+      phoneE164: true,
+      renderedParams: true,
+      // Re-read at SEND time, not trusted from materialisation. A campaign on
+      // this plan drains over days, and a candidate who taps STOP on day two
+      // must not receive day three's chunk — the audience is frozen, but consent
+      // is not part of the audience.
+      lead: { select: { whatsappOptedOutAt: true, whatsappUndeliverableAt: true } },
+    },
   });
 
   for (const recipient of pending) {
     if (Date.now() > deadline) {
       stoppedEarly = true;
       break;
+    }
+
+    const nowSkip = recipient.lead ? skipReasonFor({ ...recipient.lead, phoneE164: recipient.phoneE164 }) : null;
+    if (nowSkip) {
+      await prisma.waBroadcastRecipient.updateMany({
+        where: { id: recipient.id, status: "pending" },
+        data: { status: "skipped", skipReason: nowSkip },
+      });
+      continue;
     }
 
     // Claim it. The conditional `status: "pending"` means two concurrent
@@ -313,6 +361,27 @@ async function drainOne(
           waStatus: "sent",
         },
       });
+    } else if (result.retryable) {
+      // A rate limit or a dropped connection says nothing about this recipient.
+      // Back to `pending` so a later run tries again — `attempts` already
+      // incremented, and MAX_ATTEMPTS below stops it looping forever.
+      const giveUp = await prisma.waBroadcastRecipient.findUnique({
+        where: { id: recipient.id },
+        select: { attempts: true },
+      });
+      const exhausted = (giveUp?.attempts ?? 0) >= MAX_SEND_ATTEMPTS;
+      if (exhausted) failed++;
+      await prisma.waBroadcastRecipient.update({
+        where: { id: recipient.id },
+        data: {
+          status: exhausted ? "failed" : "pending",
+          ...(exhausted ? { waStatus: "failed" } : {}),
+          waErrorCode: result.errorCode ?? null,
+          waErrorMessage: result.body.slice(0, 300),
+        },
+      });
+      if (!exhausted) stoppedEarly = true; // a rate limit means back off now, not harder
+      if (!exhausted) break;
     } else {
       failed++;
       await prisma.waBroadcastRecipient.update({
@@ -320,6 +389,7 @@ async function drainOne(
         data: {
           status: "failed",
           waStatus: "failed",
+          waErrorCode: result.errorCode ?? null,
           waErrorMessage: result.body.slice(0, 300),
         },
       });
@@ -344,14 +414,22 @@ async function drainOne(
   const stuck = await prisma.waBroadcastRecipient.count({ where: { broadcastId, status: "sending" } });
   const done = remaining === 0 && stuck === 0;
 
+  // Counters are safe to write unconditionally; STATUS is not. An admin can
+  // cancel while a drain is mid-batch, and an unconditional `status: "sent"`
+  // would resurrect the cancelled campaign as a completed one — telling the
+  // team a send finished that they had deliberately stopped. So completion only
+  // applies to a broadcast still in flight.
   await prisma.waBroadcast.update({
     where: { id: broadcastId },
-    data: {
-      sentCount: sentTotal,
-      failedCount: failedTotal,
-      ...(done ? { status: "sent", completedAt: new Date() } : {}),
-    },
+    data: { sentCount: sentTotal, failedCount: failedTotal },
   });
+
+  if (done) {
+    await prisma.waBroadcast.updateMany({
+      where: { id: broadcastId, status: { in: ["scheduled", "sending"] } },
+      data: { status: "sent", completedAt: new Date() },
+    });
+  }
 
   if (done) logger.info("wa_broadcast_completed", { broadcastId, sent: sentTotal, failed: failedTotal });
 

@@ -92,26 +92,81 @@ export function toCloudRecipient(e164: string): string {
 }
 
 /**
- * Meta's template `components` for a body with positional variables.
+ * Meta's template `components`.
  *
- * The Cloud API numbers body variables {{1}}, {{2}}, … positionally, so the
- * caller's named map has to be ordered before it is sent. Sorting numeric keys
- * numerically matters: a plain string sort puts "10" before "2" and silently
- * shifts every variable after the ninth.
+ * A plain key ("1", "2") is a BODY variable, which is the common case. A key may
+ * also name its component explicitly — `header.1`, `button.0.1` — because a
+ * template is not always body-only: an approved template with a header variable
+ * or a URL button rejects a send that omits that component, and Meta fails the
+ * whole request. Sending only body parameters therefore breaks every recipient
+ * of any template that is not body-only, which is not a shape we can assume.
+ *
+ * Within a component the Cloud API numbers variables {{1}}, {{2}}, …
+ * positionally, so the map is ordered before it is sent. Sorting numerically
+ * matters: a plain string sort puts "10" before "2" and silently shifts every
+ * variable after the ninth into the wrong slot.
  */
 export function buildTemplateComponents(params: Record<string, string>): unknown[] {
-  const keys = Object.keys(params);
-  if (keys.length === 0) return [];
+  if (Object.keys(params).length === 0) return [];
 
-  const numeric = keys.every((k) => /^\d+$/.test(k));
-  const ordered = numeric ? keys.sort((a, b) => Number(a) - Number(b)) : keys.sort();
+  // component key -> { slot -> value }. Button components carry their index.
+  const groups = new Map<string, { type: string; index?: string; slots: Map<string, string> }>();
 
-  return [
-    {
-      type: "body",
-      parameters: ordered.map((k) => ({ type: "text", text: params[k] })),
-    },
-  ];
+  for (const [rawKey, value] of Object.entries(params)) {
+    const parts = rawKey.split(".");
+    let type = "body";
+    let index: string | undefined;
+    let slot = rawKey;
+
+    if (parts.length === 2) {
+      [type, slot] = parts;
+    } else if (parts.length === 3) {
+      [type, index, slot] = parts;
+    }
+
+    const groupKey = index ? `${type}.${index}` : type;
+    let group = groups.get(groupKey);
+    if (!group) {
+      group = { type, index, slots: new Map() };
+      groups.set(groupKey, group);
+    }
+    group.slots.set(slot, value);
+  }
+
+  const orderSlots = (slots: Map<string, string>): string[] => {
+    const keys = [...slots.keys()];
+    const numeric = keys.every((k) => /^\d+$/.test(k));
+    return numeric ? keys.sort((a, b) => Number(a) - Number(b)) : keys.sort();
+  };
+
+  // Meta expects header before body before buttons.
+  const RANK: Record<string, number> = { header: 0, body: 1, button: 2 };
+  return [...groups.values()]
+    .sort((a, b) => (RANK[a.type] ?? 9) - (RANK[b.type] ?? 9) || Number(a.index ?? 0) - Number(b.index ?? 0))
+    .map((group) => ({
+      type: group.type,
+      ...(group.type === "button" ? { sub_type: "url", index: group.index ?? "0" } : {}),
+      parameters: orderSlots(group.slots).map((k) => ({ type: "text", text: group.slots.get(k)! })),
+    }));
+}
+
+/**
+ * Meta error codes worth retrying.
+ *
+ * Rate limits and transient upstream faults come back as ordinary failures, and
+ * treating them as permanent burns a recipient who was never actually
+ * unreachable — on a campaign that drains over days, a single rate-limit blip
+ * would silently drop part of the audience. Genuine rejections (bad number,
+ * template not approved, expired token) stay terminal.
+ */
+const RETRYABLE_CODES = new Set(["4", "80007", "130429", "131048", "131056", "133016", "500", "502", "503"]);
+
+export function isRetryableGraphError(code: string | null, status: number | null): boolean {
+  if (code && RETRYABLE_CODES.has(code)) return true;
+  // No status at all means the request never completed — a timeout or a dropped
+  // connection, which says nothing about the recipient.
+  if (status === null) return true;
+  return status === 429 || status >= 500;
 }
 
 /** Pull Meta's error code/message out of a Graph error envelope. */
@@ -148,7 +203,14 @@ async function graphPost(cfg: CloudConfig, path: string, payload: unknown): Prom
     if (!res.ok) {
       const { code, message } = parseGraphError(text);
       logger.warn("wa_cloud_send_rejected", { status: res.status, code });
-      return { ok: false, providerMessageId: null, status: res.status, body: code ? `${code}: ${message}` : message };
+      return {
+        ok: false,
+        providerMessageId: null,
+        status: res.status,
+        body: code ? `${code}: ${message}` : message,
+        errorCode: code,
+        retryable: isRetryableGraphError(code, res.status),
+      };
     }
 
     // { messages: [{ id: "wamid.…" }] } — the id that makes delivery correlation
@@ -167,7 +229,8 @@ async function graphPost(cfg: CloudConfig, path: string, payload: unknown): Prom
     return { ok: true, providerMessageId, status: res.status, body: truncate(text) };
   } catch (e) {
     const msg = e instanceof Error ? `${e.name}: ${e.message}` : "request failed";
-    return { ok: false, providerMessageId: null, status: null, body: truncate(msg) };
+    // The request never completed, so this says nothing about the recipient.
+    return { ok: false, providerMessageId: null, status: null, body: truncate(msg), retryable: true };
   }
 }
 

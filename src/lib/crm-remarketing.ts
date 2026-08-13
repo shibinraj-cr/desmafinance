@@ -478,6 +478,7 @@ export async function runRemarketingScheduler(): Promise<{
           assignedToId: true,
           whatsappUndeliverableAt: true,
           whatsappUndeliverableReason: true,
+          whatsappOptedOutAt: true,
           status: { select: { code: true } },
           source: { select: { label: true } },
           service: { select: { name: true } },
@@ -503,6 +504,19 @@ export async function runRemarketingScheduler(): Promise<{
         await prisma.crmRemarketingCampaign.update({
           where: { id: c.id },
           data: { status: "stopped", endedReason: "left_stage", endedAt: now },
+        });
+        stopped++;
+        continue;
+      }
+
+      // The candidate asked us to stop. Checked BEFORE the undeliverable guard
+      // because it is a promise rather than a delivery fact: a drip is marketing,
+      // and continuing it after an opt-out is a consent breach even though every
+      // individual send would technically succeed.
+      if (c.lead.whatsappOptedOutAt) {
+        await prisma.crmRemarketingCampaign.update({
+          where: { id: c.id },
+          data: { status: "stopped", endedReason: "opted_out", endedAt: now },
         });
         stopped++;
         continue;

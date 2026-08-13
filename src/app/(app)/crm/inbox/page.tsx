@@ -39,20 +39,26 @@ export default async function CrmInboxPage() {
     );
   }
 
-  const [config, provider, templates, bdes] = await Promise.all([
+  const [config, provider, bdes] = await Promise.all([
     getWaMirrorConfig(),
     getWaProvider(),
-    prisma.crmMessageTemplate.findMany({
-      where: { channel: "whatsapp", isActive: true },
-      orderBy: { name: "asc" },
-      select: { id: true, name: true, body: true },
-    }),
     prisma.leadPulseRole.findMany({
       where: { active: true, role: { in: ["l1", "l2"] } },
       orderBy: { displayName: "asc" },
       select: { userId: true, displayName: true },
     }),
   ]);
+
+  // Templates come from the WABA, NOT from CrmMessageTemplate. A CRM template's
+  // `name` is a free-text label somebody typed ("Follow-up nudge"); Meta needs
+  // the approved template's registered name and language. Sending the label
+  // would fail every out-of-window reply with "template does not exist", so the
+  // picker is populated from the transport's own catalogue — which is empty on
+  // Wabis, and the composer says so rather than offering a list that cannot work.
+  const waTemplates = await provider.listTemplates().catch(() => []);
+  const templates = waTemplates
+    .filter((t) => t.status === "APPROVED")
+    .map((t) => ({ id: `${t.name}:${t.language}`, name: `${t.name}:${t.language}`, body: `${t.name} (${t.language})` }));
 
   return (
     <>
