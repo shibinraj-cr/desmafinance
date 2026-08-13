@@ -91,6 +91,8 @@ model User {
   crmDailyReportsReviewed CrmDailyReport[]     @relation("CrmDailyReportReviewer")
   appSettings            AppSetting[]         @relation("AppSettingEditor")
   wabisEndpoints         WabisWebhookEndpoint[] @relation("WabisEndpointConsultant")
+  waConversations        WaConversation[]     @relation("WaConversationAssignee")
+  waMessagesSent         WaMessage[]          @relation("WaMessageSender")
 
   // Operations relations
   opsTemplatesCreated    ProcessTemplate[]    @relation("OpsTemplateCreatedBy")
@@ -2236,6 +2238,7 @@ model Lead {
   tasks      CrmTask[]
   remarketingCampaigns CrmRemarketingCampaign[]
   opsProjects OpsProject[] @relation("OpsProjectLead")
+  waConversations WaConversation[]
 
   @@index([assignedToId])
   @@index([assignedAt])
@@ -2520,6 +2523,131 @@ model CrmMessageTemplate {
 
   @@index([channel, isActive])
   @@index([createdById])
+}
+
+// ──────────────────────────────────────────────────────────────────────
+// WhatsApp conversations (the CRM-side mirror of the shared inbox)
+//
+// Today the candidate's actual conversation lives inside Wabis and only its
+// EDGES reach us — an assignment intro going out, a keyword-matched reply
+// coming back. Everything in between is invisible to the CRM, which is why a
+// BDE still has to open Wabis to know what was said.
+//
+// These two tables are that conversation, stored on our side. They are
+// deliberately provider-agnostic: whether a message arrived via a Wabis relay
+// or straight from Meta's Cloud API, it lands here in the same shape (see
+// src/lib/wa/provider.ts). Nothing else in the CRM needs to know which.
+// ──────────────────────────────────────────────────────────────────────
+
+/// One WhatsApp thread with one number.
+///
+/// Keyed by `phoneE164`, which is also how it finds its lead: `Lead.phoneE164`
+/// and `Lead.altPhoneE164` are both indexed, so an inbound message resolves to
+/// a candidate with no new plumbing. `leadId` stays nullable because a message
+/// can arrive from someone we have never heard of — the ingest path creates a
+/// lead for them, but a lead that is later deleted must not take the
+/// conversation history with it (hence SetNull, not Cascade).
+model WaConversation {
+  id String @id @default(cuid())
+  /// Normalised candidate number — the thread's identity. Unique: one thread
+  /// per number, no matter how many leads share it.
+  phoneE164 String  @unique
+  leadId    String?
+  lead      Lead?   @relation(fields: [leadId], references: [id], onDelete: SetNull)
+
+  /// The consultant this thread belongs to. Mirrors `Lead.assignedToId` at
+  /// ingest time, but kept separately because a conversation can be handed over
+  /// without reassigning the lead (and vice-versa).
+  assignedToId String?
+  assignedTo   User?   @relation("WaConversationAssignee", fields: [assignedToId], references: [id], onDelete: SetNull)
+
+  /// 'open' | 'closed' — a coarse triage state, not a pipeline stage. The lead's
+  /// own status remains the single source of truth for where the deal is.
+  status String @default("open")
+
+  lastMessageAt DateTime?
+  /// When the candidate last messaged US. This is the one that matters: WhatsApp
+  /// only permits free-text replies within 24 hours of it, so it — not
+  /// `lastMessageAt` — is what the composer gates on.
+  lastInboundAt DateTime?
+  /// `lastInboundAt + 24h`, denormalised so "which threads can I still reply to"
+  /// is an indexed range scan rather than a computed filter over every row.
+  sessionExpiresAt DateTime?
+  /// Inbound messages since a CRM user last opened the thread.
+  unreadCount      Int       @default(0)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  messages WaMessage[]
+
+  @@index([leadId])
+  @@index([assignedToId, status])
+  @@index([status, lastMessageAt])
+  @@index([sessionExpiresAt])
+}
+
+/// One WhatsApp message, inbound or outbound.
+///
+/// `providerMessageId` is the idempotency guard. Webhooks are re-delivered on
+/// any non-2xx (and sometimes on a 2xx that arrived slowly), so the ingest path
+/// is written to be replayed: the unique index means a repeat delivery collides
+/// instead of duplicating the thread. It is nullable because an outbound send
+/// through a Wabis workflow returns no id at all — that gap is exactly what
+/// owning the transport closes.
+model WaMessage {
+  id             String         @id @default(cuid())
+  conversationId String
+  conversation   WaConversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+
+  /// 'in' (from the candidate) | 'out' (from us).
+  direction String
+  /// 'text' | 'image' | 'document' | 'audio' | 'video' | 'sticker' |
+  /// 'location' | 'template' | 'interactive' | 'unsupported'.
+  type      String  @default("text")
+  /// Message text, a caption, or a rendered template body. Null for a bare
+  /// media message with no caption.
+  body      String?
+
+  /// Provider-side media handle and a resolved URL, when the message carries an
+  /// attachment. Cloud API media URLs are short-lived, so `mediaUrl` is a cache
+  /// to be re-fetched from `mediaId`, never the durable reference.
+  mediaId   String?
+  mediaUrl  String?
+  mediaMime String?
+  fileName  String?
+
+  /// Meta's `wamid.…`, or whatever id the relaying provider gives us. Unique —
+  /// see the model note.
+  providerMessageId String? @unique
+  /// Which transport carried it ('wabis' | 'cloud'), so a thread spanning the
+  /// cutover still reads correctly.
+  provider          String  @default("wabis")
+
+  /// Approved template used, on an outbound template send.
+  templateName String?
+
+  /// Async Meta state: 'sent' | 'delivered' | 'read' | 'failed'. Null on
+  /// inbound, and on outbound until a status callback arrives.
+  waStatus       String?
+  waErrorCode    String?
+  waErrorMessage String?
+  readAt         DateTime?
+
+  /// The CRM user who sent it. Null on inbound, and on an outbound message an
+  /// automation sent (a re-marketing touch has no human author).
+  sentById String?
+  sentBy   User?   @relation("WaMessageSender", fields: [sentById], references: [id], onDelete: SetNull)
+
+  /// When the message happened at the provider — NOT when we stored it. A
+  /// backlog replayed after an outage must sort into the thread by its real
+  /// time, not bunch up at the moment we caught up.
+  occurredAt DateTime @default(now())
+  createdAt  DateTime @default(now())
+
+  @@index([conversationId, occurredAt])
+  @@index([direction, waStatus])
+  @@index([occurredAt])
 }
 
 // ──────────────────────────────────────────────────────────────────────

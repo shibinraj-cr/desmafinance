@@ -1,0 +1,93 @@
+import { NextResponse } from "next/server";
+import { getSetting, WA_MIRROR_SECRET_KEY } from "@/lib/app-settings";
+import { extractInboundMessages } from "@/lib/wa/inbound";
+import { getWaMirrorConfig, ingestInboundMessages } from "@/lib/wa/mirror";
+import { logger } from "@/lib/logger";
+
+export const dynamic = "force-dynamic";
+export const runtime = "nodejs";
+export const maxDuration = 30;
+
+/**
+ * Inbound WhatsApp MESSAGE hook — the conversation mirror's only entrance.
+ *
+ * Distinct from the two hooks that already exist, and deliberately not merged
+ * with them: `/integrations/wabis/inbound` advances a re-marketing lead on a
+ * keyword-matched reply, and `/integrations/wabis/delivery-status` records what
+ * Meta did with a message we sent. This one stores what was actually SAID, which
+ * neither of those has ever captured. Keeping it separate means deploying the
+ * mirror cannot disturb a live automation.
+ *
+ * Accepts Meta's native batched envelope (`entry[].changes[].value.messages[]`)
+ * as well as the flat shapes a relay sends — see extractInboundMessages. The
+ * same parser therefore serves both a Wabis relay today and the Cloud API after
+ * cutover; only the auth below changes.
+ *
+ * Auth: a shared secret from CRM → Settings, as the `x-wa-secret` header or a
+ * `?key=` query param (a webhook UI that only offers a URL field has no way to
+ * send a header). Fail-closed when unset, so the endpoint can never be driven
+ * anonymously. Its own secret rather than the re-marketing one, so rotating
+ * either cannot silently break the other.
+ *
+ * Always answers 200 once authenticated. A sender that sees a non-2xx will
+ * retry the batch and, on repeated failure, disable the subscription outright —
+ * losing far more than the message we could not parse. Nothing is lost by
+ * answering 200: a message that failed to store is logged, and a genuinely
+ * re-delivered one collides on `providerMessageId` rather than duplicating.
+ */
+async function handle(req: Request): Promise<NextResponse> {
+  const secret = (await getSetting(WA_MIRROR_SECRET_KEY).catch(() => null))?.trim() || null;
+  if (!secret) {
+    return NextResponse.json({ error: "mirror secret not set — hook disabled" }, { status: 503 });
+  }
+
+  const url = new URL(req.url);
+  const provided = req.headers.get("x-wa-secret")?.trim() || url.searchParams.get("key")?.trim() || "";
+  if (provided !== secret) return NextResponse.json({ error: "unauthorized" }, { status: 401 });
+
+  const config = await getWaMirrorConfig();
+  if (!config.enabled) return NextResponse.json({ ok: true, skipped: "mirror_disabled" });
+
+  const body = await req.json().catch(() => null);
+  const messages = extractInboundMessages(body);
+
+  if (messages.length === 0) {
+    // Most likely a status-only batch, which belongs to the delivery-status
+    // hook. Logged at debug volume so an unrecognised envelope is diagnosable
+    // without turning normal traffic into noise.
+    logger.info("wa_webhook_no_messages", { keys: body && typeof body === "object" ? Object.keys(body) : null });
+    return NextResponse.json({ ok: true, received: 0 });
+  }
+
+  const summary = await ingestInboundMessages(messages, config);
+  return NextResponse.json({ ok: true, ...summary });
+}
+
+export async function POST(req: Request) {
+  return handle(req);
+}
+
+/**
+ * Meta's webhook VERIFICATION handshake, which is a GET carrying
+ * `hub.mode=subscribe`, `hub.verify_token` and `hub.challenge`; the challenge
+ * must be echoed as bare text or the subscription is refused. Verified against
+ * the same shared secret, so there is one value to configure rather than two.
+ *
+ * Any other GET is treated as a manual test of the POST path.
+ */
+export async function GET(req: Request) {
+  const url = new URL(req.url);
+  const mode = url.searchParams.get("hub.mode");
+  const token = url.searchParams.get("hub.verify_token");
+  const challenge = url.searchParams.get("hub.challenge");
+
+  if (mode === "subscribe" && challenge) {
+    const secret = (await getSetting(WA_MIRROR_SECRET_KEY).catch(() => null))?.trim() || null;
+    if (!secret || token?.trim() !== secret) {
+      return NextResponse.json({ error: "unauthorized" }, { status: 401 });
+    }
+    return new NextResponse(challenge, { status: 200, headers: { "content-type": "text/plain" } });
+  }
+
+  return handle(req);
+}

@@ -52,6 +52,27 @@ export const WABIS_REMARKETING_OFFSETS_KEY = "wabis_remarketing_offsets";
 export const WABIS_REMARKETING_KEYWORDS_KEY = "wabis_remarketing_keywords";
 export const WABIS_INBOUND_SECRET_KEY = "wabis_inbound_secret";
 
+/**
+ * WhatsApp conversation mirror (src/lib/wa/*).
+ *
+ * - PROVIDER_KEY: which transport carries WhatsApp — "wabis" (default) or
+ *   "cloud" once the number is migrated onto our own WABA. One setting is the
+ *   whole cutover switch; nothing above the provider interface reads it.
+ * - MIRROR_ENABLED_KEY: whether the ingest endpoint stores conversations at all.
+ *   Off by default so deploying the tables changes no behaviour until an admin
+ *   turns it on.
+ * - MIRROR_SECRET_KEY: shared secret the message webhook must present, sent as
+ *   `x-wa-secret` or `?key=`. Separate from the re-marketing inbound secret so
+ *   rotating one never silently breaks the other.
+ * - MIRROR_AUTOCREATE_KEY: create a Lead for a number we have never seen. On by
+ *   default — an unknown number messaging us IS an inbound lead, and this is the
+ *   gap the Wabis keyword flow could never close.
+ */
+export const WA_PROVIDER_KEY = "wa_provider";
+export const WA_MIRROR_ENABLED_KEY = "wa_mirror_enabled";
+export const WA_MIRROR_SECRET_KEY = "wa_mirror_secret";
+export const WA_MIRROR_AUTOCREATE_KEY = "wa_mirror_autocreate_leads";
+
 export async function getSetting(key: string): Promise<string | null> {
   const row = await prisma.appSetting.findUnique({ where: { key }, select: { value: true } });
   return row?.value ?? null;
