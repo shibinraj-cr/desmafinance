@@ -58,6 +58,34 @@ export default async function CrmDeliveriesPage() {
     },
   });
 
+  // Whole-campaign send picture (all touches, not just failures) so an empty
+  // failures table has context: how many touches went out, and whether any
+  // delivery-status callbacks have arrived from Wabis at all.
+  const [byStatus, byWaStatus] = await Promise.all([
+    prisma.crmWebhookDelivery.groupBy({
+      by: ["status"],
+      where: { event: REMARKETING_TOUCH_EVENT },
+      _count: { _all: true },
+    }),
+    prisma.crmWebhookDelivery.groupBy({
+      by: ["waStatus"],
+      where: { event: REMARKETING_TOUCH_EVENT },
+      _count: { _all: true },
+    }),
+  ]);
+  const statusN = (s: string) => byStatus.find((r) => r.status === s)?._count._all ?? 0;
+  const waN = (s: string) => byWaStatus.find((r) => r.waStatus === s)?._count._all ?? 0;
+  const sendSummary = {
+    totalTouches: byStatus.reduce((n, r) => n + r._count._all, 0),
+    sent: statusN("sent"),
+    pending: statusN("pending"),
+    transportFailed: statusN("failed"),
+    callbacks: byWaStatus.reduce((n, r) => (r.waStatus ? n + r._count._all : n), 0),
+    delivered: waN("delivered"),
+    read: waN("read"),
+    waFailed: waN("failed"),
+  };
+
   const leadIds = [...new Set(failed.map((f) => f.leadId).filter((x): x is string => !!x))];
   const leads = leadIds.length
     ? await prisma.lead.findMany({
@@ -117,7 +145,7 @@ export default async function CrmDeliveriesPage() {
     <>
       <TopBar title="Campaign Delivery" subtitle="Re-marketing touches that didn't reach the lead" />
       <div className="p-margin space-y-lg">
-        <DeliveriesClient rows={rows} canImport={access.canManageCrm} />
+        <DeliveriesClient rows={rows} canImport={access.canManageCrm} sendSummary={sendSummary} />
       </div>
     </>
   );

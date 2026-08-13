@@ -72,6 +72,10 @@ const MAX_TOUCHES_PER_RUN = 600;
 /** Stop sending once this much wall-clock has elapsed in a run, leaving headroom
  * under the 60s function limit for the response + the follow-on outbox drain. */
 const RUN_TIME_BUDGET_MS = 45_000;
+/** How many touches to POST to Wabis at once. Each POST is ~1-2s, so sending
+ * sequentially drains only ~25 in the time budget; firing a batch concurrently
+ * lifts that to the low hundreds. Kept modest so we don't stampede Wabis/Meta. */
+const SEND_CONCURRENCY = 20;
 /**
  * Meta error codes that mark a number PERMANENTLY undeliverable (bad number / not
  * on WhatsApp) — these flag the lead so a future campaign also skips it. Transient
@@ -487,9 +491,11 @@ export async function runRemarketingScheduler(): Promise<{
   let stopped = 0;
   const deadline = Date.now() + RUN_TIME_BUDGET_MS;
 
+  // Phase 1 — cheap & sequential: close campaigns that should stop/complete and
+  // collect the touches that are due. No Wabis POST happens here, so it stays fast
+  // even for a large backlog.
+  const dueSends: { c: (typeof campaigns)[number]; due: number }[] = [];
   for (const c of campaigns) {
-    // Stop promptly when the time budget is spent — the rest catch up next run.
-    if (Date.now() > deadline) break;
     try {
       // The lead left Re-marketing without closing the campaign (e.g. a path we
       // don't hook yet). Close it rather than keep messaging.
@@ -521,40 +527,8 @@ export async function runRemarketingScheduler(): Promise<{
       const due = dueTouchIndex({ startedAt: c.startedAt, now, offsets: config.offsets, sent });
 
       if (due) {
-        // Cap sends per run — a lead left un-sent stays running and is caught up
-        // on the next run (cron or manual). Housekeeping closes above still run.
-        if (touchesSent >= MAX_TOUCHES_PER_RUN) continue;
-        const handled = await enqueueRemarketingTouch({
-          campaignId: c.id,
-          lead: c.lead,
-          ownerUserId: c.ownerUserId,
-          touchIndex: due,
-          config,
-          now,
-        });
-        if (handled) {
-          touchesSent++;
-          await prisma.crmRemarketingCampaign.update({
-            where: { id: c.id },
-            // Explicit per-touch field (not a computed key) so it satisfies the
-            // typed update input.
-            data:
-              due === 1
-                ? { touch1SentAt: now }
-                : due === 2
-                  ? { touch2SentAt: now }
-                  : due === 3
-                    ? { touch3SentAt: now }
-                    : { touch4SentAt: now },
-          });
-          await recordLeadActivity({
-            leadId: c.leadId,
-            type: "REMARKETING_TOUCH_SENT",
-            summary: `Re-marketing touch ${due} sent`,
-            metadata: { touch: due },
-          });
-        }
-        continue; // at most one touch per campaign per run
+        dueSends.push({ c, due }); // at most one touch per campaign per run
+        continue;
       }
 
       if (isCampaignExpired({ startedAt: c.startedAt, now, offsets: config.offsets, sent })) {
@@ -575,6 +549,51 @@ export async function runRemarketingScheduler(): Promise<{
     } catch (e) {
       console.error(`[crm-remarketing] campaign ${c.id} scheduler error:`, e);
     }
+  }
+
+  // Phase 2 — the expensive part: POST the due touches to Wabis CONCURRENTLY in
+  // batches (each POST is ~1-2s), bounded by MAX_TOUCHES_PER_RUN and the wall-clock
+  // deadline, so a large backlog drains fast without timing the function out.
+  const toSend = dueSends.slice(0, MAX_TOUCHES_PER_RUN);
+  for (let i = 0; i < toSend.length && Date.now() < deadline; i += SEND_CONCURRENCY) {
+    const batch = toSend.slice(i, i + SEND_CONCURRENCY);
+    const results = await Promise.all(
+      batch.map(async ({ c, due }) => {
+        try {
+          const handled = await enqueueRemarketingTouch({
+            campaignId: c.id,
+            lead: c.lead,
+            ownerUserId: c.ownerUserId,
+            touchIndex: due,
+            config,
+            now,
+          });
+          if (!handled) return false;
+          await prisma.crmRemarketingCampaign.update({
+            where: { id: c.id },
+            data:
+              due === 1
+                ? { touch1SentAt: now }
+                : due === 2
+                  ? { touch2SentAt: now }
+                  : due === 3
+                    ? { touch3SentAt: now }
+                    : { touch4SentAt: now },
+          });
+          await recordLeadActivity({
+            leadId: c.leadId,
+            type: "REMARKETING_TOUCH_SENT",
+            summary: `Re-marketing touch ${due} sent`,
+            metadata: { touch: due },
+          });
+          return true;
+        } catch (e) {
+          console.error(`[crm-remarketing] send failed for campaign ${c.id}:`, e);
+          return false;
+        }
+      }),
+    );
+    touchesSent += results.filter(Boolean).length;
   }
 
   return { touchesSent, completed, stopped };

@@ -59,7 +59,26 @@ type ImportSummary = {
   unmatchedPhones: string[];
 };
 
-export function DeliveriesClient({ rows, canImport }: { rows: DeliveryRow[]; canImport: boolean }) {
+export type SendSummary = {
+  totalTouches: number;
+  sent: number;
+  pending: number;
+  transportFailed: number;
+  callbacks: number;
+  delivered: number;
+  read: number;
+  waFailed: number;
+};
+
+export function DeliveriesClient({
+  rows,
+  canImport,
+  sendSummary,
+}: {
+  rows: DeliveryRow[];
+  canImport: boolean;
+  sendSummary: SendSummary;
+}) {
   const [q, setQ] = useState("");
   const [codeFilter, setCodeFilter] = useState<string>("all");
 
@@ -157,8 +176,44 @@ export function DeliveriesClient({ rows, canImport }: { rows: DeliveryRow[]; can
     URL.revokeObjectURL(url);
   }
 
+  const ss = sendSummary;
   return (
     <div className="space-y-lg">
+      {/* Whole-campaign send picture — so an empty failures table has context. */}
+      <div className="rounded-xl border border-outline-variant bg-surface-container-lowest p-md">
+        <div className="flex flex-wrap items-center gap-lg">
+          <div>
+            <div className="text-display-sm text-on-surface">{ss.totalTouches}</div>
+            <div className="text-label-sm text-on-surface-variant">Touches enqueued (all-time)</div>
+          </div>
+          <div className="text-body-sm text-on-surface-variant space-y-xs">
+            <div>
+              Accepted by Wabis: <span className="font-semibold text-on-surface">{ss.sent}</span> · Pending/retry:{" "}
+              <span className="font-semibold text-on-surface">{ss.pending}</span> · Send failed:{" "}
+              <span className="font-semibold text-on-surface">{ss.transportFailed}</span>
+            </div>
+            <div>
+              Delivery callbacks from Wabis:{" "}
+              {ss.callbacks === 0 ? (
+                <span className="font-semibold text-error">none yet</span>
+              ) : (
+                <>
+                  <span className="font-semibold text-on-surface">{ss.callbacks}</span> (delivered {ss.delivered}, read{" "}
+                  {ss.read}, failed {ss.waFailed})
+                </>
+              )}
+            </div>
+          </div>
+        </div>
+        {ss.callbacks === 0 && ss.sent > 0 && (
+          <div className="mt-sm text-label-sm text-on-surface-variant">
+            {ss.sent} touch(es) were accepted by Wabis, but <span className="font-medium">no delivery-status callbacks
+            have arrived</span> — so no delivered/failed outcomes can show below. Check that the Wabis “Message Status
+            Change” webhook is enabled and pointed at <span className="font-mono">/api/crm/integrations/wabis/delivery-status</span>.
+          </div>
+        )}
+      </div>
+
       {/* Summary tiles */}
       <div className="grid gap-base sm:grid-cols-3">
         <div className={card + " p-md"}>
