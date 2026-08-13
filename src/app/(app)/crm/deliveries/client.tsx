@@ -81,6 +81,7 @@ export function DeliveriesClient({
 }) {
   const [q, setQ] = useState("");
   const [codeFilter, setCodeFilter] = useState<string>("all");
+  const [ownerFilter, setOwnerFilter] = useState<string>("all");
 
   const [importTouch, setImportTouch] = useState(1);
   const [importBusy, setImportBusy] = useState(false);
@@ -127,6 +128,18 @@ export function DeliveriesClient({
     return [...c.entries()].sort((a, b) => b[1] - a[1]);
   }, [rows]);
 
+  // Owners present in the failures (unassigned leads fold to one bucket), so the
+  // dropdown only lists agents who actually have failed touches.
+  const UNASSIGNED = " unassigned";
+  const owners = useMemo(() => {
+    const c = new Map<string, number>();
+    for (const r of rows) {
+      const k = r.owner ?? UNASSIGNED;
+      c.set(k, (c.get(k) ?? 0) + 1);
+    }
+    return [...c.entries()].sort((a, b) => b[1] - a[1]);
+  }, [rows]);
+
   const undeliverable = rows.filter((r) => r.errorCode === "131026" || r.flaggedUndeliverable).length;
   const capped = rows.filter((r) => r.errorCode === "131049").length;
 
@@ -136,6 +149,7 @@ export function DeliveriesClient({
       if (codeFilter !== "all") {
         if (codeFilter === "none" ? r.errorCode != null : r.errorCode !== codeFilter) return false;
       }
+      if (ownerFilter !== "all" && (r.owner ?? UNASSIGNED) !== ownerFilter) return false;
       if (!term) return true;
       return (
         (r.candidateName ?? "").toLowerCase().includes(term) ||
@@ -143,7 +157,7 @@ export function DeliveriesClient({
         (r.owner ?? "").toLowerCase().includes(term)
       );
     });
-  }, [rows, q, codeFilter]);
+  }, [rows, q, codeFilter, ownerFilter]);
 
   function downloadCsv() {
     const head = ["Lead", "Phone", "Touch", "Stage", "Owner", "Layer", "Error code", "Meaning", "Flagged undeliverable", "When"];
@@ -305,6 +319,19 @@ export function DeliveriesClient({
           {codes.map(([c, n]) => (
             <option key={c} value={c}>
               {c === "none" ? "No code" : c} ({n})
+            </option>
+          ))}
+        </select>
+        <select
+          className="h-9 px-md rounded-lg border border-outline-variant bg-surface-container-lowest text-body-md outline-none focus:border-primary max-w-[220px]"
+          value={ownerFilter}
+          onChange={(e) => setOwnerFilter(e.target.value)}
+          aria-label="Filter by agent / owner"
+        >
+          <option value="all">All agents</option>
+          {owners.map(([o, n]) => (
+            <option key={o} value={o}>
+              {o === UNASSIGNED ? "Unassigned" : o} ({n})
             </option>
           ))}
         </select>
