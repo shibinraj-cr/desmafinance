@@ -294,11 +294,18 @@ export async function ingestInboundMessage(
 
     // Counters are updated only for a message we actually stored, so a redelivery
     // cannot inflate the unread badge or drag the session window forward.
+    const timestamps = advanceTimestamps(conversation, occurredAt, sessionExpiresAt);
     await prisma.waConversation.update({
       where: { id: conversation.id },
       data: {
         unreadCount: { increment: 1 },
-        ...advanceTimestamps(conversation, occurredAt, sessionExpiresAt),
+        ...timestamps,
+        // Only a message that is genuinely the NEWEST on the thread means nobody
+        // has answered. A replayed or backlogged message that lands behind an
+        // outbound reply must not resurrect the needs-reply flag — and the
+        // timestamp patch already encodes "was this the newest": it is empty
+        // when the message did not move the thread's clock forward.
+        ...(timestamps.lastInboundAt ? { awaitingReply: true } : {}),
       },
     });
 

@@ -2575,6 +2575,13 @@ model WaConversation {
   sessionExpiresAt DateTime?
   /// Inbound messages since a CRM user last opened the thread.
   unreadCount      Int       @default(0)
+  /// True when the newest message on the thread came from the CANDIDATE — i.e.
+  /// nobody has answered yet. Distinct from `unreadCount`, which only records
+  /// whether someone opened the tab; this is the question the inbox's flagship
+  /// filter asks. Denormalised because Prisma cannot compare `lastInboundAt` to
+  /// `lastMessageAt` in a `where`, and post-filtering a fetched page would break
+  /// pagination. Set on inbound ingest, cleared on outbound send.
+  awaitingReply    Boolean   @default(false)
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -2585,6 +2592,8 @@ model WaConversation {
   @@index([assignedToId, status])
   @@index([status, lastMessageAt])
   @@index([sessionExpiresAt])
+  /// The inbox's default landing query: unanswered threads, newest first.
+  @@index([awaitingReply, lastMessageAt])
 }
 
 /// One WhatsApp message, inbound or outbound.

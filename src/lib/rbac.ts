@@ -100,18 +100,20 @@ export function canSeePage(p: Permissions, href: string): boolean {
   if (ADMIN_RESTRICTED_PAGES.some((pg) => href === pg || href.startsWith(pg + "/"))) return false;
   // Self-service essentials everyone can see.
   if (ALWAYS_VISIBLE_PAGES.some((pg) => href === pg || href.startsWith(pg + "/"))) return true;
-  // CRM notifications, the personal Daily Report, and the Campaign Delivery
-  // report are visible to every CRM user — anyone who can reach the CRM Leads
-  // page — so they need no separate Role.pages grant (and never leak the CRM
-  // module to non-CRM users, who can't see /crm/leads). Each page itself
-  // authorises via getCrmAccess.
+  // CRM notifications, the personal Daily Report, the Campaign Delivery report
+  // and the WhatsApp Inbox are visible to every CRM user — anyone who can reach
+  // the CRM Leads page — so they need no separate Role.pages grant (and never
+  // leak the CRM module to non-CRM users, who can't see /crm/leads). Each page
+  // itself authorises via getCrmAccess.
   if (
     href === "/crm/notifications" ||
     href.startsWith("/crm/notifications/") ||
     href === "/crm/report" ||
     href.startsWith("/crm/report/") ||
     href === "/crm/deliveries" ||
-    href.startsWith("/crm/deliveries/")
+    href.startsWith("/crm/deliveries/") ||
+    href === "/crm/inbox" ||
+    href.startsWith("/crm/inbox/")
   ) {
     return p.pages.some((pg) => pg === "/crm/leads" || pg.startsWith("/crm/leads/"));
   }
