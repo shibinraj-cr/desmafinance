@@ -28,6 +28,7 @@ import { prisma } from "../prisma";
 import { normalizePhone, computeDedupeKey } from "../crm";
 import { recordLeadActivity } from "../crm-activity";
 import { resolveDefaultStatus } from "../crm-leads";
+import { logger } from "../logger";
 import {
   getSetting,
   WA_MIRROR_AUTOCREATE_KEY,
@@ -90,7 +91,14 @@ export type WaIngestSummary = {
   stored: number;
   duplicates: number;
   leadsCreated: number;
+  /** Unusable and never will be — no sendable number. Retrying cannot help. */
   skipped: number;
+  /**
+   * Storage genuinely failed. Kept apart from `skipped` because the two want
+   * opposite answers to the provider: a skip is final, a failure should be
+   * redelivered. The route turns a non-zero value here into a non-2xx.
+   */
+  failed: number;
 };
 
 /**
@@ -110,40 +118,77 @@ async function findLeadByPhone(phoneE164: string) {
 }
 
 /**
+ * Idempotency key for an auto-created inbound lead.
+ *
+ * `Lead.externalKey` is unique and exists precisely for "stable per-source-row
+ * key for idempotent external ingestion". Deriving it from the number makes lead
+ * creation race-safe at the DATABASE, which matters because `phoneE164` is only
+ * a plain index here — deliberately, since this CRM flags duplicates rather than
+ * rejecting them.
+ */
+export function waInboundExternalKey(phoneE164: string): string {
+  return `wa:${phoneE164}`;
+}
+
+/**
  * Create a lead for a number that messaged us out of the blue.
  *
  * Named from the number itself — we genuinely do not know who this is yet, and a
  * placeholder that looks like a name ("WhatsApp Lead") reads worse in a list than
  * the number a BDE can actually call. Returns null when the CRM has no statuses
  * configured, since a lead without a stage cannot exist.
+ *
+ * Race-safe by construction. Two messages from an unseen number can be delivered
+ * as two concurrent requests, and a plain create would then have both pass the
+ * "does a lead exist" check and both insert — one candidate, two leads, doubled
+ * source-funnel counts, and the conversation attached to only one of them. So
+ * this uses the same idiom crm-sheet-ingest.ts documents as "race-safe against
+ * the unique externalKey": insert with skipDuplicates, then read back by that
+ * key. The loser of the race gets the winner's lead instead of a second one.
  */
-async function createInboundLead(phoneE164: string): Promise<{ id: string; assignedToId: string | null } | null> {
+async function createInboundLead(
+  phoneE164: string,
+): Promise<{ lead: { id: string; assignedToId: string | null }; created: boolean } | null> {
   const [defStatus, source] = await Promise.all([
     resolveDefaultStatus(),
     prisma.leadPulseSource.findUnique({ where: { code: WA_INBOUND_SOURCE_CODE }, select: { id: true } }),
   ]);
   if (!defStatus) return null;
 
-  const lead = await prisma.lead.create({
-    data: {
-      candidateName: phoneE164,
-      phone: phoneE164,
-      phoneE164,
-      dedupeKey: computeDedupeKey(null, phoneE164),
-      statusId: defStatus.id,
-      sourceId: source?.id ?? null,
-    },
+  const externalKey = waInboundExternalKey(phoneE164);
+  const inserted = await prisma.lead.createMany({
+    data: [
+      {
+        candidateName: phoneE164,
+        phone: phoneE164,
+        phoneE164,
+        dedupeKey: computeDedupeKey(null, phoneE164),
+        externalKey,
+        statusId: defStatus.id,
+        sourceId: source?.id ?? null,
+      },
+    ],
+    skipDuplicates: true,
+  });
+
+  const lead = await prisma.lead.findUnique({
+    where: { externalKey },
     select: { id: true, assignedToId: true },
   });
+  if (!lead) return null;
 
-  await recordLeadActivity({
-    leadId: lead.id,
-    type: "LEAD_CREATED",
-    summary: "Created from an inbound WhatsApp message",
-    metadata: { channel: "whatsapp", phoneE164 },
-  });
+  // Only the request that actually inserted writes the activity, so a lost race
+  // does not put a second "Created from…" row on one lead's timeline.
+  if (inserted.count > 0) {
+    await recordLeadActivity({
+      leadId: lead.id,
+      type: "LEAD_CREATED",
+      summary: "Created from an inbound WhatsApp message",
+      metadata: { channel: "whatsapp", phoneE164 },
+    });
+  }
 
-  return lead;
+  return { lead, created: inserted.count > 0 };
 }
 
 /**
@@ -187,8 +232,11 @@ export async function ingestInboundMessage(
 
     let leadCreated = false;
     if (!lead && config.autoCreateLeads) {
-      lead = await createInboundLead(phoneE164);
-      leadCreated = !!lead;
+      const result = await createInboundLead(phoneE164);
+      lead = result?.lead ?? null;
+      // False when we lost the create race and adopted the winner's lead — the
+      // summary counts leads that came into existence, not lookups that succeeded.
+      leadCreated = result?.created ?? false;
     }
 
     const occurredAt = msg.occurredAt ?? new Date();
@@ -257,9 +305,18 @@ export async function ingestInboundMessage(
     // An inbound message is real activity: it must bump the lead out of the
     // stale-lead bucket. Deliberately no LeadActivity row per message — the
     // timeline is a summary of what was DONE, and a chatty thread would bury it.
+    //
+    // Forward-only, for the same reason the conversation's clock is: this field
+    // backs the leads list's "Recent activity" sort, every other writer stamps
+    // `new Date()`, and so it has always been monotonic. A replayed or backlogged
+    // message carrying an old `occurredAt` must not drag a lead backwards past
+    // newer, genuine work.
     if (conversation.leadId) {
       await prisma.lead
-        .update({ where: { id: conversation.leadId }, data: { lastActivityAt: occurredAt } })
+        .updateMany({
+          where: { id: conversation.leadId, lastActivityAt: { lt: occurredAt } },
+          data: { lastActivityAt: occurredAt },
+        })
         .catch(() => undefined);
     }
 
@@ -271,7 +328,16 @@ export async function ingestInboundMessage(
       leadCreated,
     };
   } catch (e) {
-    console.error("[wa-mirror] ingestInboundMessage failed:", e);
+    // Structured, not console.error — this is the one outcome where a message we
+    // accepted did NOT get stored, so it has to be findable in the logs. The
+    // caller turns this into a non-2xx so the provider redelivers; answering 200
+    // here would quietly drop the message, which is the one thing this module
+    // promises never to do.
+    logger.error("wa_mirror_ingest_failed", {
+      phoneE164,
+      providerMessageId: msg.providerMessageId,
+      message: e instanceof Error ? e.message : String(e),
+    });
     return { ok: false, reason: "error" };
   }
 }
@@ -311,12 +377,15 @@ export async function ingestInboundMessages(
     duplicates: 0,
     leadsCreated: 0,
     skipped: 0,
+    failed: 0,
   };
 
   for (const msg of messages) {
     const outcome = await ingestInboundMessage(msg, config);
-    if (!outcome.ok) summary.skipped++;
-    else if (outcome.action === "duplicate") summary.duplicates++;
+    if (!outcome.ok) {
+      if (outcome.reason === "error") summary.failed++;
+      else summary.skipped++;
+    } else if (outcome.action === "duplicate") summary.duplicates++;
     else {
       summary.stored++;
       if (outcome.leadCreated) summary.leadsCreated++;

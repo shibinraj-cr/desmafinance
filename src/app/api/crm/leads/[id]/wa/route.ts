@@ -41,9 +41,18 @@ export const GET = withApiHandler(async (_req: Request, { params }: { params: { 
   // A thread is found by its link first and by number second: a conversation
   // that started before the lead existed is linked on the next inbound message,
   // but the number match makes it readable immediately.
+  //
+  // The number match is restricted to UNLINKED threads, which matters because a
+  // number legitimately maps to several leads here — re-enrollment copies
+  // phoneE164 onto a brand-new lead for the second service, and the mirror binds
+  // the thread to exactly one of them. Without the `leadId: null` guard, opening
+  // the other lead would show a conversation that belongs to a different record.
   const conversation = await prisma.waConversation.findFirst({
     where: {
-      OR: [{ leadId: lead.id }, ...(lead.phoneE164 ? [{ phoneE164: lead.phoneE164 }] : [])],
+      OR: [
+        { leadId: lead.id },
+        ...(lead.phoneE164 ? [{ phoneE164: lead.phoneE164, leadId: null }] : []),
+      ],
     },
     orderBy: { lastMessageAt: "desc" },
     select: {
@@ -82,9 +91,16 @@ export const GET = withApiHandler(async (_req: Request, { params }: { params: { 
     return NextResponse.json({ conversation: null, canReply });
   }
 
-  // Opening the thread is what clears the badge. Best-effort — a failed counter
-  // reset must not cost the user the messages they came to read.
-  if (conversation.unreadCount > 0) await markConversationRead(conversation.id);
+  // Opening the thread clears the badge — but only for someone who owns the
+  // work. `canViewLeads` is granted to every BDE, supervisor and admin and is
+  // NOT scoped by assignee, so gating the write on it would let any colleague
+  // browsing the lead (or a link prefetch, or a re-render) silently clear the
+  // assigned consultant's unread count. `unreadCount` is a single shared column,
+  // not per-user, so that loss is unrecoverable.
+  //
+  // Best-effort — a failed counter reset must not cost the user the messages
+  // they came to read.
+  if (conversation.unreadCount > 0 && canReply) await markConversationRead(conversation.id);
 
   return NextResponse.json({
     conversation: {

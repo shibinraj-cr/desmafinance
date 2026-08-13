@@ -28,6 +28,22 @@ describe("parseWaTimestamp", () => {
   it("rejects a pre-WhatsApp date rather than sorting it to the top of a thread forever", () => {
     expect(parseWaTimestamp("1970-01-01T00:00:00.000Z")).toBeNull();
   });
+  it("applies the same plausibility bounds to NUMERIC epochs, not just ISO strings", () => {
+    // 9 digits = the 1970s-90s; 11 digits = the year 2500. Both match the digit
+    // pattern while being obvious misparses.
+    expect(parseWaTimestamp("123456789")).toBeNull();
+    expect(parseWaTimestamp("99999999999")).toBeNull();
+    // 12-digit ms = 1973.
+    expect(parseWaTimestamp("100000000000")).toBeNull();
+  });
+  it("rejects a future timestamp beyond ordinary clock skew", () => {
+    const farFuture = Math.floor((Date.now() + 90 * 24 * 3600 * 1000) / 1000);
+    expect(parseWaTimestamp(String(farFuture))).toBeNull();
+  });
+  it("still accepts a timestamp inside the clock-skew grace window", () => {
+    const slightlyAhead = Math.floor((Date.now() + 60_000) / 1000);
+    expect(parseWaTimestamp(String(slightlyAhead))).not.toBeNull();
+  });
   it("is null on nothing usable", () => {
     expect(parseWaTimestamp(null)).toBeNull();
     expect(parseWaTimestamp("")).toBeNull();
@@ -133,6 +149,27 @@ describe("extractInboundMessages", () => {
 
   it("does not mistake a flat status callback for a message", () => {
     expect(extractInboundMessages({ statuses: [{ status: "read" }] })).toEqual([]);
+  });
+
+  // The sibling parser (extractDeliveryEvents) accepts four status shapes; only
+  // one of them carries a top-level `statuses` key. The other three reach this
+  // parser looking like messages, and mirroring them would put empty bubbles in
+  // the thread for data the delivery-status hook already owns.
+  it("rejects a FLAT status callback that has no statuses key", () => {
+    expect(extractInboundMessages({ phone: "919876543210", status: "delivered" })).toEqual([]);
+  });
+  it("rejects a status wrapped in `data`", () => {
+    expect(extractInboundMessages({ data: { phone: "919876543210", status: "failed", error_code: "131026" } })).toEqual([]);
+  });
+  it("rejects statuses delivered under a `messages` array", () => {
+    expect(extractInboundMessages({ messages: [{ wa_id: "919876543210", message_status: "read" }] })).toEqual([]);
+  });
+  it("still keeps a real message whose TEXT is the word 'read'", () => {
+    const msgs = extractInboundMessages(
+      metaEnvelope([{ from: "919876543210", id: "wamid.R", type: "text", text: { body: "read" } }]),
+    );
+    expect(msgs).toHaveLength(1);
+    expect(msgs[0].body).toBe("read");
   });
 
   it("drops a message with no sender — there is no thread to attach it to", () => {

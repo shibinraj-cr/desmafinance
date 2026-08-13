@@ -85,20 +85,28 @@ export function parseWaTimestamp(raw: unknown): Date | null {
   const s = String(raw).trim();
   if (!s) return null;
 
-  if (/^\d{9,11}$/.test(s)) {
-    const d = new Date(Number(s) * 1000);
-    return Number.isNaN(d.getTime()) ? null : d;
-  }
+  if (/^\d{9,11}$/.test(s)) return plausible(new Date(Number(s) * 1000));
   // Milliseconds, in case a relay normalises for us.
-  if (/^\d{12,14}$/.test(s)) {
-    const d = new Date(Number(s));
-    return Number.isNaN(d.getTime()) ? null : d;
-  }
+  if (/^\d{12,14}$/.test(s)) return plausible(new Date(Number(s)));
 
-  const parsed = new Date(s);
-  if (Number.isNaN(parsed.getTime())) return null;
-  // A date before WhatsApp existed is a parse artefact, not a message.
-  return parsed.getUTCFullYear() >= 2009 ? parsed : null;
+  return plausible(new Date(s));
+}
+
+/**
+ * WhatsApp launched in 2009 and a message cannot be from the future, so anything
+ * outside those bounds is a misparse rather than a timestamp — a 9-digit epoch
+ * (the 1970s-90s) or an 11-digit one (the year 2500) both satisfy the digit
+ * patterns above while being obvious nonsense. Rejecting rather than guessing
+ * matters because `occurredAt` drives thread ordering AND the 24-hour reply
+ * window: one bad value either pins a message to the top of the thread forever
+ * or holds a closed session open.
+ */
+function plausible(d: Date): Date | null {
+  if (Number.isNaN(d.getTime())) return null;
+  if (d.getUTCFullYear() < 2009) return null;
+  // A day's grace absorbs ordinary clock skew between us and the provider.
+  if (d.getTime() > Date.now() + 24 * 60 * 60 * 1000) return null;
+  return d;
 }
 
 export function normalizeMessageType(raw: unknown): WaMessageType {
@@ -209,5 +217,29 @@ export function extractInboundMessages(body: unknown): WaInboundMessage[] {
   // wearing a different hat, which the statuses key gives away.
   if (raw.length === 0 && !("statuses" in b)) raw.push(b);
 
-  return raw.map(readMessage).filter((m) => !!m.from);
+  return raw.filter((r) => !isStatusCallback(r)).map(readMessage).filter((m) => !!m.from);
+}
+
+/**
+ * Is this object a DELIVERY STATUS rather than a message?
+ *
+ * The top-level `statuses` key only catches Meta's own shape. The sibling parser
+ * (extractDeliveryEvents in crm-remarketing.ts) proves three more are in use — a
+ * flat `{phone, status, …}`, a `{data:{…}}` wrapper, and a top-level `messages[]`
+ * of statuses — and all three slip past a key check. Left unfiltered they are
+ * read as inbound messages and mirrored into the thread as empty bubbles, which
+ * is worse than dropping them: the delivery-status hook already owns this data.
+ *
+ * The discriminator is a status verb with no message content. Requiring BOTH
+ * keeps a genuine message whose text happens to be the word "read" from being
+ * mistaken for a status.
+ */
+const STATUS_VERBS = new Set(["sent", "delivered", "read", "failed", "deleted", "warning"]);
+
+function isStatusCallback(o: Record<string, unknown>): boolean {
+  const status = pick(o, "status", "message_status", "messageStatus", "delivery_status");
+  if (!status || !STATUS_VERBS.has(status.toLowerCase())) return false;
+  // A real message always carries a type or a body; a status carries neither.
+  const hasContent = !!extractBody(o, normalizeMessageType(o.type)) || !!asObject(o.text) || !!asObject(o.image);
+  return !hasContent;
 }

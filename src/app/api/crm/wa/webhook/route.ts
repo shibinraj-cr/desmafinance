@@ -29,11 +29,15 @@ export const maxDuration = 30;
  * anonymously. Its own secret rather than the re-marketing one, so rotating
  * either cannot silently break the other.
  *
- * Always answers 200 once authenticated. A sender that sees a non-2xx will
- * retry the batch and, on repeated failure, disable the subscription outright —
- * losing far more than the message we could not parse. Nothing is lost by
- * answering 200: a message that failed to store is logged, and a genuinely
- * re-delivered one collides on `providerMessageId` rather than duplicating.
+ * Answers 200 for anything we understood, INCLUDING a batch we could not parse:
+ * a sender that sees a non-2xx retries and, on repeated failure, disables the
+ * subscription outright — losing far more than the one payload we could not read.
+ *
+ * The single exception is a message that parsed but could not be STORED (a
+ * database blip). That gets a 502, because the whole point of the mirror is
+ * never to lose a message and redelivery is the only thing that can save it.
+ * A redelivery is safe: it collides on `providerMessageId` rather than
+ * duplicating.
  */
 async function handle(req: Request): Promise<NextResponse> {
   const secret = (await getSetting(WA_MIRROR_SECRET_KEY).catch(() => null))?.trim() || null;
@@ -48,18 +52,30 @@ async function handle(req: Request): Promise<NextResponse> {
   const config = await getWaMirrorConfig();
   if (!config.enabled) return NextResponse.json({ ok: true, skipped: "mirror_disabled" });
 
+  // Body first, query string second. A GET-with-query-params relay is a shape
+  // this team already configures — both pre-existing Wabis hooks read fields
+  // from the body OR the query for exactly that reason — and a bare test curl
+  // is the fastest way to prove the endpoint is wired at all.
   const body = await req.json().catch(() => null);
-  const messages = extractInboundMessages(body);
+  let messages = extractInboundMessages(body);
+  if (messages.length === 0 && [...url.searchParams.keys()].some((k) => k !== "key")) {
+    messages = extractInboundMessages(Object.fromEntries(url.searchParams));
+  }
 
   if (messages.length === 0) {
     // Most likely a status-only batch, which belongs to the delivery-status
-    // hook. Logged at debug volume so an unrecognised envelope is diagnosable
-    // without turning normal traffic into noise.
+    // hook. Logged so an unrecognised envelope is diagnosable, without echoing
+    // the payload itself — these carry candidate phone numbers.
     logger.info("wa_webhook_no_messages", { keys: body && typeof body === "object" ? Object.keys(body) : null });
     return NextResponse.json({ ok: true, received: 0 });
   }
 
   const summary = await ingestInboundMessages(messages, config);
+
+  // Only a genuine storage failure earns a retry — see the note above.
+  if (summary.failed > 0) {
+    return NextResponse.json({ ok: false, ...summary }, { status: 502 });
+  }
   return NextResponse.json({ ok: true, ...summary });
 }
 
