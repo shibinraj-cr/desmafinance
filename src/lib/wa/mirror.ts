@@ -35,7 +35,7 @@ import {
   WA_MIRROR_ENABLED_KEY,
   WA_PROVIDER_KEY,
 } from "../app-settings";
-import type { WaInboundMessage } from "./inbound";
+import { isOptOutMessage, type WaInboundMessage } from "./inbound";
 import type { WaProviderKey } from "./provider";
 
 /** Source master an auto-created lead is attributed to (see prisma/seed-lead-pulse.ts). */
@@ -309,6 +309,14 @@ export async function ingestInboundMessage(
       },
     });
 
+    // An opt-out is the one inbound message that changes the lead itself. It is
+    // recorded on the timeline BECAUSE it is rare and consequential — the exact
+    // opposite of the ordinary chatter deliberately kept off it — and every
+    // future broadcast then skips this candidate (see skipReasonFor).
+    if (conversation.leadId && isOptOutMessage(msg.body)) {
+      await optOutLead(conversation.leadId, msg.body ?? "", occurredAt);
+    }
+
     // An inbound message is real activity: it must bump the lead out of the
     // stale-lead bucket. Deliberately no LeadActivity row per message — the
     // timeline is a summary of what was DONE, and a chatty thread would bury it.
@@ -400,6 +408,37 @@ export async function ingestInboundMessages(
   }
 
   return summary;
+}
+
+/**
+ * Record that a candidate asked to stop receiving marketing.
+ *
+ * Only stamped once — `whatsappOptedOutAt: null` in the where — so a second
+ * "STOP" does not keep rewriting the date or pile duplicate rows onto the
+ * timeline. Best-effort like the rest of this module: failing to record an
+ * opt-out must not cost us the message, though it is logged loudly because the
+ * consequence of losing one is messaging someone who asked us not to.
+ */
+async function optOutLead(leadId: string, text: string, occurredAt: Date): Promise<void> {
+  try {
+    const updated = await prisma.lead.updateMany({
+      where: { id: leadId, whatsappOptedOutAt: null },
+      data: { whatsappOptedOutAt: occurredAt },
+    });
+    if (updated.count === 0) return;
+
+    await recordLeadActivity({
+      leadId,
+      type: "FIELD_UPDATED",
+      summary: "Opted out of WhatsApp marketing",
+      metadata: { channel: "whatsapp", field: "whatsappOptedOutAt", text: text.slice(0, 200) },
+    });
+  } catch (e) {
+    logger.error("wa_mirror_optout_failed", {
+      leadId,
+      message: e instanceof Error ? e.message : String(e),
+    });
+  }
 }
 
 /** Clear the unread badge when a CRM user opens the thread. */

@@ -93,6 +93,7 @@ model User {
   wabisEndpoints         WabisWebhookEndpoint[] @relation("WabisEndpointConsultant")
   waConversations        WaConversation[]     @relation("WaConversationAssignee")
   waMessagesSent         WaMessage[]          @relation("WaMessageSender")
+  waBroadcasts           WaBroadcast[]        @relation("WaBroadcastCreatedBy")
 
   // Operations relations
   opsTemplatesCreated    ProcessTemplate[]    @relation("OpsTemplateCreatedBy")
@@ -2239,6 +2240,13 @@ model Lead {
   remarketingCampaigns CrmRemarketingCampaign[]
   opsProjects OpsProject[] @relation("OpsProjectLead")
   waConversations WaConversation[]
+  waBroadcastRecipients WaBroadcastRecipient[]
+
+  /// When the candidate asked to stop receiving marketing WhatsApp ("STOP",
+  /// "unsubscribe"). Set by the conversation mirror on an opt-out keyword and
+  /// honoured by every broadcast. Distinct from `whatsappUndeliverableAt`, which
+  /// means the number does not work — this one means they asked us not to.
+  whatsappOptedOutAt DateTime?
 
   @@index([assignedToId])
   @@index([assignedAt])
@@ -2657,6 +2665,108 @@ model WaMessage {
   @@index([conversationId, occurredAt])
   @@index([direction, waStatus])
   @@index([occurredAt])
+}
+
+/// A marketing send to a segment of leads — the "do marketing inside the CRM"
+/// half of the WhatsApp module.
+///
+/// Recipients are MATERIALISED when the broadcast is queued, never recomputed at
+/// send time. A segment is a live query over leads, so recomputing mid-send
+/// would let the audience shift underneath a partly-delivered campaign: someone
+/// who changed stage between chunk 1 and chunk 7 would silently be added or
+/// dropped, and the report could never be reconciled afterwards. Freezing the
+/// list makes a broadcast an auditable fact rather than an approximation.
+model WaBroadcast {
+  id   String @id @default(cuid())
+  name String
+
+  /// The lead filter this audience was built from, in LeadFilterParams shape, so
+  /// it is fed straight to buildLeadWhere. Stored for provenance — the recipient
+  /// rows, not this, are what actually gets sent.
+  segment Json
+
+  /// Approved template name, optionally `name:language` (a WABA can hold the
+  /// same template in several languages and Meta treats them as distinct).
+  templateName String
+  /// Template variable -> lead merge token, e.g. {"1": "{name}"}. Rendered per
+  /// recipient when the audience is materialised.
+  variableMap  Json?
+
+  /// 'draft' | 'scheduled' | 'sending' | 'sent' | 'cancelled' | 'failed'
+  status      String    @default("draft")
+  /// When the drain may begin. Null means "as soon as it is queued".
+  scheduledAt DateTime?
+  startedAt   DateTime?
+  completedAt DateTime?
+
+  /// Denormalised counters so the list does not aggregate over every recipient.
+  totalRecipients Int @default(0)
+  sentCount       Int @default(0)
+  failedCount     Int @default(0)
+  skippedCount    Int @default(0)
+
+  createdById String?
+  createdBy   User?   @relation("WaBroadcastCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  recipients WaBroadcastRecipient[]
+
+  @@index([status, scheduledAt])
+  @@index([createdAt])
+  @@index([createdById])
+}
+
+/// One lead's place in one broadcast.
+///
+/// `@@unique([broadcastId, leadId])` is the guard that matters: the drain is
+/// chunked and resumable, so it WILL run again over a partly-sent broadcast, and
+/// nothing else stops a candidate receiving the same marketing message twice.
+model WaBroadcastRecipient {
+  id          String      @id @default(cuid())
+  broadcastId String
+  broadcast   WaBroadcast @relation(fields: [broadcastId], references: [id], onDelete: Cascade)
+
+  /// The lead this was built from. Non-null in practice — a segment is a lead
+  /// query — but SetNull so a deleted lead does not erase the send record.
+  leadId String?
+  lead   Lead?   @relation(fields: [leadId], references: [id], onDelete: SetNull)
+  /// Captured at materialisation, so the record survives the lead's number
+  /// being corrected afterwards.
+  phoneE164 String
+
+  /// Merge values rendered for THIS recipient at materialisation time.
+  renderedParams Json?
+
+  /// 'pending' | 'sent' | 'failed' | 'skipped'. `skipped` is a decision we made
+  /// (opted out, no number, undeliverable) and is never retried; `failed` is the
+  /// provider's answer.
+  status     String  @default("pending")
+  skipReason String?
+
+  /// Meta's `wamid`, when the transport returns one. Unique so a re-run cannot
+  /// record the same send twice, and it is what a later delivery-status webhook
+  /// matches on — exactly, rather than by phone and timing.
+  providerMessageId String? @unique
+
+  /// Async Meta state, arriving after we already got a 200 from the send.
+  waStatus       String?
+  waErrorCode    String?
+  waErrorMessage String?
+  readAt         DateTime?
+
+  attempts Int       @default(0)
+  sentAt   DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  /// One send per lead per broadcast — see the model note.
+  @@unique([broadcastId, leadId])
+  /// The drain's own query: the next pending recipients of one broadcast.
+  @@index([broadcastId, status])
+  @@index([phoneE164])
+  @@index([waStatus])
 }
 
 // ──────────────────────────────────────────────────────────────────────

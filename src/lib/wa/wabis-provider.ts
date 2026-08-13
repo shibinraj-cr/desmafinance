@@ -31,7 +31,21 @@ import {
   type WhatsAppProvider,
 } from "./provider";
 
-const SUPPORTED: ReadonlySet<WaCapability> = new Set<WaCapability>(["sendTemplate"]);
+/**
+ * Nothing, from the inbox's point of view — and that is the honest answer.
+ *
+ * `sendTemplate` means "address an approved template BY NAME". Wabis cannot: a
+ * workflow URL is the address, one URL per template, and no mapping from a CRM
+ * template to a workflow exists (WabisWebhookEndpoint carries `lead_assigned`
+ * and `study_abroad`, both bound to a consultant, neither to an inbox reply).
+ * Claiming support here would let the composer offer a template picker whose
+ * every send fails — which is precisely what it did before this was corrected.
+ *
+ * The method below still works for the legacy callers that resolve a workflow
+ * URL themselves and pass it in; `supports()` deliberately does not cover that
+ * path, because no caller can discover such a URL from a template name.
+ */
+const SUPPORTED: ReadonlySet<WaCapability> = new Set<WaCapability>();
 
 export const wabisProvider: WhatsAppProvider = {
   key: "wabis",

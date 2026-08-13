@@ -32,9 +32,13 @@ export const GET = withApiHandler(async (req: Request) => {
   if (!access.canViewLeads) throw forbidden();
 
   const sp = new URL(req.url).searchParams;
-  const filter = normalizeInboxFilter(sp.get("filter"));
+  const filter = normalizeInboxFilter(sp.get("filter"), { isBde: access.isBde });
   const search = sp.get("q");
-  const take = Math.min(Number(sp.get("limit")) || PAGE_SIZE, MAX_PAGE_SIZE);
+  // Floored and floored-at-1: Prisma requires an Int, and a negative `take`
+  // means "page backwards", which the hasMore/slice arithmetic below cannot
+  // express — an unvalidated `?limit=-5` would silently return the wrong page.
+  const requested = Math.floor(Number(sp.get("limit")));
+  const take = Number.isFinite(requested) && requested > 0 ? Math.min(requested, MAX_PAGE_SIZE) : PAGE_SIZE;
   const cursor = sp.get("cursor");
 
   const where = buildInboxWhere(filter, { userId, isBde: access.isBde }, search);
@@ -69,13 +73,15 @@ export const GET = withApiHandler(async (req: Request) => {
   const hasMore = rows.length > take;
   const page = hasMore ? rows.slice(0, take) : rows;
 
-  // Counts for the filter chips. Deliberately unfiltered by the current filter —
-  // the point of a badge is to tell you what is waiting in the tab you are NOT
-  // looking at.
+  // Counts for the filter chips. Deliberately independent of the CURRENT filter —
+  // the point of a badge is to say what is waiting in the tab you are not looking
+  // at — but they must exclude closed threads exactly as the lists do, or a badge
+  // will promise work that clicking through cannot show.
+  const open = { status: { not: "closed" } } as const;
   const [needsReply, unread, unassigned] = await Promise.all([
-    prisma.waConversation.count({ where: { awaitingReply: true } }),
-    prisma.waConversation.count({ where: { unreadCount: { gt: 0 } } }),
-    prisma.waConversation.count({ where: { assignedToId: null } }),
+    prisma.waConversation.count({ where: { ...open, awaitingReply: true } }),
+    prisma.waConversation.count({ where: { ...open, unreadCount: { gt: 0 } } }),
+    prisma.waConversation.count({ where: { ...open, assignedToId: null } }),
   ]);
 
   return NextResponse.json({

@@ -15,12 +15,21 @@ import type { Prisma } from "@prisma/client";
 import { isSessionOpen } from "./mirror";
 
 /** Which slice of the inbox to show. */
-export const WA_INBOX_FILTERS = ["mine", "unassigned", "unread", "needs_reply", "all"] as const;
+export const WA_INBOX_FILTERS = ["mine", "unassigned", "unread", "needs_reply", "all", "closed"] as const;
 export type WaInboxFilter = (typeof WA_INBOX_FILTERS)[number];
 
-export function normalizeInboxFilter(raw: string | null | undefined): WaInboxFilter {
+/**
+ * Resolve the landing filter.
+ *
+ * Takes the scope, because the default is role-dependent: a BDE opens on their
+ * own threads, while an admin or supervisor opening on "mine" would see an empty
+ * inbox — they own no conversations. Same shape as resolveAssigneeFilter on the
+ * leads list, where an explicit choice always wins over the role default.
+ */
+export function normalizeInboxFilter(raw: string | null | undefined, scope?: { isBde: boolean }): WaInboxFilter {
   const v = (raw ?? "").trim();
-  return (WA_INBOX_FILTERS as readonly string[]).includes(v) ? (v as WaInboxFilter) : "mine";
+  if ((WA_INBOX_FILTERS as readonly string[]).includes(v)) return v as WaInboxFilter;
+  return scope?.isBde ? "mine" : "needs_reply";
 }
 
 export type InboxScope = {
@@ -28,6 +37,11 @@ export type InboxScope = {
   /** A BDE defaults to their own threads; everyone else defaults to all. */
   isBde: boolean;
 };
+
+/** The `status` constraint a filter implies — exported so the chip counts agree with the list. */
+export function inboxStatusWhere(filter: WaInboxFilter): Prisma.WaConversationWhereInput {
+  return filter === "closed" ? { status: "closed" } : { status: { not: "closed" } };
+}
 
 /**
  * Build the `where` for the conversation list.
@@ -46,7 +60,9 @@ export type InboxScope = {
  */
 export function buildInboxWhere(filter: WaInboxFilter, scope: InboxScope, search?: string | null): Prisma.WaConversationWhereInput {
   const where: Prisma.WaConversationWhereInput = {};
-  const and: Prisma.WaConversationWhereInput[] = [];
+  // Closed threads are hidden from every working view — otherwise the close
+  // button changes nothing the consultant can see.
+  const and: Prisma.WaConversationWhereInput[] = [inboxStatusWhere(filter)];
 
   switch (filter) {
     case "mine":
@@ -62,6 +78,7 @@ export function buildInboxWhere(filter: WaInboxFilter, scope: InboxScope, search
       and.push({ awaitingReply: true });
       break;
     case "all":
+    case "closed":
       break;
   }
 

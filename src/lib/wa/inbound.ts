@@ -59,6 +59,33 @@ export type WaMessageType = (typeof WA_MESSAGE_TYPES)[number];
 
 const KNOWN_TYPES = new Set<string>(WA_MESSAGE_TYPES);
 
+/**
+ * Words that mean "stop messaging me".
+ *
+ * Deliberately matched as the WHOLE message, trimmed, not as a substring: "stop
+ * sending me the wrong course details" is a complaint to answer, not an opt-out,
+ * and treating it as one would silently drop a live candidate out of every
+ * future campaign. WhatsApp itself surfaces these as one-tap replies, so the
+ * exact-match case is the one that actually occurs.
+ */
+const OPT_OUT_WORDS: ReadonlySet<string> = new Set([
+  "stop",
+  "unsubscribe",
+  "opt out",
+  "optout",
+  "remove me",
+  "do not message",
+  "dont message",
+  "don't message",
+]);
+
+/** Is this message the candidate asking to be left alone? */
+export function isOptOutMessage(text: string | null | undefined): boolean {
+  const t = (text ?? "").trim().toLowerCase().replace(/[.!]+$/, "");
+  if (!t) return false;
+  return OPT_OUT_WORDS.has(t);
+}
+
 /** Read a string-ish field under any of several names. */
 function pick(o: Record<string, unknown>, ...keys: string[]): string | null {
   for (const k of keys) {

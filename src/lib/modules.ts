@@ -232,6 +232,14 @@ export const MODULES: AppModule[] = [
         group: "TOOLS",
       },
       {
+        // CRM-admin only in practice: the page enforces canBulkEmail, the same
+        // authority as sending a bulk email to a segment.
+        href: "/crm/broadcasts",
+        label: "WhatsApp Broadcasts",
+        icon: "campaign",
+        group: "TOOLS",
+      },
+      {
         // Not adminOnly: any CRM user sees which re-marketing touches failed to
         // reach the lead (bad number / frequency cap). Page enforces canViewLeads.
         href: "/crm/deliveries",

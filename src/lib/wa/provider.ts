@@ -24,7 +24,17 @@
 /** Which transport is carrying WhatsApp traffic. Stored on every WaMessage. */
 export type WaProviderKey = "wabis" | "cloud";
 
-/** Free text is only legal inside the 24-hour window; templates always work. */
+/**
+ * What a transport can actually do.
+ *
+ * `sendTemplate` specifically means "address an approved template BY NAME".
+ * That distinction is load-bearing: Wabis can deliver a template only via a
+ * pre-built workflow URL, so it cannot answer "send template X to this number"
+ * and must report false — even though its `sendTemplate` method works for a
+ * caller that already resolved a URL. A capability that meant "the method
+ * exists" would be useless to the composer, which needs to know whether a
+ * template picker can work at all.
+ */
 export type WaCapability = "sendTemplate" | "sendText" | "fetchMedia" | "listTemplates";
 
 /**

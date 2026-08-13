@@ -32,47 +32,68 @@ function access(over: Partial<CrmAccess> = {}): CrmAccess {
 
 describe("normalizeInboxFilter", () => {
   it("accepts every declared filter", () => {
-    for (const f of WA_INBOX_FILTERS) expect(normalizeInboxFilter(f)).toBe(f);
+    for (const f of WA_INBOX_FILTERS) expect(normalizeInboxFilter(f, { isBde: true })).toBe(f);
   });
-  it("falls back to 'mine' on junk or absence", () => {
-    expect(normalizeInboxFilter(null)).toBe("mine");
-    expect(normalizeInboxFilter("")).toBe("mine");
-    expect(normalizeInboxFilter("../../etc/passwd")).toBe("mine");
+
+  it("lands a BDE on their own threads", () => {
+    expect(normalizeInboxFilter(null, { isBde: true })).toBe("mine");
+    expect(normalizeInboxFilter("../../etc/passwd", { isBde: true })).toBe("mine");
+  });
+
+  // An admin or supervisor owns no conversations, so defaulting them to "mine"
+  // would open the inbox on an empty list.
+  it("lands a non-BDE on the work that needs answering", () => {
+    expect(normalizeInboxFilter(null, { isBde: false })).toBe("needs_reply");
+    expect(normalizeInboxFilter("", { isBde: false })).toBe("needs_reply");
+  });
+
+  it("an explicit choice always beats the role default", () => {
+    expect(normalizeInboxFilter("all", { isBde: true })).toBe("all");
   });
 });
 
 describe("buildInboxWhere", () => {
   const scope = { userId: "u1", isBde: true };
+  const OPEN = { status: { not: "closed" } };
 
   it("scopes 'mine' to the caller", () => {
-    expect(buildInboxWhere("mine", scope)).toEqual({ AND: [{ assignedToId: "u1" }] });
+    expect(buildInboxWhere("mine", scope)).toEqual({ AND: [OPEN, { assignedToId: "u1" }] });
   });
   it("finds the unassigned queue", () => {
-    expect(buildInboxWhere("unassigned", scope)).toEqual({ AND: [{ assignedToId: null }] });
+    expect(buildInboxWhere("unassigned", scope)).toEqual({ AND: [OPEN, { assignedToId: null }] });
   });
   it("reads the maintained flag for needs-reply, not a column comparison", () => {
-    expect(buildInboxWhere("needs_reply", scope)).toEqual({ AND: [{ awaitingReply: true }] });
+    expect(buildInboxWhere("needs_reply", scope)).toEqual({ AND: [OPEN, { awaitingReply: true }] });
   });
   it("filters unread on the counter", () => {
-    expect(buildInboxWhere("unread", scope)).toEqual({ AND: [{ unreadCount: { gt: 0 } }] });
+    expect(buildInboxWhere("unread", scope)).toEqual({ AND: [OPEN, { unreadCount: { gt: 0 } }] });
   });
-  it("places no constraint on 'all'", () => {
-    expect(buildInboxWhere("all", scope)).toEqual({});
+
+  // Closing is the only way to get a thread out of the way, so a working filter
+  // that ignores `status` makes the button do nothing.
+  it("hides closed threads from EVERY working filter", () => {
+    for (const f of ["mine", "unassigned", "unread", "needs_reply", "all"] as const) {
+      const and = buildInboxWhere(f, scope).AND as Record<string, unknown>[];
+      expect(and).toContainEqual(OPEN);
+    }
+  });
+
+  it("shows only closed threads in the closed view, so a mistake is recoverable", () => {
+    expect(buildInboxWhere("closed", scope)).toEqual({ AND: [{ status: "closed" }] });
   });
 
   it("searches number, name and email together", () => {
     const where = buildInboxWhere("all", scope, "priya");
-    expect(where.AND).toHaveLength(1);
-    const or = (where.AND as Record<string, unknown>[])[0].OR as Record<string, unknown>[];
+    const and = where.AND as Record<string, unknown>[];
+    const or = and[and.length - 1].OR as Record<string, unknown>[];
     expect(or).toHaveLength(3);
     expect(or[0]).toEqual({ phoneE164: { contains: "priya", mode: "insensitive" } });
   });
   it("ignores a whitespace-only search rather than matching everything", () => {
-    expect(buildInboxWhere("all", scope, "   ")).toEqual({});
+    expect(buildInboxWhere("all", scope, "   ")).toEqual({ AND: [OPEN] });
   });
   it("combines a filter with a search", () => {
-    const where = buildInboxWhere("needs_reply", scope, "98765");
-    expect(where.AND).toHaveLength(2);
+    expect((buildInboxWhere("needs_reply", scope, "98765").AND as unknown[])).toHaveLength(3);
   });
 });
 
@@ -135,19 +156,43 @@ describe("canActOnConversation", () => {
 });
 
 describe("canAssignConversation", () => {
+  /** An unowned thread: no lead, nobody assigned. */
+  const unowned = { leadAssignedToId: null, conversationAssignedToId: null, hasLead: false };
+
   it("lets anyone with the assign capability hand a thread over", () => {
-    expect(canAssignConversation(access({ canAssign: true }), { conversationAssignedToId: "u2" }, "u3", "u1")).toBe(true);
+    const conv = { leadAssignedToId: null, conversationAssignedToId: "u2", hasLead: false };
+    expect(canAssignConversation(access({ canAssign: true }), conv, "u3", "u1")).toBe(true);
   });
 
-  it("lets a BDE claim an unassigned thread for themselves", () => {
-    expect(canAssignConversation(access({ isBde: true }), { conversationAssignedToId: null }, "u1", "u1")).toBe(true);
+  it("lets a BDE claim an unowned thread for themselves", () => {
+    expect(canAssignConversation(access({ isBde: true }), unowned, "u1", "u1")).toBe(true);
   });
 
   it("does NOT let a BDE take a thread that already has an owner", () => {
-    expect(canAssignConversation(access({ isBde: true }), { conversationAssignedToId: "u2" }, "u1", "u1")).toBe(false);
+    const conv = { leadAssignedToId: null, conversationAssignedToId: "u2", hasLead: false };
+    expect(canAssignConversation(access({ isBde: true }), conv, "u1", "u1")).toBe(false);
   });
 
   it("does NOT let a BDE push work onto someone else", () => {
-    expect(canAssignConversation(access({ isBde: true }), { conversationAssignedToId: null }, "u2", "u1")).toBe(false);
+    expect(canAssignConversation(access({ isBde: true }), unowned, "u2", "u1")).toBe(false);
+  });
+
+  // The conversation's own assignedToId is copied from the lead only when the
+  // thread is created and never backfilled, so "conversation unassigned" does
+  // not mean "unowned" — the lead has to be checked too, or a BDE could quietly
+  // pull a colleague's candidate onto themselves.
+  it("does NOT let a BDE claim a thread whose LEAD belongs to another consultant", () => {
+    const conv = { leadAssignedToId: "u2", conversationAssignedToId: null, hasLead: true };
+    expect(canAssignConversation(access({ isBde: true }), conv, "u1", "u1")).toBe(false);
+  });
+
+  it("still lets a BDE claim a thread whose lead is theirs but unassigned on the conversation", () => {
+    const conv = { leadAssignedToId: "u1", conversationAssignedToId: null, hasLead: true };
+    expect(canAssignConversation(access({ isBde: true }), conv, "u1", "u1")).toBe(true);
+  });
+
+  it("still lets a BDE claim a lead-linked thread nobody owns", () => {
+    const conv = { leadAssignedToId: null, conversationAssignedToId: null, hasLead: true };
+    expect(canAssignConversation(access({ isBde: true }), conv, "u1", "u1")).toBe(true);
   });
 });

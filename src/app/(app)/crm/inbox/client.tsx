@@ -406,7 +406,11 @@ function ThreadPane({
           <div ref={bottomRef} />
         </div>
 
+        {/* Keyed on the thread so switching conversation REMOUNTS the composer.
+            Without this React reuses the instance and a draft typed for one
+            candidate stays in the box — and gets sent to the next one opened. */}
         <Composer
+          key={thread.id}
           conversationId={thread.id}
           sessionOpen={thread.sessionOpen}
           canAct={canAct}
@@ -423,6 +427,7 @@ function ThreadPane({
 
       <ContextRail
         thread={thread}
+        canAct={canAct}
         canAssign={canAssign}
         bdes={bdes}
         onChanged={() => {
@@ -527,16 +532,23 @@ function Composer({
   const [sending, setSending] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  // Outside the window a template is the only legal send, so the picker replaces
-  // the text box rather than sitting beside it.
-  const mode = sessionOpen ? "text" : "template";
-  const capable = mode === "text" ? canSendText : canSendTemplate;
+  // A template is legal BOTH inside and outside the window; only free text is
+  // restricted. So the window narrows the choice rather than dictating it —
+  // treating the two as mutually exclusive would hide the template picker during
+  // an open session, which on a transport that cannot do free text leaves no way
+  // to reply at all. Outside the window, template is simply the only option left.
+  const [mode, setMode] = useState<"text" | "template">(sessionOpen && canSendText ? "text" : "template");
+  const effectiveMode = sessionOpen ? mode : "template";
+  const canChoose = sessionOpen && canSendText && canSendTemplate;
+  const capable = effectiveMode === "text" ? canSendText : canSendTemplate;
   const selected = useMemo(() => templates.find((t) => t.id === templateId) ?? null, [templates, templateId]);
 
   async function send() {
     setError(null);
     setSending(true);
-    const payload = mode === "text" ? { body: text } : { template: selected?.name };
+    // Exactly one of the two — the server rejects a request carrying both,
+    // because only one would actually be delivered.
+    const payload = effectiveMode === "text" ? { body: text } : { template: selected?.name };
     const res = await fetch(`/api/crm/wa/conversations/${conversationId}/messages`, {
       method: "POST",
       headers: { "content-type": "application/json" },
@@ -567,11 +579,15 @@ function Composer({
   }
 
   if (!capable) {
+    // Neither mode works on this transport. Say so once, plainly, rather than
+    // showing a control whose every use fails.
     return (
       <div className="px-md py-sm border-t border-outline-variant text-label-sm text-on-surface-variant">
-        {mode === "text"
-          ? `${providerLabel} has no free-text send API wired, so replies still happen in Wabis. Sending from here works once the number moves to the Cloud API.`
-          : `${providerLabel} cannot send templates from the inbox yet.`}
+        {canSendText || canSendTemplate
+          ? effectiveMode === "text"
+            ? `${providerLabel} can’t send free text — choose a template instead.`
+            : `${providerLabel} can’t send templates from the inbox.`
+          : `${providerLabel} can’t send from the CRM, so replies still happen in Wabis. This starts working when the number moves to the Cloud API.`}
       </div>
     );
   }
@@ -579,7 +595,26 @@ function Composer({
   return (
     <div className="px-md py-sm border-t border-outline-variant space-y-xs">
       {error && <p className="text-label-sm text-error">{error}</p>}
-      {mode === "text" ? (
+      {canChoose && (
+        <div className="inline-flex rounded-lg border border-outline-variant overflow-hidden">
+          {(["text", "template"] as const).map((m) => (
+            <button
+              key={m}
+              type="button"
+              onClick={() => setMode(m)}
+              className={
+                "px-md h-7 text-label-sm font-semibold transition " +
+                (mode === m
+                  ? "bg-primary text-on-primary"
+                  : "bg-surface-container-lowest text-on-surface-variant hover:bg-surface-container-low")
+              }
+            >
+              {m === "text" ? "Reply" : "Template"}
+            </button>
+          ))}
+        </div>
+      )}
+      {effectiveMode === "text" ? (
         <div className="flex items-end gap-sm">
           <textarea
             value={text}
@@ -643,25 +678,42 @@ function Composer({
 
 function ContextRail({
   thread,
+  canAct,
   canAssign,
   bdes,
   onChanged,
 }: {
   thread: Thread;
+  canAct: boolean;
   canAssign: boolean;
   bdes: BdeOpt[];
   onChanged: () => void;
 }) {
   const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
+  // A rejected PATCH used to be swallowed: the request 403'd, onChanged() ran
+  // anyway, the list re-fetched unchanged, and the user saw their selection
+  // silently revert with no explanation.
   async function patch(body: Record<string, unknown>) {
     setBusy(true);
-    await fetch(`/api/crm/wa/conversations/${thread.id}`, {
+    setError(null);
+    const res = await fetch(`/api/crm/wa/conversations/${thread.id}`, {
       method: "PATCH",
       headers: { "content-type": "application/json" },
       body: JSON.stringify(body),
     }).catch(() => null);
     setBusy(false);
+
+    if (!res) {
+      setError("Network error — nothing was changed.");
+      return;
+    }
+    if (!res.ok) {
+      const d = (await res.json().catch(() => null)) as { message?: string } | null;
+      setError(d?.message ?? "You don’t have permission to change this thread.");
+      return;
+    }
     onChanged();
   }
 
@@ -693,6 +745,7 @@ function ContextRail({
       )}
 
       <div className="pt-md border-t border-outline-variant space-y-sm">
+        {error && <p className="text-label-sm text-error">{error}</p>}
         <div>
           <span className="block text-label-sm text-on-surface-variant mb-xs">Owner</span>
           {canAssign ? (
@@ -714,17 +767,23 @@ function ContextRail({
           )}
         </div>
 
-        <button
-          type="button"
-          disabled={busy}
-          onClick={() => void patch({ status: thread.status === "open" ? "closed" : "open" })}
-          className="w-full h-9 rounded-lg border border-outline-variant text-label-sm font-semibold text-on-surface-variant hover:bg-surface-container-low disabled:opacity-40"
-        >
-          {thread.status === "open" ? "Close conversation" : "Reopen conversation"}
-        </button>
-        <p className="text-label-sm text-on-surface-variant">
-          Closing only clears it from the working list — it doesn’t change the lead’s stage.
-        </p>
+        {/* Only rendered for someone the server will actually accept — PATCH
+            re-checks canActOnConversation and 403s otherwise. */}
+        {canAct && (
+          <>
+            <button
+              type="button"
+              disabled={busy}
+              onClick={() => void patch({ status: thread.status === "open" ? "closed" : "open" })}
+              className="w-full h-9 rounded-lg border border-outline-variant text-label-sm font-semibold text-on-surface-variant hover:bg-surface-container-low disabled:opacity-40"
+            >
+              {thread.status === "open" ? "Close conversation" : "Reopen conversation"}
+            </button>
+            <p className="text-label-sm text-on-surface-variant">
+              Closing only clears it from the working list — it doesn’t change the lead’s stage.
+            </p>
+          </>
+        )}
       </div>
     </div>
   );

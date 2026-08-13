@@ -45,11 +45,20 @@ export function canActOnConversation(access: CrmAccess, conv: ConversationActor,
  */
 export function canAssignConversation(
   access: CrmAccess,
-  conv: { conversationAssignedToId: string | null },
+  conv: ConversationActor,
   targetUserId: string | null,
   userId: string,
 ): boolean {
   if (access.canAssign) return true;
+
+  // The claim carve-out is for work nobody owns. A thread whose LEAD belongs to
+  // another consultant is owned — the conversation's own `assignedToId` is only
+  // copied from the lead when the thread is created and is never backfilled, so
+  // "conversation unassigned" does not mean "unowned". Checking the lead too is
+  // what stops a BDE quietly pulling a colleague's candidate onto themselves.
+  const leadOwnedByOther = conv.hasLead && !!conv.leadAssignedToId && conv.leadAssignedToId !== userId;
+  if (leadOwnedByOther) return false;
+
   const claimingUnassigned = conv.conversationAssignedToId === null && targetUserId === userId;
   return claimingUnassigned && access.isBde;
 }

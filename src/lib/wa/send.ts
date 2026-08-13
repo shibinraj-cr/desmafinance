@@ -71,6 +71,12 @@ export async function sendWaMessage(input: WaSendInput): Promise<WaSendOutcome> 
   if (!template && !body) {
     return { ok: false, reason: "send_failed", detail: "Nothing to send" };
   }
+  // Only one of the two actually goes out, so accepting both would record free
+  // text on the thread — and on the lead's timeline — that the candidate never
+  // received. Rejecting beats silently discarding one of them.
+  if (template && body) {
+    return { ok: false, reason: "send_failed", detail: "Send either a message or a template, not both" };
+  }
   if (body && body.length > WA_MAX_TEXT_LENGTH) {
     return { ok: false, reason: "send_failed", detail: `Message exceeds ${WA_MAX_TEXT_LENGTH} characters` };
   }
@@ -112,7 +118,34 @@ export async function sendWaMessage(input: WaSendInput): Promise<WaSendOutcome> 
     return { ok: false, reason: "send_failed", detail: result.body || "The message could not be sent" };
   }
 
+  // Past this line the candidate HAS the message. Every failure below is a
+  // bookkeeping failure, and must never be reported as a send failure: the
+  // consultant would press Send again and the candidate would get it twice.
   const now = new Date();
+  try {
+    return await recordSentMessage(conversation, input, template, body, result, provider.key, now);
+  } catch (e) {
+    logger.error("wa_send_persisted_failed", {
+      conversationId: conversation.id,
+      providerMessageId: result.providerMessageId,
+      message: e instanceof Error ? e.message : String(e),
+    });
+    // Reported as success because it WAS a success. The thread will be missing a
+    // row until the delivery-status webhook or the next inbound message repairs
+    // it; that is strictly better than a duplicate send.
+    return { ok: true, messageId: "", providerMessageId: result.providerMessageId };
+  }
+}
+
+async function recordSentMessage(
+  conversation: { id: string; leadId: string | null },
+  input: WaSendInput,
+  template: string | null,
+  body: string | null,
+  result: { providerMessageId: string | null },
+  providerKey: string,
+  now: Date,
+): Promise<WaSendOutcome> {
   const message = await prisma.waMessage.create({
     data: {
       conversationId: conversation.id,
@@ -121,7 +154,7 @@ export async function sendWaMessage(input: WaSendInput): Promise<WaSendOutcome> 
       body,
       templateName: template,
       providerMessageId: result.providerMessageId,
-      provider: provider.key,
+      provider: providerKey,
       // Our verdict, not Meta's — see the module note.
       waStatus: "sent",
       sentById: input.sentById,

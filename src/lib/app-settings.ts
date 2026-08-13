@@ -73,6 +73,32 @@ export const WA_MIRROR_ENABLED_KEY = "wa_mirror_enabled";
 export const WA_MIRROR_SECRET_KEY = "wa_mirror_secret";
 export const WA_MIRROR_AUTOCREATE_KEY = "wa_mirror_autocreate_leads";
 
+/**
+ * Meta WhatsApp Cloud API credentials, used once `wa_provider = "cloud"`.
+ *
+ * Settings-first with an env fallback, matching how the SMTP credentials work —
+ * an admin can configure the integration in-app, and a deployment can pin it.
+ *
+ * - PHONE_NUMBER_ID: the sending number's id (NOT the number itself).
+ * - WABA_ID: the WhatsApp Business Account, needed only to list templates.
+ * - TOKEN: a permanent System User access token. The one true secret here.
+ * - APP_SECRET: verifies Meta's `X-Hub-Signature-256` on inbound webhooks. Without
+ *   it the mirror falls back to the shared-secret check, which is weaker but
+ *   still closed.
+ * - API_VERSION: pinned (e.g. "v21.0") so a Graph API release cannot change
+ *   behaviour underneath us.
+ */
+export const WA_CLOUD_PHONE_NUMBER_ID_KEY = "wa_cloud_phone_number_id";
+export const WA_CLOUD_WABA_ID_KEY = "wa_cloud_waba_id";
+export const WA_CLOUD_TOKEN_KEY = "wa_cloud_access_token";
+export const WA_CLOUD_APP_SECRET_KEY = "wa_cloud_app_secret";
+export const WA_CLOUD_API_VERSION_KEY = "wa_cloud_api_version";
+
+/** Marketing broadcasts (src/lib/wa/broadcast.ts). */
+export const WA_BROADCAST_ENABLED_KEY = "wa_broadcast_enabled";
+/** Messages per drain run — the throttle that keeps us inside Meta's rate limits. */
+export const WA_BROADCAST_BATCH_KEY = "wa_broadcast_batch_size";
+
 export async function getSetting(key: string): Promise<string | null> {
   const row = await prisma.appSetting.findUnique({ where: { key }, select: { value: true } });
   return row?.value ?? null;

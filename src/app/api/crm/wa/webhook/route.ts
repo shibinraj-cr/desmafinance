@@ -1,8 +1,19 @@
 import { NextResponse } from "next/server";
-import { getSetting, WA_MIRROR_SECRET_KEY } from "@/lib/app-settings";
+import { getSetting, WA_CLOUD_APP_SECRET_KEY, WA_MIRROR_SECRET_KEY } from "@/lib/app-settings";
 import { extractInboundMessages } from "@/lib/wa/inbound";
 import { getWaMirrorConfig, ingestInboundMessages } from "@/lib/wa/mirror";
+import { verifyMetaSignature, WA_SIGNATURE_HEADER } from "@/lib/wa/signature";
 import { logger } from "@/lib/logger";
+
+/** A body we cannot parse is not an error here — see the always-200 note below. */
+function parseJson(raw: string): unknown {
+  if (!raw.trim()) return null;
+  try {
+    return JSON.parse(raw) as unknown;
+  } catch {
+    return null;
+  }
+}
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -40,14 +51,36 @@ export const maxDuration = 30;
  * duplicating.
  */
 async function handle(req: Request): Promise<NextResponse> {
-  const secret = (await getSetting(WA_MIRROR_SECRET_KEY).catch(() => null))?.trim() || null;
-  if (!secret) {
-    return NextResponse.json({ error: "mirror secret not set — hook disabled" }, { status: 503 });
+  const url = new URL(req.url);
+
+  // Read the body ONCE, as raw text. Meta's signature covers the exact bytes, so
+  // parsing and re-serialising to verify would produce a different digest and
+  // fail every request.
+  const rawBody = req.method === "GET" ? "" : await req.text().catch(() => "");
+
+  const [sharedSecret, appSecret] = await Promise.all([
+    getSetting(WA_MIRROR_SECRET_KEY).catch(() => null),
+    getSetting(WA_CLOUD_APP_SECRET_KEY).catch(() => null),
+  ]);
+
+  // Meta's HMAC when we hold an app secret and the sender signed; the shared
+  // secret otherwise. Strictly a widening — a signed request is accepted on its
+  // signature alone, an unsigned one still has to present the shared secret, and
+  // with neither configured the endpoint stays closed.
+  const verdict = verifyMetaSignature(rawBody, req.headers.get(WA_SIGNATURE_HEADER), appSecret);
+  if (verdict === "invalid") {
+    logger.warn("wa_webhook_bad_signature", {});
+    return NextResponse.json({ error: "unauthorized" }, { status: 401 });
   }
 
-  const url = new URL(req.url);
-  const provided = req.headers.get("x-wa-secret")?.trim() || url.searchParams.get("key")?.trim() || "";
-  if (provided !== secret) return NextResponse.json({ error: "unauthorized" }, { status: 401 });
+  if (verdict !== "valid") {
+    const secret = sharedSecret?.trim() || null;
+    if (!secret) {
+      return NextResponse.json({ error: "mirror secret not set — hook disabled" }, { status: 503 });
+    }
+    const provided = req.headers.get("x-wa-secret")?.trim() || url.searchParams.get("key")?.trim() || "";
+    if (provided !== secret) return NextResponse.json({ error: "unauthorized" }, { status: 401 });
+  }
 
   const config = await getWaMirrorConfig();
   if (!config.enabled) return NextResponse.json({ ok: true, skipped: "mirror_disabled" });
@@ -56,7 +89,7 @@ async function handle(req: Request): Promise<NextResponse> {
   // this team already configures — both pre-existing Wabis hooks read fields
   // from the body OR the query for exactly that reason — and a bare test curl
   // is the fastest way to prove the endpoint is wired at all.
-  const body = await req.json().catch(() => null);
+  const body = parseJson(rawBody);
   let messages = extractInboundMessages(body);
   if (messages.length === 0 && [...url.searchParams.keys()].some((k) => k !== "key")) {
     messages = extractInboundMessages(Object.fromEntries(url.searchParams));
