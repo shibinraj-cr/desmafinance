@@ -20,6 +20,7 @@ import {
   WA_MIRROR_ENABLED_KEY,
   WA_MIRROR_SECRET_KEY,
   WA_PROVIDER_KEY,
+  WABIS_API_TOKEN_KEY,
 } from "@/lib/app-settings";
 import { getWaProvider } from "@/lib/wa/registry";
 import { isCloudConfigured } from "@/lib/wa/cloud-provider";
@@ -66,6 +67,7 @@ export const GET = withApiHandler(async (req: Request) => {
     apiVersion,
     broadcastEnabled,
     batchSize,
+    wabisApiToken,
   ] = await Promise.all([
     getSetting(WA_PROVIDER_KEY),
     getSetting(WA_MIRROR_ENABLED_KEY),
@@ -78,6 +80,7 @@ export const GET = withApiHandler(async (req: Request) => {
     getSetting(WA_CLOUD_API_VERSION_KEY),
     getSetting(WA_BROADCAST_ENABLED_KEY),
     getSetting(WA_BROADCAST_BATCH_KEY),
+    getSetting(WABIS_API_TOKEN_KEY),
   ]);
 
   const active = await getWaProvider();
@@ -113,6 +116,10 @@ export const GET = withApiHandler(async (req: Request) => {
       enabled: broadcastEnabled === "1",
       batchSize: batchSize?.trim() ?? "",
     },
+    wabisApi: {
+      hasToken: !!wabisApiToken?.trim(),
+      tokenHint: mask(wabisApiToken),
+    },
   });
 });
 
@@ -130,6 +137,8 @@ const SaveSchema = z.object({
   appSecret: z.string().max(500),
   broadcastEnabled: z.boolean(),
   batchSize: z.string().max(10),
+  /** Wabis developer key, for the history import. Blank keeps what is stored. */
+  wabisApiToken: z.string().max(500).default(""),
 });
 
 const TestSchema = z.object({
@@ -175,6 +184,7 @@ export const POST = withApiHandler(async (req: Request) => {
     // treating blank as "clear it" would delete a credential on any re-save.
     if (data.token.trim()) await setSetting(WA_CLOUD_TOKEN_KEY, data.token.trim(), userId);
     if (data.appSecret.trim()) await setSetting(WA_CLOUD_APP_SECRET_KEY, data.appSecret.trim(), userId);
+    if (data.wabisApiToken.trim()) await setSetting(WABIS_API_TOKEN_KEY, data.wabisApiToken.trim(), userId);
 
     return NextResponse.json({ ok: true });
   }

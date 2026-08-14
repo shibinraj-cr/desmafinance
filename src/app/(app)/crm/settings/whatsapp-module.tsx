@@ -39,6 +39,21 @@ type Settings = {
     appSecretHint: string | null;
   };
   broadcasts: { enabled: boolean; batchSize: string };
+  wabisApi: { hasToken: boolean; tokenHint: string | null };
+};
+
+type ImportSummary = {
+  dryRun: boolean;
+  subscribersSeen: number;
+  conversationsTouched: number;
+  messagesFound: number;
+  messagesImported: number;
+  leadsMatched: number;
+  skippedNoPhone: number;
+  stoppedEarly: boolean;
+  sampleRaw: unknown;
+  observedKeys: string[];
+  errors: string[];
 };
 
 const card = "bg-surface-container-lowest border border-outline-variant rounded-xl shadow-sm";
@@ -98,6 +113,12 @@ export function WhatsAppModuleCard() {
   const [appSecret, setAppSecret] = useState("");
   const [broadcastEnabled, setBroadcastEnabled] = useState(false);
   const [batchSize, setBatchSize] = useState("");
+  const [wabisApiToken, setWabisApiToken] = useState("");
+
+  const [importPhone, setImportPhone] = useState("");
+  const [importMax, setImportMax] = useState("25");
+  const [importBusy, setImportBusy] = useState(false);
+  const [importResult, setImportResult] = useState<ImportSummary | null>(null);
 
   const [testPhone, setTestPhone] = useState("");
   const [testBody, setTestBody] = useState("");
@@ -123,6 +144,7 @@ export function WhatsAppModuleCard() {
       setBatchSize(d.broadcasts.batchSize);
       setToken("");
       setAppSecret("");
+      setWabisApiToken("");
     }
     setLoading(false);
   }, []);
@@ -151,6 +173,7 @@ export function WhatsAppModuleCard() {
         appSecret,
         broadcastEnabled,
         batchSize,
+        wabisApiToken,
       }),
     });
     const p = (await r.json().catch(() => ({}))) as Record<string, unknown>;
@@ -368,6 +391,151 @@ export function WhatsAppModuleCard() {
 
         {testResult && <p className={"text-label-sm " + (testOk ? "text-primary" : "text-error")}>{testResult}</p>}
       </div>
+
+      <div className={card + " p-lg space-y-md"}>
+        <h3 className="text-h3 text-on-surface">Import history from Wabis</h3>
+        <p className="text-label-sm text-on-surface-variant">
+          Pulls past conversations out of Wabis so the inbox doesn’t start empty. One-off, not a sync — run it before
+          Wabis is retired. Safe to repeat: messages are matched on their WhatsApp id, so nothing duplicates.
+        </p>
+        <p className="text-label-sm text-on-surface-variant">
+          <span className="font-semibold text-on-surface">Always dry-run first.</span> Wabis doesn’t document what its
+          API returns, so the dry run reports the field names it actually saw — that’s what the mapping gets corrected
+          against before anything is written.
+        </p>
+
+        <Field
+          label="Wabis API key"
+          hint={
+            s?.wabisApi.hasToken
+              ? `Stored: ${s.wabisApi.tokenHint} — leave blank to keep it.`
+              : "From Wabis: avatar menu → API Developer. Used only for this import."
+          }
+        >
+          <input
+            type="password"
+            value={wabisApiToken}
+            onChange={(e) => setWabisApiToken(e.target.value)}
+            placeholder={s?.wabisApi.hasToken ? "•••••• (unchanged)" : ""}
+            className={input + " w-full max-w-md font-mono text-label-sm"}
+          />
+        </Field>
+
+        <div className="flex flex-wrap items-end gap-base">
+          <Field label="Only this number" hint="Strongly recommended for the first run.">
+            <input value={importPhone} onChange={(e) => setImportPhone(e.target.value)} placeholder="+91…" className={input + " w-48"} />
+          </Field>
+          <Field label="Max contacts" hint="Ignored when a number is given.">
+            <input value={importMax} onChange={(e) => setImportMax(e.target.value)} className={input + " w-28"} />
+          </Field>
+        </div>
+
+        <div className="flex flex-wrap items-center gap-base">
+          <button type="button" className={ghost} disabled={importBusy} onClick={() => void runImport(true)}>
+            {importBusy ? "Working…" : "Dry run"}
+          </button>
+          <button
+            type="button"
+            className={primary}
+            disabled={importBusy || !importResult || importResult.dryRun === false}
+            onClick={() => void runImport(false)}
+            title={!importResult ? "Do a dry run first" : undefined}
+          >
+            Import for real
+          </button>
+        </div>
+
+        {importResult && <ImportReport summary={importResult} />}
+      </div>
+    </div>
+  );
+
+  async function runImport(dryRun: boolean) {
+    setImportBusy(true);
+    setImportResult(null);
+    const r = await fetch("/api/crm/wa/import", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        dryRun,
+        maxSubscribers: Math.max(1, Math.min(500, Number(importMax) || 25)),
+        onlyPhone: importPhone.trim() || null,
+      }),
+    }).catch(() => null);
+    setImportBusy(false);
+    if (!r?.ok) {
+      setImportResult({
+        dryRun,
+        subscribersSeen: 0,
+        conversationsTouched: 0,
+        messagesFound: 0,
+        messagesImported: 0,
+        leadsMatched: 0,
+        skippedNoPhone: 0,
+        stoppedEarly: false,
+        sampleRaw: null,
+        observedKeys: [],
+        errors: ["The import request failed."],
+      });
+      return;
+    }
+    setImportResult((await r.json()) as ImportSummary);
+  }
+}
+
+/**
+ * The dry-run report is the actual deliverable of a first run: the observed
+ * field names and one raw record are what tell us whether the normaliser is
+ * reading the right keys, without anyone having to read a log.
+ */
+function ImportReport({ summary }: { summary: ImportSummary }) {
+  return (
+    <div className="rounded-lg border border-outline-variant bg-surface-container-low p-md space-y-sm">
+      <p className="text-body-md text-on-surface">
+        {summary.dryRun ? "Dry run — nothing was written." : "Imported."}{" "}
+        <span className="tabular-nums">
+          {summary.subscribersSeen} contacts · {summary.messagesFound} messages found
+          {!summary.dryRun && ` · ${summary.messagesImported} stored · ${summary.leadsMatched} matched to a lead`}
+        </span>
+      </p>
+
+      {summary.stoppedEarly && (
+        <p className="text-label-sm text-on-surface-variant">
+          Stopped on the time limit — run it again to continue where it left off.
+        </p>
+      )}
+      {summary.skippedNoPhone > 0 && (
+        <p className="text-label-sm text-on-surface-variant">{summary.skippedNoPhone} contacts had no usable number.</p>
+      )}
+
+      {summary.observedKeys.length > 0 && (
+        <div>
+          <span className="block text-label-sm text-on-surface-variant mb-xs">Fields Wabis actually returned</span>
+          <code className="block text-label-sm font-mono break-all">{summary.observedKeys.join(", ")}</code>
+        </div>
+      )}
+
+      {summary.sampleRaw != null && (
+        <details>
+          <summary className="text-label-sm text-primary cursor-pointer">Sample message record</summary>
+          <pre className="mt-xs text-label-sm font-mono overflow-x-auto whitespace-pre-wrap break-all">
+            {JSON.stringify(summary.sampleRaw, null, 2)}
+          </pre>
+        </details>
+      )}
+
+      {summary.errors.length > 0 && (
+        <div>
+          <span className="block text-label-sm text-error mb-xs">Problems</span>
+          <ul className="list-disc pl-lg space-y-xs">
+            {summary.errors.slice(0, 10).map((e, i) => (
+              <li key={i} className="text-label-sm text-error break-all">
+                {e}
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
     </div>
   );
 }

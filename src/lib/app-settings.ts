@@ -94,6 +94,15 @@ export const WA_CLOUD_TOKEN_KEY = "wa_cloud_access_token";
 export const WA_CLOUD_APP_SECRET_KEY = "wa_cloud_app_secret";
 export const WA_CLOUD_API_VERSION_KEY = "wa_cloud_api_version";
 
+/**
+ * Wabis developer API key (avatar menu → API Developer). Used ONLY by the
+ * one-off history import (src/lib/wa/wabis-import.ts) — sending still goes
+ * through the provider seam. Sent as an `apiToken` request parameter, which is
+ * Wabis's scheme: no header, no signing, so it is POSTed rather than put in a
+ * query string where it would land in access logs.
+ */
+export const WABIS_API_TOKEN_KEY = "wabis_api_token";
+
 /** Marketing broadcasts (src/lib/wa/broadcast.ts). */
 export const WA_BROADCAST_ENABLED_KEY = "wa_broadcast_enabled";
 /** Messages per drain run — the throttle that keeps us inside Meta's rate limits. */
