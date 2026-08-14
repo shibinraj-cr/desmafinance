@@ -1,4 +1,5 @@
 import { redirect } from "next/navigation";
+import type { Prisma } from "@prisma/client";
 import { getCurrentUserAndPermissions } from "@/lib/permissions";
 import { getLeadPulseAccess } from "@/lib/lead-pulse-rbac";
 import { prisma } from "@/lib/prisma";
@@ -11,7 +12,7 @@ export const dynamic = "force-dynamic";
 export default async function PipelinePage({
   searchParams,
 }: {
-  searchParams: { tab?: string; userId?: string; year?: string; month?: string };
+  searchParams: { tab?: string; userId?: string; year?: string; month?: string; status?: string };
 }) {
   const { userId, perms } = await getCurrentUserAndPermissions();
   if (!userId || !perms) redirect("/login");
@@ -37,18 +38,49 @@ export default async function PipelinePage({
   }
 
   const today = todayIst();
-  const year = searchParams.year ? Number(searchParams.year) : Number(today.slice(0, 4));
-  const month = searchParams.month ? Number(searchParams.month) : Number(today.slice(5, 7));
   const tab: "list" | "forecast" = searchParams.tab === "forecast" ? "forecast" : "list";
+
+  // Month filter. Absent = every month on the list (the historical default, so
+  // nothing disappears for someone who just opens the page); the forecast tab
+  // always needs a month, so it falls back to the current one.
+  const rawYear = Number(searchParams.year);
+  const rawMonth = Number(searchParams.month);
+  const monthFiltered =
+    Number.isInteger(rawYear) && rawYear > 2000 && Number.isInteger(rawMonth) && rawMonth >= 1 && rawMonth <= 12;
+  const year = monthFiltered ? rawYear : Number(today.slice(0, 4));
+  const month = monthFiltered ? rawMonth : Number(today.slice(5, 7));
+
+  const status =
+    searchParams.status === "open" || searchParams.status === "closed_won" || searchParams.status === "lost"
+      ? searchParams.status
+      : null;
 
   // Pick whose pipeline to load.
   const scopedUserId = access.canSupervise
     ? searchParams.userId || null
     : userId;
 
+  // A deal belongs to a month if it is either expected to close in it or was
+  // actually closed in it — same rule the forecast uses, so both tabs agree on
+  // what "August" means.
+  const monthStart = new Date(Date.UTC(year, month - 1, 1));
+  const monthEnd = new Date(Date.UTC(year, month, 0, 23, 59, 59, 999));
+  const where: Prisma.LeadPulsePipelineWhereInput = {
+    ...(scopedUserId ? { userId: scopedUserId } : {}),
+    ...(status ? { status } : {}),
+    ...(monthFiltered
+      ? {
+          OR: [
+            { expectedCloseDate: { gte: monthStart, lte: monthEnd } },
+            { closedDate: { gte: monthStart, lte: monthEnd } },
+          ],
+        }
+      : {}),
+  };
+
   const [rows, l2Bdes, services, sources, forecast] = await Promise.all([
     prisma.leadPulsePipeline.findMany({
-      where: scopedUserId ? { userId: scopedUserId } : {},
+      where,
       orderBy: [
         { status: "asc" },
         { expectedCloseDate: "asc" },
@@ -96,7 +128,9 @@ export default async function PipelinePage({
       tab={tab}
       year={year}
       month={month}
+      monthFiltered={monthFiltered}
       monthLabel={monthLabel}
+      status={status}
       rows={rows.map((r) => ({
         id: r.id,
         userId: r.userId,

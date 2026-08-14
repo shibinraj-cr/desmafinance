@@ -1,12 +1,13 @@
 "use client";
 
-import { useMemo, useState, useTransition } from "react";
+import { useEffect, useMemo, useState, useTransition } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 
 type ServiceOpt = { id: string; name: string };
 type SourceOpt = { id: string; code: string; label: string };
 type BdeOpt = { userId: string; displayName: string; active: boolean };
+type StatusFilter = "open" | "closed_won" | "lost";
 
 export type PipelineRow = {
   id: string;
@@ -75,7 +76,9 @@ export function PipelineClient(props: {
   tab: "list" | "forecast";
   year: number;
   month: number;
+  monthFiltered: boolean;
   monthLabel: string;
+  status: StatusFilter | null;
   rows: PipelineRow[];
   forecast: ForecastData | null;
 }) {
@@ -99,6 +102,38 @@ export function PipelineClient(props: {
   const open = useMemo(() => props.rows.filter((r) => r.status === "open"), [props.rows]);
   const won = useMemo(() => props.rows.filter((r) => r.status === "closed_won"), [props.rows]);
   const lost = useMemo(() => props.rows.filter((r) => r.status === "lost"), [props.rows]);
+
+  // The forecast is always for one month, so show the month it is actually
+  // rendering even when the URL carries none; the list defaults to all months.
+  const monthValue =
+    props.monthFiltered || props.tab === "forecast"
+      ? `${props.year}-${String(props.month).padStart(2, "0")}`
+      : "";
+  const query: PipelineQuery = {
+    tab: props.tab,
+    userId: props.ownerFilter,
+    status: props.status,
+    month: props.monthFiltered ? monthValue : null,
+  };
+  // An L2's own scoping isn't a filter they chose — only a supervisor's is.
+  const filtered =
+    Boolean(props.status) || props.monthFiltered || (props.canSupervise && Boolean(props.ownerFilter));
+
+  function go(patch: Partial<PipelineQuery>) {
+    router.push(hrefFor({ ...query, ...patch }));
+  }
+
+  // With a month filter on, a row added with today's date would be created and
+  // then immediately filtered out of view — so default the new row's expected
+  // close into the month being looked at.
+  const defaultCloseDate = props.monthFiltered
+    ? props.today.startsWith(monthValue)
+      ? props.today
+      : `${monthValue}-01`
+    : props.today;
+  useEffect(() => {
+    setDraft((d) => (d.expectedCloseDate === defaultCloseDate ? d : { ...d, expectedCloseDate: defaultCloseDate }));
+  }, [defaultCloseDate]);
 
   function refresh() {
     router.refresh();
@@ -291,53 +326,81 @@ export function PipelineClient(props: {
         <div>
           <h1 className="text-[30px] font-bold tracking-tight">Pipeline</h1>
           <p className="mt-[4px] text-[13px]" style={{ color: "var(--lp-on-surface-variant)" }}>
-            In-flight deals · {open.length} open · {won.length} won · {lost.length} lost
+            {props.monthFiltered ? `${props.monthLabel} deals` : "In-flight deals"} · {open.length} open ·{" "}
+            {won.length} won · {lost.length} lost
           </p>
         </div>
         <div className="flex items-center gap-[8px]">
-          <TabLink href={hrefFor("list", props)} active={props.tab === "list"}>
+          <TabLink href={hrefFor({ ...query, tab: "list" })} active={props.tab === "list"}>
             List
           </TabLink>
-          <TabLink href={hrefFor("forecast", props)} active={props.tab === "forecast"}>
+          <TabLink href={hrefFor({ ...query, tab: "forecast" })} active={props.tab === "forecast"}>
             Forecast
           </TabLink>
         </div>
       </header>
 
-      {props.canSupervise && (
-        <div
-          className="flex flex-wrap items-center gap-[8px] rounded-[12px] p-[12px] border"
-          style={{ backgroundColor: "var(--lp-surface-container)", borderColor: "var(--lp-outline-variant)" }}
-        >
-          <span className="text-[11px] uppercase tracking-widest" style={{ color: "var(--lp-on-surface-variant)" }}>
-            BDE
-          </span>
-          <select
-            value={props.ownerFilter ?? ""}
-            onChange={(e) => {
-              const v = e.target.value;
-              const params = new URLSearchParams();
-              if (props.tab !== "list") params.set("tab", props.tab);
-              if (v) params.set("userId", v);
-              if (props.tab === "forecast") {
-                params.set("year", String(props.year));
-                params.set("month", String(props.month));
-              }
-              router.push(
-                `/marketing/lead-pulse/pipeline${params.toString() ? `?${params.toString()}` : ""}`,
-              );
-            }}
+      <div
+        className="flex flex-wrap items-center gap-x-[16px] gap-y-[8px] rounded-[12px] p-[12px] border"
+        style={{ backgroundColor: "var(--lp-surface-container)", borderColor: "var(--lp-outline-variant)" }}
+      >
+        {props.canSupervise && (
+          <FilterField label="BDE">
+            <select
+              value={props.ownerFilter ?? ""}
+              onChange={(e) => go({ userId: e.target.value || null })}
+              className="h-[32px] px-[8px] rounded-[6px] text-[13px]"
+            >
+              <option value="">All BDEs</option>
+              {props.l2Bdes.map((b) => (
+                <option key={b.userId} value={b.userId}>
+                  {b.displayName} {b.active ? "" : "(inactive)"}
+                </option>
+              ))}
+            </select>
+          </FilterField>
+        )}
+
+        {props.tab === "list" && (
+          <FilterField label="Status">
+            <select
+              value={props.status ?? ""}
+              onChange={(e) => go({ status: (e.target.value || null) as StatusFilter | null })}
+              className="h-[32px] px-[8px] rounded-[6px] text-[13px]"
+            >
+              <option value="">All statuses</option>
+              <option value="open">Open</option>
+              <option value="closed_won">Won</option>
+              <option value="lost">Lost</option>
+            </select>
+          </FilterField>
+        )}
+
+        <FilterField label="Month">
+          <input
+            type="month"
+            value={monthValue}
+            onChange={(e) => go({ month: e.target.value || null })}
             className="h-[32px] px-[8px] rounded-[6px] text-[13px]"
+          />
+        </FilterField>
+
+        {props.tab === "list" && props.monthFiltered && (
+          <button
+            onClick={() => go({ month: null })}
+            className="text-[12px] underline"
+            style={{ color: "var(--lp-on-surface-variant)" }}
           >
-            <option value="">All BDEs</option>
-            {props.l2Bdes.map((b) => (
-              <option key={b.userId} value={b.userId}>
-                {b.displayName} {b.active ? "" : "(inactive)"}
-              </option>
-            ))}
-          </select>
-        </div>
-      )}
+            All months
+          </button>
+        )}
+
+        {props.tab === "list" && props.monthFiltered && (
+          <span className="text-[11px]" style={{ color: "var(--lp-on-surface-variant)" }}>
+            Expected to close, or closed, in {props.monthLabel}
+          </span>
+        )}
+      </div>
 
       {error && (
         <div className="rounded-[10px] border-2 px-[14px] py-[10px] text-[13px]"
@@ -473,7 +536,9 @@ export function PipelineClient(props: {
                 {props.rows.length === 0 && (
                   <tr>
                     <td colSpan={props.canSupervise ? 10 : 9} className="text-center py-[24px]" style={{ color: "var(--lp-on-surface-variant)" }}>
-                      No pipeline rows yet — add one above.
+                      {filtered
+                        ? "No deals match these filters."
+                        : "No pipeline rows yet — add one above."}
                     </td>
                   </tr>
                 )}
@@ -510,16 +575,36 @@ export function PipelineClient(props: {
   );
 }
 
-function hrefFor(tab: "list" | "forecast", props: { ownerFilter: string | null; year: number; month: number }): string {
+type PipelineQuery = {
+  tab: "list" | "forecast";
+  userId: string | null;
+  status: StatusFilter | null;
+  /** "YYYY-MM", or null for every month. */
+  month: string | null;
+};
+
+function hrefFor(q: PipelineQuery): string {
   const params = new URLSearchParams();
-  if (tab !== "list") params.set("tab", tab);
-  if (props.ownerFilter) params.set("userId", props.ownerFilter);
-  if (tab === "forecast") {
-    params.set("year", String(props.year));
-    params.set("month", String(props.month));
+  if (q.tab !== "list") params.set("tab", q.tab);
+  if (q.userId) params.set("userId", q.userId);
+  if (q.status) params.set("status", q.status);
+  if (q.month) {
+    params.set("year", q.month.slice(0, 4));
+    params.set("month", String(Number(q.month.slice(5, 7))));
   }
   const qs = params.toString();
   return qs ? `/marketing/lead-pulse/pipeline?${qs}` : "/marketing/lead-pulse/pipeline";
+}
+
+function FilterField({ label, children }: { label: string; children: React.ReactNode }) {
+  return (
+    <label className="flex items-center gap-[8px]">
+      <span className="text-[11px] uppercase tracking-widest" style={{ color: "var(--lp-on-surface-variant)" }}>
+        {label}
+      </span>
+      {children}
+    </label>
+  );
 }
 
 function TabLink({ href, active, children }: { href: string; active: boolean; children: React.ReactNode }) {
