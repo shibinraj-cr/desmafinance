@@ -67,9 +67,11 @@ export const wabisProvider: WhatsAppProvider = {
     const { secret } = await getWabisWebhookConfig();
     const result = await postWebhook(url, { ...(input.params ?? {}), template: input.template }, secret);
 
-    // Wabis returns no message id, so delivery statuses cannot be correlated by
-    // key — they are matched by phone + campaign + touch downstream. See
-    // handleWabisDeliveryStatus.
+    // A WORKFLOW trigger returns whatever the workflow returns, which is not a
+    // message id — so a delivery status arriving later is matched by phone +
+    // campaign + touch downstream (see handleWabisDeliveryStatus). Wabis's send
+    // API does return a `wa_message_id`, but this path is not that API; wiring
+    // it is what the unimplemented capabilities above describe.
     return { ok: result.ok, providerMessageId: null, status: result.status, body: result.body };
   },
 

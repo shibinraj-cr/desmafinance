@@ -12,18 +12,26 @@ Every WhatsApp automation ends at one call — `WhatsAppProvider` in
 
 | | Wabis (`wabis-provider.ts`) | Cloud API (`cloud-provider.ts`) |
 |---|---|---|
-| Send template by name | ✗ addresses by workflow URL | ✓ |
-| Send free text | ✗ no API | ✓ inside the 24h window |
-| Returns a message id | ✗ | ✓ `wamid`, so status matches by key |
-| Fetch media | ✗ | ✓ |
-| List approved templates | ✗ catalogue lives at Meta | ✓ |
+| Send template by name | ✗ needs a numeric `template_id` | ✓ |
+| Send free text | not implemented (an API does exist) | ✓ inside the 24h window |
+| Returns a message id | ✓ from the send API, ✗ from a workflow | ✓ `wamid` |
+| Fetch media | no endpoint; public storage URLs instead | ✓ |
+| List approved templates | ✓ but Wabis's own ids, not Meta names | ✓ |
 
 `wa_provider` selects between them. That one setting is the whole cutover.
 
-**While on Wabis the CRM can read conversations but not send from them.** That
-is reported honestly rather than stubbed: the composer says so, and
-`/crm/broadcasts` refuses to create a campaign. Nothing needs rewriting when the
-transport changes — only the setting.
+**The Wabis adapter implements none of the send capabilities**, even though the
+underlying API supports them. That is a deliberate scope decision, not a
+limitation: Wabis addresses templates by its own numeric `template_id` with
+per-template named variables (`templateVariable-agent-1`) rather than by Meta
+name and positional `{{1}}`, so wiring it would mean a name→id mapping layer
+cached from `/api/v1/whatsapp/template/list`. Since we own the WABA and can go
+straight to the Cloud API, that layer would be built to be thrown away.
+
+So while `wa_provider` is `wabis`, the CRM reads conversations but does not send
+from them. That is reported honestly rather than stubbed: the composer says so
+and `/crm/broadcasts` refuses to create a campaign. If the priority ever changes,
+the adapter is the only file that needs filling in.
 
 ## Settings
 
@@ -102,8 +110,17 @@ Manager — but check what their panel still does for you first: "full control"
 means they can manage templates and settings on our WABA today, and something
 operational may depend on that.
 
-Note that conversation history inside Wabis is not exportable. Whatever is not
-mirrored before you stop using them stays there.
+Conversation history **is** retrievable before you go — `GET/POST
+/api/v1/whatsapp/get/conversation` returns a subscriber's messages, 50 at a
+time, paginated. So the inbox does not have to start empty: a one-off backfill
+over the subscriber list could import existing threads into `WaConversation` /
+`WaMessage` before Wabis is retired. Not built — it is a separable job and worth
+doing only if the history matters to you.
+
+Media is the part with a deadline. Incoming files live on unauthenticated Wabis
+storage URLs and are purged on a schedule (Settings → Security → Media Delete
+Activity), so anything you want to keep has to be copied out as bytes, not
+linked.
 
 ## Broadcasts
 
@@ -133,15 +150,24 @@ Three honest fixes, in order of preference:
 Investigated and answered — recorded because it was hard-won, though going
 straight to the Cloud API means we should not need any of it.
 
-- **Send API exists.** `POST /api/v1/whatsapp/send` (free text, inside the 24h
-  window) and `/api/v1/whatsapp/send/template`. Auth is an `apiToken` request
-  *parameter*, not a header, and nothing is signed.
+- **Send API exists**, and returns a real `wa_message_id` (a Meta `wamid`).
+  `POST /api/v1/whatsapp/send` (free text, inside the 24h window) and
+  `/api/v1/whatsapp/send/template`. Auth is an `apiToken` request *parameter*,
+  not a header, and nothing is signed — so prefer POST, or the key lands in
+  access logs. Success is `{"status":"1", …}`, failure `{"status":"0", …}`,
+  which the existing outbox already reads correctly (`isDeliveredResponse`).
 - **Templates are addressed differently.** Wabis takes its own numeric
   `template_id`, not Meta's template name, and variables are named per template
   (`templateVariable-agent-1`) rather than positional `{{1}}`. Using it would
   mean a mapping layer fed from `/api/v1/whatsapp/template/list` — which is
   exactly the impedance mismatch the provider seam exists to keep out of the
   rest of the CRM.
+- **Conversation history is readable**: `/api/v1/whatsapp/get/conversation`,
+  50 messages at a time, paginated. This is the one Wabis capability with real
+  standalone value — it would let existing threads be backfilled into the mirror
+  so the inbox does not start empty. Not built.
+- Also available: delivery status by message id, interactive buttons, media
+  upload, subscriber/label/note CRUD, and Flow-Builder triggers.
 - **Inbound webhook exists** but is off by default: Bot Manager → Bot Settings →
   Webhook → "Trigger Webhook for Incoming Message". The URL field only appears
   once the toggle is on. **Its payload shape is undocumented** — it would have to

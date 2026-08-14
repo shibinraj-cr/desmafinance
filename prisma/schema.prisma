@@ -2610,8 +2610,10 @@ model WaConversation {
 /// any non-2xx (and sometimes on a 2xx that arrived slowly), so the ingest path
 /// is written to be replayed: the unique index means a repeat delivery collides
 /// instead of duplicating the thread. It is nullable because an outbound send
-/// through a Wabis workflow returns no id at all — that gap is exactly what
-/// owning the transport closes.
+/// through a Wabis WORKFLOW returns no id — the workflow answers with its own
+/// result, not a message id. Sends through Meta (and through Wabis's own send
+/// API, which we do not use) do return one, which is what makes an arriving
+/// delivery status an exact key lookup instead of a phone-and-timing guess.
 model WaMessage {
   id             String         @id @default(cuid())
   conversationId String

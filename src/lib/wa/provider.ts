@@ -48,9 +48,10 @@ export type WaCapability = "sendTemplate" | "sendText" | "fetchMedia" | "listTem
 export type WaSendResult = {
   ok: boolean;
   /**
-   * Meta's `wamid.…`, when the transport returns one. Null through Wabis, whose
-   * workflow response carries no id — which is precisely why delivery statuses
-   * have to be correlated by phone + campaign + touch today instead of by key.
+   * Meta's `wamid.…`, when the transport returns one. Null through a Wabis
+   * WORKFLOW, whose response carries no id — which is precisely why delivery
+   * statuses have to be correlated by phone + campaign + touch today instead of
+   * by key. (Wabis's send API does return one; that path is not implemented.)
    */
   providerMessageId: string | null;
   /** HTTP status, or null when the request never completed. */
