@@ -25,7 +25,20 @@ export type PipelineRow = {
   status: "open" | "closed_won" | "lost";
   closedDate: string | null;
   notes: string | null;
+  /** Set = this row mirrors a CRM lead, which owns the deal. Read-only here. */
+  leadId: string | null;
 };
+
+/**
+ * A row can become CRM-owned between page render and submit (the lead was
+ * enrolled in another tab), so the write can 409 even though the UI showed the
+ * buttons. Surface the server's guidance rather than a raw error code.
+ */
+function crmOwnedMessage(d: unknown): string | null {
+  const body = d as { error?: string; message?: string } | null;
+  if (body?.error !== "crm_owned") return null;
+  return body.message ?? "This deal is owned by its CRM lead — change it there.";
+}
 
 type ForecastData = {
   byBde: Array<{
@@ -179,7 +192,7 @@ export function PipelineClient(props: {
       const res = await fetch(`/api/marketing/lead-pulse/pipeline/${id}`, { method: "DELETE" });
       if (!res.ok) {
         const d = await res.json().catch(() => ({}));
-        setError((d as { error?: string }).error ?? "Delete failed.");
+        setError(crmOwnedMessage(d) ?? (d as { error?: string }).error ?? "Delete failed.");
         return;
       }
       refresh();
@@ -196,7 +209,10 @@ export function PipelineClient(props: {
       if (!res.ok) {
         const d = await res.json().catch(() => ({}));
         const code = (d as { error?: string; date?: string; userId?: string }).error ?? "Status change failed.";
-        if (code === "needs_unlock") {
+        const owned = crmOwnedMessage(d);
+        if (owned) {
+          setError(owned);
+        } else if (code === "needs_unlock") {
           const date = (d as { date?: string }).date ?? closedDate;
           setError(
             `Daily entry for ${date} is locked or outside the 3-day backdate window. Ask a supervisor to unlock it, then retry.`,
@@ -233,7 +249,10 @@ export function PipelineClient(props: {
       if (!res.ok) {
         const d = await res.json().catch(() => ({}));
         const code = (d as { error?: string }).error ?? "Could not save changes.";
-        setError(code === "row_not_open" ? "This deal is no longer open — re-open it before editing." : code);
+        setError(
+          crmOwnedMessage(d) ??
+            (code === "row_not_open" ? "This deal is no longer open — re-open it before editing." : code),
+        );
         return;
       }
       setEditModal(null);
@@ -266,6 +285,20 @@ export function PipelineClient(props: {
           {r.closedDate ?? "—"}
         </td>
         <td className="px-[12px] py-[8px]">
+          {/* CRM-owned deal: the lead drives service / value / expected close
+              date and is where it gets enrolled or marked lost. Editing it here
+              would be overwritten on the next CRM edit, so send the BDE there. */}
+          {r.leadId ? (
+            <a
+              href={`/crm/leads/${r.leadId}`}
+              className="text-[12px] underline"
+              style={{ color: "var(--lp-on-surface-variant)" }}
+              title="This deal is owned by its CRM lead — open the lead to change it"
+            >
+              Open in CRM
+            </a>
+          ) : (
+            <>
           {canTouch && r.status === "open" && (
             <div className="flex gap-[6px] flex-wrap">
               <button
@@ -314,6 +347,8 @@ export function PipelineClient(props: {
             >
               Re-open
             </button>
+          )}
+            </>
           )}
         </td>
       </tr>

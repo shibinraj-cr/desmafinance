@@ -11,7 +11,8 @@ import { getActiveTemplateForService } from "./ops-templates";
 import { createProjectForEnrollment, resolveDefaultOpsAssignee } from "./ops-projects";
 import { loadHolidaySet } from "./ops-dates";
 import { monthCodeFromDate, flowFor } from "./catalog";
-import { toPrismaDate, fromPrismaDate } from "./lead-pulse-dates";
+import { toPrismaDate, fromPrismaDate, todayIst } from "./lead-pulse-dates";
+import { isLostStatusCode } from "./crm-reinquiry";
 
 /**
  * Resolve a finance (category, subItem) for a revenue draft from the enrolled
@@ -187,10 +188,36 @@ async function upsertPipeline(
           closedDate!,
         );
       }
+      // Re-opening a won row MUST reverse its daily close — the same reversal
+      // the Marketing status route performs. Leaving it behind strands a
+      // LeadPulseDailyClose that keeps counting in the forecast "Actual" for a
+      // deal that is open again, and the stale dailyCloseId then trips the
+      // guard above so the eventual real enrollment never logs its own close.
+      let clearDailyClose = false;
+      if (status !== "closed_won" && exists.dailyCloseId) {
+        const close = await tx.leadPulseDailyClose.findUnique({
+          where: { id: exists.dailyCloseId },
+          select: { id: true, entry: { select: { id: true, closedWon: true } } },
+        });
+        if (close) {
+          await tx.leadPulseDailyClose.delete({ where: { id: close.id } });
+          await tx.leadPulseDailyEntry.update({
+            where: { id: close.entry.id },
+            data: { closedWon: Math.max(0, (close.entry.closedWon ?? 0) - 1) },
+          });
+        }
+        clearDailyClose = true;
+      }
       await tx.leadPulsePipeline.update({
         where: { id: lead.pipelineId },
-        // Never write dailyCloseId:null here — it would wipe an existing link.
-        data: { ...base, closedDate, ...(dailyCloseId ? { dailyCloseId } : {}) },
+        // dailyCloseId is only ever nulled alongside the reversal above — never
+        // blindly, which would orphan the close instead of removing it.
+        data: {
+          ...base,
+          closedDate,
+          ...(dailyCloseId ? { dailyCloseId } : {}),
+          ...(clearDailyClose ? { dailyCloseId: null } : {}),
+        },
       });
       return lead.pipelineId;
     }
@@ -250,6 +277,44 @@ async function findOrCreateParty(tx: Prisma.TransactionClient, lead: LeadCore, o
     },
   });
   return created.id;
+}
+
+/**
+ * Mirror a CRM lead's status onto its Marketing pipeline row. CRM is the source
+ * of truth for a deal, so a lead the consultant marked lost must not keep
+ * sitting in the L2 forecast as an open deal expected to close, and reviving
+ * that lead must put its deal back in the forecast.
+ *
+ * Deliberately never touches a `closed_won` row: an enrollment is only ever
+ * un-done by Enroll / Set deal (which reverse the daily close properly), not by
+ * a status edit. Best-effort — a mirror failure must not fail the status change
+ * the consultant actually asked for.
+ */
+export async function syncPipelineToLeadStatus(args: { leadId: string; toCode: string }): Promise<void> {
+  try {
+    const lead = await prisma.lead.findUnique({
+      where: { id: args.leadId },
+      select: { pipeline: { select: { id: true, status: true } } },
+    });
+    const pipeline = lead?.pipeline;
+    if (!pipeline) return;
+
+    if (isLostStatusCode(args.toCode)) {
+      if (pipeline.status === "open") {
+        await prisma.leadPulsePipeline.update({
+          where: { id: pipeline.id },
+          data: { status: "lost", closedDate: toPrismaDate(todayIst()) },
+        });
+      }
+    } else if (pipeline.status === "lost") {
+      await prisma.leadPulsePipeline.update({
+        where: { id: pipeline.id },
+        data: { status: "open", closedDate: null },
+      });
+    }
+  } catch {
+    // Mirror is best-effort; the lead's own status change already committed.
+  }
 }
 
 type DealArgs = {

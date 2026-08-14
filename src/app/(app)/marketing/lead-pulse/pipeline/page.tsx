@@ -89,6 +89,9 @@ export default async function PipelinePage({
         service: { select: { id: true, name: true } },
         source: { select: { id: true, code: true, label: true } },
         user: { select: { id: true, username: true } },
+        // Present = this row mirrors a CRM lead, which owns it. The row is
+        // read-only here and links back to the lead instead.
+        leadLink: { select: { id: true } },
       },
     }),
     prisma.leadPulseRole.findMany({
@@ -147,6 +150,7 @@ export default async function PipelinePage({
         status: r.status as "open" | "closed_won" | "lost",
         closedDate: r.closedDate ? r.closedDate.toISOString().slice(0, 10) : null,
         notes: r.notes,
+        leadId: r.leadLink?.id ?? null,
       }))}
       forecast={forecast}
     />

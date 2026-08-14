@@ -12,6 +12,7 @@ import { normalizePhone, computeDedupeKey, emailKeyOf, LEAD_TEMPERATURE_VALUES }
 import { parseDobInput } from "@/lib/age";
 import { leadRowInclude, serializeLead, isActionOnlyStatus } from "@/lib/crm-leads";
 import { openRemarketingCampaign, stopRemarketingCampaigns } from "@/lib/crm-remarketing";
+import { syncPipelineToLeadStatus } from "@/lib/crm-enroll";
 import { REMARKETING_STATUS_CODE } from "@/lib/crm-reinquiry";
 
 export const dynamic = "force-dynamic";
@@ -250,6 +251,9 @@ export const PATCH = withApiHandler(async (req: Request, { params }: Ctx) => {
     } else if (statusCodeChange.fromCode === REMARKETING_STATUS_CODE) {
       await stopRemarketingCampaigns({ leadId: updated.id, actorId: userId });
     }
+    // Keep the Marketing forecast in step: a lost lead's deal drops out of the
+    // pipeline, a revived one comes back. Same best-effort contract as above.
+    await syncPipelineToLeadStatus({ leadId: updated.id, toCode: statusCodeChange.toCode });
   }
 
   return NextResponse.json({ lead: serializeLead(updated) });

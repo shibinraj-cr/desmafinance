@@ -36,11 +36,29 @@ export async function PATCH(
   if (!perms || !userId) return NextResponse.json({ error: "unauthorized" }, { status: 401 });
   const access = await getLeadPulseAccess(userId, perms);
 
-  const existing = await prisma.leadPulsePipeline.findUnique({ where: { id: params.id } });
+  const existing = await prisma.leadPulsePipeline.findUnique({
+    where: { id: params.id },
+    include: { leadLink: { select: { id: true } } },
+  });
   if (!existing) return NextResponse.json({ error: "not_found" }, { status: 404 });
   // L2 BDE can flip own rows; supervisors can flip anyone's.
   if (existing.userId !== userId && !access.canSupervise) {
     return NextResponse.json({ error: "forbidden" }, { status: 403 });
+  }
+  // A CRM-owned deal is won by ENROLLING the lead — that is what creates the
+  // candidate in the Party master, raises the revenue draft for Finance and
+  // opens the Operations project. Winning it here would mark the deal closed in
+  // Marketing with none of that behind it, and lose it likewise. Both belong on
+  // the lead: Enroll, or set a lost status.
+  if (existing.leadLink) {
+    return NextResponse.json(
+      {
+        error: "crm_owned",
+        leadId: existing.leadLink.id,
+        message: "This deal is owned by its CRM lead — enroll (or mark lost) there and it will update here.",
+      },
+      { status: 409 },
+    );
   }
 
   const body = await req.json().catch(() => null);
