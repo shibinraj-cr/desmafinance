@@ -46,51 +46,64 @@ how SMTP credentials work.
 
 `CRON_SECRET` (env) guards `/api/cron/crm-broadcasts`, like the other crons.
 
-## Running it on Wabis today
+## There is no number migration
 
-1. Set `wa_mirror_secret` to a long random string and `wa_mirror_enabled` to `1`.
-2. In Wabis, point an inbound-message webhook at
-   `https://<host>/api/crm/wa/webhook?key=<wa_mirror_secret>`.
-3. Conversations appear on the lead's WhatsApp tab and in `/crm/inbox`.
+Confirmed in Meta Business Manager: **we own the WhatsApp Business Account.** It
+sits under our own verified business portfolio, with Wabis listed as a partner
+holding full control. The number, the approved templates, the quality rating and
+the messaging tier all belong to the WABA — which is ours.
 
-Whether step 2 is possible is the open question — see *Blocking unknown* below.
+That removes most of what a cutover normally costs:
 
-## Cutover to the Cloud API — what only you can do
+- No deregistering and re-registering the number, so **no outage**.
+- No template re-approval — templates live on the WABA and are not moving.
+- No Meta Business verification to wait on; it is already done.
+- No dependency on Wabis cooperating with a migration.
 
-These are Meta account operations. They cannot be scripted from here, and the
-adapter has **not been exercised against a live WABA**, because that needs
-credentials this repo does not have.
+Leaving Wabis is reduced to two things: **subscribe our own Meta app to the
+WABA**, and later **remove Wabis's partner access**. (A genuine WABA-to-WABA move
+would need `POST /<DEST_WABA_ID>/migrate_message_templates`, which Meta only
+permits within one business. It does not apply to us.)
 
-1. **Meta Business verification.** Business Manager → Security Centre. Takes
-   days; everything else waits on it.
-2. **Create (or take ownership of) the WhatsApp Business Account** and add a
-   System User with `whatsapp_business_messaging` and
-   `whatsapp_business_management`. Generate a **permanent** token — the default
-   is short-lived and will expire silently mid-campaign.
-3. **Migrate the number off Wabis.** A number lives on one platform at a time.
-   Deregister it there, then register it on your WABA. There is an outage
-   between the two; do it out of hours.
-4. **Re-create and submit the templates.** Templates belong to the WABA. Meta
-   can migrate them with the number, but plan for re-approval — a campaign
-   template rejected on the morning of a send is the failure mode to avoid.
-5. **Set the webhook** to `https://<host>/api/crm/wa/webhook`, subscribed to the
-   `messages` field, with `hub.verify_token` = `wa_mirror_secret`. The endpoint
-   answers Meta's verification handshake already.
-6. **Fill the `wa_cloud_*` settings**, then set `wa_provider = cloud`.
+## Going live on the Cloud API
+
+Because both an app of ours and Wabis's app can be subscribed to the same WABA,
+this can be done **in parallel, with Wabis untouched** — no switchover moment.
+
+1. **Create a Meta app** in our own business and add a **System User** with
+   `whatsapp_business_messaging` and `whatsapp_business_management`. Generate a
+   **permanent** token; the default expires in hours and would fail silently
+   mid-campaign.
+2. **Subscribe the app to the WABA** (`POST /<WABA_ID>/subscribed_apps`), with
+   the webhook pointed at `https://<host>/api/crm/wa/webhook`, the `messages`
+   field selected, and `hub.verify_token` set to `wa_mirror_secret`. Our endpoint
+   already answers Meta's verification handshake.
+   *Verify this step first — it is the one assumption in this plan: that Meta
+   delivers to every subscribed app, so we receive alongside Wabis rather than
+   displacing them.*
+3. **Fill the `wa_cloud_*` settings**, set `wa_mirror_enabled` to `1`, and set
+   `wa_provider` to `cloud`.
+4. **Test on a Meta test number first** if you want zero exposure — the developer
+   app provides one free, able to message a few verified recipients. It exercises
+   the entire path without involving the production number at all.
 
 Then check, in this order: an inbound message appears in `/crm/inbox`; a
 free-text reply arrives on the phone; a template send works outside the 24h
 window; delivery ticks turn to read.
 
 If `wa_provider` is `cloud` but credentials are missing, the registry falls back
-to Wabis and logs `wa_cloud_not_configured` — so a half-finished cutover degrades
+to Wabis and logs `wa_cloud_not_configured` — so a half-finished setup degrades
 instead of breaking every send.
 
-### Before you migrate the number
+### Retiring Wabis
 
-Turn the mirror on and leave it running for a while first. Wabis almost
-certainly cannot export conversation history, so mirroring early means the inbox
-already holds months of context on the day you switch, instead of starting empty.
+Only once the above is proven. Remove Wabis's partner access in Business
+Manager — but check what their panel still does for you first: "full control"
+means they can manage templates and settings on our WABA today, and something
+operational may depend on that.
+
+Note that conversation history inside Wabis is not exportable. Whatever is not
+mirrored before you stop using them stays there.
 
 ## Broadcasts
 
@@ -115,18 +128,31 @@ Three honest fixes, in order of preference:
    `/api/cron/crm-broadcasts?key=$CRON_SECRET` every few minutes.
 3. **More daily entries** in `vercel.json`, the way `etime-sync` stacks three.
 
-## Blocking unknown
+## What Wabis can do, if we ever need it
 
-Whether the mirror can run on Wabis at all depends on two things nobody has
-confirmed:
+Investigated and answered — recorded because it was hard-won, though going
+straight to the Cloud API means we should not need any of it.
 
-1. Does Wabis expose a **send-message REST API**?
-2. Does it forward **every inbound message** to a webhook, not just ones a
-   Flow-Builder keyword bot matched?
+- **Send API exists.** `POST /api/v1/whatsapp/send` (free text, inside the 24h
+  window) and `/api/v1/whatsapp/send/template`. Auth is an `apiToken` request
+  *parameter*, not a header, and nothing is signed.
+- **Templates are addressed differently.** Wabis takes its own numeric
+  `template_id`, not Meta's template name, and variables are named per template
+  (`templateVariable-agent-1`) rather than positional `{{1}}`. Using it would
+  mean a mapping layer fed from `/api/v1/whatsapp/template/list` — which is
+  exactly the impedance mismatch the provider seam exists to keep out of the
+  rest of the CRM.
+- **Inbound webhook exists** but is off by default: Bot Manager → Bot Settings →
+  Webhook → "Trigger Webhook for Incoming Message". The URL field only appears
+  once the toggle is on. **Its payload shape is undocumented** — it would have to
+  be discovered empirically against a request-bin before anything could parse it.
+- **Media is downloadable without an API**: incoming media is mirrored to public,
+  unauthenticated URLs. Copy the bytes at ingest rather than storing the link —
+  the URLs are guessable-by-holder and Wabis has a media-deletion process.
 
-Yes to both → phases 1–3 run on Wabis and the cutover is calm and optional.
-No → the mirror cannot be fed on Wabis, and the sequence collapses into
-"migrate the number first, then build".
+The undocumented payload is the reason to prefer the Cloud API even for a
+transitional period: Meta's envelope is specified, versioned, and already parsed
+by `src/lib/wa/inbound.ts`.
 
 ## Decided: a thread binds to the oldest lead
 
@@ -148,5 +174,11 @@ thread happens to point at.
 
 ## Still open
 
-Only one thing, and it gates everything: whether Wabis can POST **every** inbound
-message to a URL we give it. See *Blocking unknown* above.
+1. **Does Meta deliver to every subscribed app?** The parallel-running plan rests
+   on it. Verify by subscribing our app and watching whether Wabis keeps
+   receiving. If it turns out to be exclusive, we fall back to running on Wabis's
+   send API and inbound webhook for the transition, and the payload shape has to
+   be reverse-engineered first.
+2. **Wabis's partner access.** They hold full control of our WABA today. Decide
+   what to downgrade it to, and confirm nothing operational depends on it before
+   changing anything.
