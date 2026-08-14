@@ -26,6 +26,12 @@ export type DetailAccess = {
   isAdmin: boolean;
   canAssign: boolean;
   canViewHistory: boolean;
+  /**
+   * Show the WhatsApp thread tab. Admin-only while the conversation mirror is in
+   * testing — see WA_UI_ADMIN_ONLY in src/lib/rbac.ts, which is the single line
+   * that opens the whole module to the team.
+   */
+  canSeeWhatsApp: boolean;
   /** BDE or CRM admin — may create leads, so may re-enroll an existing candidate. */
   canCreateLeads: boolean;
   userId: string;
@@ -283,18 +289,20 @@ export function LeadDetail({
               </span>
             )}
           </button>
-          <button
-            type="button"
-            onClick={() => setTab("whatsapp")}
-            className={
-              "px-md h-9 text-label-sm font-semibold transition " +
-              (tab === "whatsapp"
-                ? "bg-primary text-on-primary"
-                : "bg-surface-container-lowest text-on-surface-variant hover:bg-surface-container-low")
-            }
-          >
-            WhatsApp
-          </button>
+          {access.canSeeWhatsApp && (
+            <button
+              type="button"
+              onClick={() => setTab("whatsapp")}
+              className={
+                "px-md h-9 text-label-sm font-semibold transition " +
+                (tab === "whatsapp"
+                  ? "bg-primary text-on-primary"
+                  : "bg-surface-container-lowest text-on-surface-variant hover:bg-surface-container-low")
+              }
+            >
+              WhatsApp
+            </button>
+          )}
           {access.canViewHistory && (
             <button
               type="button"
@@ -352,7 +360,9 @@ export function LeadDetail({
         />
       )}
 
-      {tab === "whatsapp" && <WhatsAppThreadPanel leadId={lead.id} leadName={lead.candidateName} />}
+      {tab === "whatsapp" && access.canSeeWhatsApp && (
+        <WhatsAppThreadPanel leadId={lead.id} leadName={lead.candidateName} />
+      )}
 
       {tab === "history" && <HistoryPanel leadId={lead.id} bdes={masters.bdes} />}
 

@@ -86,9 +86,25 @@ export const ALWAYS_VISIBLE_PAGES = ["/me/attendance", "/me/regularization"];
 // /crm/settings): these are legacy self-report surfaces fully superseded by CRM
 // capture, so no non-admin should reach them. The page + API route guards
 // enforce the same rule server-side.
+/**
+ * WhatsApp module rollout gate — ONE line to open the module to the team.
+ *
+ * The inbox and broadcasts ship admin-only while the conversation mirror is
+ * tested against the live number, because until the mirror is switched on and
+ * Wabis is forwarding messages, everyone else would see an empty inbox they
+ * cannot explain. Set this to `false` to release both to every CRM user; the
+ * pages, the nav and the per-lead WhatsApp tab all read it, and each already
+ * authorises correctly for the wider audience (canViewLeads / canBulkEmail).
+ */
+export const WA_UI_ADMIN_ONLY = true;
+
 export const ADMIN_RESTRICTED_PAGES = [
   "/marketing/lead-pulse/daily-entry",
   "/marketing/lead-pulse/director-entry",
+  // Removed automatically when WA_UI_ADMIN_ONLY flips — the CRM-user rule below
+  // then takes over for the inbox, and /crm/broadcasts falls back to its own
+  // canBulkEmail gate.
+  ...(WA_UI_ADMIN_ONLY ? ["/crm/inbox", "/crm/broadcasts"] : []),
 ];
 
 export function canSeePage(p: Permissions, href: string): boolean {

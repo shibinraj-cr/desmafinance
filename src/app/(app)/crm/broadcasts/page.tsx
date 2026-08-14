@@ -3,6 +3,7 @@ import { TopBar } from "@/components/TopBar";
 import { prisma } from "@/lib/prisma";
 import { getCurrentUserAndPermissions } from "@/lib/permissions";
 import { getCrmAccess } from "@/lib/crm-rbac";
+import { WA_UI_ADMIN_ONLY } from "@/lib/rbac";
 import { getWaProvider } from "@/lib/wa/registry";
 import { getBroadcastConfig } from "@/lib/wa/broadcast";
 import { CRM_TEMPLATE_MERGE_FIELDS } from "@/lib/crm";
@@ -27,13 +28,16 @@ export default async function CrmBroadcastsPage() {
   if (!userId || !perms) redirect("/login");
 
   const access = await getCrmAccess(userId, perms);
-  if (!access.canBulkEmail) {
+  // Same rollout gate as the inbox — see WA_UI_ADMIN_ONLY.
+  if (!access.canBulkEmail || (WA_UI_ADMIN_ONLY && !access.isAdmin)) {
     return (
       <>
         <TopBar title="WhatsApp Broadcasts" subtitle="CRM" />
         <div className="p-margin">
           <div className="rounded-xl border border-outline-variant bg-surface-container-lowest p-lg text-on-surface-variant">
-            Broadcasts are available to CRM admins only.
+            {WA_UI_ADMIN_ONLY && access.canBulkEmail
+              ? "WhatsApp broadcasts are still in testing and are limited to admins."
+              : "Broadcasts are available to CRM admins only."}
           </div>
         </div>
       </>

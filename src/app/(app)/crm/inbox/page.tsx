@@ -3,6 +3,7 @@ import { TopBar } from "@/components/TopBar";
 import { prisma } from "@/lib/prisma";
 import { getCurrentUserAndPermissions } from "@/lib/permissions";
 import { getCrmAccess } from "@/lib/crm-rbac";
+import { WA_UI_ADMIN_ONLY } from "@/lib/rbac";
 import { getWaMirrorConfig } from "@/lib/wa/mirror";
 import { getWaProvider } from "@/lib/wa/registry";
 import { InboxClient } from "./client";
@@ -26,13 +27,17 @@ export default async function CrmInboxPage() {
   if (!userId || !perms) redirect("/login");
 
   const access = await getCrmAccess(userId, perms);
-  if (!access.canViewLeads) {
+  // Hidden from the nav by ADMIN_RESTRICTED_PAGES while WA_UI_ADMIN_ONLY holds;
+  // checked here too, so knowing the URL is not a way around the rollout gate.
+  if (!access.canViewLeads || (WA_UI_ADMIN_ONLY && !access.isAdmin)) {
     return (
       <>
         <TopBar title="WhatsApp Inbox" subtitle="CRM" />
         <div className="p-margin">
           <div className="rounded-xl border border-outline-variant bg-surface-container-lowest p-lg text-on-surface-variant">
-            The WhatsApp inbox is available to CRM users only.
+            {WA_UI_ADMIN_ONLY && access.canViewLeads
+              ? "The WhatsApp inbox is still in testing and is limited to admins."
+              : "The WhatsApp inbox is available to CRM users only."}
           </div>
         </div>
       </>
