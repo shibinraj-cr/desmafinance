@@ -106,8 +106,24 @@ export type WaIngestSummary = {
  *
  * Matched against BOTH phone fields because a candidate may well message from
  * the alternate number they gave us — `phoneMatchKeys` exists for the same
- * reason on the import path. Oldest lead wins, matching how a re-inquiry folds
- * onto the canonical record rather than the newest duplicate.
+ * reason on the import path.
+ *
+ * OLDEST lead wins, and that is a deliberate product decision, not an artefact
+ * of the query. One number can map to several leads here (re-enrollment creates
+ * a new lead per service), but a number has exactly one WhatsApp thread, so the
+ * thread must pick one. Binding to the oldest matches how a re-inquiry folds
+ * onto the canonical record rather than the newest duplicate, and it never
+ * moves — the conversation stays attached to the same lead for its whole life.
+ *
+ * The known cost, accepted: for a re-enrolled candidate the inbox's context rail
+ * shows the original lead, which is usually already closed, rather than the
+ * service the consultant is currently working. Binding to the most recently
+ * active lead would fix the rail but make the link move as leads change, which
+ * loses stable attribution. Stability was chosen.
+ *
+ * This choice does NOT affect consent or de-duplication: opt-out is stamped
+ * across every lead sharing the number, and broadcasts claim numbers rather than
+ * leads, both independent of which lead the thread points at.
  */
 async function findLeadByPhone(phoneE164: string) {
   return prisma.lead.findFirst({

@@ -128,9 +128,25 @@ Yes to both → phases 1–3 run on Wabis and the cutover is calm and optional.
 No → the mirror cannot be fed on Wabis, and the sequence collapses into
 "migrate the number first, then build".
 
-## Deliberately not decided
+## Decided: a thread binds to the oldest lead
 
-The mirror binds a thread to the **oldest** lead sharing a number. For a
-re-enrolled candidate that is usually the closed original rather than the active
-one, so the inbox's context rail will show the old record. Changing it alters
-attribution, so it wants a product decision rather than a quiet default.
+One number can map to several leads (re-enrollment creates a new lead per
+service) but has exactly one WhatsApp thread, so the thread has to pick one.
+**It binds to the oldest** — the same rule a re-inquiry follows when folding onto
+a canonical record — and the link never moves for the life of the conversation.
+
+The accepted cost: for a re-enrolled candidate, the inbox's context rail shows
+the original lead, usually already closed, rather than the service the
+consultant is currently working. Binding to the most recently active lead would
+fix the rail but let the link move as leads change, losing stable attribution.
+Stability was chosen over convenience.
+
+This affects **display only**. Consent and de-duplication are independent of it:
+an opt-out is stamped across every lead sharing the number, and a broadcast
+claims numbers rather than leads, so neither can be defeated by which lead the
+thread happens to point at.
+
+## Still open
+
+Only one thing, and it gates everything: whether Wabis can POST **every** inbound
+message to a URL we give it. See *Blocking unknown* above.
