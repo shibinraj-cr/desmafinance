@@ -23,6 +23,24 @@ function canEdit(opts: { ownerId: string; actorId: string; canSupervise: boolean
 }
 
 /**
+ * A pipeline row created from a CRM lead is a MIRROR, not a record — the CRM
+ * lead owns the service / value / expected close date and re-writes them onto
+ * this row on every "Set deal". Editing or deleting the mirror here would be
+ * silently overwritten by the next CRM edit, and would show the two modules
+ * disagreeing until then. The edit belongs on the lead itself.
+ */
+function crmOwned(leadId: string) {
+  return NextResponse.json(
+    {
+      error: "crm_owned",
+      leadId,
+      message: "This deal is owned by its CRM lead — edit it there and it will update here.",
+    },
+    { status: 409 },
+  );
+}
+
+/**
  * PATCH /api/marketing/lead-pulse/pipeline/[id]
  *
  * Edit any non-status field while the row is still open. Closed rows
@@ -34,11 +52,15 @@ export async function PATCH(req: NextRequest, { params }: { params: { id: string
   if (!perms || !userId) return NextResponse.json({ error: "unauthorized" }, { status: 401 });
   const access = await getLeadPulseAccess(userId, perms);
 
-  const existing = await prisma.leadPulsePipeline.findUnique({ where: { id: params.id } });
+  const existing = await prisma.leadPulsePipeline.findUnique({
+    where: { id: params.id },
+    include: { leadLink: { select: { id: true } } },
+  });
   if (!existing) return NextResponse.json({ error: "not_found" }, { status: 404 });
   if (!canEdit({ ownerId: existing.userId, actorId: userId, canSupervise: access.canSupervise })) {
     return NextResponse.json({ error: "forbidden" }, { status: 403 });
   }
+  if (existing.leadLink) return crmOwned(existing.leadLink.id);
   if (existing.status !== "open") {
     return NextResponse.json({ error: "row_not_open" }, { status: 409 });
   }
@@ -85,11 +107,18 @@ export async function DELETE(_req: NextRequest, { params }: { params: { id: stri
   if (!perms || !userId) return NextResponse.json({ error: "unauthorized" }, { status: 401 });
   const access = await getLeadPulseAccess(userId, perms);
 
-  const existing = await prisma.leadPulsePipeline.findUnique({ where: { id: params.id } });
+  const existing = await prisma.leadPulsePipeline.findUnique({
+    where: { id: params.id },
+    include: { leadLink: { select: { id: true } } },
+  });
   if (!existing) return NextResponse.json({ error: "not_found" }, { status: 404 });
   if (!canEdit({ ownerId: existing.userId, actorId: userId, canSupervise: access.canSupervise })) {
     return NextResponse.json({ error: "forbidden" }, { status: 403 });
   }
+  // Deleting the mirror would strand the lead's deal: the lead keeps its
+  // expectedValue / expectedCloseDate but drops out of every forecast, with
+  // nothing in either module showing that it happened.
+  if (existing.leadLink) return crmOwned(existing.leadLink.id);
   if (existing.status !== "open") {
     // Force a re-open first so closed_won side-effects are reversed
     // explicitly and we don't strand a LeadPulseDailyClose.
