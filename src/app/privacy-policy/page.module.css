@@ -1,0 +1,150 @@
+.page {
+  --ink: #16191d;
+  --muted: #5b6470;
+  --line: #e3e6ea;
+  --bg: #ffffff;
+  --accent: #1a5fb4;
+  --soft: #f6f8fa;
+
+  background: var(--bg);
+  color: var(--ink);
+  font: 16px/1.7 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  min-height: 100vh;
+}
+
+@media (prefers-color-scheme: dark) {
+  .page {
+    --ink: #e8eaed;
+    --muted: #9aa3af;
+    --line: #2b3138;
+    --bg: #101317;
+    --accent: #7cb0f0;
+    --soft: #181c22;
+  }
+}
+
+.wrap {
+  max-width: 800px;
+  margin: 0 auto;
+  padding: 56px 24px 96px;
+}
+
+.header {
+  border-bottom: 1px solid var(--line);
+  padding-bottom: 28px;
+  margin-bottom: 40px;
+}
+
+.h1 {
+  font-size: 2rem;
+  line-height: 1.25;
+  margin: 0 0 12px;
+  letter-spacing: -0.02em;
+  font-weight: 700;
+}
+
+.dates {
+  color: var(--muted);
+  font-size: 0.9rem;
+  margin: 0;
+}
+
+.h2 {
+  font-size: 1.25rem;
+  margin: 44px 0 14px;
+  letter-spacing: -0.01em;
+  scroll-margin-top: 24px;
+  font-weight: 600;
+}
+
+.h3 {
+  font-size: 1rem;
+  margin: 28px 0 10px;
+  color: var(--ink);
+  font-weight: 600;
+}
+
+.page p,
+.page li {
+  color: #2b3138;
+}
+
+@media (prefers-color-scheme: dark) {
+  .page p,
+  .page li {
+    color: #d3d8de;
+  }
+}
+
+.page ul,
+.page ol {
+  padding-left: 22px;
+  margin: 12px 0;
+}
+
+.page li {
+  margin: 6px 0;
+}
+
+.page a {
+  color: var(--accent);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+.page a:hover {
+  text-decoration: none;
+}
+
+.page code {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 0.9em;
+  background: var(--soft);
+  padding: 1px 5px;
+  border-radius: 4px;
+}
+
+.table {
+  width: 100%;
+  border-collapse: collapse;
+  margin: 18px 0;
+  font-size: 0.94rem;
+}
+
+.table th,
+.table td {
+  text-align: left;
+  padding: 11px 12px;
+  border: 1px solid var(--line);
+  vertical-align: top;
+}
+
+.table th {
+  background: var(--soft);
+  font-weight: 600;
+}
+
+.note {
+  background: var(--soft);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 16px 18px;
+  margin: 22px 0;
+}
+
+.note p {
+  margin: 0;
+}
+
+.idblock {
+  color: var(--muted);
+  font-size: 0.9rem;
+}
+
+.footer {
+  margin-top: 56px;
+  padding-top: 24px;
+  border-top: 1px solid var(--line);
+  color: var(--muted);
+  font-size: 0.88rem;
+}
