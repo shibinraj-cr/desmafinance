@@ -26,7 +26,7 @@ import { normalizePhone } from "../crm";
 import { toWabisPhone } from "../crm-webhook";
 import { logger } from "../logger";
 import { getSetting, WABIS_API_TOKEN_KEY, WA_CLOUD_PHONE_NUMBER_ID_KEY } from "../app-settings";
-import { normalizeMessageType, parseWaTimestamp, type WaMessageType } from "./inbound";
+import { extractBody, normalizeMessageType, parseWaTimestamp, type WaMessageType } from "./inbound";
 import { isAwaitingReply } from "./inbox";
 import { sessionExpiryFrom } from "./mirror";
 
@@ -59,6 +59,15 @@ export type WabisImportSummary = {
   sampleRaw: unknown;
   /** Field names seen on raw messages — the fastest way to spot a mis-mapping. */
   observedKeys: string[];
+  /**
+   * Every distinct `sender` value seen, with how each was classified.
+   *
+   * `sender` decides direction and its value set is undocumented — the spec only
+   * ever shows "bot". Rather than guess and quietly file half a thread on the
+   * wrong side, the run reports what it actually met, so an unrecognised value
+   * shows up as a line to fix instead of as silently mis-rendered history.
+   */
+  observedSenders: { value: string; direction: string; count: number }[];
   /**
    * The first raw RESPONSE, redacted and truncated — captured whether or not any
    * records were found.
@@ -133,6 +142,15 @@ async function wabisPost(
   return parsed;
 }
 
+/** The server's own next-page cursor (`nextOffset`), when it gives one. */
+export function nextOffsetOf(payload: unknown): number | null {
+  const o = asObject(payload);
+  if (!o) return null;
+  const raw = o.nextOffset ?? o.next_offset;
+  const n = typeof raw === "number" ? raw : typeof raw === "string" ? Number(raw) : NaN;
+  return Number.isFinite(n) && n > 0 ? n : null;
+}
+
 /** Wabis's in-body failure, or null when the response is a success. */
 export function wabisErrorMessage(payload: unknown): string | null {
   const o = asObject(payload);
@@ -191,35 +209,139 @@ export type WabisRawMessage = {
  * one looks like we said something we never did.
  */
 export function normalizeWabisMessage(raw: Record<string, unknown>): WabisRawMessage {
-  const dirRaw = (pick(raw, "direction", "type_of_message", "message_direction", "is_sent", "sent_by") ?? "").toLowerCase();
-  const outbound =
-    dirRaw === "out" ||
-    dirRaw === "outgoing" ||
-    dirRaw === "sent" ||
-    dirRaw === "business" ||
-    dirRaw === "agent" ||
-    dirRaw === "1" ||
-    raw.is_outgoing === true ||
-    raw.from_business === true;
+  // `message_content` is DOUBLE-ENCODED: a JSON string holding the raw WhatsApp
+  // payload. The type and the text both live inside it — there is no flat `type`
+  // or `text` field on the record — so it is parsed first and the existing Meta
+  // helpers do the rest, since the inner object is Meta's own message shape.
+  const inner = parseMessageContent(raw.message_content);
+  const contentString = typeof raw.message_content === "string" ? raw.message_content : null;
 
-  const content = pick(raw, "message_content", "message", "text", "body", "content", "caption");
-  // Wabis rewrites incoming media to its own storage; the console renders that
-  // URL inline in the message content, so it may arrive as the body itself.
+  const type = inner
+    ? normalizeMessageType(pick(inner, "type"))
+    : normalizeMessageType(pick(raw, "message_type", "type", "media_type"));
+
+  const body = extractWabisBody(inner, type, contentString) ?? pick(raw, "message", "text", "body", "content", "caption");
+
+  // Media lives somewhere inside the inner payload under a key we have not
+  // confirmed, so the storage URL is recovered from the raw text as well —
+  // Wabis rewrites incoming media to its own bucket, and that URL is present in
+  // the stored record however it is nested.
   const mediaUrl =
+    (inner && pick(inner, "media_url", "url", "link")) ??
     pick(raw, "media_url", "mediaUrl", "file_url", "attachment_url", "url") ??
-    (content && /^https?:\/\/\S+$/i.test(content) ? content : null) ??
-    (content?.match(/https?:\/\/\S*wasabisys\.com\/\S+/i)?.[0] ?? null);
+    (contentString?.match(/https?:\/\/\S*wasabisys\.com\/[^\s"'\\]+/i)?.[0] ?? null) ??
+    (body && /^https?:\/\/\S+$/i.test(body) ? body : null);
 
   return {
-    providerMessageId: pick(raw, "wa_message_id", "message_id", "wamid", "id"),
-    direction: outbound ? "out" : "in",
-    type: normalizeMessageType(pick(raw, "message_type", "type", "media_type")),
-    body: content,
+    // The real Meta wamid, which is what a delivery-status callback joins on.
+    // `id` is Wabis's own row id and is deliberately NOT used as a fallback:
+    // storing it in providerMessageId would poison the unique index that makes
+    // re-running the import safe.
+    providerMessageId: pick(raw, "wa_message_id", "message_id", "wamid"),
+    direction: wabisDirection(raw),
+    type,
+    body,
     mediaUrl,
-    occurredAt: parseWaTimestamp(
-      raw.timestamp ?? raw.created_at ?? raw.createdAt ?? raw.sent_at ?? raw.date ?? raw.time,
-    ),
+    occurredAt: parseWabisTime(raw.conversation_time) ?? parseWaTimestamp(raw.timestamp ?? raw.created_at ?? raw.sent_at),
   };
+}
+
+/**
+ * The readable text of a stored Wabis message.
+ *
+ * `extractBody` handles Meta's INBOUND webhook shapes and is left alone — it is
+ * correct for those and tested against them. What it does not cover is the
+ * OUTBOUND SEND payload, which is what Wabis stores for its own bot messages:
+ * there, an interactive message carries `interactive.body.text` (an object),
+ * where an inbound one would carry `interactive.button_reply.title` (a string).
+ * Reaching into that here keeps a Wabis storage quirk out of the shared parser.
+ *
+ * Falls back to the raw string when `message_content` was never JSON at all,
+ * since some records are plain text.
+ */
+export function extractWabisBody(
+  inner: Record<string, unknown> | null,
+  type: WaMessageType,
+  contentString: string | null,
+): string | null {
+  if (inner) {
+    const viaShared = extractBody(inner, type);
+    if (viaShared) return viaShared;
+
+    // Outbound interactive/template: body first, then header as a last resort —
+    // a header-only message is rare but reads better than an empty bubble.
+    const interactive = asObject(inner.interactive) ?? asObject(inner.template);
+    if (interactive) {
+      for (const section of ["body", "header", "footer"]) {
+        const text = pick(asObject(interactive[section]) ?? {}, "text");
+        if (text) return text;
+      }
+    }
+    return null;
+  }
+
+  // Not JSON — the record simply holds text. A URL-only body is still the body;
+  // the media extractor reads it separately.
+  return contentString;
+}
+
+/** The inner WhatsApp payload, or null when it is absent or unparseable. */
+export function parseMessageContent(value: unknown): Record<string, unknown> | null {
+  if (asObject(value)) return asObject(value);
+  if (typeof value !== "string") return null;
+  const t = value.trim();
+  if (!t.startsWith("{")) return null;
+  try {
+    return asObject(JSON.parse(t));
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Which way a Wabis message went.
+ *
+ * The field is `sender`, and its value set is NOT documented — the spec's only
+ * example shows `"bot"`. So the outbound markers we know are matched explicitly
+ * and everything else falls to inbound, which is the safer misfile: a wrongly
+ * inbound message reads as the candidate saying something odd, a wrongly
+ * outbound one looks like we said something we never did.
+ *
+ * `agent_name` is a separate axis — human versus automation — but a message
+ * carrying one was necessarily sent BY us, so it settles direction too.
+ */
+export function wabisDirection(raw: Record<string, unknown>): "in" | "out" {
+  const sender = (
+    pick(raw, "sender", "direction", "type_of_message", "message_direction", "sent_by", "is_sent") ?? ""
+  ).toLowerCase();
+  const OUTBOUND = new Set(["bot", "agent", "business", "out", "outgoing", "sent", "system", "automation"]);
+  if (OUTBOUND.has(sender)) return "out";
+  if (pick(raw, "agent_name")) return "out";
+  if (raw.is_outgoing === true || raw.from_business === true) return "out";
+  return "in";
+}
+
+/**
+ * Wabis timestamps are `Y-m-d H:i:s` with NO timezone marker.
+ *
+ * Left to JavaScript that string is read in the server's zone — UTC on Vercel —
+ * which would shift every imported message by the offset and scramble a thread
+ * that mixes imported and live messages. The panel displays IST and the account
+ * is Asia/Kolkata, so it is read as IST here.
+ *
+ * That is an assumption, not a documented fact. It is one constant to change,
+ * and the dry run surfaces a raw record so it can be checked against a message
+ * whose real time is known.
+ */
+const WABIS_UTC_OFFSET = "+05:30";
+
+export function parseWabisTime(value: unknown): Date | null {
+  if (typeof value !== "string") return null;
+  const t = value.trim();
+  if (!t) return null;
+  const m = t.match(/^(\d{4})-(\d{2})-(\d{2})[ T](\d{2}):(\d{2}):(\d{2})$/);
+  if (!m) return parseWaTimestamp(t);
+  return parseWaTimestamp(`${m[1]}-${m[2]}-${m[3]}T${m[4]}:${m[5]}:${m[6]}${WABIS_UTC_OFFSET}`);
 }
 
 /** Redact anything that looks like a token before a raw sample reaches a browser. */
@@ -250,6 +372,7 @@ export async function importWabisHistory(opts: WabisImportOptions): Promise<Wabi
     stoppedEarly: false,
     sampleRaw: null,
     observedKeys: [],
+    observedSenders: [],
     rawResponse: null,
     requestSent: null,
     errors: [],
@@ -269,6 +392,7 @@ export async function importWabisHistory(opts: WabisImportOptions): Promise<Wabi
 
   const deadline = Date.now() + TIME_BUDGET_MS;
   const keys = new Set<string>();
+  const senders = new Map<string, { direction: string; count: number }>();
 
   // First response wins — one envelope is enough to read the shape off, and
   // capturing every page would bury it.
@@ -310,39 +434,42 @@ export async function importWabisHistory(opts: WabisImportOptions): Promise<Wabi
     }
 
     const messages: WabisRawMessage[] = [];
-    // Guards against Wabis honouring neither pagination parameter and returning
-    // the same first page forever, which would silently burn the whole time
-    // budget on one contact and look like a slow import rather than a bug.
+    // Guards against pagination not advancing and returning the same page
+    // forever, which would silently burn the whole time budget on one contact
+    // and look like a slow import rather than a bug.
     const seenIds = new Set<string>();
+    // Wabis's spec describes `offset` as "Page number of pagination. Default 1",
+    // but its response returns `nextOffset: 101` for a limit of 10 — which is a
+    // record offset, not a page. The page documents both and reconciles neither.
+    //
+    // So neither is assumed: we start at the documented default and then follow
+    // whatever `nextOffset` the response gives us. That is correct under either
+    // reading, and needs no round-trip to settle which one is real.
+    let offset = 1;
     for (let page = 1; ; page++) {
       if (Date.now() > deadline) {
         summary.stoppedEarly = true;
         break;
       }
+      let payload: unknown;
       let batch: Record<string, unknown>[];
       try {
-        batch = findRecordArray(
-          await wabisPost(
-            "/get/conversation",
-            token,
-            {
-              // Digits only, no leading plus — Wabis's own send spec is explicit
-              // that phone_number is "E164 digits, country code, no +". Passing
-              // the CRM's stored "+91…" is why the first run matched nothing.
-              phone_number: wabisPhone,
-              phone_number_id: config.phoneNumberId ?? "",
-              // Required — Wabis refuses the request outright without it.
-              limit: String(PAGE_SIZE),
-              // Which pagination parameter it honours is undocumented, so both
-              // conventions are sent. Whichever it ignores costs nothing; the
-              // duplicate-page guard below catches the case where it ignores
-              // BOTH and would otherwise return page 1 forever.
-              page: String(page),
-              offset: String((page - 1) * PAGE_SIZE),
-            },
-            capture,
-          ),
+        payload = await wabisPost(
+          "/get/conversation",
+          token,
+          {
+            // Digits only, no leading plus — Wabis's own send spec is explicit
+            // that phone_number is "E164 digits, country code, no +". Passing
+            // the CRM's stored "+91…" is why the first run matched nothing.
+            phone_number: wabisPhone,
+            phone_number_id: config.phoneNumberId ?? "",
+            // Both required; limit is capped at 50 by the API.
+            limit: String(PAGE_SIZE),
+            offset: String(offset),
+          },
+          capture,
         );
+        batch = findRecordArray(payload);
       } catch (e) {
         summary.errors.push(`${phoneE164}: ${e instanceof Error ? e.message : String(e)}`);
         break;
@@ -355,6 +482,12 @@ export async function importWabisHistory(opts: WabisImportOptions): Promise<Wabi
         for (const k of Object.keys(raw)) keys.add(k);
 
         const normalised = normalizeWabisMessage(raw);
+
+        const senderValue = pick(raw, "sender") ?? "(absent)";
+        const seenSender = senders.get(senderValue);
+        if (seenSender) seenSender.count++;
+        else senders.set(senderValue, { direction: normalised.direction, count: 1 });
+
         // Identity for the repeat check. Falling back to the whole record keeps
         // the guard working for a provider that returns no id at all — without
         // it, an id-less response would loop until the deadline.
@@ -370,6 +503,11 @@ export async function importWabisHistory(opts: WabisImportOptions): Promise<Wabi
       // than ask again for the same rows.
       if (fresh === 0) break;
       if (batch.length < PAGE_SIZE) break;
+
+      // Follow the server's own cursor when it offers one; fall back to
+      // incrementing the page number, which is the other documented reading.
+      const next = nextOffsetOf(payload);
+      offset = next !== null && next !== offset ? next : offset + 1;
     }
 
     if (messages.length === 0) continue;
@@ -389,6 +527,9 @@ export async function importWabisHistory(opts: WabisImportOptions): Promise<Wabi
   }
 
   summary.observedKeys = [...keys].sort();
+  summary.observedSenders = [...senders.entries()]
+    .map(([value, v]) => ({ value, direction: v.direction, count: v.count }))
+    .sort((a, b) => b.count - a.count);
   if (summary.errors.length) logger.warn("wabis_import_errors", { count: summary.errors.length });
   return summary;
 }
