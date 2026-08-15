@@ -119,6 +119,10 @@ export function WhatsAppModuleCard() {
   const [importMax, setImportMax] = useState("25");
   const [importBusy, setImportBusy] = useState(false);
   const [importResult, setImportResult] = useState<ImportSummary | null>(null);
+  const [keyBusy, setKeyBusy] = useState(false);
+  // Local to this card: the page-level note renders at the top, which is out of
+  // sight from the button that triggered it.
+  const [keyNote, setKeyNote] = useState<string | null>(null);
 
   const [testPhone, setTestPhone] = useState("");
   const [testBody, setTestBody] = useState("");
@@ -404,22 +408,43 @@ export function WhatsAppModuleCard() {
           against before anything is written.
         </p>
 
+        {/* This field has its own Save. The page-level Save button sits above
+            this card, so a key typed here with no adjacent button reads as saved
+            when it is not — which is exactly how the first attempt failed. */}
         <Field
           label="Wabis API key"
           hint={
             s?.wabisApi.hasToken
-              ? `Stored: ${s.wabisApi.tokenHint} — leave blank to keep it.`
+              ? `Stored: ${s.wabisApi.tokenHint}`
               : "From Wabis: avatar menu → API Developer. Used only for this import."
           }
         >
-          <input
-            type="password"
-            value={wabisApiToken}
-            onChange={(e) => setWabisApiToken(e.target.value)}
-            placeholder={s?.wabisApi.hasToken ? "•••••• (unchanged)" : ""}
-            className={input + " w-full max-w-md font-mono text-label-sm"}
-          />
+          <div className="flex flex-wrap items-center gap-sm">
+            <input
+              type="password"
+              value={wabisApiToken}
+              onChange={(e) => setWabisApiToken(e.target.value)}
+              placeholder={s?.wabisApi.hasToken ? "•••••• (stored)" : "Paste the key, then Save key"}
+              className={input + " flex-1 min-w-[260px] max-w-md font-mono text-label-sm"}
+            />
+            <button
+              type="button"
+              className={primary}
+              disabled={keyBusy || !wabisApiToken.trim()}
+              onClick={() => void saveWabisKey()}
+            >
+              {keyBusy ? "Saving…" : "Save key"}
+            </button>
+          </div>
         </Field>
+
+        {keyNote && <p className="text-label-sm text-primary">{keyNote}</p>}
+
+        {!s?.wabisApi.hasToken && (
+          <p className="text-label-sm text-on-surface-variant">
+            Save the key before running anything here — the import reads it from the server, not from this box.
+          </p>
+        )}
 
         <div className="flex flex-wrap items-end gap-base">
           <Field label="Only this number" hint="Strongly recommended for the first run.">
@@ -431,7 +456,13 @@ export function WhatsAppModuleCard() {
         </div>
 
         <div className="flex flex-wrap items-center gap-base">
-          <button type="button" className={ghost} disabled={importBusy} onClick={() => void runImport(true)}>
+          <button
+            type="button"
+            className={ghost}
+            disabled={importBusy || !s?.wabisApi.hasToken}
+            title={s?.wabisApi.hasToken ? undefined : "Save the Wabis API key first"}
+            onClick={() => void runImport(true)}
+          >
             {importBusy ? "Working…" : "Dry run"}
           </button>
           <button
@@ -449,6 +480,24 @@ export function WhatsAppModuleCard() {
       </div>
     </div>
   );
+
+  async function saveWabisKey() {
+    setKeyBusy(true);
+    setKeyNote(null);
+    const r = await fetch("/api/crm/wa/settings", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ action: "save_wabis_key", token: wabisApiToken }),
+    }).catch(() => null);
+    setKeyBusy(false);
+    if (!r?.ok) {
+      setKeyNote("The Wabis API key didn’t save.");
+      return;
+    }
+    setKeyNote("Saved. You can dry-run now.");
+    // Reload so `hasToken` flips and the Dry run button unlocks.
+    void load();
+  }
 
   async function runImport(dryRun: boolean) {
     setImportBusy(true);
