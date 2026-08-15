@@ -145,7 +145,12 @@ describe("consultant-routed events / purposes", () => {
 
 describe("isWabisWebhookUrl", () => {
   it("accepts a Wabis workflow callback URL", () => {
-    expect(isWabisWebhookUrl("https://bot.wabis.in/webhook/whatsapp-workflow/138003.145848.411309.1784625851")).toBe(
+    // Shape only — the id segments are deliberately fake. A real workflow URL is
+    // a bearer credential: anyone holding one can trigger it and send WhatsApp as
+    // us, so it must never sit in a public repository, least of all in a fixture
+    // where it looks like test data. isWabisWebhookUrl checks nothing but https
+    // and a /webhook/ path, so nothing is lost by anonymising it.
+    expect(isWabisWebhookUrl("https://bot.wabis.in/webhook/whatsapp-workflow/000000.000000.000000.0000000000")).toBe(
       true,
     );
   });
