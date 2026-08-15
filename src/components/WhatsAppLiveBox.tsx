@@ -24,14 +24,20 @@ type LiveConversation = {
   name: string;
   leadId: string | null;
   unreadCount: number;
+  awaitingReply: boolean;
   lastMessageAt: string | null;
+  assignedToName: string | null;
   preview: string | null;
+  previewDirection: string | null;
 };
 
 type LivePayload = {
   enabled: boolean;
   reason?: string;
+  /** All open threads. */
   count: number;
+  /** Of those, how many are waiting on us — the number worth acting on. */
+  waiting: number;
   conversations: LiveConversation[];
 };
 
@@ -93,24 +99,33 @@ export function WhatsAppLiveBox() {
     };
   }, [load]);
 
+  // Hidden only when there is genuinely nothing — a live list of an empty desk
+  // is just a permanent zero in the corner of the screen.
   if (!data?.enabled || data.count === 0) return null;
 
   return (
-    <div className="rounded-lg border border-brand-line bg-brand-elevated overflow-hidden shrink-0">
+    <div className="rounded-lg border border-brand-line bg-brand-elevated overflow-hidden shrink-0 flex flex-col max-h-[46vh]">
       <Link
-        href="/crm/inbox?filter=needs_reply"
-        className="flex items-center gap-xs px-sm h-8 border-b border-brand-line hover:bg-white/5 transition"
+        href={data.waiting > 0 ? "/crm/inbox?filter=needs_reply" : "/crm/inbox"}
+        className="flex items-center gap-xs px-sm h-8 border-b border-brand-line hover:bg-white/5 transition shrink-0"
       >
         <span className="material-symbols-outlined text-emerald-400" style={{ fontSize: 16 }} aria-hidden="true">
           forum
         </span>
-        <span className="text-label-sm font-semibold text-on-brand flex-1">Waiting on reply</span>
-        <span className="inline-grid place-items-center min-w-[18px] h-[18px] px-[5px] rounded-full text-[10px] font-bold bg-emerald-500 text-white tabular-nums">
-          {data.count}
-        </span>
+        <span className="text-label-sm font-semibold text-on-brand flex-1">WhatsApp</span>
+        {/* The badge counts what needs answering, not what exists — a total is
+            decoration, an unanswered count is a queue. */}
+        {data.waiting > 0 && (
+          <span
+            className="inline-grid place-items-center min-w-[18px] h-[18px] px-[5px] rounded-full text-[10px] font-bold bg-emerald-500 text-white tabular-nums"
+            title={`${data.waiting} waiting on a reply`}
+          >
+            {data.waiting}
+          </span>
+        )}
       </Link>
 
-      <ul className="divide-y divide-brand-line">
+      <ul className="divide-y divide-brand-line overflow-y-auto scrollbar-thin">
         {data.conversations.map((c) => (
           <li key={c.id}>
             <Link
@@ -119,10 +134,22 @@ export function WhatsAppLiveBox() {
               title={c.preview ?? undefined}
             >
               <div className="flex items-baseline gap-xs">
+                {/* One dot carries "they are waiting on us" without a second badge. */}
+                {c.awaitingReply && (
+                  <span className="w-[6px] h-[6px] rounded-full bg-emerald-400 shrink-0" aria-label="waiting on reply" />
+                )}
                 <span className="text-label-sm font-semibold text-on-brand truncate flex-1">{c.name}</span>
                 <span className="text-[10px] text-on-brand/60 tabular-nums shrink-0">{ago(c.lastMessageAt)}</span>
               </div>
-              {c.preview && <p className="text-[11px] text-on-brand/70 truncate">{c.preview}</p>}
+              {c.preview && (
+                <p className="text-[11px] text-on-brand/70 truncate">
+                  {c.previewDirection === "out" && <span className="text-on-brand/50">You: </span>}
+                  {c.preview}
+                </p>
+              )}
+              <p className="text-[10px] text-on-brand/50 truncate">
+                {c.assignedToName ?? "Unassigned"}
+              </p>
             </Link>
           </li>
         ))}
@@ -130,8 +157,8 @@ export function WhatsAppLiveBox() {
 
       {data.count > data.conversations.length && (
         <Link
-          href="/crm/inbox?filter=needs_reply"
-          className="block px-sm py-xs text-[11px] text-on-brand/70 hover:bg-white/5 transition"
+          href="/crm/inbox"
+          className="block px-sm py-xs text-[11px] text-on-brand/70 hover:bg-white/5 transition border-t border-brand-line shrink-0"
         >
           +{data.count - data.conversations.length} more…
         </Link>

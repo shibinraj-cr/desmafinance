@@ -290,8 +290,22 @@ export async function ingestInboundMessage(
         ...(lead ? { leadId: lead.id } : {}),
         status: "open",
       },
-      select: { id: true, leadId: true, lastMessageAt: true, lastInboundAt: true },
+      select: { id: true, leadId: true, assignedToId: true, lastMessageAt: true, lastInboundAt: true },
     });
+
+    // Hand an ownerless thread to whoever owns the lead. Only when it has no
+    // owner: a conversation can be deliberately passed to someone other than the
+    // lead's consultant (the inbox allows exactly that), and re-stamping it on
+    // every inbound message would silently undo that handover.
+    //
+    // This is the common case rather than an edge one — a stranger's first
+    // message creates the thread AND the lead, and the lead is assigned minutes
+    // later, so without this the thread would never reach anyone's queue.
+    if (!conversation.assignedToId && lead?.assignedToId) {
+      await prisma.waConversation
+        .update({ where: { id: conversation.id }, data: { assignedToId: lead.assignedToId } })
+        .catch(() => undefined);
+    }
 
     const created = await prisma.waMessage.createMany({
       data: [
@@ -474,6 +488,37 @@ async function optOutByPhone(phoneE164: string, text: string, occurredAt: Date):
   } catch (e) {
     logger.error("wa_mirror_optout_failed", {
       phoneE164,
+      message: e instanceof Error ? e.message : String(e),
+    });
+  }
+}
+
+/**
+ * Point a lead's WhatsApp thread at whoever now owns the lead.
+ *
+ * Called when a lead is assigned or reassigned. A conversation is keyed by
+ * number, so it is found by the lead's link OR by either of the lead's numbers —
+ * a thread that arrived before the lead was linked would otherwise be missed
+ * precisely when this matters most.
+ *
+ * Best-effort by design: the mirror may be switched off, or there may be no
+ * thread for this number, and neither is a reason to fail an assignment.
+ */
+export async function syncConversationAssignee(leadId: string, assigneeUserId: string | null): Promise<void> {
+  try {
+    const lead = await prisma.lead.findUnique({
+      where: { id: leadId },
+      select: { phoneE164: true, altPhoneE164: true },
+    });
+
+    const numbers = [lead?.phoneE164, lead?.altPhoneE164].filter((p): p is string => !!p);
+    await prisma.waConversation.updateMany({
+      where: { OR: [{ leadId }, ...(numbers.length ? [{ phoneE164: { in: numbers } }] : [])] },
+      data: { assignedToId: assigneeUserId },
+    });
+  } catch (e) {
+    logger.warn("wa_sync_conversation_assignee_failed", {
+      leadId,
       message: e instanceof Error ? e.message : String(e),
     });
   }
