@@ -186,6 +186,15 @@ export const MODULES: AppModule[] = [
         group: "ACTIVITY",
       },
       {
+        // Enrolment & conversion money view (targets, pipeline value, source
+        // ROI) — the finance-facing sibling of Dashboard's people/process view.
+        href: "/crm/team/bde-enrollment",
+        label: "BDE Enrollment",
+        icon: "leaderboard",
+        group: "ACTIVITY",
+        adminOnly: true,
+      },
+      {
         // A BDE's end-of-day report (auto-filled from their activity) + manager
         // review. Personal to every CRM user, so visibility is handled in
         // canSeePage (any CRM user), not a per-role Role.pages grant.
