@@ -64,6 +64,9 @@ export function QueueFilters({
         <option value="no-task">No next step</option>
         <option value="stuck">Stuck in stage</option>
         <option value="abandoned">Abandoned</option>
+        <option value="overdue-task">Overdue tasks</option>
+        <option value="first-response">First-response gaps</option>
+        <option value="reinquiry">Re-inquiry follow-ups</option>
       </select>
     </div>
   );

@@ -183,7 +183,7 @@ export type BdeEnrollmentData = {
   };
   buckets: PipelineBucket[];
   pipelineNote: string;
-  slaTiles: Array<{ key: string; label: string; rule: string; count: number; tone: "danger" | "warning" | "neutral" }>;
+  slaTiles: Array<{ key: string; label: string; rule: string; count: number; tone: "danger" | "warning" | "neutral"; issue: string }>;
   slaWorst: Array<{ userId: string; name: string; count: number; widthPct: number }>;
   sources: SourceRow[];
   details: Record<string, ConsultantDetail>;
@@ -445,13 +445,13 @@ export async function getBdeEnrollmentData(opts: {
   // ── SLA tiles (scoped) ──
   const slaSum = (pick: (r: BdeRow) => number) => rows.reduce((s, r) => s + pick(r), 0);
   const slaTiles: BdeEnrollmentData["slaTiles"] = [
-    { key: "sla", label: "Stage SLA breaches", rule: "past stage SLA (1–3d)", count: slaSum((r) => r.slaBreaches), tone: "danger" },
-    { key: "firstResponse", label: "First-response gaps", rule: `no contact within ${FIRST_RESPONSE_SLA_HOURS}h`, count: slaSum((r) => r.firstResponseBreached), tone: "danger" },
-    { key: "abandoned", label: "Abandoned", rule: `untouched > ${ABANDONED_DAYS} days`, count: slaSum((r) => r.abandoned), tone: "danger" },
-    { key: "stuck", label: "Stuck in stage", rule: `same status > ${STUCK_DAYS} days`, count: slaSum((r) => r.stuck), tone: "warning" },
-    { key: "noTask", label: "No next step", rule: "active lead, no open task", count: slaSum((r) => r.noTask), tone: "warning" },
-    { key: "overdueTasks", label: "Overdue tasks", rule: "due date passed", count: slaSum((r) => r.overdueTasks), tone: "danger" },
-    { key: "reinquiry", label: "Re-inquiry follow-ups", rule: "open re-inquiry tasks", count: slaSum((r) => r.openReinquiry), tone: "neutral" },
+    { key: "sla", label: "Stage SLA breaches", rule: "past stage SLA (1–3d)", count: slaSum((r) => r.slaBreaches), tone: "danger", issue: "sla" },
+    { key: "firstResponse", label: "First-response gaps", rule: `no contact within ${FIRST_RESPONSE_SLA_HOURS}h`, count: slaSum((r) => r.firstResponseBreached), tone: "danger", issue: "first-response" },
+    { key: "abandoned", label: "Abandoned", rule: `untouched > ${ABANDONED_DAYS} days`, count: slaSum((r) => r.abandoned), tone: "danger", issue: "abandoned" },
+    { key: "stuck", label: "Stuck in stage", rule: `same status > ${STUCK_DAYS} days`, count: slaSum((r) => r.stuck), tone: "warning", issue: "stuck" },
+    { key: "noTask", label: "No next step", rule: "active lead, no open task", count: slaSum((r) => r.noTask), tone: "warning", issue: "no-task" },
+    { key: "overdueTasks", label: "Overdue tasks", rule: "due date passed", count: slaSum((r) => r.overdueTasks), tone: "danger", issue: "overdue-task" },
+    { key: "reinquiry", label: "Re-inquiry follow-ups", rule: "open re-inquiry tasks", count: slaSum((r) => r.openReinquiry), tone: "neutral", issue: "reinquiry" },
   ];
   const maxFlags = Math.max(1, ...rows.map((r) => r.flags));
   const slaWorst = [...rows]
