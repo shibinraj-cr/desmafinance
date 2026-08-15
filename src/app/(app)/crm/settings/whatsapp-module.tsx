@@ -303,6 +303,28 @@ export function WhatsAppModuleCard() {
             </code>
           </Field>
         )}
+
+        {/* The trap this exists to prevent: Meta's VERIFICATION handshake passes
+            on hub.verify_token, but delivered messages carry no such token — they
+            authenticate by X-Hub-Signature-256. So a setup can verify green in
+            Meta's dashboard and then reject every real message with 401, which
+            reads as "the webhook is broken" rather than "a field is empty". */}
+        {s?.mirror.enabled && !s.cloud.hasAppSecret && (
+          <div className="rounded-lg border border-error/40 bg-error/5 p-md space-y-xs">
+            <p className="text-label-sm text-error font-semibold">
+              Incoming messages will be rejected until the App secret is set.
+            </p>
+            <p className="text-label-sm text-on-surface-variant">
+              Meta signs each delivered message instead of sending the verify token, so verification passing does not
+              mean messages will be accepted. Copy the <span className="font-semibold">App secret</span> from Meta → App
+              Dashboard → Settings → Basic into the field above, and save.
+            </p>
+            <p className="text-label-sm text-on-surface-variant">
+              Alternatively, append <code className="font-mono">?key={s.mirror.secret || "«secret»"}</code> to the
+              callback URL in Meta — weaker, since it puts the secret in every access log along the way.
+            </p>
+          </div>
+        )}
       </div>
 
       <div className={card + " p-lg space-y-md"}>
