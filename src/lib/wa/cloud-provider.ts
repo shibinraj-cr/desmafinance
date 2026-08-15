@@ -234,6 +234,77 @@ async function graphPost(cfg: CloudConfig, path: string, payload: unknown): Prom
   }
 }
 
+export type SubscribedApp = { id: string | null; name: string | null };
+
+/**
+ * Which Meta apps receive this WABA's webhooks.
+ *
+ * Configuring a callback URL on an app and subscribing that app to a WABA are
+ * two DIFFERENT objects, and only the first is visible in Meta's dashboard. A
+ * setup can therefore verify green, subscribe to the `messages` field, and still
+ * receive nothing — which is exactly what happened here: the endpoint logged the
+ * GET handshake and then never saw a single POST.
+ *
+ * No Meta UI lists this anywhere (Business Settings shows partner *businesses*,
+ * not apps), so the Graph call is the only way to see it.
+ */
+export async function listSubscribedApps(): Promise<{ ok: boolean; apps: SubscribedApp[]; detail: string }> {
+  const cfg = await getCloudConfig();
+  if (!cfg?.wabaId) return { ok: false, apps: [], detail: "WhatsApp Business Account ID is not set" };
+
+  try {
+    const res = await fetch(`${GRAPH_HOST}/${cfg.apiVersion}/${cfg.wabaId}/subscribed_apps`, {
+      headers: { authorization: `Bearer ${cfg.token}` },
+      cache: "no-store",
+      signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+    });
+    const text = await res.text().catch(() => "");
+    if (!res.ok) {
+      const { code, message } = parseGraphError(text);
+      return { ok: false, apps: [], detail: code ? `${code}: ${message}` : message };
+    }
+    const parsed = JSON.parse(text) as { data?: { whatsapp_business_api_data?: { id?: string; name?: string } }[] };
+    const apps = (parsed?.data ?? []).map((d) => ({
+      id: d?.whatsapp_business_api_data?.id ?? null,
+      name: d?.whatsapp_business_api_data?.name ?? null,
+    }));
+    return { ok: true, apps, detail: truncate(text) };
+  } catch (e) {
+    return { ok: false, apps: [], detail: e instanceof Error ? `${e.name}: ${e.message}` : "request failed" };
+  }
+}
+
+/**
+ * Subscribe OUR app to the WABA, so Meta starts delivering its events to us.
+ *
+ * Additive: `subscribed_apps` is a list, and the app is identified by the token
+ * making the call, so this cannot touch another partner's subscription. That is
+ * the property the whole run-alongside-Wabis plan depends on, and the caller
+ * lists the apps afterwards so it is demonstrated rather than assumed.
+ */
+export async function subscribeAppToWaba(): Promise<{ ok: boolean; detail: string }> {
+  const cfg = await getCloudConfig();
+  if (!cfg?.wabaId) return { ok: false, detail: "WhatsApp Business Account ID is not set" };
+
+  try {
+    const res = await fetch(`${GRAPH_HOST}/${cfg.apiVersion}/${cfg.wabaId}/subscribed_apps`, {
+      method: "POST",
+      headers: { authorization: `Bearer ${cfg.token}` },
+      cache: "no-store",
+      signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+    });
+    const text = await res.text().catch(() => "");
+    if (!res.ok) {
+      const { code, message } = parseGraphError(text);
+      logger.warn("wa_waba_subscribe_failed", { status: res.status, code });
+      return { ok: false, detail: code ? `${code}: ${message}` : message };
+    }
+    return { ok: true, detail: truncate(text) };
+  } catch (e) {
+    return { ok: false, detail: e instanceof Error ? `${e.name}: ${e.message}` : "request failed" };
+  }
+}
+
 const SUPPORTED: ReadonlySet<WaCapability> = new Set<WaCapability>([
   "sendTemplate",
   "sendText",
