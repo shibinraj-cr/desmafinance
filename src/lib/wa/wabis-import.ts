@@ -113,7 +113,7 @@ async function wabisPost(
   const text = await res.text().catch(() => "");
   // The API key is the one thing that must never reach a browser; every other
   // parameter is exactly what we need to see.
-  capture?.(text.slice(0, 1500), `POST ${path} ${new URLSearchParams({ apiToken: "«redacted»", ...params })}`);
+  capture?.(text.slice(0, 1500), `POST ${path} ${new URLSearchParams({ apiToken: "REDACTED", ...params })}`);
   if (!res.ok) throw new Error(`Wabis ${path} → HTTP ${res.status}: ${text.slice(0, 300)}`);
 
   let parsed: unknown;
@@ -310,6 +310,10 @@ export async function importWabisHistory(opts: WabisImportOptions): Promise<Wabi
     }
 
     const messages: WabisRawMessage[] = [];
+    // Guards against Wabis honouring neither pagination parameter and returning
+    // the same first page forever, which would silently burn the whole time
+    // budget on one contact and look like a slow import rather than a bug.
+    const seenIds = new Set<string>();
     for (let page = 1; ; page++) {
       if (Date.now() > deadline) {
         summary.stoppedEarly = true;
@@ -327,7 +331,14 @@ export async function importWabisHistory(opts: WabisImportOptions): Promise<Wabi
               // the CRM's stored "+91…" is why the first run matched nothing.
               phone_number: wabisPhone,
               phone_number_id: config.phoneNumberId ?? "",
+              // Required — Wabis refuses the request outright without it.
+              limit: String(PAGE_SIZE),
+              // Which pagination parameter it honours is undocumented, so both
+              // conventions are sent. Whichever it ignores costs nothing; the
+              // duplicate-page guard below catches the case where it ignores
+              // BOTH and would otherwise return page 1 forever.
               page: String(page),
+              offset: String((page - 1) * PAGE_SIZE),
             },
             capture,
           ),
@@ -338,12 +349,26 @@ export async function importWabisHistory(opts: WabisImportOptions): Promise<Wabi
       }
       if (batch.length === 0) break;
 
+      let fresh = 0;
       for (const raw of batch) {
         if (!summary.sampleRaw) summary.sampleRaw = redactSample(raw);
         for (const k of Object.keys(raw)) keys.add(k);
-        messages.push(normalizeWabisMessage(raw));
+
+        const normalised = normalizeWabisMessage(raw);
+        // Identity for the repeat check. Falling back to the whole record keeps
+        // the guard working for a provider that returns no id at all — without
+        // it, an id-less response would loop until the deadline.
+        const identity = normalised.providerMessageId ?? JSON.stringify(raw);
+        if (seenIds.has(identity)) continue;
+        seenIds.add(identity);
+        fresh++;
+        messages.push(normalised);
       }
-      summary.messagesFound += batch.length;
+      summary.messagesFound += fresh;
+
+      // Nothing new on this page means pagination is not advancing. Stop rather
+      // than ask again for the same rows.
+      if (fresh === 0) break;
       if (batch.length < PAGE_SIZE) break;
     }
 
