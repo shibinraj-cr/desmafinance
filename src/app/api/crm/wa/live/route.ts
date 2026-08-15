@@ -9,8 +9,8 @@ import { getWaMirrorConfig } from "@/lib/wa/mirror";
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
 
-/** Enough to see who is waiting without turning the sidebar into a second inbox. */
-const PREVIEW_LIMIT = 5;
+/** Enough to work from without turning the sidebar into a second inbox. */
+const PREVIEW_LIMIT = 8;
 
 /**
  * GET /api/crm/wa/live — the sidebar's unanswered-conversation ticker.
@@ -49,20 +49,28 @@ export const GET = withApiHandler(async () => {
     ? { assignedToId: userId }
     : {};
 
-  const where = { status: { not: "closed" }, awaitingReply: true, ...scope } as const;
+  // Every open thread, not just the unanswered ones — this is a live view of the
+  // desk. The unanswered COUNT is reported separately, because that is the
+  // number worth acting on and it would be lost if the list were the only signal.
+  const where = { status: { not: "closed" }, ...scope } as const;
 
-  const [count, conversations] = await Promise.all([
+  const [count, waiting, conversations] = await Promise.all([
     prisma.waConversation.count({ where }),
+    prisma.waConversation.count({ where: { ...where, awaitingReply: true } }),
     prisma.waConversation.findMany({
       where,
-      orderBy: { lastMessageAt: "desc" },
+      // Threads with no message yet sort last rather than floating above live
+      // ones on a null.
+      orderBy: { lastMessageAt: { sort: "desc", nulls: "last" } },
       take: PREVIEW_LIMIT,
       select: {
         id: true,
         phoneE164: true,
         lastMessageAt: true,
         unreadCount: true,
+        awaitingReply: true,
         lead: { select: { id: true, candidateName: true } },
+        assignedTo: { select: { username: true, leadPulseRole: { select: { displayName: true } } } },
         messages: {
           orderBy: { occurredAt: "desc" },
           take: 1,
@@ -75,6 +83,7 @@ export const GET = withApiHandler(async () => {
   return NextResponse.json({
     enabled: true,
     count,
+    waiting,
     conversations: conversations.map((c) => {
       const newest = c.messages[0] ?? null;
       return {
@@ -82,9 +91,14 @@ export const GET = withApiHandler(async () => {
         name: c.lead?.candidateName || c.phoneE164,
         leadId: c.lead?.id ?? null,
         unreadCount: c.unreadCount,
+        awaitingReply: c.awaitingReply,
         lastMessageAt: c.lastMessageAt,
+        // Shown so it is obvious at a glance whether a thread has an owner —
+        // an unassigned one is nobody's job until someone picks it up.
+        assignedToName: c.assignedTo?.leadPulseRole?.displayName ?? c.assignedTo?.username ?? null,
         // A media message with no caption still needs a line.
         preview: newest ? (newest.body?.trim() || (newest.type !== "text" ? `[${newest.type}]` : null)) : null,
+        previewDirection: newest?.direction ?? null,
       };
     }),
   });

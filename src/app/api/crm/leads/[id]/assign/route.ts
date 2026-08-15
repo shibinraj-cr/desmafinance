@@ -8,6 +8,7 @@ import { getCrmAccess } from "@/lib/crm-rbac";
 import { recordLeadActivity } from "@/lib/crm-activity";
 import { notifyLeadAssigned } from "@/lib/crm-notify";
 import { enqueueLeadAssignedWebhook } from "@/lib/crm-webhook";
+import { syncConversationAssignee } from "@/lib/wa/mirror";
 import { leadRowInclude, serializeLead, crmTaskFollowAssignmentWhere } from "@/lib/crm-leads";
 
 export const dynamic = "force-dynamic";
@@ -126,6 +127,18 @@ export const POST = withApiHandler(async (req: Request, { params }: { params: { 
       agentPhone: updated.assignedTo?.leadPulseRole?.phone,
     });
   }
+
+  // Move the candidate's WhatsApp thread to the new consultant, so the person
+  // who now owns the lead is the person who can answer them. Without this the
+  // conversation keeps whoever it was first stamped with — or nobody at all,
+  // for a thread that existed before the lead was assigned — and the new
+  // consultant never sees it in their inbox.
+  //
+  // Deliberately unconditional on reassignment, matching the Wabis intro above:
+  // the whole point of moving a lead is that the conversation moves with it.
+  // Best-effort — a mirror that is switched off, or has no thread for this
+  // number, must never fail the assignment itself.
+  await syncConversationAssignee(updated.id, target);
 
   return NextResponse.json({ lead: serializeLead(updated) });
 });
