@@ -1053,7 +1053,13 @@ async function taskLeadQueue(opts: {
   const nameById = new Map(roster.map((b) => [b.userId, b.displayName]));
 
   const tasks = await prisma.crmTask.findMany({
-    where: { ...opts.taskWhere, assignedToId: ownerId ? ownerId : { in: ids } },
+    where: {
+      ...opts.taskWhere,
+      assignedToId: ownerId ? ownerId : { in: ids },
+      // A task on an enrolled/lost lead, or a deliberately-parked re-marketing
+      // lead, isn't a follow-up gap — same "never nags" rule as attentionFlags.
+      lead: { status: { kind: "active", code: { notIn: [...PARKED_STATUS_CODES] } } },
+    },
     select: {
       dueAt: true,
       createdAt: true,
@@ -1127,7 +1133,12 @@ export async function getFirstResponseGapQueue(opts: {
   const nameById = new Map(roster.map((b) => [b.userId, b.displayName]));
 
   const leadsRaw = await prisma.lead.findMany({
-    where: { status: { kind: "active" }, assignedToId: ownerId ? ownerId : { in: ids } },
+    where: {
+      // Same "never nags" rule as attentionFlags: a parked (re-marketing) lead
+      // is a deliberate resting state, not a first-response gap.
+      status: { kind: "active", code: { notIn: [...PARKED_STATUS_CODES] } },
+      assignedToId: ownerId ? ownerId : { in: ids },
+    },
     select: {
       id: true,
       candidateName: true,
