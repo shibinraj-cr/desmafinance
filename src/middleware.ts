@@ -39,8 +39,11 @@ export const config = {
     // webhooks under api/crm/integrations/wabis — inbound replies + delivery
     // status — which authenticate with their own shared `wabis_inbound_secret`,
     // not a logged-in session; the parent wabis admin endpoints stay gated),
+    // the WhatsApp conversation-mirror hook (api/crm/wa/webhook — same reason:
+    // a message provider POSTs with a shared `wa_mirror_secret` and has no
+    // session; every OTHER route under api/crm/wa stays gated),
     // Next.js internal asset routes, and any file with an extension
     // (/desfin.png, /favicon.ico, fonts).
-    "/((?!login|api/auth|api/health|api/whoami|api/integrations|api/crm/integrations/wabis/inbound|api/crm/integrations/wabis/delivery-status|psych/test|api/psych/test|_next/static|_next/image|.*\\..*).*)",
+    "/((?!login|api/auth|api/health|api/whoami|api/integrations|api/crm/integrations/wabis/inbound|api/crm/integrations/wabis/delivery-status|api/crm/wa/webhook|psych/test|api/psych/test|_next/static|_next/image|.*\\..*).*)",
   ],
 };

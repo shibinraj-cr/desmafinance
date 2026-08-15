@@ -1,0 +1,89 @@
+/**
+ * Wabis adapter — today's transport, behind the provider interface.
+ *
+ * Wabis addresses by WORKFLOW, not by template: a Webhook Workflow URL has one
+ * approved template welded into it, so "which template" and "which URL" are the
+ * same question. `sendTemplate` therefore needs a resolved `endpointUrl` and
+ * treats `template` as a label for logging. That awkwardness is not a modelling
+ * mistake on our side — it is the constraint we are migrating away from, and
+ * `WabisWebhookEndpoint` exists only to carry it.
+ *
+ * Two capabilities are reported as unsupported rather than faked:
+ *
+ *   - `sendText`, because a Wabis workflow cannot carry arbitrary text and we
+ *     have not confirmed a send API exists. A shared inbox needs this, which is
+ *     why it is the question gating whether the inbox can ship on Wabis at all.
+ *   - `listTemplates`, because approved templates live in the WABA and Wabis
+ *     exposes no catalogue to us.
+ *
+ * An adapter that quietly returned success for either would turn a known gap
+ * into a silent one. Callers get a clear `unsupported` instead.
+ */
+import { getWabisWebhookConfig, postWebhook } from "../crm-webhook";
+import {
+  unsupportedResult,
+  type WaCapability,
+  type WaMedia,
+  type WaSendResult,
+  type WaSendTemplateInput,
+  type WaSendTextInput,
+  type WaTemplateSummary,
+  type WhatsAppProvider,
+} from "./provider";
+
+/**
+ * Nothing, from the inbox's point of view — and that is the honest answer.
+ *
+ * `sendTemplate` means "address an approved template BY NAME". Wabis cannot: a
+ * workflow URL is the address, one URL per template, and no mapping from a CRM
+ * template to a workflow exists (WabisWebhookEndpoint carries `lead_assigned`
+ * and `study_abroad`, both bound to a consultant, neither to an inbox reply).
+ * Claiming support here would let the composer offer a template picker whose
+ * every send fails — which is precisely what it did before this was corrected.
+ *
+ * The method below still works for the legacy callers that resolve a workflow
+ * URL themselves and pass it in; `supports()` deliberately does not cover that
+ * path, because no caller can discover such a URL from a template name.
+ */
+const SUPPORTED: ReadonlySet<WaCapability> = new Set<WaCapability>();
+
+export const wabisProvider: WhatsAppProvider = {
+  key: "wabis",
+  label: "Wabis (Webhook Workflows)",
+
+  supports(capability: WaCapability): boolean {
+    return SUPPORTED.has(capability);
+  },
+
+  async sendTemplate(input: WaSendTemplateInput): Promise<WaSendResult> {
+    const url = (input.endpointUrl ?? "").trim();
+    if (!url) {
+      // Not a transport failure — the caller never resolved a workflow. Marked
+      // unsupported so a retry loop does not hammer a destination that does not
+      // exist; the fix is an endpoint mapping, not another attempt.
+      return unsupportedResult("no Wabis workflow URL resolved for this template");
+    }
+
+    const { secret } = await getWabisWebhookConfig();
+    const result = await postWebhook(url, { ...(input.params ?? {}), template: input.template }, secret);
+
+    // A WORKFLOW trigger returns whatever the workflow returns, which is not a
+    // message id — so a delivery status arriving later is matched by phone +
+    // campaign + touch downstream (see handleWabisDeliveryStatus). Wabis's send
+    // API does return a `wa_message_id`, but this path is not that API; wiring
+    // it is what the unimplemented capabilities above describe.
+    return { ok: result.ok, providerMessageId: null, status: result.status, body: result.body };
+  },
+
+  async sendText(_input: WaSendTextInput): Promise<WaSendResult> {
+    return unsupportedResult("Wabis has no free-text send API wired — see CRM → Settings → Integrations");
+  },
+
+  async fetchMedia(_mediaId: string): Promise<WaMedia | null> {
+    return null;
+  },
+
+  async listTemplates(): Promise<WaTemplateSummary[]> {
+    return [];
+  },
+};

@@ -6,6 +6,7 @@ import { useRouter } from "next/navigation";
 import { IntegrationsCard } from "./integrations";
 import { WabisWebhookCard } from "./wabis-webhook";
 import { RemarketingSettingsCard } from "./remarketing";
+import { WhatsAppModuleCard } from "./whatsapp-module";
 import { EmailSenderCard } from "./email-sender";
 
 type StatusRow = {
@@ -61,7 +62,7 @@ const qualErrors: Record<string, string> = {
   in_use: "Qualification is used by leads — deactivate instead.",
 };
 
-type TabKey = "statuses" | "qualifications" | "capture" | "whatsapp" | "remarketing" | "email";
+type TabKey = "statuses" | "qualifications" | "capture" | "whatsapp" | "wa_module" | "remarketing" | "email";
 
 // One tab per settings section. `group` is a soft caption shown above the active
 // panel so the old "Reference data / Integrations" split isn't lost.
@@ -69,7 +70,8 @@ const TABS: { key: TabKey; label: string; icon: string; group: string }[] = [
   { key: "statuses", label: "Lead Statuses", icon: "flag", group: "Reference data" },
   { key: "qualifications", label: "Qualifications", icon: "school", group: "Reference data" },
   { key: "capture", label: "Lead Capture", icon: "sync_alt", group: "Integrations" },
-  { key: "whatsapp", label: "WhatsApp", icon: "forum", group: "Integrations" },
+  { key: "whatsapp", label: "Wabis", icon: "forum", group: "Integrations" },
+  { key: "wa_module", label: "WhatsApp Inbox", icon: "chat", group: "Integrations" },
   { key: "remarketing", label: "Re-marketing", icon: "campaign", group: "Integrations" },
   { key: "email", label: "Email Sender", icon: "forward_to_inbox", group: "Integrations" },
 ];
@@ -131,6 +133,7 @@ export function SettingsClient({ statuses, qualifications }: { statuses: StatusR
         {tab === "qualifications" && <QualificationEditor qualifications={qualifications} />}
         {tab === "capture" && <IntegrationsCard />}
         {tab === "whatsapp" && <WabisWebhookCard />}
+        {tab === "wa_module" && <WhatsAppModuleCard />}
         {tab === "remarketing" && <RemarketingSettingsCard />}
         {tab === "email" && <EmailSenderCard />}
       </div>

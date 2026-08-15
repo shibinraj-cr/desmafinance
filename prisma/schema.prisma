@@ -91,6 +91,9 @@ model User {
   crmDailyReportsReviewed CrmDailyReport[]     @relation("CrmDailyReportReviewer")
   appSettings            AppSetting[]         @relation("AppSettingEditor")
   wabisEndpoints         WabisWebhookEndpoint[] @relation("WabisEndpointConsultant")
+  waConversations        WaConversation[]     @relation("WaConversationAssignee")
+  waMessagesSent         WaMessage[]          @relation("WaMessageSender")
+  waBroadcasts           WaBroadcast[]        @relation("WaBroadcastCreatedBy")
 
   // Operations relations
   opsTemplatesCreated    ProcessTemplate[]    @relation("OpsTemplateCreatedBy")
@@ -2236,6 +2239,14 @@ model Lead {
   tasks      CrmTask[]
   remarketingCampaigns CrmRemarketingCampaign[]
   opsProjects OpsProject[] @relation("OpsProjectLead")
+  waConversations WaConversation[]
+  waBroadcastRecipients WaBroadcastRecipient[]
+
+  /// When the candidate asked to stop receiving marketing WhatsApp ("STOP",
+  /// "unsubscribe"). Set by the conversation mirror on an opt-out keyword and
+  /// honoured by every broadcast. Distinct from `whatsappUndeliverableAt`, which
+  /// means the number does not work — this one means they asked us not to.
+  whatsappOptedOutAt DateTime?
 
   @@index([assignedToId])
   @@index([assignedAt])
@@ -2520,6 +2531,244 @@ model CrmMessageTemplate {
 
   @@index([channel, isActive])
   @@index([createdById])
+}
+
+// ──────────────────────────────────────────────────────────────────────
+// WhatsApp conversations (the CRM-side mirror of the shared inbox)
+//
+// Today the candidate's actual conversation lives inside Wabis and only its
+// EDGES reach us — an assignment intro going out, a keyword-matched reply
+// coming back. Everything in between is invisible to the CRM, which is why a
+// BDE still has to open Wabis to know what was said.
+//
+// These two tables are that conversation, stored on our side. They are
+// deliberately provider-agnostic: whether a message arrived via a Wabis relay
+// or straight from Meta's Cloud API, it lands here in the same shape (see
+// src/lib/wa/provider.ts). Nothing else in the CRM needs to know which.
+// ──────────────────────────────────────────────────────────────────────
+
+/// One WhatsApp thread with one number.
+///
+/// Keyed by `phoneE164`, which is also how it finds its lead: `Lead.phoneE164`
+/// and `Lead.altPhoneE164` are both indexed, so an inbound message resolves to
+/// a candidate with no new plumbing. `leadId` stays nullable because a message
+/// can arrive from someone we have never heard of — the ingest path creates a
+/// lead for them, but a lead that is later deleted must not take the
+/// conversation history with it (hence SetNull, not Cascade).
+model WaConversation {
+  id String @id @default(cuid())
+  /// Normalised candidate number — the thread's identity. Unique: one thread
+  /// per number, no matter how many leads share it.
+  phoneE164 String  @unique
+  leadId    String?
+  lead      Lead?   @relation(fields: [leadId], references: [id], onDelete: SetNull)
+
+  /// The consultant this thread belongs to. Mirrors `Lead.assignedToId` at
+  /// ingest time, but kept separately because a conversation can be handed over
+  /// without reassigning the lead (and vice-versa).
+  assignedToId String?
+  assignedTo   User?   @relation("WaConversationAssignee", fields: [assignedToId], references: [id], onDelete: SetNull)
+
+  /// 'open' | 'closed' — a coarse triage state, not a pipeline stage. The lead's
+  /// own status remains the single source of truth for where the deal is.
+  status String @default("open")
+
+  lastMessageAt DateTime?
+  /// When the candidate last messaged US. This is the one that matters: WhatsApp
+  /// only permits free-text replies within 24 hours of it, so it — not
+  /// `lastMessageAt` — is what the composer gates on.
+  lastInboundAt DateTime?
+  /// `lastInboundAt + 24h`, denormalised so "which threads can I still reply to"
+  /// is an indexed range scan rather than a computed filter over every row.
+  sessionExpiresAt DateTime?
+  /// Inbound messages since a CRM user last opened the thread.
+  unreadCount      Int       @default(0)
+  /// True when the newest message on the thread came from the CANDIDATE — i.e.
+  /// nobody has answered yet. Distinct from `unreadCount`, which only records
+  /// whether someone opened the tab; this is the question the inbox's flagship
+  /// filter asks. Denormalised because Prisma cannot compare `lastInboundAt` to
+  /// `lastMessageAt` in a `where`, and post-filtering a fetched page would break
+  /// pagination. Set on inbound ingest, cleared on outbound send.
+  awaitingReply    Boolean   @default(false)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  messages WaMessage[]
+
+  @@index([leadId])
+  @@index([assignedToId, status])
+  @@index([status, lastMessageAt])
+  @@index([sessionExpiresAt])
+  /// The inbox's default landing query: unanswered threads, newest first.
+  @@index([awaitingReply, lastMessageAt])
+}
+
+/// One WhatsApp message, inbound or outbound.
+///
+/// `providerMessageId` is the idempotency guard. Webhooks are re-delivered on
+/// any non-2xx (and sometimes on a 2xx that arrived slowly), so the ingest path
+/// is written to be replayed: the unique index means a repeat delivery collides
+/// instead of duplicating the thread. It is nullable because an outbound send
+/// through a Wabis WORKFLOW returns no id — the workflow answers with its own
+/// result, not a message id. Sends through Meta (and through Wabis's own send
+/// API, which we do not use) do return one, which is what makes an arriving
+/// delivery status an exact key lookup instead of a phone-and-timing guess.
+model WaMessage {
+  id             String         @id @default(cuid())
+  conversationId String
+  conversation   WaConversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+
+  /// 'in' (from the candidate) | 'out' (from us).
+  direction String
+  /// 'text' | 'image' | 'document' | 'audio' | 'video' | 'sticker' |
+  /// 'location' | 'template' | 'interactive' | 'unsupported'.
+  type      String  @default("text")
+  /// Message text, a caption, or a rendered template body. Null for a bare
+  /// media message with no caption.
+  body      String?
+
+  /// Provider-side media handle and a resolved URL, when the message carries an
+  /// attachment. Cloud API media URLs are short-lived, so `mediaUrl` is a cache
+  /// to be re-fetched from `mediaId`, never the durable reference.
+  mediaId   String?
+  mediaUrl  String?
+  mediaMime String?
+  fileName  String?
+
+  /// Meta's `wamid.…`, or whatever id the relaying provider gives us. Unique —
+  /// see the model note.
+  providerMessageId String? @unique
+  /// Which transport carried it ('wabis' | 'cloud'), so a thread spanning the
+  /// cutover still reads correctly.
+  provider          String  @default("wabis")
+
+  /// Approved template used, on an outbound template send.
+  templateName String?
+
+  /// Async Meta state: 'sent' | 'delivered' | 'read' | 'failed'. Null on
+  /// inbound, and on outbound until a status callback arrives.
+  waStatus       String?
+  waErrorCode    String?
+  waErrorMessage String?
+  readAt         DateTime?
+
+  /// The CRM user who sent it. Null on inbound, and on an outbound message an
+  /// automation sent (a re-marketing touch has no human author).
+  sentById String?
+  sentBy   User?   @relation("WaMessageSender", fields: [sentById], references: [id], onDelete: SetNull)
+
+  /// When the message happened at the provider — NOT when we stored it. A
+  /// backlog replayed after an outage must sort into the thread by its real
+  /// time, not bunch up at the moment we caught up.
+  occurredAt DateTime @default(now())
+  createdAt  DateTime @default(now())
+
+  @@index([conversationId, occurredAt])
+  @@index([direction, waStatus])
+  @@index([occurredAt])
+}
+
+/// A marketing send to a segment of leads — the "do marketing inside the CRM"
+/// half of the WhatsApp module.
+///
+/// Recipients are MATERIALISED when the broadcast is queued, never recomputed at
+/// send time. A segment is a live query over leads, so recomputing mid-send
+/// would let the audience shift underneath a partly-delivered campaign: someone
+/// who changed stage between chunk 1 and chunk 7 would silently be added or
+/// dropped, and the report could never be reconciled afterwards. Freezing the
+/// list makes a broadcast an auditable fact rather than an approximation.
+model WaBroadcast {
+  id   String @id @default(cuid())
+  name String
+
+  /// The lead filter this audience was built from, in LeadFilterParams shape, so
+  /// it is fed straight to buildLeadWhere. Stored for provenance — the recipient
+  /// rows, not this, are what actually gets sent.
+  segment Json
+
+  /// Approved template name, optionally `name:language` (a WABA can hold the
+  /// same template in several languages and Meta treats them as distinct).
+  templateName String
+  /// Template variable -> lead merge token, e.g. {"1": "{name}"}. Rendered per
+  /// recipient when the audience is materialised.
+  variableMap  Json?
+
+  /// 'draft' | 'scheduled' | 'sending' | 'sent' | 'cancelled' | 'failed'
+  status      String    @default("draft")
+  /// When the drain may begin. Null means "as soon as it is queued".
+  scheduledAt DateTime?
+  startedAt   DateTime?
+  completedAt DateTime?
+
+  /// Denormalised counters so the list does not aggregate over every recipient.
+  totalRecipients Int @default(0)
+  sentCount       Int @default(0)
+  failedCount     Int @default(0)
+  skippedCount    Int @default(0)
+
+  createdById String?
+  createdBy   User?   @relation("WaBroadcastCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  recipients WaBroadcastRecipient[]
+
+  @@index([status, scheduledAt])
+  @@index([createdAt])
+  @@index([createdById])
+}
+
+/// One lead's place in one broadcast.
+///
+/// `@@unique([broadcastId, leadId])` is the guard that matters: the drain is
+/// chunked and resumable, so it WILL run again over a partly-sent broadcast, and
+/// nothing else stops a candidate receiving the same marketing message twice.
+model WaBroadcastRecipient {
+  id          String      @id @default(cuid())
+  broadcastId String
+  broadcast   WaBroadcast @relation(fields: [broadcastId], references: [id], onDelete: Cascade)
+
+  /// The lead this was built from. Non-null in practice — a segment is a lead
+  /// query — but SetNull so a deleted lead does not erase the send record.
+  leadId String?
+  lead   Lead?   @relation(fields: [leadId], references: [id], onDelete: SetNull)
+  /// Captured at materialisation, so the record survives the lead's number
+  /// being corrected afterwards.
+  phoneE164 String
+
+  /// Merge values rendered for THIS recipient at materialisation time.
+  renderedParams Json?
+
+  /// 'pending' | 'sent' | 'failed' | 'skipped'. `skipped` is a decision we made
+  /// (opted out, no number, undeliverable) and is never retried; `failed` is the
+  /// provider's answer.
+  status     String  @default("pending")
+  skipReason String?
+
+  /// Meta's `wamid`, when the transport returns one. Unique so a re-run cannot
+  /// record the same send twice, and it is what a later delivery-status webhook
+  /// matches on — exactly, rather than by phone and timing.
+  providerMessageId String? @unique
+
+  /// Async Meta state, arriving after we already got a 200 from the send.
+  waStatus       String?
+  waErrorCode    String?
+  waErrorMessage String?
+  readAt         DateTime?
+
+  attempts Int       @default(0)
+  sentAt   DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  /// One send per lead per broadcast — see the model note.
+  @@unique([broadcastId, leadId])
+  /// The drain's own query: the next pending recipients of one broadcast.
+  @@index([broadcastId, status])
+  @@index([phoneE164])
+  @@index([waStatus])
 }
 
 // ──────────────────────────────────────────────────────────────────────

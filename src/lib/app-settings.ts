@@ -52,6 +52,62 @@ export const WABIS_REMARKETING_OFFSETS_KEY = "wabis_remarketing_offsets";
 export const WABIS_REMARKETING_KEYWORDS_KEY = "wabis_remarketing_keywords";
 export const WABIS_INBOUND_SECRET_KEY = "wabis_inbound_secret";
 
+/**
+ * WhatsApp conversation mirror (src/lib/wa/*).
+ *
+ * - PROVIDER_KEY: which transport carries WhatsApp — "wabis" (default) or
+ *   "cloud" once the number is migrated onto our own WABA. One setting is the
+ *   whole cutover switch; nothing above the provider interface reads it.
+ * - MIRROR_ENABLED_KEY: whether the ingest endpoint stores conversations at all.
+ *   Off by default so deploying the tables changes no behaviour until an admin
+ *   turns it on.
+ * - MIRROR_SECRET_KEY: shared secret the message webhook must present, sent as
+ *   `x-wa-secret` or `?key=`. Separate from the re-marketing inbound secret so
+ *   rotating one never silently breaks the other.
+ * - MIRROR_AUTOCREATE_KEY: create a Lead for a number we have never seen. On by
+ *   default — an unknown number messaging us IS an inbound lead, and this is the
+ *   gap the Wabis keyword flow could never close.
+ */
+export const WA_PROVIDER_KEY = "wa_provider";
+export const WA_MIRROR_ENABLED_KEY = "wa_mirror_enabled";
+export const WA_MIRROR_SECRET_KEY = "wa_mirror_secret";
+export const WA_MIRROR_AUTOCREATE_KEY = "wa_mirror_autocreate_leads";
+
+/**
+ * Meta WhatsApp Cloud API credentials, used once `wa_provider = "cloud"`.
+ *
+ * Settings-first with an env fallback, matching how the SMTP credentials work —
+ * an admin can configure the integration in-app, and a deployment can pin it.
+ *
+ * - PHONE_NUMBER_ID: the sending number's id (NOT the number itself).
+ * - WABA_ID: the WhatsApp Business Account, needed only to list templates.
+ * - TOKEN: a permanent System User access token. The one true secret here.
+ * - APP_SECRET: verifies Meta's `X-Hub-Signature-256` on inbound webhooks. Without
+ *   it the mirror falls back to the shared-secret check, which is weaker but
+ *   still closed.
+ * - API_VERSION: pinned (e.g. "v21.0") so a Graph API release cannot change
+ *   behaviour underneath us.
+ */
+export const WA_CLOUD_PHONE_NUMBER_ID_KEY = "wa_cloud_phone_number_id";
+export const WA_CLOUD_WABA_ID_KEY = "wa_cloud_waba_id";
+export const WA_CLOUD_TOKEN_KEY = "wa_cloud_access_token";
+export const WA_CLOUD_APP_SECRET_KEY = "wa_cloud_app_secret";
+export const WA_CLOUD_API_VERSION_KEY = "wa_cloud_api_version";
+
+/**
+ * Wabis developer API key (avatar menu → API Developer). Used ONLY by the
+ * one-off history import (src/lib/wa/wabis-import.ts) — sending still goes
+ * through the provider seam. Sent as an `apiToken` request parameter, which is
+ * Wabis's scheme: no header, no signing, so it is POSTed rather than put in a
+ * query string where it would land in access logs.
+ */
+export const WABIS_API_TOKEN_KEY = "wabis_api_token";
+
+/** Marketing broadcasts (src/lib/wa/broadcast.ts). */
+export const WA_BROADCAST_ENABLED_KEY = "wa_broadcast_enabled";
+/** Messages per drain run — the throttle that keeps us inside Meta's rate limits. */
+export const WA_BROADCAST_BATCH_KEY = "wa_broadcast_batch_size";
+
 export async function getSetting(key: string): Promise<string | null> {
   const row = await prisma.appSetting.findUnique({ where: { key }, select: { value: true } });
   return row?.value ?? null;

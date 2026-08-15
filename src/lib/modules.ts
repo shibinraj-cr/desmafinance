@@ -216,11 +216,27 @@ export const MODULES: AppModule[] = [
         group: "PIPELINE",
       },
       {
+        // Not adminOnly: any CRM user works their own WhatsApp threads. Page
+        // enforces canViewLeads; each conversation re-checks who may act on it.
+        href: "/crm/inbox",
+        label: "WhatsApp Inbox",
+        icon: "forum",
+        group: "PIPELINE",
+      },
+      {
         // Not adminOnly: gated by an explicit page grant so a marketing
         // supervisor can be given template access without full CRM admin.
         href: "/crm/templates",
         label: "Message Templates",
         icon: "quickreply",
+        group: "TOOLS",
+      },
+      {
+        // CRM-admin only in practice: the page enforces canBulkEmail, the same
+        // authority as sending a bulk email to a segment.
+        href: "/crm/broadcasts",
+        label: "WhatsApp Broadcasts",
+        icon: "campaign",
         group: "TOOLS",
       },
       {

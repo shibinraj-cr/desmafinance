@@ -23,6 +23,10 @@ const SOURCES = [
   // (preserving the original channel in Lead.originalSource) so repeat revenue
   // shows as its own bucket in the source funnel.
   { code: "existing_candidate", label: "Existing Candidate", displayOrder: 9 },
+  // A number we have never seen messaging our WhatsApp. The conversation mirror
+  // creates the lead (see src/lib/wa/mirror.ts), so these arrive without anyone
+  // filling a form — worth its own bucket rather than being lost in "Other".
+  { code: "whatsapp_inbound", label: "WhatsApp Inbound", displayOrder: 10 },
 ];
 
 const REGIONS = [

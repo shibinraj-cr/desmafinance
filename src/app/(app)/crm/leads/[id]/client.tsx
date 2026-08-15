@@ -26,6 +26,12 @@ export type DetailAccess = {
   isAdmin: boolean;
   canAssign: boolean;
   canViewHistory: boolean;
+  /**
+   * Show the WhatsApp thread tab. Admin-only while the conversation mirror is in
+   * testing — see WA_UI_ADMIN_ONLY in src/lib/rbac.ts, which is the single line
+   * that opens the whole module to the team.
+   */
+  canSeeWhatsApp: boolean;
   /** BDE or CRM admin — may create leads, so may re-enroll an existing candidate. */
   canCreateLeads: boolean;
   userId: string;
@@ -238,7 +244,7 @@ export function LeadDetail({
   access: DetailAccess;
   studyAbroad: { eligible: boolean; alreadySent: boolean };
 }) {
-  const [tab, setTab] = useState<"overview" | "tasks" | "history">("overview");
+  const [tab, setTab] = useState<"overview" | "tasks" | "whatsapp" | "history">("overview");
   const [comm, setComm] = useState<null | "email" | "whatsapp" | "call">(null);
   const openTaskCount = tasks.filter((t) => t.status === "open").length;
   const overdueCount = tasks.filter((t) => t.status === "open" && t.dueAt && new Date(t.dueAt).getTime() < Date.now()).length;
@@ -283,6 +289,20 @@ export function LeadDetail({
               </span>
             )}
           </button>
+          {access.canSeeWhatsApp && (
+            <button
+              type="button"
+              onClick={() => setTab("whatsapp")}
+              className={
+                "px-md h-9 text-label-sm font-semibold transition " +
+                (tab === "whatsapp"
+                  ? "bg-primary text-on-primary"
+                  : "bg-surface-container-lowest text-on-surface-variant hover:bg-surface-container-low")
+              }
+            >
+              WhatsApp
+            </button>
+          )}
           {access.canViewHistory && (
             <button
               type="button"
@@ -338,6 +358,10 @@ export function LeadDetail({
           bdes={masters.bdes}
           defaultAssigneeId={lead.assignedTo?.id ?? null}
         />
+      )}
+
+      {tab === "whatsapp" && access.canSeeWhatsApp && (
+        <WhatsAppThreadPanel leadId={lead.id} leadName={lead.candidateName} />
       )}
 
       {tab === "history" && <HistoryPanel leadId={lead.id} bdes={masters.bdes} />}
@@ -1810,6 +1834,196 @@ function CallModal({ lead, onClose }: { lead: LeadRow; onClose: () => void }) {
         </button>
       </div>
     </Modal>
+  );
+}
+
+// ── WhatsApp thread tab ────────────────────────────────────────────────────
+//
+// Phase 1 of moving the shared inbox into the CRM: the conversation is READ
+// here, still replied to in Wabis. That split is stated on screen rather than
+// hidden, because a thread you can read but not answer looks broken unless the
+// UI says why.
+
+type WaMessageRow = {
+  id: string;
+  direction: string;
+  type: string;
+  body: string | null;
+  mediaMime: string | null;
+  fileName: string | null;
+  templateName: string | null;
+  waStatus: string | null;
+  waErrorCode: string | null;
+  occurredAt: string;
+  sentByName: string | null;
+};
+
+type WaConversationDTO = {
+  id: string;
+  phoneE164: string;
+  status: string;
+  lastMessageAt: string | null;
+  lastInboundAt: string | null;
+  sessionExpiresAt: string | null;
+  sessionOpen: boolean;
+  messages: WaMessageRow[];
+  truncated: boolean;
+};
+
+/** Meta's delivery states, shown as a single glyph so they never crowd the text. */
+const WA_STATUS_GLYPH: Record<string, { icon: string; cls: string; label: string }> = {
+  sent: { icon: "done", cls: "text-on-surface-variant", label: "Sent" },
+  delivered: { icon: "done_all", cls: "text-on-surface-variant", label: "Delivered" },
+  read: { icon: "done_all", cls: "text-primary", label: "Read" },
+  failed: { icon: "error", cls: "text-error", label: "Failed" },
+};
+
+function WhatsAppThreadPanel({ leadId, leadName }: { leadId: string; leadName: string }) {
+  const [data, setData] = useState<{ conversation: WaConversationDTO | null; canReply: boolean } | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [failed, setFailed] = useState(false);
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      setLoading(true);
+      setFailed(false);
+      const res = await fetch(`/api/crm/leads/${leadId}/wa`).catch(() => null);
+      if (cancelled) return;
+      setLoading(false);
+      if (!res?.ok) {
+        setFailed(true);
+        return;
+      }
+      setData((await res.json()) as { conversation: WaConversationDTO | null; canReply: boolean });
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [leadId]);
+
+  const conversation = data?.conversation ?? null;
+
+  return (
+    <div className={cardCls}>
+      <div className="flex flex-wrap items-center justify-between gap-base">
+        <CardHeading icon="chat" color="#25a244">
+          WhatsApp
+        </CardHeading>
+        {conversation && (
+          <span className="text-label-sm text-on-surface-variant font-mono tabular-nums">{conversation.phoneE164}</span>
+        )}
+      </div>
+
+      {loading && <p className="text-body-md text-on-surface-variant">Loading conversation…</p>}
+
+      {failed && !loading && (
+        <p className="text-body-md text-error">
+          Couldn’t load the conversation. Refresh the page to try again.
+        </p>
+      )}
+
+      {!loading && !failed && !conversation && (
+        <div className="space-y-xs">
+          <p className="text-body-md text-on-surface-variant">No WhatsApp conversation yet.</p>
+          <p className="text-label-sm text-on-surface-variant">
+            Messages appear here once {leadName || "this candidate"} writes to the business number and the conversation
+            mirror is switched on in CRM → Settings.
+          </p>
+        </div>
+      )}
+
+      {conversation && (
+        <>
+          <div className="flex flex-wrap items-center gap-sm text-label-sm">
+            {conversation.sessionOpen ? (
+              <span className="inline-flex items-center gap-xs px-sm h-6 rounded-full bg-emerald-500/10 text-emerald-600 font-semibold">
+                <span className="material-symbols-outlined" style={{ fontSize: 14 }}>
+                  schedule
+                </span>
+                Reply window open
+              </span>
+            ) : (
+              <span className="inline-flex items-center gap-xs px-sm h-6 rounded-full bg-surface-container-low text-on-surface-variant font-semibold">
+                <span className="material-symbols-outlined" style={{ fontSize: 14 }}>
+                  lock_clock
+                </span>
+                Reply window closed — template only
+              </span>
+            )}
+            {conversation.lastInboundAt && (
+              <span className="text-on-surface-variant">Last reply {fmtRelative(conversation.lastInboundAt)}</span>
+            )}
+          </div>
+
+          {conversation.truncated && (
+            <p className="text-label-sm text-on-surface-variant">
+              Showing the most recent {conversation.messages.length} messages.
+            </p>
+          )}
+
+          <div className="overflow-auto scrollbar-thin max-h-[calc(100vh-420px)] rounded-lg border border-outline-variant bg-surface-container-low p-md space-y-sm">
+            {conversation.messages.length === 0 && (
+              <p className="text-body-md text-on-surface-variant text-center py-lg">This thread has no messages yet.</p>
+            )}
+            {conversation.messages.map((m) => (
+              <WaBubble key={m.id} message={m} />
+            ))}
+          </div>
+
+          <p className="text-label-sm text-on-surface-variant">
+            {data?.canReply
+              ? "Read-only for now — reply in Wabis. Sending from the CRM arrives with the inbox."
+              : "Read-only — only the assigned consultant or an admin can reply to this lead."}
+          </p>
+        </>
+      )}
+    </div>
+  );
+}
+
+function WaBubble({ message }: { message: WaMessageRow }) {
+  const outbound = message.direction === "out";
+  const status = message.waStatus ? WA_STATUS_GLYPH[message.waStatus] : null;
+  // A media message with no caption still has to render as something — the type
+  // plus filename is more use than an empty bubble.
+  const text = message.body?.trim() || (message.type !== "text" ? `[${message.type}]` : "");
+
+  return (
+    <div className={"flex " + (outbound ? "justify-end" : "justify-start")}>
+      <div
+        className={
+          "max-w-[80%] rounded-xl px-md py-sm space-y-xs " +
+          (outbound
+            ? "bg-primary/10 border border-primary/20"
+            : "bg-surface-container-lowest border border-outline-variant")
+        }
+      >
+        {message.templateName && (
+          <span className="block text-label-sm text-on-surface-variant font-mono">{message.templateName}</span>
+        )}
+        <p className="text-body-md text-on-surface whitespace-pre-wrap break-words">{text}</p>
+        {message.fileName && (
+          <span className="block text-label-sm text-on-surface-variant">
+            {message.fileName}
+            {message.mediaMime ? ` · ${message.mediaMime}` : ""}
+          </span>
+        )}
+        <div className="flex items-center justify-end gap-xs text-label-sm text-on-surface-variant">
+          {outbound && message.sentByName && <span>{message.sentByName}</span>}
+          <span className="tabular-nums">{fmtDateTime(message.occurredAt)}</span>
+          {status && (
+            <span
+              className={"material-symbols-outlined " + status.cls}
+              style={{ fontSize: 14 }}
+              title={message.waErrorCode ? `${status.label} (${message.waErrorCode})` : status.label}
+            >
+              {status.icon}
+            </span>
+          )}
+        </div>
+      </div>
+    </div>
   );
 }
 
