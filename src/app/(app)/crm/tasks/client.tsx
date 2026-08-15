@@ -6,6 +6,7 @@ import { useRouter, usePathname, useSearchParams } from "next/navigation";
 import type { CrmTaskListRow } from "@/lib/crm-leads";
 import { DEFAULT_STATUS_COLOR } from "@/lib/crm";
 import { NextStepDialog, type NextStepPayload } from "@/components/crm/NextStepDialog";
+import { TaskEditDialog, type TaskEditPayload } from "@/components/crm/TaskEditDialog";
 
 export type BdeOpt = { userId: string; displayName: string; username: string; role: string };
 export type TasksAccess = { isAdmin: boolean; isBde: boolean; userId: string };
@@ -204,6 +205,30 @@ export function TasksBoard({
     }
   }
 
+  // Edit an existing task's subject/due/priority/assignee/note in place (PATCH),
+  // shared between this board and the single-lead Tasks tab via TaskEditDialog.
+  const [editingTask, setEditingTask] = useState<CrmTaskListRow | null>(null);
+  const [editBusy, setEditBusy] = useState(false);
+  const [editError, setEditError] = useState<string | null>(null);
+
+  async function saveEdit(payload: TaskEditPayload) {
+    if (!editingTask) return;
+    setEditBusy(true);
+    setEditError(null);
+    const res = await fetch(`/api/crm/leads/${editingTask.leadId}/tasks/${editingTask.id}`, {
+      method: "PATCH",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+    setEditBusy(false);
+    if (res.ok) {
+      setEditingTask(null);
+      router.refresh();
+    } else {
+      setEditError("Couldn’t save changes. Please try again.");
+    }
+  }
+
   return (
     <div className="space-y-md">
       {pendingComplete && (
@@ -216,6 +241,25 @@ export function TasksBoard({
             setNextError(null);
           }}
           onSubmit={submitNextStep}
+        />
+      )}
+      {editingTask && (
+        <TaskEditDialog
+          task={{
+            subject: editingTask.subject,
+            dueAt: editingTask.dueAt,
+            priority: editingTask.priority,
+            assignedToId: editingTask.assignedToId,
+            note: editingTask.note,
+          }}
+          bdes={bdes}
+          busy={editBusy}
+          error={editError}
+          onCancel={() => {
+            setEditingTask(null);
+            setEditError(null);
+          }}
+          onSubmit={saveEdit}
         />
       )}
       {/* Quick-filter chips */}
@@ -431,6 +475,20 @@ export function TasksBoard({
                             <span className="material-symbols-outlined text-green-600" style={{ fontSize: 18 }} title="Completed">
                               task_alt
                             </span>
+                          )}
+                          {canEdit && (
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setEditingTask(t);
+                                setEditError(null);
+                              }}
+                              className="inline-flex items-center gap-xs h-8 px-sm rounded-lg border border-outline-variant text-label-sm text-on-surface-variant hover:text-accent hover:border-accent/50 transition"
+                              title="Edit task"
+                            >
+                              <span className="material-symbols-outlined" style={{ fontSize: 16 }}>edit</span>
+                              Edit
+                            </button>
                           )}
                           <Link
                             href={`/crm/leads/${t.lead.id}`}

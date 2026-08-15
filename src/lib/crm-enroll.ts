@@ -409,9 +409,21 @@ export async function enrollLead(
 ): Promise<{ partyId: string; pipelineId: string; draftId: string | null; opsProjectId: string | null }> {
   const lead = await prisma.lead.findUnique({
     where: { id: args.leadId },
-    select: { ...leadCoreSelect, status: { select: { label: true } }, expectedValue: true, expectedCloseDate: true },
+    select: {
+      ...leadCoreSelect,
+      status: { select: { label: true, code: true } },
+      expectedValue: true,
+      expectedCloseDate: true,
+    },
   });
   if (!lead) throw new HttpError(404, "Lead not found", "not_found");
+
+  // Idempotency: enrolling twice must never draft revenue twice. A repeat call
+  // (a double-click/two-tab race, or a stale UI that still shows the Enroll
+  // button) is rejected rather than silently re-drafted.
+  if (lead.status.code === "enrolled") {
+    throw badRequest("This lead is already enrolled.", "already_enrolled");
+  }
 
   const serviceId = args.serviceId ?? lead.serviceId;
   const expectedValue = args.expectedValue ?? (lead.expectedValue ? Number(lead.expectedValue) : null);

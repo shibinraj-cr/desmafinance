@@ -12,6 +12,7 @@ import { COUNTRIES, countryCodeFor } from "@/lib/countries";
 import { StatusPill, TemperaturePill, type StatusOpt, type Opt, type BdeOpt } from "../client";
 import { EnrollCelebration } from "@/components/EnrollCelebration";
 import { NextStepDialog, type NextStepPayload } from "@/components/crm/NextStepDialog";
+import { TaskEditDialog, type TaskEditPayload } from "@/components/crm/TaskEditDialog";
 
 export type PartyOpt = { id: string; label: string; phone: string | null };
 export type DetailMasters = {
@@ -486,8 +487,13 @@ function StageBar({ lead, statuses, canEdit }: { lead: LeadRow; statuses: Status
         const isCurrent = !isEndState && i === currentIdx;
         const color = stageColor(s, i);
         // "Pipeline" shows on the bar as a milestone but is set only by the
-        // Set-deal action — never clickable.
-        const locked = isActionOnlyStatus(s.code);
+        // Set-deal action — never clickable. Once the lead itself is Enrolled, every
+        // stage button is locked too — the backend now rejects any statusId change away
+        // from "enrolled" (see PATCH /api/crm/leads/[id]), and without this the buttons
+        // for ordinary stages (Qualify, Follow-Up, ...) would stay clickable and silently
+        // no-op on that 400 with no feedback, same as the Status field in the Summary card.
+        const lockedByEnrollment = lead.status.code === "enrolled";
+        const locked = isActionOnlyStatus(s.code) || lockedByEnrollment;
         // Reached stages wear their stage colour; the current stage gets a
         // brighter fill + glow ring; upcoming stages stay tinted-but-muted.
         const style: React.CSSProperties = reached
@@ -511,11 +517,13 @@ function StageBar({ lead, statuses, canEdit }: { lead: LeadRow; statuses: Status
               (canEdit && !locked ? " cursor-pointer hover:brightness-105" : "")
             }
             title={
-              locked
-                ? `${s.label} is set by an action (Set deal), not the status picker`
-                : canEdit
-                  ? `Set status: ${s.label}`
-                  : s.label
+              lockedByEnrollment
+                ? "Lead is Enrolled — its status can't be changed from here"
+                : locked
+                  ? `${s.label} is set by an action (Set deal), not the status picker`
+                  : canEdit
+                    ? `Set status: ${s.label}`
+                    : s.label
             }
           >
             {reached && (
@@ -709,22 +717,40 @@ function SummaryCard({ lead, masters, canEdit }: { lead: LeadRow; masters: Detai
             </Field>
           )}
           <Field label="Status">
-            <select className={inputCls} value={draft.statusId} onChange={(e) => setDraft({ ...draft, statusId: e.target.value })}>
-              {/* Pipeline & Enrolled are set by actions (Set deal / Enroll), not here.
-                  If the lead is already in one, show it as a disabled current value. */}
-              {isActionOnlyStatus(lead.status.code) && (
-                <option value={lead.status.id} disabled>
-                  {lead.status.label} (set by action)
-                </option>
-              )}
-              {masters.statuses
-                .filter((s) => !isActionOnlyStatus(s.code))
-                .map((s) => (
-                  <option key={s.id} value={s.id}>
-                    {s.label}
+            {lead.status.code === "enrolled" ? (
+              // Enrolled is more than a label — it has a Party record / LeadPulsePipeline row /
+              // Finance TransactionDraft / Operations project already created off the back of it.
+              // Leaving "enrolled" from the plain picker would desync the CRM's display from those
+              // systems of record with no unwinding, so the field is locked instead of editable
+              // (the API rejects the change server-side too — this is belt and suspenders).
+              // Undoing an enrollment needs a dedicated action, not this form.
+              <div
+                className={`${inputCls} flex items-center gap-xs bg-surface-container-low text-on-surface-variant cursor-not-allowed`}
+                aria-disabled="true"
+              >
+                <span className="material-symbols-outlined" style={{ fontSize: 16 }}>
+                  lock
+                </span>
+                <span className="text-body-md">Enrolled — status can&rsquo;t be changed here</span>
+              </div>
+            ) : (
+              <select className={inputCls} value={draft.statusId} onChange={(e) => setDraft({ ...draft, statusId: e.target.value })}>
+                {/* Pipeline & Enrolled are set by actions (Set deal / Enroll), not here.
+                    If the lead is already in one, show it as a disabled current value. */}
+                {isActionOnlyStatus(lead.status.code) && (
+                  <option value={lead.status.id} disabled>
+                    {lead.status.label} (set by action)
                   </option>
-                ))}
-            </select>
+                )}
+                {masters.statuses
+                  .filter((s) => !isActionOnlyStatus(s.code))
+                  .map((s) => (
+                    <option key={s.id} value={s.id}>
+                      {s.label}
+                    </option>
+                  ))}
+              </select>
+            )}
           </Field>
           <Field label="Temperature">
             <select className={inputCls} value={draft.temperature} onChange={(e) => setDraft({ ...draft, temperature: e.target.value })}>
@@ -2282,7 +2308,7 @@ function TasksPanel({
         ) : (
           <ul className="space-y-base">
             {open.map((t) => (
-              <TaskItem key={t.id} leadId={leadId} leadName={leadName} task={t} canEdit={canEdit} />
+              <TaskItem key={t.id} leadId={leadId} leadName={leadName} task={t} canEdit={canEdit} bdes={bdes} />
             ))}
           </ul>
         )}
@@ -2293,7 +2319,7 @@ function TasksPanel({
           <div className="text-label-sm uppercase tracking-wider text-on-surface-variant">Completed</div>
           <ul className="space-y-base">
             {done.map((t) => (
-              <TaskItem key={t.id} leadId={leadId} leadName={leadName} task={t} canEdit={canEdit} />
+              <TaskItem key={t.id} leadId={leadId} leadName={leadName} task={t} canEdit={canEdit} bdes={bdes} />
             ))}
           </ul>
         </div>
@@ -2395,11 +2421,26 @@ function TaskComposer({
   );
 }
 
-function TaskItem({ leadId, task, canEdit, leadName }: { leadId: string; task: TaskRow; canEdit: boolean; leadName?: string | null }) {
+function TaskItem({
+  leadId,
+  task,
+  canEdit,
+  leadName,
+  bdes,
+}: {
+  leadId: string;
+  task: TaskRow;
+  canEdit: boolean;
+  leadName?: string | null;
+  bdes: BdeOpt[];
+}) {
   const router = useRouter();
   const [busy, setBusy] = useState(false);
   const [showNext, setShowNext] = useState(false);
   const [nextError, setNextError] = useState<string | null>(null);
+  const [editing, setEditing] = useState(false);
+  const [editBusy, setEditBusy] = useState(false);
+  const [editError, setEditError] = useState<string | null>(null);
   const done = task.status === "done";
   const due = taskDueLabel(task.dueAt);
 
@@ -2452,6 +2493,23 @@ function TaskItem({ leadId, task, canEdit, leadName }: { leadId: string; task: T
     setBusy(false);
     if (res.ok) router.refresh();
   }
+  async function saveEdit(payload: TaskEditPayload) {
+    if (!canEdit) return;
+    setEditBusy(true);
+    setEditError(null);
+    const res = await fetch(`/api/crm/leads/${leadId}/tasks/${task.id}`, {
+      method: "PATCH",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+    setEditBusy(false);
+    if (res.ok) {
+      setEditing(false);
+      router.refresh();
+    } else {
+      setEditError("Couldn’t save changes. Please try again.");
+    }
+  }
 
   return (
     <li className="flex items-start gap-sm rounded-lg border border-outline-variant bg-surface-container-low p-md">
@@ -2465,6 +2523,19 @@ function TaskItem({ leadId, task, canEdit, leadName }: { leadId: string; task: T
             setNextError(null);
           }}
           onSubmit={(p) => complete(p)}
+        />
+      )}
+      {editing && (
+        <TaskEditDialog
+          task={{ subject: task.subject, dueAt: task.dueAt, priority: task.priority, assignedToId: task.assignedToId, note: task.note }}
+          bdes={bdes}
+          busy={editBusy}
+          error={editError}
+          onCancel={() => {
+            setEditing(false);
+            setEditError(null);
+          }}
+          onSubmit={saveEdit}
         />
       )}
       <button
@@ -2504,17 +2575,30 @@ function TaskItem({ leadId, task, canEdit, leadName }: { leadId: string; task: T
         {task.note && <p className="mt-xs text-label-sm text-on-surface-variant whitespace-pre-wrap">{task.note}</p>}
       </div>
       {canEdit && (
-        <button
-          type="button"
-          onClick={remove}
-          disabled={busy}
-          className="text-on-surface-variant hover:text-error flex-shrink-0"
-          title="Delete task"
-        >
-          <span className="material-symbols-outlined" style={{ fontSize: 18 }}>
-            delete
-          </span>
-        </button>
+        <span className="flex items-center gap-xs flex-shrink-0">
+          <button
+            type="button"
+            onClick={() => setEditing(true)}
+            disabled={busy}
+            className="text-on-surface-variant hover:text-accent"
+            title="Edit task"
+          >
+            <span className="material-symbols-outlined" style={{ fontSize: 18 }}>
+              edit
+            </span>
+          </button>
+          <button
+            type="button"
+            onClick={remove}
+            disabled={busy}
+            className="text-on-surface-variant hover:text-error"
+            title="Delete task"
+          >
+            <span className="material-symbols-outlined" style={{ fontSize: 18 }}>
+              delete
+            </span>
+          </button>
+        </span>
       )}
     </li>
   );
