@@ -1006,3 +1006,170 @@ export async function getAttentionQueue(opts: {
   rows.sort((a, b) => b.daysSinceTouch - a.daysSinceTouch);
   return { rows, counts };
 }
+
+// ── Task-based / first-response drill-downs ───────────────────────────────────
+// Three more "needs attention" buckets that aren't Lead-attention-flag issues
+// (attentionFlags/getAttentionQueue above): overdue tasks and open re-inquiry
+// follow-ups are CrmTask-level, and a first-response gap is "assigned but never
+// contacted, past the SLA". Each returns the same lightweight QueueRow shape so
+// `/crm/team/queue` can render them alongside the four AttentionQueueRow buckets
+// with one consistent (and reassignable) table.
+
+export type QueueRow = {
+  id: string; // lead id
+  name: string;
+  statusLabel: string;
+  statusColor: string | null;
+  assigneeId: string | null;
+  assigneeName: string | null;
+  ageDays: number;
+  ageLabel: string;
+  nextTaskDueAt: Date | null;
+};
+
+/** Resolve which BDE(s) a drill-down query is scoped to, mirroring getAttentionQueue's ownerId rule. */
+async function resolveQueueOwner(
+  scope: TeamScope,
+  consultantId: string | null | undefined,
+): Promise<{ ownerId: string | null; roster: Array<{ userId: string; displayName: string }> }> {
+  const self = scope.restrictToUserId;
+  const roster = (await getAssignableBdes()).filter((b) => !self || b.userId === self);
+  return { ownerId: self ?? (consultantId || null), roster };
+}
+
+/** One row per lead with a matching open CrmTask, keyed off the earliest matching task. */
+async function taskLeadQueue(opts: {
+  scope: TeamScope;
+  consultantId?: string | null;
+  now: Date;
+  taskWhere: Prisma.CrmTaskWhereInput;
+  ageLabel: string;
+  /** When true, age = days since the task's due date (overdue); else days since the task was created. */
+  ageFromDue: boolean;
+}): Promise<QueueRow[]> {
+  const { ownerId, roster } = await resolveQueueOwner(opts.scope, opts.consultantId);
+  const ids = roster.map((b) => b.userId);
+  if (!ids.length) return [];
+  const nameById = new Map(roster.map((b) => [b.userId, b.displayName]));
+
+  const tasks = await prisma.crmTask.findMany({
+    where: { ...opts.taskWhere, assignedToId: ownerId ? ownerId : { in: ids } },
+    select: {
+      dueAt: true,
+      createdAt: true,
+      lead: {
+        select: {
+          id: true,
+          candidateName: true,
+          assignedToId: true,
+          status: { select: { code: true, label: true, color: true } },
+        },
+      },
+    },
+    orderBy: { dueAt: "asc" },
+  });
+
+  const byLead = new Map<string, QueueRow>();
+  for (const t of tasks) {
+    if (byLead.has(t.lead.id)) continue;
+    const anchor = (opts.ageFromDue ? t.dueAt : null) ?? t.createdAt;
+    byLead.set(t.lead.id, {
+      id: t.lead.id,
+      name: t.lead.candidateName,
+      statusLabel: t.lead.status.label,
+      statusColor: t.lead.status.color,
+      assigneeId: t.lead.assignedToId,
+      assigneeName: t.lead.assignedToId ? (nameById.get(t.lead.assignedToId) ?? null) : null,
+      ageDays: Math.max(0, Math.round(ageInDays(opts.now, anchor))),
+      ageLabel: opts.ageLabel,
+      nextTaskDueAt: t.dueAt,
+    });
+  }
+  return [...byLead.values()].sort((a, b) => b.ageDays - a.ageDays);
+}
+
+/** Leads with an open task whose due date has passed. */
+export async function getOverdueTaskQueue(opts: { scope: TeamScope; consultantId?: string | null; now: Date }): Promise<QueueRow[]> {
+  return taskLeadQueue({
+    ...opts,
+    taskWhere: { status: "open", dueAt: { lt: startOfLocalDay(opts.now) } },
+    ageLabel: "days overdue",
+    ageFromDue: true,
+  });
+}
+
+/** Leads with an open re-inquiry follow-up task (subject match, same rule as the Tasks board). */
+export async function getReinquiryQueue(opts: { scope: TeamScope; consultantId?: string | null; now: Date }): Promise<QueueRow[]> {
+  return taskLeadQueue({
+    ...opts,
+    taskWhere: { status: "open", subject: { contains: REINQUIRY_TASK_SUBJECT_NEEDLE, mode: "insensitive" } },
+    ageLabel: "days open",
+    ageFromDue: false,
+  });
+}
+
+/**
+ * Leads genuinely owned (deliberate assignment) that have NEVER received an
+ * outbound contact and are already past {@link FIRST_RESPONSE_SLA_HOURS} since
+ * assignment — the actionable "nobody has reached out yet" gap. Unlike
+ * {@link computeFirstResponseStats}'s `breached` count, this deliberately
+ * excludes leads that WERE eventually contacted (just late): those don't need
+ * reassignment, they need nothing further.
+ */
+export async function getFirstResponseGapQueue(opts: {
+  scope: TeamScope;
+  consultantId?: string | null;
+  now: Date;
+}): Promise<QueueRow[]> {
+  const { ownerId, roster } = await resolveQueueOwner(opts.scope, opts.consultantId);
+  const ids = roster.map((b) => b.userId);
+  if (!ids.length) return [];
+  const nameById = new Map(roster.map((b) => [b.userId, b.displayName]));
+
+  const leadsRaw = await prisma.lead.findMany({
+    where: { status: { kind: "active" }, assignedToId: ownerId ? ownerId : { in: ids } },
+    select: {
+      id: true,
+      candidateName: true,
+      assignedToId: true,
+      assignedAt: true,
+      importBatch: { select: { createdAt: true } },
+      status: { select: { code: true, label: true, color: true } },
+    },
+  });
+  const owned = leadsRaw.filter((l) =>
+    isDeliberateAssignment({
+      assignedToId: l.assignedToId,
+      assignedAt: l.assignedAt,
+      importBatchCreatedAt: l.importBatch?.createdAt ?? null,
+    }),
+  );
+  const ownedIds = owned.map((l) => l.id);
+  const contactGroups = ownedIds.length
+    ? await prisma.leadActivity.groupBy({
+        by: ["leadId"],
+        where: { leadId: { in: ownedIds }, ...outboundContactWhere() },
+        _min: { occurredAt: true },
+      })
+    : [];
+  const contactedLeadIds = new Set(contactGroups.map((g) => g.leadId));
+
+  const rows: QueueRow[] = [];
+  for (const l of owned) {
+    if (contactedLeadIds.has(l.id)) continue; // already contacted at least once — not a gap
+    const hours = (opts.now.getTime() - (l.assignedAt as Date).getTime()) / 3_600_000;
+    if (hours <= FIRST_RESPONSE_SLA_HOURS) continue;
+    rows.push({
+      id: l.id,
+      name: l.candidateName,
+      statusLabel: l.status.label,
+      statusColor: l.status.color,
+      assigneeId: l.assignedToId,
+      assigneeName: l.assignedToId ? (nameById.get(l.assignedToId) ?? null) : null,
+      ageDays: Math.round(hours / 24),
+      ageLabel: "since assigned, not yet contacted",
+      nextTaskDueAt: null,
+    });
+  }
+  return rows.sort((a, b) => b.ageDays - a.ageDays);
+}

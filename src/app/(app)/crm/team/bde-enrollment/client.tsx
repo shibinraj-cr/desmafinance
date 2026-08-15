@@ -285,21 +285,35 @@ function BucketCard({ bucket }: { bucket: PipelineBucket }) {
   );
 }
 
+/** `/crm/team/queue` href for one SLA tile — carries the current BDE filter as the consultant param. */
+function queueHref(issue: string, bdeFilter: string): string {
+  const params = new URLSearchParams({ issue });
+  if (bdeFilter !== "all") params.set("consultant", bdeFilter);
+  return `/crm/team/queue?${params.toString()}`;
+}
+
 function SlaAndSources({ data, onSelect }: { data: BdeEnrollmentData; onSelect: (id: string) => void }) {
   return (
     <section className="grid grid-cols-1 gap-gutter lg:grid-cols-2">
-      <Section title="SLA & follow-up health" action={<span className="text-caption text-on-surface-variant">Live · all owners</span>}>
+      <Section
+        title="SLA & follow-up health"
+        action={<span className="text-caption text-on-surface-variant">Live · all owners · click a box to reassign</span>}
+      >
         <div className="grid grid-cols-1 gap-sm sm:grid-cols-2">
           {data.slaTiles.map((s) => {
             const tone = tileTone(s.tone);
             return (
-              <div key={s.key} className={`flex items-center gap-sm rounded-lg border border-outline-variant px-md py-sm ${tone.bg}`}>
+              <Link
+                key={s.key}
+                href={queueHref(s.issue, data.bdeFilter)}
+                className={`flex items-center gap-sm rounded-lg border border-outline-variant px-md py-sm transition hover:border-primary/50 ${tone.bg}`}
+              >
                 <div className="min-w-0 flex-1">
                   <p className="text-label-sm text-on-surface-variant">{s.label}</p>
                   <p className="text-caption text-on-surface-variant">{s.rule}</p>
                 </div>
                 <span className={`text-h3 font-semibold tabular-nums ${tone.icon}`}>{s.count}</span>
-              </div>
+              </Link>
             );
           })}
         </div>
