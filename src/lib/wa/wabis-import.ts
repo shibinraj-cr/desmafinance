@@ -197,6 +197,12 @@ export type WabisRawMessage = {
   body: string | null;
   mediaUrl: string | null;
   occurredAt: Date | null;
+  /** Approved template name, when the record is a template send. */
+  templateName: string | null;
+  /** Meta's own state, which Wabis already stored — free read receipts. */
+  waStatus: string | null;
+  waErrorMessage: string | null;
+  readAt: Date | null;
 };
 
 /**
@@ -216,9 +222,14 @@ export function normalizeWabisMessage(raw: Record<string, unknown>): WabisRawMes
   const inner = parseMessageContent(raw.message_content);
   const contentString = typeof raw.message_content === "string" ? raw.message_content : null;
 
-  const type = inner
-    ? normalizeMessageType(pick(inner, "type"))
-    : normalizeMessageType(pick(raw, "message_type", "type", "media_type"));
+  // A template definition carries no top-level `type` — it is identified by
+  // having a name and components — so it would otherwise be filed as plain text.
+  const isTemplate = !!inner && !inner.type && !!inner.name && Array.isArray(inner.components);
+  const type = isTemplate
+    ? ("template" as WaMessageType)
+    : inner
+      ? normalizeMessageType(pick(inner, "type"))
+      : normalizeMessageType(pick(raw, "message_type", "type", "media_type"));
 
   const body = extractWabisBody(inner, type, contentString) ?? pick(raw, "message", "text", "body", "content", "caption");
 
@@ -243,7 +254,23 @@ export function normalizeWabisMessage(raw: Record<string, unknown>): WabisRawMes
     body,
     mediaUrl,
     occurredAt: parseWabisTime(raw.conversation_time) ?? parseWaTimestamp(raw.timestamp ?? raw.created_at ?? raw.sent_at),
+    templateName: isTemplate ? pick(inner!, "name") : null,
+    // Wabis already recorded what Meta did with each message, so imported
+    // threads arrive with real delivery ticks instead of a wall of unknowns.
+    waStatus: normalizeWabisStatus(pick(raw, "message_status")),
+    waErrorMessage: pick(raw, "failed_reason"),
+    readAt: parseWabisTime(raw.read_time),
   };
+}
+
+/** Wabis's stored delivery state, mapped onto the four we store. */
+export function normalizeWabisStatus(raw: string | null): string | null {
+  const s = (raw ?? "").trim().toLowerCase();
+  if (!s) return null;
+  if (s === "read" || s === "delivered" || s === "sent" || s === "failed") return s;
+  if (s === "seen") return "read";
+  if (s === "error" || s === "failure") return "failed";
+  return null;
 }
 
 /**
@@ -268,12 +295,28 @@ export function extractWabisBody(
     const viaShared = extractBody(inner, type);
     if (viaShared) return viaShared;
 
-    // Outbound interactive/template: body first, then header as a last resort —
-    // a header-only message is rare but reads better than an empty bubble.
+    // Outbound interactive: body first, then header as a last resort — a
+    // header-only message is rare but reads better than an empty bubble.
     const interactive = asObject(inner.interactive) ?? asObject(inner.template);
     if (interactive) {
       for (const section of ["body", "header", "footer"]) {
         const text = pick(asObject(interactive[section]) ?? {}, "text");
+        if (text) return text;
+      }
+    }
+
+    // TEMPLATE DEFINITION shape — what Wabis stores for a template send:
+    // {name, language, category, components:[{type:"body", text:"…"}]}. Neither
+    // Meta's message format nor Wabis's own documented sample covers it, and it
+    // is what real records in this account actually contain, so without this
+    // every template send imports with an empty body.
+    const components = Array.isArray(inner.components) ? inner.components : [];
+    for (const wanted of ["body", "header", "footer"]) {
+      for (const c of components) {
+        const comp = asObject(c);
+        if (!comp) continue;
+        if ((pick(comp, "type") ?? "").toLowerCase() !== wanted) continue;
+        const text = pick(comp, "text");
         if (text) return text;
       }
     }
@@ -577,6 +620,10 @@ async function storeThread(
       mediaUrl: m.mediaUrl,
       providerMessageId: m.providerMessageId,
       provider: "wabis",
+      templateName: m.templateName,
+      waStatus: m.waStatus,
+      waErrorMessage: m.waErrorMessage,
+      readAt: m.readAt,
       occurredAt: m.occurredAt ?? new Date(),
     })),
     // The replay guard: re-running after adjusting the field mapping cannot
