@@ -108,6 +108,8 @@ function windowLeft(sessionExpiresAt: string | null): string | null {
 }
 
 export function InboxClient({
+  initialFilter,
+  initialConversationId,
   mirrorEnabled,
   providerLabel,
   canSendText,
@@ -116,6 +118,10 @@ export function InboxClient({
   templates,
   bdes,
 }: {
+  /** From ?filter= — the sidebar ticker links to the slice it counted. */
+  initialFilter: string | null;
+  /** From ?conversation= — opens one thread directly. */
+  initialConversationId: string | null;
   mirrorEnabled: boolean;
   providerLabel: string;
   canSendText: boolean;
@@ -124,12 +130,16 @@ export function InboxClient({
   templates: TemplateOpt[];
   bdes: BdeOpt[];
 }) {
-  const [filter, setFilter] = useState("needs_reply");
+  // Only accept a filter the UI actually offers — a stray ?filter=foo would
+  // otherwise leave the chips showing nothing selected.
+  const [filter, setFilter] = useState(
+    FILTERS.some((f) => f.key === initialFilter) ? (initialFilter as string) : "needs_reply",
+  );
   const [search, setSearch] = useState("");
   const [rows, setRows] = useState<InboxRow[]>([]);
   const [counts, setCounts] = useState({ needsReply: 0, unread: 0, unassigned: 0 });
   const [listLoading, setListLoading] = useState(true);
-  const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [selectedId, setSelectedId] = useState<string | null>(initialConversationId);
 
   const loadList = useCallback(async () => {
     setListLoading(true);

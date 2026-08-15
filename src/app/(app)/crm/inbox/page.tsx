@@ -22,7 +22,15 @@ export const dynamic = "force-dynamic";
  * whether the mirror is even collecting messages, and whether the live transport
  * can send free text at all.
  */
-export default async function CrmInboxPage() {
+export default async function CrmInboxPage({
+  searchParams,
+}: {
+  searchParams?: Promise<Record<string, string | string[] | undefined>>;
+}) {
+  // Deep links from the sidebar ticker: ?conversation=<id> opens a thread
+  // directly, ?filter=needs_reply lands on the same slice the badge counted.
+  const sp = (await searchParams) ?? {};
+  const one = (v: string | string[] | undefined) => (Array.isArray(v) ? v[0] : v) ?? null;
   const { userId, perms } = await getCurrentUserAndPermissions();
   if (!userId || !perms) redirect("/login");
 
@@ -70,6 +78,8 @@ export default async function CrmInboxPage() {
       <TopBar title="WhatsApp Inbox" subtitle="CRM" />
       <div className="p-margin">
         <InboxClient
+          initialFilter={one(sp.filter)}
+          initialConversationId={one(sp.conversation)}
           mirrorEnabled={config.enabled}
           providerLabel={provider.label}
           canSendText={provider.supports("sendText")}

@@ -17,6 +17,7 @@ import {
   visibleModules,
 } from "@/lib/modules";
 import { openAppLauncher } from "@/components/AppLauncher";
+import { WhatsAppLiveBox } from "@/components/WhatsAppLiveBox";
 
 type NavItem = {
   href: string;
@@ -370,6 +371,9 @@ export function SideNav({
         <BrandHeader />
         <ModuleSwitcher current={activeModule} modules={modules} onPick={pickModule} />
         <NavList items={items} pathname={pathname} />
+        {/* Sits between the nav and the user footer so it is visible without
+            scrolling the nav, and renders nothing at all when no one is waiting. */}
+        {canSeePage(perms, "/crm/inbox") && <WhatsAppLiveBox />}
         <UserFooter user={user} perms={perms} />
       </aside>
 
