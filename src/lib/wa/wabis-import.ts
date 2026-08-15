@@ -23,8 +23,9 @@
  */
 import { prisma } from "../prisma";
 import { normalizePhone } from "../crm";
+import { toWabisPhone } from "../crm-webhook";
 import { logger } from "../logger";
-import { getSetting, WABIS_API_TOKEN_KEY } from "../app-settings";
+import { getSetting, WABIS_API_TOKEN_KEY, WA_CLOUD_PHONE_NUMBER_ID_KEY } from "../app-settings";
 import { normalizeMessageType, parseWaTimestamp, type WaMessageType } from "./inbound";
 import { isAwaitingReply } from "./inbox";
 import { sessionExpiryFrom } from "./mirror";
@@ -58,6 +59,19 @@ export type WabisImportSummary = {
   sampleRaw: unknown;
   /** Field names seen on raw messages — the fastest way to spot a mis-mapping. */
   observedKeys: string[];
+  /**
+   * The first raw RESPONSE, redacted and truncated — captured whether or not any
+   * records were found.
+   *
+   * This exists because the first real run reported "0 messages found" and
+   * nothing else: `sampleRaw` only fills when records are located, so the one
+   * case the dry run exists to diagnose produced no diagnostic at all. Now the
+   * envelope itself comes back, which answers "wrong parameter name?", "wrong
+   * wrapper key?" and "did it refuse us?" in a single look.
+   */
+  rawResponse: string | null;
+  /** Exactly what we asked for, so a wrong parameter name is visible too. */
+  requestSent: string | null;
   errors: string[];
 };
 
@@ -81,7 +95,13 @@ function pick(o: Record<string, unknown>, ...keys: string[]): string | null {
  * parameter with no header and no signing, so a GET would write the API key into
  * every access log and proxy along the way.
  */
-async function wabisPost(path: string, token: string, params: Record<string, string>): Promise<unknown> {
+async function wabisPost(
+  path: string,
+  token: string,
+  params: Record<string, string>,
+  /** Called with the raw body and request BEFORE any throw, so a refusal is still visible. */
+  capture?: (raw: string, request: string) => void,
+): Promise<unknown> {
   const body = new URLSearchParams({ apiToken: token, ...params });
   const res = await fetch(`${WABIS_BASE}${path}`, {
     method: "POST",
@@ -91,12 +111,37 @@ async function wabisPost(path: string, token: string, params: Record<string, str
     signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
   });
   const text = await res.text().catch(() => "");
-  if (!res.ok) throw new Error(`Wabis ${path} → HTTP ${res.status}: ${text.slice(0, 200)}`);
+  // The API key is the one thing that must never reach a browser; every other
+  // parameter is exactly what we need to see.
+  capture?.(text.slice(0, 1500), `POST ${path} ${new URLSearchParams({ apiToken: "«redacted»", ...params })}`);
+  if (!res.ok) throw new Error(`Wabis ${path} → HTTP ${res.status}: ${text.slice(0, 300)}`);
+
+  let parsed: unknown;
   try {
-    return JSON.parse(text) as unknown;
+    parsed = JSON.parse(text) as unknown;
   } catch {
-    throw new Error(`Wabis ${path} returned non-JSON: ${text.slice(0, 200)}`);
+    throw new Error(`Wabis ${path} returned non-JSON: ${text.slice(0, 300)}`);
   }
+
+  // Wabis signals failure IN THE BODY with HTTP 200 — {"status":"0","message":…}.
+  // Without this check a rejected request is indistinguishable from an empty
+  // result, which is exactly how the first run reported "0 messages found" and
+  // told us nothing.
+  const err = wabisErrorMessage(parsed);
+  if (err) throw new Error(`Wabis ${path} refused: ${err}`);
+
+  return parsed;
+}
+
+/** Wabis's in-body failure, or null when the response is a success. */
+export function wabisErrorMessage(payload: unknown): string | null {
+  const o = asObject(payload);
+  if (!o) return null;
+  const status = o.status;
+  const failed = status === "0" || status === 0 || status === false || o.success === false;
+  if (!failed) return null;
+  const msg = pick(o, "message", "error", "msg", "description");
+  return msg ?? "request rejected (no message given)";
 }
 
 /**
@@ -205,17 +250,34 @@ export async function importWabisHistory(opts: WabisImportOptions): Promise<Wabi
     stoppedEarly: false,
     sampleRaw: null,
     observedKeys: [],
+    rawResponse: null,
+    requestSent: null,
     errors: [],
   };
 
   const token = (await getSetting(WABIS_API_TOKEN_KEY).catch(() => null))?.trim();
   if (!token) {
-    summary.errors.push("No Wabis API token set — add it in CRM → Settings → WhatsApp Inbox.");
+    summary.errors.push("No Wabis API token set — paste it above and press Save key.");
     return summary;
   }
 
+  // Wabis scopes conversation reads to a bot's number. Reused from the Cloud
+  // settings rather than asked for twice: it is the same number either way.
+  const config = {
+    phoneNumberId: (await getSetting(WA_CLOUD_PHONE_NUMBER_ID_KEY).catch(() => null))?.trim() || null,
+  };
+
   const deadline = Date.now() + TIME_BUDGET_MS;
   const keys = new Set<string>();
+
+  // First response wins — one envelope is enough to read the shape off, and
+  // capturing every page would bury it.
+  const capture = (raw: string, request: string) => {
+    if (summary.rawResponse === null) {
+      summary.rawResponse = raw;
+      summary.requestSent = request;
+    }
+  };
 
   // A single number is the safest first test: one subscriber, one thread.
   let subscribers: Record<string, unknown>[];
@@ -223,10 +285,9 @@ export async function importWabisHistory(opts: WabisImportOptions): Promise<Wabi
     subscribers = [{ phone_number: opts.onlyPhone }];
   } else {
     try {
-      subscribers = findRecordArray(await wabisPost("/subscriber/list", token, { page: "1" })).slice(
-        0,
-        opts.maxSubscribers,
-      );
+      subscribers = findRecordArray(
+        await wabisPost("/subscriber/list", token, { page: "1" }, capture),
+      ).slice(0, opts.maxSubscribers);
     } catch (e) {
       summary.errors.push(e instanceof Error ? e.message : String(e));
       return summary;
@@ -242,7 +303,8 @@ export async function importWabisHistory(opts: WabisImportOptions): Promise<Wabi
 
     const rawPhone = pick(sub, "phone_number", "phone", "wa_id", "msisdn", "mobile");
     const phoneE164 = normalizePhone(rawPhone);
-    if (!phoneE164) {
+    const wabisPhone = toWabisPhone(rawPhone);
+    if (!phoneE164 || !wabisPhone) {
       summary.skippedNoPhone++;
       continue;
     }
@@ -256,10 +318,19 @@ export async function importWabisHistory(opts: WabisImportOptions): Promise<Wabi
       let batch: Record<string, unknown>[];
       try {
         batch = findRecordArray(
-          await wabisPost("/get/conversation", token, {
-            phone_number: rawPhone!,
-            page: String(page),
-          }),
+          await wabisPost(
+            "/get/conversation",
+            token,
+            {
+              // Digits only, no leading plus — Wabis's own send spec is explicit
+              // that phone_number is "E164 digits, country code, no +". Passing
+              // the CRM's stored "+91…" is why the first run matched nothing.
+              phone_number: wabisPhone,
+              phone_number_id: config.phoneNumberId ?? "",
+              page: String(page),
+            },
+            capture,
+          ),
         );
       } catch (e) {
         summary.errors.push(`${phoneE164}: ${e instanceof Error ? e.message : String(e)}`);

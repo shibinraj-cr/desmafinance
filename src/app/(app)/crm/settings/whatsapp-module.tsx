@@ -53,6 +53,8 @@ type ImportSummary = {
   stoppedEarly: boolean;
   sampleRaw: unknown;
   observedKeys: string[];
+  rawResponse: string | null;
+  requestSent: string | null;
   errors: string[];
 };
 
@@ -524,6 +526,8 @@ export function WhatsAppModuleCard() {
         stoppedEarly: false,
         sampleRaw: null,
         observedKeys: [],
+        rawResponse: null,
+        requestSent: null,
         errors: ["The import request failed."],
       });
       return;
@@ -569,6 +573,22 @@ function ImportReport({ summary }: { summary: ImportSummary }) {
           <summary className="text-label-sm text-primary cursor-pointer">Sample message record</summary>
           <pre className="mt-xs text-label-sm font-mono overflow-x-auto whitespace-pre-wrap break-all">
             {JSON.stringify(summary.sampleRaw, null, 2)}
+          </pre>
+        </details>
+      )}
+
+      {/* Shown whether or not anything was found — when nothing is, this IS the
+          finding. Open by default in that case so it does not have to be hunted for. */}
+      {summary.rawResponse && (
+        <details open={summary.messagesFound === 0}>
+          <summary className="text-label-sm text-primary cursor-pointer">
+            What Wabis actually returned {summary.messagesFound === 0 && "— read this"}
+          </summary>
+          {summary.requestSent && (
+            <p className="mt-xs text-label-sm font-mono text-on-surface-variant break-all">{summary.requestSent}</p>
+          )}
+          <pre className="mt-xs text-label-sm font-mono overflow-x-auto whitespace-pre-wrap break-all">
+            {summary.rawResponse}
           </pre>
         </details>
       )}

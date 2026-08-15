@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { findRecordArray, normalizeWabisMessage, redactSample } from "@/lib/wa/wabis-import";
+import { findRecordArray, normalizeWabisMessage, redactSample, wabisErrorMessage } from "@/lib/wa/wabis-import";
 
 /**
  * These cover the parts written against an UNDOCUMENTED response shape, which is
@@ -98,6 +98,27 @@ describe("normalizeWabisMessage", () => {
 
   it("is null-timestamped rather than wrong when nothing parses", () => {
     expect(normalizeWabisMessage({ message_content: "hi" }).occurredAt).toBeNull();
+  });
+});
+
+// Wabis answers HTTP 200 and signals failure in the body. Without this, a
+// rejected request looks exactly like an empty result — which is precisely how
+// the first real run reported "0 messages found" and explained nothing.
+describe("wabisErrorMessage", () => {
+  it("detects Wabis's in-body failure and returns its message", () => {
+    expect(wabisErrorMessage({ status: "0", message: "Invalid phone number" })).toBe("Invalid phone number");
+    expect(wabisErrorMessage({ status: 0, error: "bad token" })).toBe("bad token");
+    expect(wabisErrorMessage({ success: false, message: "nope" })).toBe("nope");
+  });
+
+  it("still reports a failure that carries no message", () => {
+    expect(wabisErrorMessage({ status: "0" })).toBe("request rejected (no message given)");
+  });
+
+  it("is null on success, so a real empty result is not mistaken for an error", () => {
+    expect(wabisErrorMessage({ status: "1", data: [] })).toBeNull();
+    expect(wabisErrorMessage({ data: [] })).toBeNull();
+    expect(wabisErrorMessage(null)).toBeNull();
   });
 });
 
