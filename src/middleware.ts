@@ -42,8 +42,9 @@ export const config = {
     // the WhatsApp conversation-mirror hook (api/crm/wa/webhook — same reason:
     // a message provider POSTs with a shared `wa_mirror_secret` and has no
     // session; every OTHER route under api/crm/wa stays gated),
-    // Next.js internal asset routes, and any file with an extension
-    // (/desfin.png, /favicon.ico, fonts).
-    "/((?!login|api/auth|api/health|api/whoami|api/integrations|api/crm/integrations/wabis/inbound|api/crm/integrations/wabis/delivery-status|api/crm/wa/webhook|psych/test|api/psych/test|_next/static|_next/image|.*\\..*).*)",
+    // the public privacy policy page (required to be reachable without login
+    // for Meta app review), Next.js internal asset routes, and any file with
+    // an extension (/desfin.png, /favicon.ico, fonts).
+    "/((?!login|api/auth|api/health|api/whoami|api/integrations|api/crm/integrations/wabis/inbound|api/crm/integrations/wabis/delivery-status|api/crm/wa/webhook|psych/test|api/psych/test|privacy-policy|_next/static|_next/image|.*\\..*).*)",
   ],
 };
