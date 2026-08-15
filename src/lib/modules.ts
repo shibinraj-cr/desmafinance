@@ -225,12 +225,30 @@ export const MODULES: AppModule[] = [
         group: "PIPELINE",
       },
       {
-        // Not adminOnly: any CRM user works their own WhatsApp threads. Page
-        // enforces canViewLeads; each conversation re-checks who may act on it.
+        // Its own group, so WhatsApp is a destination in the left bar rather
+        // than a page buried inside Pipeline — the left bar lists GROUPS, so
+        // anything sharing a group with Leads is invisible until you are already
+        // in Pipeline. Answering candidates is its own job, not a sub-task of
+        // working the pipeline.
+        //
+        // Group order follows first appearance in this list (see moduleGroups),
+        // so sitting here puts WhatsApp directly below Pipeline.
+        //
+        // Not adminOnly: any CRM user works their own threads. Page enforces
+        // canViewLeads; each conversation re-checks who may act on it.
         href: "/crm/inbox",
-        label: "WhatsApp Inbox",
+        label: "Inbox",
         icon: "forum",
-        group: "PIPELINE",
+        group: "WHATSAPP",
+      },
+      {
+        // Lives beside the inbox rather than in Tools: both are the WhatsApp
+        // workspace, and a marketer looking for broadcasts looks under WhatsApp.
+        // Page enforces canBulkEmail — the same authority as a bulk email.
+        href: "/crm/broadcasts",
+        label: "Broadcasts",
+        icon: "campaign",
+        group: "WHATSAPP",
       },
       {
         // Not adminOnly: gated by an explicit page grant so a marketing
@@ -238,14 +256,6 @@ export const MODULES: AppModule[] = [
         href: "/crm/templates",
         label: "Message Templates",
         icon: "quickreply",
-        group: "TOOLS",
-      },
-      {
-        // CRM-admin only in practice: the page enforces canBulkEmail, the same
-        // authority as sending a bulk email to a segment.
-        href: "/crm/broadcasts",
-        label: "WhatsApp Broadcasts",
-        icon: "campaign",
         group: "TOOLS",
       },
       {
