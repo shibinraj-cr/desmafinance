@@ -82,6 +82,15 @@ this can be done **in parallel, with Wabis untouched** — no switchover moment.
    `whatsapp_business_messaging` and `whatsapp_business_management`. Generate a
    **permanent** token; the default expires in hours and would fail silently
    mid-campaign.
+1b. **Publish the app — it will not receive live webhooks otherwise.** A Meta app
+   in *Development* mode only receives test webhooks fired from the dashboard;
+   no production traffic is delivered. Everything below can be configured and
+   report success while the CRM still sees nothing. Verified on our own app,
+   which sits in Development today.
+
+   Note this gates RECEIVING only. Sending works from Development mode — our
+   first real outbound message was sent that way.
+
 2. **Subscribe the app to the WABA** (`POST /<WABA_ID>/subscribed_apps`), with
    the webhook pointed at `https://<host>/api/crm/wa/webhook`, the `messages`
    field selected, and `hub.verify_token` set to `wa_mirror_secret`. Our endpoint
@@ -200,11 +209,23 @@ thread happens to point at.
 
 ## Still open
 
-1. **Does Meta deliver to every subscribed app?** The parallel-running plan rests
-   on it. Verify by subscribing our app and watching whether Wabis keeps
-   receiving. If it turns out to be exclusive, we fall back to running on Wabis's
-   send API and inbound webhook for the transition, and the payload shape has to
-   be reverse-engineered first.
+1. **Does Meta deliver to every subscribed app?** Largely settled by inspection,
+   not yet by evidence. A callback URL is stored **per Meta app**, not per WABA,
+   so Wabis's URL lives inside Wabis's own app and is unreachable from ours —
+   nothing we configure can overwrite it. And `subscribed_apps` is a list, so
+   adding ours appends rather than replaces. The plan is additive by
+   construction.
+
+   What is still missing is proof. No Meta UI lists a WABA's subscribed apps
+   (Business Settings shows partner *businesses*, not apps), so the only way to
+   see it is:
+
+   ```
+   curl -s "https://graph.facebook.com/v23.0/<WABA_ID>/subscribed_apps" \
+     -H "Authorization: Bearer <TOKEN>"
+   ```
+
+   Run it before and after subscribing; the diff is the evidence.
 2. **Wabis's partner access.** They hold full control of our WABA today. Decide
    what to downgrade it to, and confirm nothing operational depends on it before
    changing anything.
