@@ -3,6 +3,7 @@ import {
   findRecordArray,
   nextOffsetOf,
   normalizeWabisMessage,
+  normalizeWabisStatus,
   parseWabisTime,
   redactSample,
   wabisDirection,
@@ -173,6 +174,79 @@ describe("normalizeWabisMessage against the documented record", () => {
     const url = "https://bot-data.s3.ap-southeast-1.wasabisys.com/livechat/2026/8/whatsapp-1/2-1-3.ogg";
     const rec = { ...REAL_RECORD, message_content: `{"type":"audio","audio":{"url":"${url}"}}` };
     expect(normalizeWabisMessage(rec).mediaUrl).toBe(url);
+  });
+});
+
+/**
+ * A REAL record from the account — a template send. Neither Meta's message
+ * format nor Wabis's documented sample covers this shape, and it is what the
+ * records actually contain: the text lives at components[].text, and there is no
+ * top-level `type` at all.
+ */
+const REAL_TEMPLATE_RECORD: Record<string, unknown> = {
+  id: 1302743707,
+  whatsapp_bot_subscriber_subscriber_id: "919946108136-145848",
+  whatsapp_bot_id: 145848,
+  sender: "automation",
+  agent_name: null,
+  message_content:
+    '{"name":"desgro","language":"en_US","category":"MARKETING","components":[{"type":"body","text":"Hello,\\n\\nI am *Test Agent* from *DESMA International*.","example":{"body_text":[["agent","agent_phone"]]}}]}',
+  conversation_time: "2026-07-21 17:56:19",
+  wa_message_id: "wamid.HBgMOTE5OTQ2MTA4MTM2FQIAERgSM0Q1ODA4NDY5RTk2ODg2QTZGAA==",
+  message_status: "read",
+  delivery_status_updated_at: "2026-07-21 17:56:22",
+  read_time: "2026-07-21 17:56:29",
+  failed_reason: "",
+  failed_time: null,
+};
+
+describe("normalizeWabisMessage against a REAL template record", () => {
+  // Without the components[] path every template send imports with an empty
+  // bubble — which is what all 13 messages in the first successful dry run
+  // would have done.
+  it("finds the body inside components[]", () => {
+    expect(normalizeWabisMessage(REAL_TEMPLATE_RECORD).body).toBe(
+      "Hello,\n\nI am *Test Agent* from *DESMA International*.",
+    );
+  });
+
+  it("classifies it as a template, not as plain text", () => {
+    expect(normalizeWabisMessage(REAL_TEMPLATE_RECORD).type).toBe("template");
+  });
+
+  it("keeps the template name", () => {
+    expect(normalizeWabisMessage(REAL_TEMPLATE_RECORD).templateName).toBe("desgro");
+  });
+
+  it("reads sender 'automation' as outbound", () => {
+    expect(normalizeWabisMessage(REAL_TEMPLATE_RECORD).direction).toBe("out");
+  });
+
+  it("carries Meta's delivery state across, so imported threads show real ticks", () => {
+    const m = normalizeWabisMessage(REAL_TEMPLATE_RECORD);
+    expect(m.waStatus).toBe("read");
+    expect(m.readAt?.toISOString()).toBe("2026-07-21T12:26:29.000Z");
+  });
+
+  it("takes the wamid, not the numeric row id", () => {
+    expect(normalizeWabisMessage(REAL_TEMPLATE_RECORD).providerMessageId).toBe(
+      REAL_TEMPLATE_RECORD.wa_message_id,
+    );
+  });
+});
+
+describe("normalizeWabisStatus", () => {
+  it("passes through the four states we store", () => {
+    for (const s of ["read", "delivered", "sent", "failed"]) expect(normalizeWabisStatus(s)).toBe(s);
+  });
+  it("maps synonyms", () => {
+    expect(normalizeWabisStatus("seen")).toBe("read");
+    expect(normalizeWabisStatus("error")).toBe("failed");
+  });
+  it("is null on nothing recognisable, rather than inventing a state", () => {
+    expect(normalizeWabisStatus(null)).toBeNull();
+    expect(normalizeWabisStatus("")).toBeNull();
+    expect(normalizeWabisStatus("pending_whatever")).toBeNull();
   });
 });
 
