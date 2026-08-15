@@ -53,6 +53,7 @@ type ImportSummary = {
   stoppedEarly: boolean;
   sampleRaw: unknown;
   observedKeys: string[];
+  observedSenders: { value: string; direction: string; count: number }[];
   rawResponse: string | null;
   requestSent: string | null;
   errors: string[];
@@ -526,6 +527,7 @@ export function WhatsAppModuleCard() {
         stoppedEarly: false,
         sampleRaw: null,
         observedKeys: [],
+        observedSenders: [],
         rawResponse: null,
         requestSent: null,
         errors: ["The import request failed."],
@@ -565,6 +567,22 @@ function ImportReport({ summary }: { summary: ImportSummary }) {
         <div>
           <span className="block text-label-sm text-on-surface-variant mb-xs">Fields Wabis actually returned</span>
           <code className="block text-label-sm font-mono break-all">{summary.observedKeys.join(", ")}</code>
+        </div>
+      )}
+
+      {summary.observedSenders.length > 0 && (
+        <div>
+          <span className="block text-label-sm text-on-surface-variant mb-xs">
+            Who sent what — check these read the right way round
+          </span>
+          <ul className="space-y-xs">
+            {summary.observedSenders.map((s) => (
+              <li key={s.value} className="text-label-sm">
+                <code className="font-mono">{s.value}</code> → {s.direction === "out" ? "us" : "the candidate"}{" "}
+                <span className="text-on-surface-variant tabular-nums">({s.count})</span>
+              </li>
+            ))}
+          </ul>
         </div>
       )}
 

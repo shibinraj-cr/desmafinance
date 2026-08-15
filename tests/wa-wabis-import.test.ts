@@ -1,5 +1,13 @@
 import { describe, it, expect } from "vitest";
-import { findRecordArray, normalizeWabisMessage, redactSample, wabisErrorMessage } from "@/lib/wa/wabis-import";
+import {
+  findRecordArray,
+  nextOffsetOf,
+  normalizeWabisMessage,
+  parseWabisTime,
+  redactSample,
+  wabisDirection,
+  wabisErrorMessage,
+} from "@/lib/wa/wabis-import";
 
 /**
  * These cover the parts written against an UNDOCUMENTED response shape, which is
@@ -104,7 +112,131 @@ describe("normalizeWabisMessage", () => {
 // Wabis answers HTTP 200 and signals failure in the body. Without this, a
 // rejected request looks exactly like an empty result — which is precisely how
 // the first real run reported "0 messages found" and explained nothing.
+/**
+ * The real record shape, taken verbatim from Wabis's documented Sample Response.
+ * Every field my normaliser reads is exercised against it, because the previous
+ * version read four fields that do not exist on this record.
+ */
+const REAL_RECORD: Record<string, unknown> = {
+  id: 8003,
+  whatsapp_bot_subscriber_subscriber_id: "0123456789-23",
+  whatsapp_bot_id: 23,
+  sender: "bot",
+  agent_name: null,
+  message_content:
+    '{"messaging_product":"whatsapp","recipient_type":"individual","to":"0123456789","type":"interactive","interactive":{"header":{"type":"text","text":"Order gateway"},"body":{"text":"How would you like to purchase it?"},"type":"button"}}',
+  conversation_time: "2024-07-28 13:21:03",
+  wa_message_id: "wamid.HBgNODgwMTcyMzMwOTAwMxUCABEYEjlGQkY3MEFEMEVGODhCNDkxNQA=",
+  message_status: null,
+  failed_reason: "",
+};
+
+describe("normalizeWabisMessage against the documented record", () => {
+  it("takes the Meta wamid, never Wabis's own row id", () => {
+    // `id` in providerMessageId would poison the unique index that makes
+    // re-running the import safe.
+    const m = normalizeWabisMessage(REAL_RECORD);
+    expect(m.providerMessageId).toBe(REAL_RECORD.wa_message_id);
+    expect(normalizeWabisMessage({ id: 8003 }).providerMessageId).toBeNull();
+  });
+
+  it("reads the type out of the double-encoded message_content", () => {
+    expect(normalizeWabisMessage(REAL_RECORD).type).toBe("interactive");
+  });
+
+  it("reads the body out of the nested interactive payload", () => {
+    expect(normalizeWabisMessage(REAL_RECORD).body).toBe("How would you like to purchase it?");
+  });
+
+  it("reads a plain text message's body from text.body", () => {
+    const rec = { ...REAL_RECORD, message_content: '{"type":"text","text":{"body":"Hello there"}}' };
+    const m = normalizeWabisMessage(rec);
+    expect(m.type).toBe("text");
+    expect(m.body).toBe("Hello there");
+  });
+
+  it("never leaves raw JSON as the message body", () => {
+    expect(normalizeWabisMessage(REAL_RECORD).body).not.toContain("messaging_product");
+  });
+
+  it("treats sender 'bot' as outbound", () => {
+    expect(normalizeWabisMessage(REAL_RECORD).direction).toBe("out");
+  });
+
+  it("parses conversation_time as IST, not as the server's zone", () => {
+    // 13:21:03 IST is 07:51:03 UTC. Read as UTC it would be 5.5h out and would
+    // interleave wrongly with live messages.
+    expect(normalizeWabisMessage(REAL_RECORD).occurredAt?.toISOString()).toBe("2024-07-28T07:51:03.000Z");
+  });
+
+  it("recovers a Wabis storage URL from inside the encoded content", () => {
+    const url = "https://bot-data.s3.ap-southeast-1.wasabisys.com/livechat/2026/8/whatsapp-1/2-1-3.ogg";
+    const rec = { ...REAL_RECORD, message_content: `{"type":"audio","audio":{"url":"${url}"}}` };
+    expect(normalizeWabisMessage(rec).mediaUrl).toBe(url);
+  });
+});
+
+describe("wabisDirection", () => {
+  it("classifies the outbound markers we know", () => {
+    for (const s of ["bot", "agent", "business", "system", "automation"]) {
+      expect(wabisDirection({ sender: s })).toBe("out");
+    }
+  });
+
+  it("treats a named human agent as outbound whatever the sender says", () => {
+    expect(wabisDirection({ sender: "unknown_value", agent_name: "Priya" })).toBe("out");
+  });
+
+  // The value set is undocumented, so an unrecognised sender must fall the safe
+  // way: a wrongly-inbound message reads as the candidate saying something odd,
+  // a wrongly-outbound one looks like we said something we never did.
+  it("defaults an unknown sender to inbound", () => {
+    expect(wabisDirection({ sender: "user" })).toBe("in");
+    expect(wabisDirection({ sender: "something_new" })).toBe("in");
+    expect(wabisDirection({})).toBe("in");
+  });
+});
+
+describe("parseWabisTime", () => {
+  it("reads the documented Y-m-d H:i:s format as IST", () => {
+    expect(parseWabisTime("2024-07-28 13:21:03")?.toISOString()).toBe("2024-07-28T07:51:03.000Z");
+  });
+  it("is null on junk rather than an epoch-zero date", () => {
+    expect(parseWabisTime(null)).toBeNull();
+    expect(parseWabisTime("")).toBeNull();
+    expect(parseWabisTime(12345)).toBeNull();
+  });
+});
+
+describe("nextOffsetOf", () => {
+  // The spec calls offset a page number but returns nextOffset: 101 for limit 10.
+  // Following the server's own cursor is correct under either reading.
+  it("follows the server's cursor", () => {
+    expect(nextOffsetOf({ status: "1", message: [], nextOffset: 101 })).toBe(101);
+    expect(nextOffsetOf({ next_offset: "51" })).toBe(51);
+  });
+  it("is null when absent or unusable, so the caller falls back", () => {
+    expect(nextOffsetOf({ status: "1" })).toBeNull();
+    expect(nextOffsetOf({ nextOffset: 0 })).toBeNull();
+    expect(nextOffsetOf(null)).toBeNull();
+  });
+});
+
+describe("findRecordArray on the real envelope", () => {
+  it("finds the records under Wabis's `message` key", () => {
+    expect(findRecordArray({ status: "1", message: [REAL_RECORD], nextOffset: 101 })).toHaveLength(1);
+  });
+});
+
 describe("wabisErrorMessage", () => {
+  // `message` is an ARRAY on success and a STRING on failure — same key, two
+  // types — so status has to be checked before the body is touched.
+  it("handles `message` being a string on the failure path", () => {
+    expect(wabisErrorMessage({ status: "0", message: "WhatsApp account not found." })).toBe(
+      "WhatsApp account not found.",
+    );
+  });
+
   it("detects Wabis's in-body failure and returns its message", () => {
     expect(wabisErrorMessage({ status: "0", message: "Invalid phone number" })).toBe("Invalid phone number");
     expect(wabisErrorMessage({ status: 0, error: "bad token" })).toBe("bad token");
