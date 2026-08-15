@@ -151,7 +151,25 @@ const TestSchema = z.object({
 
 const GenerateSchema = z.object({ action: z.literal("generate_secret") });
 
-const BodySchema = z.discriminatedUnion("action", [SaveSchema, TestSchema, GenerateSchema]);
+/**
+ * Save just the Wabis API key.
+ *
+ * Its own action because the key's field lives in the import card, well below
+ * the main Save button — asking that card to submit the whole settings form
+ * would make a key change silently re-save every other field on the page,
+ * including ones the admin never looked at.
+ */
+const SaveWabisKeySchema = z.object({
+  action: z.literal("save_wabis_key"),
+  token: z.string().min(1).max(500),
+});
+
+const BodySchema = z.discriminatedUnion("action", [
+  SaveSchema,
+  TestSchema,
+  GenerateSchema,
+  SaveWabisKeySchema,
+]);
 
 export const POST = withApiHandler(async (req: Request) => {
   const { userId, perms } = await getCurrentUserAndPermissions();
@@ -160,6 +178,11 @@ export const POST = withApiHandler(async (req: Request) => {
   if (!access.canManageSettings) throw forbidden();
 
   const data = BodySchema.parse(await req.json().catch(() => null));
+
+  if (data.action === "save_wabis_key") {
+    await setSetting(WABIS_API_TOKEN_KEY, data.token.trim(), userId);
+    return NextResponse.json({ ok: true });
+  }
 
   if (data.action === "generate_secret") {
     const secret = randomBytes(24).toString("hex");
