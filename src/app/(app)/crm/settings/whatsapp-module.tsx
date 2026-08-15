@@ -380,6 +380,23 @@ export function WhatsAppModuleCard() {
           business number in the last 24 hours; otherwise use a template.
         </p>
 
+        {/* Say which transport this will use BEFORE it is pressed. Without this
+            the button silently used whatever Transport was selected above, and
+            failed on a capability Wabis does not have — which reads as though
+            the Cloud credentials were wrong. */}
+        {s?.cloudConfigured ? (
+          <p className="text-label-sm text-on-surface-variant">
+            Sends via <span className="font-semibold text-on-surface">WhatsApp Cloud API</span> — deliberately, even
+            while the live transport is still {s.activeProviderLabel}. That is what makes this safe to run before
+            cutting over.
+          </p>
+        ) : (
+          <p className="text-label-sm text-error">
+            Fill in the phone number id and access token above and save — without them there is nothing here that can
+            send.
+          </p>
+        )}
+
         <div className="grid grid-cols-1 md:grid-cols-3 gap-base">
           <Field label="To (your own number)">
             <input value={testPhone} onChange={(e) => setTestPhone(e.target.value)} placeholder="+91…" className={input + " w-full"} />
@@ -392,7 +409,13 @@ export function WhatsAppModuleCard() {
           </Field>
         </div>
 
-        <button type="button" className={ghost} disabled={testBusy || !testPhone.trim()} onClick={() => void sendTest()}>
+        <button
+          type="button"
+          className={ghost}
+          disabled={testBusy || !testPhone.trim() || !s?.cloudConfigured}
+          title={s?.cloudConfigured ? undefined : "Save the Cloud API phone number id and access token first"}
+          onClick={() => void sendTest()}
+        >
           {testBusy ? "Sending…" : "Send test"}
         </button>
 

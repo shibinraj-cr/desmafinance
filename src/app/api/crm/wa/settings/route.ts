@@ -23,7 +23,7 @@ import {
   WABIS_API_TOKEN_KEY,
 } from "@/lib/app-settings";
 import { getWaProvider } from "@/lib/wa/registry";
-import { isCloudConfigured } from "@/lib/wa/cloud-provider";
+import { cloudProvider, isCloudConfigured } from "@/lib/wa/cloud-provider";
 import { normalizePhone } from "@/lib/crm";
 
 export const dynamic = "force-dynamic";
@@ -219,7 +219,15 @@ export const POST = withApiHandler(async (req: Request) => {
   const toE164 = normalizePhone(data.phone);
   if (!toE164) throw badRequest("That doesn't look like a sendable number", "bad_phone");
 
-  const provider = await getWaProvider();
+  // Prefer the Cloud API whenever it is configured, EVEN IF the live transport
+  // is still Wabis.
+  //
+  // That is the whole point of this button: prove the Cloud credentials work
+  // before making them live, with Wabis still carrying real traffic. Routing the
+  // test through the live transport instead made it fail on a capability Wabis
+  // does not have, which says nothing about the thing being tested and reads as
+  // though the credentials were wrong.
+  const provider = (await isCloudConfigured()) ? cloudProvider : await getWaProvider();
   const result = data.template
     ? await provider.sendTemplate({ toE164, template: data.template, params: {}, endpointUrl: null })
     : await provider.sendText({ toE164, body: data.body?.trim() || "DesGro CRM test message." });
