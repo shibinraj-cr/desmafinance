@@ -23,7 +23,12 @@ import {
   WABIS_API_TOKEN_KEY,
 } from "@/lib/app-settings";
 import { getWaProvider } from "@/lib/wa/registry";
-import { cloudProvider, isCloudConfigured } from "@/lib/wa/cloud-provider";
+import {
+  cloudProvider,
+  isCloudConfigured,
+  listSubscribedApps,
+  subscribeAppToWaba,
+} from "@/lib/wa/cloud-provider";
 import { normalizePhone } from "@/lib/crm";
 
 export const dynamic = "force-dynamic";
@@ -164,11 +169,22 @@ const SaveWabisKeySchema = z.object({
   token: z.string().min(1).max(500),
 });
 
+/**
+ * Read or create the WABA→app subscription — the object no Meta UI exposes, and
+ * the reason a fully-verified webhook can still receive nothing.
+ */
+// Two literal members rather than one z.enum: discriminatedUnion narrows on a
+// literal, and an enum leaves the remaining branches un-narrowed downstream.
+const CheckWabaSchema = z.object({ action: z.literal("check_waba") });
+const SubscribeWabaSchema = z.object({ action: z.literal("subscribe_waba") });
+
 const BodySchema = z.discriminatedUnion("action", [
   SaveSchema,
   TestSchema,
   GenerateSchema,
   SaveWabisKeySchema,
+  CheckWabaSchema,
+  SubscribeWabaSchema,
 ]);
 
 export const POST = withApiHandler(async (req: Request) => {
@@ -178,6 +194,22 @@ export const POST = withApiHandler(async (req: Request) => {
   if (!access.canManageSettings) throw forbidden();
 
   const data = BodySchema.parse(await req.json().catch(() => null));
+
+  if (data.action === "check_waba" || data.action === "subscribe_waba") {
+    // Always list AFTER subscribing, so the response shows the resulting state
+    // rather than just reporting that a call returned 200 — and so the other
+    // partner's entry is visibly still there.
+    const subscribed = data.action === "subscribe_waba" ? await subscribeAppToWaba() : { ok: true, detail: "" };
+    const listed = await listSubscribedApps();
+    return NextResponse.json({
+      ok: subscribed.ok && listed.ok,
+      action: data.action,
+      subscribeDetail: subscribed.detail,
+      apps: listed.apps,
+      detail: listed.detail,
+      listOk: listed.ok,
+    });
+  }
 
   if (data.action === "save_wabis_key") {
     await setSetting(WABIS_API_TOKEN_KEY, data.token.trim(), userId);

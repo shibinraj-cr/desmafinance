@@ -122,6 +122,15 @@ export function WhatsAppModuleCard() {
   const [importMax, setImportMax] = useState("25");
   const [importBusy, setImportBusy] = useState(false);
   const [importResult, setImportResult] = useState<ImportSummary | null>(null);
+  const [wabaBusy, setWabaBusy] = useState(false);
+  const [wabaResult, setWabaResult] = useState<{
+    ok: boolean;
+    listOk: boolean;
+    apps: { id: string | null; name: string | null }[];
+    detail: string;
+    subscribeDetail: string;
+  } | null>(null);
+
   const [keyBusy, setKeyBusy] = useState(false);
   // Local to this card: the page-level note renders at the top, which is out of
   // sight from the button that triggered it.
@@ -373,6 +382,55 @@ export function WhatsAppModuleCard() {
             <input value={apiVersion} onChange={(e) => setApiVersion(e.target.value)} placeholder="v21.0" className={input + " w-full font-mono text-label-sm"} />
           </Field>
         </div>
+
+        {/* The step no Meta UI exposes. Configuring a callback URL on the app and
+            subscribing that app to the WABA are different objects — a setup can
+            verify green, subscribe to `messages`, and still receive nothing,
+            because Meta was never told to send this account's events here. */}
+        <div className="pt-md border-t border-outline-variant space-y-sm">
+          <span className="block text-label-sm text-on-surface-variant">
+            Account subscription — separate from the webhook, and not visible anywhere in Meta’s dashboard. Without it
+            Meta accepts the webhook and delivers nothing.
+          </span>
+          <div className="flex flex-wrap items-center gap-base">
+            <button type="button" className={ghost} disabled={wabaBusy} onClick={() => void waba("check_waba")}>
+              {wabaBusy ? "Checking…" : "Check subscription"}
+            </button>
+            <button type="button" className={primary} disabled={wabaBusy} onClick={() => void waba("subscribe_waba")}>
+              Subscribe this app
+            </button>
+          </div>
+          {wabaResult && (
+            <div className="rounded-lg border border-outline-variant bg-surface-container-low p-md space-y-xs">
+              {wabaResult.apps.length > 0 ? (
+                <>
+                  <span className="block text-label-sm text-on-surface-variant">Apps receiving this account’s events</span>
+                  <ul className="space-y-xs">
+                    {wabaResult.apps.map((a) => (
+                      <li key={a.id ?? a.name ?? Math.random()} className="text-label-sm text-on-surface">
+                        {a.name ?? "(unnamed)"}{" "}
+                        <span className="font-mono text-on-surface-variant">{a.id ?? ""}</span>
+                      </li>
+                    ))}
+                  </ul>
+                  <p className="text-label-sm text-on-surface-variant">
+                    More than one entry is expected and correct — this list is additive, so subscribing ours does not
+                    remove anyone else’s.
+                  </p>
+                </>
+              ) : (
+                <p className="text-label-sm text-error">
+                  {wabaResult.listOk
+                    ? "No apps are subscribed — Meta is delivering this account’s messages nowhere."
+                    : wabaResult.detail || "Could not read the subscription."}
+                </p>
+              )}
+              {wabaResult.subscribeDetail && !wabaResult.ok && (
+                <p className="text-label-sm text-error break-all">{wabaResult.subscribeDetail}</p>
+              )}
+            </div>
+          )}
+        </div>
       </div>
 
       <div className={card + " p-lg space-y-md"}>
@@ -528,6 +586,22 @@ export function WhatsAppModuleCard() {
       </div>
     </div>
   );
+
+  async function waba(action: "check_waba" | "subscribe_waba") {
+    setWabaBusy(true);
+    setWabaResult(null);
+    const r = await fetch("/api/crm/wa/settings", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ action }),
+    }).catch(() => null);
+    setWabaBusy(false);
+    if (!r) {
+      setWabaResult({ ok: false, listOk: false, apps: [], detail: "Network error.", subscribeDetail: "" });
+      return;
+    }
+    setWabaResult((await r.json()) as typeof wabaResult);
+  }
 
   async function saveWabisKey() {
     setKeyBusy(true);
