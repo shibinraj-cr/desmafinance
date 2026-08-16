@@ -7,6 +7,7 @@ import { getCurrentUserAndPermissions } from "@/lib/permissions";
 import { getCrmAccess } from "@/lib/crm-rbac";
 import { isSessionOpen, markConversationRead } from "@/lib/wa/mirror";
 import { canActOnConversation, canAssignConversation, canViewConversation } from "@/lib/wa/access";
+import { findLeadDuplicates } from "@/lib/crm-leads";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -30,10 +31,21 @@ const conversationSelect = {
       email: true,
       phone: true,
       assignedToId: true,
+      // The ids, not just the labels: the rail edits these in place, and a
+      // dropdown cannot preselect what it was only given the label of.
+      statusId: true,
+      serviceId: true,
+      sourceId: true,
+      qualificationId: true,
+      country: true,
+      studyDestination: true,
+      temperature: true,
+      emailKey: true,
+      phoneE164: true,
       status: { select: { label: true, color: true } },
       service: { select: { name: true } },
       source: { select: { label: true } },
-      temperature: true,
+      qualification: { select: { label: true } },
     },
   },
   assignedTo: { select: { id: true, username: true, leadPulseRole: { select: { displayName: true } } } },
@@ -105,6 +117,33 @@ export const GET = withApiHandler(async (_req: Request, { params }: { params: { 
     userId,
   );
 
+  // Duplicates and recent activity are fetched with the thread rather than on
+  // demand: both are things you want to know BEFORE replying, and a panel that
+  // loads them after the first keystroke tells you too late.
+  const [duplicates, activity] = await Promise.all([
+    conversation.lead
+      ? findLeadDuplicates({
+          id: conversation.lead.id,
+          emailKey: conversation.lead.emailKey,
+          phoneE164: conversation.lead.phoneE164,
+        }).catch(() => [])
+      : Promise.resolve([]),
+    conversation.lead
+      ? prisma.leadActivity.findMany({
+          where: { leadId: conversation.lead.id },
+          orderBy: { occurredAt: "desc" },
+          take: 3,
+          select: {
+            id: true,
+            type: true,
+            summary: true,
+            occurredAt: true,
+            actor: { select: { username: true, leadPulseRole: { select: { displayName: true } } } },
+          },
+        })
+      : Promise.resolve([]),
+  ]);
+
   // Opening clears the badge — but only for someone who owns the work.
   // `unreadCount` is one shared column, not per-user, so letting any viewer zero
   // it would lose the assigned consultant's signal irrecoverably.
@@ -126,13 +165,28 @@ export const GET = withApiHandler(async (_req: Request, { params }: { params: { 
             candidateName: conversation.lead.candidateName,
             email: conversation.lead.email,
             phone: conversation.lead.phone,
+            statusId: conversation.lead.statusId,
+            serviceId: conversation.lead.serviceId,
+            sourceId: conversation.lead.sourceId,
+            qualificationId: conversation.lead.qualificationId,
+            country: conversation.lead.country,
+            studyDestination: conversation.lead.studyDestination,
+            temperature: conversation.lead.temperature,
             statusLabel: conversation.lead.status?.label ?? null,
             statusColor: conversation.lead.status?.color ?? null,
             serviceName: conversation.lead.service?.name ?? null,
             sourceLabel: conversation.lead.source?.label ?? null,
-            temperature: conversation.lead.temperature,
+            qualificationLabel: conversation.lead.qualification?.label ?? null,
           }
         : null,
+      duplicates,
+      activity: activity.map((a) => ({
+        id: a.id,
+        type: a.type,
+        summary: a.summary,
+        occurredAt: a.occurredAt,
+        actorName: a.actor?.leadPulseRole?.displayName ?? a.actor?.username ?? null,
+      })),
       assignedTo: conversation.assignedTo
         ? {
             id: conversation.assignedTo.id,
