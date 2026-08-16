@@ -4,6 +4,7 @@ import { prisma } from "@/lib/prisma";
 import { getCurrentUserAndPermissions } from "@/lib/permissions";
 import { getCrmAccess } from "@/lib/crm-rbac";
 import { WA_UI_ADMIN_ONLY } from "@/lib/rbac";
+import { filterTemplatesFor, leadPulseRoleOf, loadTemplateGrants, templateKey } from "@/lib/wa/template-access";
 import { getWaMirrorConfig } from "@/lib/wa/mirror";
 import { getWaProvider } from "@/lib/wa/registry";
 import { InboxClient } from "./client";
@@ -68,10 +69,30 @@ export default async function CrmInboxPage({
   // would fail every out-of-window reply with "template does not exist", so the
   // picker is populated from the transport's own catalogue — which is empty on
   // Wabis, and the composer says so rather than offering a list that cannot work.
-  const waTemplates = await provider.listTemplates().catch(() => []);
-  const templates = waTemplates
-    .filter((t) => t.status === "APPROVED")
-    .map((t) => ({ id: `${t.name}:${t.language}`, name: `${t.name}:${t.language}`, body: `${t.name} (${t.language})` }));
+  const [waTemplates, grants, myTier] = await Promise.all([
+    provider.listTemplates().catch(() => []),
+    loadTemplateGrants().catch(() => []),
+    leadPulseRoleOf(userId).catch(() => null),
+  ]);
+
+  // Only APPROVED templates can be sent, and only those this consultant has been
+  // granted — the whole WABA catalogue is visible to the API, which is not the
+  // same as it being appropriate for one person to send.
+  const templates = filterTemplatesFor(
+    waTemplates.filter((t) => t.status === "APPROVED"),
+    access,
+    grants,
+    myTier,
+  ).map((t) => ({
+    id: templateKey(t.name, t.language),
+    name: templateKey(t.name, t.language),
+    label: `${t.name} (${t.language})`,
+    // The real message text, so the composer can show what will be sent rather
+    // than only what it is called.
+    body: t.body,
+    header: t.header,
+    variableCount: t.variableCount,
+  }));
 
   return (
     <>

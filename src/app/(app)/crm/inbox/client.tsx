@@ -64,7 +64,17 @@ type Thread = {
   truncated: boolean;
 };
 
-type TemplateOpt = { id: string; name: string; body: string };
+type TemplateOpt = {
+  id: string;
+  /** `name:language` — what the send API is given. */
+  name: string;
+  /** Human label for the dropdown. */
+  label: string;
+  /** The real body text, `{{1}}` placeholders intact. */
+  body: string | null;
+  header: string | null;
+  variableCount: number;
+};
 type BdeOpt = { userId: string; displayName: string };
 
 const FILTERS = [
@@ -95,6 +105,16 @@ function fmtRelative(iso: string | null): string {
   const hrs = Math.round(mins / 60);
   if (hrs < 24) return `${hrs}h`;
   return `${Math.round(hrs / 24)}d`;
+}
+
+/**
+ * Substitute `{{n}}` for the preview. Unfilled placeholders stay visible, so a
+ * half-completed template reads as obviously incomplete rather than as a message
+ * with a gap in it.
+ */
+function fillPreview(body: string | null, params: Record<string, string>): string {
+  if (!body) return "";
+  return body.replace(/\{\{\s*(\d+)\s*\}\}/g, (whole, n: string) => params[n]?.trim() || whole);
 }
 
 /** Remaining free-text window, or null once it has closed. */
@@ -539,6 +559,7 @@ function Composer({
 }) {
   const [text, setText] = useState("");
   const [templateId, setTemplateId] = useState("");
+  const [templateVars, setTemplateVars] = useState<Record<string, string>>({});
   const [sending, setSending] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -553,12 +574,24 @@ function Composer({
   const capable = effectiveMode === "text" ? canSendText : canSendTemplate;
   const selected = useMemo(() => templates.find((t) => t.id === templateId) ?? null, [templates, templateId]);
 
+  // Which placeholders are still empty. Blocks Send rather than letting Meta
+  // reject the call — and stops a half-filled template reaching a candidate.
+  const missingVars = useMemo(() => {
+    if (!selected) return [];
+    return Array.from({ length: selected.variableCount }, (_, i) => String(i + 1)).filter(
+      (slot) => !templateVars[slot]?.trim(),
+    );
+  }, [selected, templateVars]);
+
   async function send() {
     setError(null);
     setSending(true);
     // Exactly one of the two — the server rejects a request carrying both,
     // because only one would actually be delivered.
-    const payload = effectiveMode === "text" ? { body: text } : { template: selected?.name };
+    const payload =
+      effectiveMode === "text"
+        ? { body: text }
+        : { template: selected?.name, templateParams: templateVars };
     const res = await fetch(`/api/crm/wa/conversations/${conversationId}/messages`, {
       method: "POST",
       headers: { "content-type": "application/json" },
@@ -650,35 +683,83 @@ function Composer({
         </div>
       ) : (
         <div className="space-y-xs">
-          <p className="text-label-sm text-on-surface-variant">
-            The 24-hour reply window has closed — only an approved template can be sent.
-          </p>
-          <div className="flex items-center gap-sm">
-            <select
-              value={templateId}
-              onChange={(e) => setTemplateId(e.target.value)}
-              className="flex-1 h-9 px-md rounded-lg border border-outline-variant bg-surface-container-lowest text-label-sm focus:border-primary outline-none"
-            >
-              <option value="">Choose a template…</option>
-              {templates.map((t) => (
-                <option key={t.id} value={t.id}>
-                  {t.name}
-                </option>
-              ))}
-            </select>
-            <button
-              type="button"
-              disabled={!selected || sending}
-              onClick={() => void send()}
-              className="h-9 px-lg rounded-lg bg-primary text-on-primary text-label-sm font-semibold disabled:opacity-40"
-            >
-              {sending ? "Sending…" : "Send"}
-            </button>
-          </div>
-          {selected && (
-            <p className="text-label-sm text-on-surface-variant whitespace-pre-wrap border border-outline-variant rounded-lg p-sm bg-surface-container-low">
-              {selected.body}
+          {!sessionOpen && (
+            <p className="text-label-sm text-on-surface-variant">
+              The 24-hour reply window has closed — only an approved template can be sent.
             </p>
+          )}
+
+          {templates.length === 0 ? (
+            <p className="text-label-sm text-on-surface-variant">
+              No templates have been assigned to you. An admin can grant them under CRM → Settings → Message Templates.
+            </p>
+          ) : (
+            <>
+              <select
+                value={templateId}
+                onChange={(e) => {
+                  setTemplateId(e.target.value);
+                  setTemplateVars({});
+                }}
+                className="w-full h-9 px-md rounded-lg border border-outline-variant bg-surface-container-lowest text-label-sm focus:border-primary outline-none"
+              >
+                <option value="">Choose a template…</option>
+                {templates.map((t) => (
+                  <option key={t.id} value={t.id}>
+                    {t.label}
+                  </option>
+                ))}
+              </select>
+
+              {selected && (
+                <>
+                  {/* Meta rejects a send whose parameter count does not match the
+                      template, so the values are collected here rather than
+                      discovered as an API error after the consultant pressed Send. */}
+                  {selected.variableCount > 0 && (
+                    <div className="flex flex-wrap gap-sm">
+                      {Array.from({ length: selected.variableCount }, (_, i) => String(i + 1)).map((slot) => (
+                        <label key={slot} className="block">
+                          <span className="block text-label-sm text-on-surface-variant mb-xs">{`{{${slot}}}`}</span>
+                          <input
+                            value={templateVars[slot] ?? ""}
+                            onChange={(e) => setTemplateVars((v) => ({ ...v, [slot]: e.target.value }))}
+                            className="h-9 px-md w-44 rounded-lg border border-outline-variant bg-surface-container-lowest text-label-sm focus:border-primary outline-none"
+                          />
+                        </label>
+                      ))}
+                    </div>
+                  )}
+
+                  {/* The actual message, with values filled in. Sending a template
+                      is irreversible and lands on a real candidate's phone, so
+                      what goes out is shown before the button, not after. */}
+                  <div className="rounded-lg border border-outline-variant bg-surface-container-low p-sm space-y-xs">
+                    <span className="block text-label-sm text-on-surface-variant">This is what will be sent</span>
+                    {selected.header && (
+                      <p className="text-label-sm font-semibold text-on-surface whitespace-pre-wrap">{selected.header}</p>
+                    )}
+                    <p className="text-body-md text-on-surface whitespace-pre-wrap">
+                      {fillPreview(selected.body, templateVars) || "(this template has no body text)"}
+                    </p>
+                    {missingVars.length > 0 && (
+                      <p className="text-label-sm text-error">
+                        Fill {missingVars.map((s) => `{{${s}}}`).join(", ")} before sending.
+                      </p>
+                    )}
+                  </div>
+
+                  <button
+                    type="button"
+                    disabled={sending || missingVars.length > 0}
+                    onClick={() => void send()}
+                    className="h-9 px-lg rounded-lg bg-primary text-on-primary text-label-sm font-semibold disabled:opacity-40"
+                  >
+                    {sending ? "Sending…" : "Send this message"}
+                  </button>
+                </>
+              )}
+            </>
           )}
         </div>
       )}

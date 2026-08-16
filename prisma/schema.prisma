@@ -94,6 +94,8 @@ model User {
   waConversations        WaConversation[]     @relation("WaConversationAssignee")
   waMessagesSent         WaMessage[]          @relation("WaMessageSender")
   waBroadcasts           WaBroadcast[]        @relation("WaBroadcastCreatedBy")
+  waTemplateGrants       WaTemplateGrant[]    @relation("WaTemplateGrantUser")
+  waTemplateGrantsMade   WaTemplateGrant[]    @relation("WaTemplateGrantCreatedBy")
 
   // Operations relations
   opsTemplatesCreated    ProcessTemplate[]    @relation("OpsTemplateCreatedBy")
@@ -2769,6 +2771,43 @@ model WaBroadcastRecipient {
   @@index([broadcastId, status])
   @@index([phoneE164])
   @@index([waStatus])
+}
+
+/// Who may send a given approved WhatsApp template.
+///
+/// Templates live at Meta, not here, so this grants access to a NAME rather than
+/// to a row: `templateKey` is `name:language`, the same string the composer
+/// sends. A template that Meta later removes simply stops appearing; its grants
+/// become inert rather than dangling.
+///
+/// DEFAULT IS DENY. A template with no grants is admin-only — the point of this
+/// table is that consultants do not see the whole catalogue, and a default of
+/// "everyone until restricted" would mean every newly-approved template is
+/// silently world-visible the moment Meta approves it.
+///
+/// A grant names EITHER one user or one Lead Pulse role tier. Per-user is exact;
+/// per-tier is what makes it maintainable, since "all L2s may send the follow-up
+/// template" is one row rather than twenty that drift as people join and leave.
+model WaTemplateGrant {
+  id          String  @id @default(cuid())
+  /// `name:language`, e.g. `desgro:en_US`.
+  templateKey String
+
+  /// Exactly one of these is set.
+  userId        String?
+  user          User?   @relation("WaTemplateGrantUser", fields: [userId], references: [id], onDelete: Cascade)
+  /// 'l1' | 'l2' | 'supervisor' — matches LeadPulseRole.role.
+  leadPulseRole String?
+
+  createdById String?
+  createdBy   User?    @relation("WaTemplateGrantCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
+  createdAt   DateTime @default(now())
+
+  /// One grant per template per subject; the partial indexes in the migration
+  /// enforce it for each kind separately, since NULLs do not collide.
+  @@index([templateKey])
+  @@index([userId])
+  @@index([leadPulseRole])
 }
 
 // ──────────────────────────────────────────────────────────────────────

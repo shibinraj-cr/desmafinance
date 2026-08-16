@@ -4,6 +4,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
+import { WhatsAppTemplateAccessCard } from "./whatsapp-access";
 import {
   CRM_TEMPLATE_MERGE_FIELDS,
   CRM_TEMPLATE_SAMPLE_VARS,
@@ -114,6 +115,14 @@ export function MessageTemplatesClient({ templates }: { templates: MessageTempla
             </button>
           );
         })}
+      </div>
+
+      {/* Approved WhatsApp templates live at Meta, not in this table — they are
+          authored and approved there, so what is managed here is who may SEND
+          each one. Same page because "which message can this person send" is one
+          question however the message is stored. */}
+      <div className="pt-lg border-t border-outline-variant">
+        <WhatsAppTemplateAccessCard />
       </div>
 
       {list.length === 0 ? (
