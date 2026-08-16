@@ -36,6 +36,12 @@ export type InboxScope = {
   userId: string;
   /** A BDE defaults to their own threads; everyone else defaults to all. */
   isBde: boolean;
+  /**
+   * Hard visibility restriction from conversationVisibilityWhere — empty for
+   * oversight roles, own-threads-only for a consultant. Applied to EVERY filter,
+   * so "all" means "all I am allowed to see" rather than the whole desk.
+   */
+  visibility?: Prisma.WaConversationWhereInput;
 };
 
 /** The `status` constraint a filter implies — exported so the chip counts agree with the list. */
@@ -63,6 +69,11 @@ export function buildInboxWhere(filter: WaInboxFilter, scope: InboxScope, search
   // Closed threads are hidden from every working view — otherwise the close
   // button changes nothing the consultant can see.
   const and: Prisma.WaConversationWhereInput[] = [inboxStatusWhere(filter)];
+  // Visibility is a HARD scope, applied to every filter including "all".
+  // Previously a consultant defaulted to their own threads but could switch to
+  // the whole desk; a candidate's own words are not something to leave on a
+  // dropdown.
+  if (scope.visibility && Object.keys(scope.visibility).length > 0) and.push(scope.visibility);
 
   switch (filter) {
     case "mine":

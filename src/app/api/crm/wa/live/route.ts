@@ -5,6 +5,7 @@ import { unauthorized } from "@/lib/http-error";
 import { getCurrentUserAndPermissions } from "@/lib/permissions";
 import { getCrmAccess } from "@/lib/crm-rbac";
 import { getWaMirrorConfig } from "@/lib/wa/mirror";
+import { conversationVisibilityWhere } from "@/lib/wa/access";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -42,12 +43,11 @@ export const GET = withApiHandler(async () => {
     return NextResponse.json({ enabled: false, reason: "mirror_off", count: 0, conversations: [] });
   }
 
-  // A BDE sees their own threads; everyone else sees the whole desk. Same rule
-  // as the inbox's landing filter — the sidebar must not disagree with the page
-  // it links to, or the count will look wrong the moment it is clicked.
-  const scope = access.isBde
-    ? { assignedToId: userId }
-    : {};
+  // The same HARD visibility scope the inbox uses — a consultant sees the
+  // candidates they are responsible for, oversight roles see the desk. The
+  // sidebar must not disagree with the page it links to, or a count leads
+  // somewhere that shows less than it promised.
+  const scope = conversationVisibilityWhere(access, userId);
 
   // Every open thread, not just the unanswered ones — this is a live view of the
   // desk. The unanswered COUNT is reported separately, because that is the

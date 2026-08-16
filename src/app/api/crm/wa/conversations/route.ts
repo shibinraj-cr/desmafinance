@@ -5,6 +5,7 @@ import { unauthorized, forbidden } from "@/lib/http-error";
 import { getCurrentUserAndPermissions } from "@/lib/permissions";
 import { getCrmAccess } from "@/lib/crm-rbac";
 import { buildInboxWhere, normalizeInboxFilter, serializeInboxRow } from "@/lib/wa/inbox";
+import { conversationVisibilityWhere } from "@/lib/wa/access";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -41,7 +42,8 @@ export const GET = withApiHandler(async (req: Request) => {
   const take = Number.isFinite(requested) && requested > 0 ? Math.min(requested, MAX_PAGE_SIZE) : PAGE_SIZE;
   const cursor = sp.get("cursor");
 
-  const where = buildInboxWhere(filter, { userId, isBde: access.isBde }, search);
+  const visibility = conversationVisibilityWhere(access, userId);
+  const where = buildInboxWhere(filter, { userId, isBde: access.isBde, visibility }, search);
 
   const rows = await prisma.waConversation.findMany({
     where,
@@ -77,7 +79,9 @@ export const GET = withApiHandler(async (req: Request) => {
   // the point of a badge is to say what is waiting in the tab you are not looking
   // at — but they must exclude closed threads exactly as the lists do, or a badge
   // will promise work that clicking through cannot show.
-  const open = { status: { not: "closed" } } as const;
+  // Counts obey the same visibility scope as the list — a badge promising work
+  // that clicking through cannot show is worse than no badge.
+  const open = { status: { not: "closed" }, ...visibility } as const;
   const [needsReply, unread, unassigned] = await Promise.all([
     prisma.waConversation.count({ where: { ...open, awaitingReply: true } }),
     prisma.waConversation.count({ where: { ...open, unreadCount: { gt: 0 } } }),

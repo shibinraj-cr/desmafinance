@@ -5,6 +5,7 @@ import { unauthorized, forbidden, notFound } from "@/lib/http-error";
 import { getCurrentUserAndPermissions } from "@/lib/permissions";
 import { getCrmAccess, canEditLead } from "@/lib/crm-rbac";
 import { isSessionOpen, markConversationRead } from "@/lib/wa/mirror";
+import { canViewConversation } from "@/lib/wa/access";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -63,6 +64,7 @@ export const GET = withApiHandler(async (_req: Request, { params }: { params: { 
       lastInboundAt: true,
       sessionExpiresAt: true,
       unreadCount: true,
+      assignedToId: true,
       messages: {
         orderBy: { occurredAt: "asc" },
         take: MESSAGE_LIMIT,
@@ -86,6 +88,21 @@ export const GET = withApiHandler(async (_req: Request, { params }: { params: { 
   });
 
   const canReply = canEditLead(access, lead, userId);
+
+  // Lead VISIBILITY is open across the CRM, but a WhatsApp thread is the
+  // candidate's own words — so it is scoped even here, on a lead the consultant
+  // is otherwise allowed to open. They see the lead; they do not see someone
+  // else's conversation with them.
+  if (
+    conversation &&
+    !canViewConversation(
+      access,
+      { leadAssignedToId: lead.assignedToId, conversationAssignedToId: conversation.assignedToId },
+      userId,
+    )
+  ) {
+    return NextResponse.json({ conversation: null, canReply, restricted: true });
+  }
 
   if (!conversation) {
     return NextResponse.json({ conversation: null, canReply });

@@ -6,7 +6,7 @@ import { unauthorized, forbidden, notFound, badRequest } from "@/lib/http-error"
 import { getCurrentUserAndPermissions } from "@/lib/permissions";
 import { getCrmAccess } from "@/lib/crm-rbac";
 import { isSessionOpen, markConversationRead } from "@/lib/wa/mirror";
-import { canActOnConversation, canAssignConversation } from "@/lib/wa/access";
+import { canActOnConversation, canAssignConversation, canViewConversation } from "@/lib/wa/access";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -78,6 +78,22 @@ export const GET = withApiHandler(async (_req: Request, { params }: { params: { 
     },
   });
   if (!conversation) throw notFound();
+
+  // A consultant may only open a thread that is theirs. notFound rather than
+  // forbidden: whether a conversation exists for some other candidate is itself
+  // information they are not entitled to.
+  if (
+    !canViewConversation(
+      access,
+      {
+        leadAssignedToId: conversation.lead?.assignedToId ?? null,
+        conversationAssignedToId: conversation.assignedToId,
+      },
+      userId,
+    )
+  ) {
+    throw notFound();
+  }
 
   const canAct = canActOnConversation(
     access,

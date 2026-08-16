@@ -17,7 +17,52 @@
  *     it to admins would leave first-contact messages sitting unanswered, which
  *     is the exact failure the inbox exists to prevent.
  */
+import type { Prisma } from "@prisma/client";
 import { canEditLead, type CrmAccess } from "../crm-rbac";
+
+/**
+ * May this user see EVERY conversation, or only their own?
+ *
+ * Conversations are treated as more sensitive than the leads they belong to.
+ * The CRM has always let any user view any lead — name, stage, service — but a
+ * WhatsApp thread is the candidate's own words, often about money, visas or
+ * personal circumstances. So this is scoped where lead viewing is not:
+ * oversight roles see the whole desk, a consultant sees the candidates they are
+ * responsible for.
+ *
+ * Deliberately keyed on ROLE rather than on named individuals, so granting a
+ * person the whole-desk view is a role change in the CRM rather than a code
+ * change here.
+ */
+export function canViewAllConversations(access: CrmAccess): boolean {
+  return access.isAdmin || access.isSupervisor || access.isCrmTeamLead || access.canManageCrm;
+}
+
+/**
+ * The `where` restricting a conversation list to what this user may see.
+ *
+ * Empty for oversight roles. For a consultant, a thread is theirs when its LEAD
+ * is theirs — or when the thread itself was handed to them, which covers a
+ * conversation that has no lead yet (a stranger's first message) and one passed
+ * to them without moving the lead.
+ */
+export function conversationVisibilityWhere(
+  access: CrmAccess,
+  userId: string,
+): Prisma.WaConversationWhereInput {
+  if (canViewAllConversations(access)) return {};
+  return { OR: [{ lead: { assignedToId: userId } }, { assignedToId: userId }] };
+}
+
+/** Whether one already-loaded conversation is visible to this user. */
+export function canViewConversation(
+  access: CrmAccess,
+  conv: { leadAssignedToId: string | null; conversationAssignedToId: string | null },
+  userId: string,
+): boolean {
+  if (canViewAllConversations(access)) return true;
+  return conv.leadAssignedToId === userId || conv.conversationAssignedToId === userId;
+}
 
 export type ConversationActor = {
   leadAssignedToId: string | null;

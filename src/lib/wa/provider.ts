@@ -107,6 +107,23 @@ export type WaTemplateSummary = {
   category: string | null;
   /** 'APPROVED' | 'PENDING' | 'REJECTED' | … */
   status: string;
+  /**
+   * The template's actual body text, `{{1}}` placeholders intact.
+   *
+   * Without this a "preview" can only show the template's name, which tells a
+   * consultant nothing about what the candidate will receive — and picking a
+   * send by name alone is how the wrong message goes out.
+   */
+  body: string | null;
+  /** Header text, when the template has a text header. */
+  header: string | null;
+  /**
+   * How many `{{n}}` placeholders the body carries.
+   *
+   * Meta rejects a template send whose parameter count does not match, so this
+   * is what lets the composer collect the values instead of failing at the API.
+   */
+  variableCount: number;
 };
 
 export interface WhatsAppProvider {

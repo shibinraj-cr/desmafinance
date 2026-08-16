@@ -234,6 +234,33 @@ async function graphPost(cfg: CloudConfig, path: string, payload: unknown): Prom
   }
 }
 
+/**
+ * How many distinct `{{n}}` placeholders a template body carries.
+ *
+ * Counts DISTINCT indexes, not occurrences — `{{1}}` used twice is still one
+ * value to collect. Meta rejects a send whose parameter count does not match the
+ * template, so this is what lets the composer ask for the values rather than
+ * discovering the mismatch as an API error.
+ */
+export function countTemplateVariables(body: string | null | undefined): number {
+  if (!body) return 0;
+  const found = new Set<number>();
+  for (const m of body.matchAll(/\{\{\s*(\d+)\s*\}\}/g)) {
+    const n = Number(m[1]);
+    if (Number.isFinite(n) && n > 0) found.add(n);
+  }
+  return found.size;
+}
+
+/** Substitute `{{n}}` placeholders for a preview. Unfilled ones stay visible. */
+export function renderTemplatePreview(body: string | null, params: Record<string, string>): string {
+  if (!body) return "";
+  return body.replace(/\{\{\s*(\d+)\s*\}\}/g, (whole, n: string) => {
+    const v = params[n]?.trim();
+    return v ? v : whole;
+  });
+}
+
 export type SubscribedApp = { id: string | null; name: string | null };
 
 /**
@@ -398,22 +425,42 @@ export const cloudProvider: WhatsAppProvider = {
     if (!cfg?.wabaId) return [];
 
     try {
-      const url = `${GRAPH_HOST}/${cfg.apiVersion}/${cfg.wabaId}/message_templates?fields=name,language,category,status&limit=200`;
+      // `components` is what carries the actual message text. Without it a
+      // preview can only show the template's name, and a consultant picking by
+      // name alone is how the wrong message goes out.
+      const url = `${GRAPH_HOST}/${cfg.apiVersion}/${cfg.wabaId}/message_templates?fields=name,language,category,status,components&limit=200`;
       const res = await fetch(url, {
         headers: { authorization: `Bearer ${cfg.token}` },
         cache: "no-store",
         signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
       });
       if (!res.ok) return [];
-      const d = (await res.json()) as { data?: { name?: string; language?: string; category?: string; status?: string }[] };
+      const d = (await res.json()) as {
+        data?: {
+          name?: string;
+          language?: string;
+          category?: string;
+          status?: string;
+          components?: { type?: string; format?: string; text?: string }[];
+        }[];
+      };
       return (d?.data ?? [])
-        .filter((t): t is { name: string; language: string; category?: string; status?: string } => !!t?.name && !!t.language)
-        .map((t) => ({
-          name: t.name,
-          language: t.language,
-          category: t.category ?? null,
-          status: t.status ?? "UNKNOWN",
-        }));
+        .filter((t): t is { name: string; language: string } & typeof t => !!t?.name && !!t.language)
+        .map((t) => {
+          const components = t.components ?? [];
+          const partOf = (type: string) =>
+            components.find((c) => (c.type ?? "").toUpperCase() === type && typeof c.text === "string")?.text ?? null;
+          const body = partOf("BODY");
+          return {
+            name: t.name,
+            language: t.language,
+            category: t.category ?? null,
+            status: t.status ?? "UNKNOWN",
+            body,
+            header: partOf("HEADER"),
+            variableCount: countTemplateVariables(body),
+          };
+        });
     } catch (e) {
       logger.warn("wa_cloud_templates_failed", { message: e instanceof Error ? e.message : String(e) });
       return [];
