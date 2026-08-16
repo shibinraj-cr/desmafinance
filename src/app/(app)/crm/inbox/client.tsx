@@ -1229,7 +1229,15 @@ function LeadFields({
 function QuickTask({ leadId, canEdit }: { leadId: string; canEdit: boolean }) {
   const [open, setOpen] = useState(false);
   const [subject, setSubject] = useState("");
-  const [due, setDue] = useState<"today" | "tomorrow" | "3d" | "week">("tomorrow");
+  // A real date, not a preset. Presets read well in the abstract but a follow-up
+  // is usually pinned to something — a results date, a flight, a call already
+  // promised — and none of those are "in 3 days". Defaults to tomorrow so the
+  // common case is still one keystroke away.
+  const [dueDate, setDueDate] = useState(() => {
+    const d = new Date();
+    d.setDate(d.getDate() + 1);
+    return d.toISOString().slice(0, 10);
+  });
   const [busy, setBusy] = useState(false);
   const [note, setNote] = useState<string | null>(null);
 
@@ -1238,16 +1246,19 @@ function QuickTask({ leadId, canEdit }: { leadId: string; canEdit: boolean }) {
   async function add() {
     setBusy(true);
     setNote(null);
-    const d = new Date();
-    d.setHours(9, 0, 0, 0);
-    if (due === "tomorrow") d.setDate(d.getDate() + 1);
-    if (due === "3d") d.setDate(d.getDate() + 3);
-    if (due === "week") d.setDate(d.getDate() + 7);
+    // 09:00 LOCAL on the chosen day. Parsing the bare "YYYY-MM-DD" would be read
+    // as UTC midnight, which lands on the previous evening east of Greenwich —
+    // a task due "the 19th" would show as the 18th here.
+    const [y, m, day] = dueDate.split("-").map(Number);
+    const d = new Date(y, (m ?? 1) - 1, day ?? 1, 9, 0, 0, 0);
 
     const res = await fetch(`/api/crm/leads/${leadId}/tasks`, {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ subject: subject.trim(), dueAt: d.toISOString() }),
+      body: JSON.stringify({
+        subject: subject.trim(),
+        dueAt: Number.isFinite(d.getTime()) ? d.toISOString() : null,
+      }),
     }).catch(() => null);
     setBusy(false);
     if (!res?.ok) {
@@ -1279,34 +1290,20 @@ function QuickTask({ leadId, canEdit }: { leadId: string; canEdit: boolean }) {
             placeholder="What needs doing?"
             className={railInput}
           />
-          <div className="flex flex-wrap gap-xs">
-            {(
-              [
-                ["today", "Today"],
-                ["tomorrow", "Tomorrow"],
-                ["3d", "In 3 days"],
-                ["week", "Next week"],
-              ] as const
-            ).map(([k, label]) => (
-              <button
-                key={k}
-                type="button"
-                onClick={() => setDue(k)}
-                className={
-                  "px-sm h-7 rounded-full text-label-sm font-semibold border transition " +
-                  (due === k
-                    ? "bg-primary text-on-primary border-primary"
-                    : "border-outline-variant text-on-surface-variant hover:bg-surface-container-low")
-                }
-              >
-                {label}
-              </button>
-            ))}
-          </div>
+          <label className="block">
+            <span className="block text-label-sm text-on-surface-variant mb-xs">Due date</span>
+            <input
+              type="date"
+              value={dueDate}
+              min={new Date().toISOString().slice(0, 10)}
+              onChange={(e) => setDueDate(e.target.value)}
+              className={railInput}
+            />
+          </label>
           <div className="flex items-center gap-xs">
             <button
               type="button"
-              disabled={busy || !subject.trim()}
+              disabled={busy || !subject.trim() || !dueDate}
               onClick={() => void add()}
               className="h-8 px-md rounded-lg bg-primary text-on-primary text-label-sm font-semibold disabled:opacity-40"
             >
