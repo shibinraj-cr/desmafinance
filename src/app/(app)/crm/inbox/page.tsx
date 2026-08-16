@@ -5,6 +5,7 @@ import { getCurrentUserAndPermissions } from "@/lib/permissions";
 import { getCrmAccess } from "@/lib/crm-rbac";
 import { WA_UI_ADMIN_ONLY } from "@/lib/rbac";
 import { filterTemplatesFor, leadPulseRoleOf, loadTemplateGrants, templateKey } from "@/lib/wa/template-access";
+import { COUNTRIES } from "@/lib/countries";
 import { getWaMirrorConfig } from "@/lib/wa/mirror";
 import { getWaProvider } from "@/lib/wa/registry";
 import { InboxClient } from "./client";
@@ -53,13 +54,32 @@ export default async function CrmInboxPage({
     );
   }
 
-  const [config, provider, bdes] = await Promise.all([
+  const [config, provider, bdes, statuses, services, sources, qualifications] = await Promise.all([
     getWaMirrorConfig(),
     getWaProvider(),
     prisma.leadPulseRole.findMany({
       where: { active: true, role: { in: ["l1", "l2"] } },
       orderBy: { displayName: "asc" },
       select: { userId: true, displayName: true },
+    }),
+    // Masters for the context rail's inline editing. Loaded here rather than per
+    // conversation — they are the same for every thread, and refetching them on
+    // each click would be a request per keystroke of navigation.
+    prisma.crmLeadStatus.findMany({
+      where: { active: true },
+      orderBy: { displayOrder: "asc" },
+      select: { id: true, label: true, color: true },
+    }),
+    prisma.service.findMany({ orderBy: { name: "asc" }, select: { id: true, name: true } }),
+    prisma.leadPulseSource.findMany({
+      where: { active: true },
+      orderBy: { displayOrder: "asc" },
+      select: { id: true, label: true },
+    }),
+    prisma.crmQualification.findMany({
+      where: { active: true },
+      orderBy: { displayOrder: "asc" },
+      select: { id: true, label: true },
     }),
   ]);
 
@@ -108,6 +128,13 @@ export default async function CrmInboxPage({
           canAssign={access.canAssign}
           templates={templates}
           bdes={bdes.map((b) => ({ userId: b.userId, displayName: b.displayName }))}
+          masters={{
+            statuses,
+            services: services.map((s) => ({ id: s.id, label: s.name })),
+            sources,
+            qualifications,
+            countries: [...COUNTRIES],
+          }}
         />
       </div>
     </>

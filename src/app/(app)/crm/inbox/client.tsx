@@ -53,15 +53,41 @@ type Thread = {
     candidateName: string;
     email: string | null;
     phone: string | null;
+    statusId: string | null;
+    serviceId: string | null;
+    sourceId: string | null;
+    qualificationId: string | null;
+    country: string | null;
+    studyDestination: string | null;
+    temperature: string | null;
     statusLabel: string | null;
     statusColor: string | null;
     serviceName: string | null;
     sourceLabel: string | null;
-    temperature: string | null;
+    qualificationLabel: string | null;
   } | null;
   assignedTo: { id: string; name: string } | null;
   messages: ThreadMessage[];
   truncated: boolean;
+  duplicates: LeadDuplicate[];
+  activity: { id: string; type: string; summary: string | null; occurredAt: string; actorName: string | null }[];
+};
+
+type LeadDuplicate = {
+  id: string;
+  candidateName: string;
+  email: string | null;
+  phone: string | null;
+  matchedOn: string;
+  status: { label: string; color: string | null };
+};
+
+export type InboxMasters = {
+  statuses: { id: string; label: string; color: string | null }[];
+  services: { id: string; label: string }[];
+  sources: { id: string; label: string }[];
+  qualifications: { id: string; label: string }[];
+  countries: string[];
 };
 
 type TemplateOpt = {
@@ -137,6 +163,7 @@ export function InboxClient({
   canAssign,
   templates,
   bdes,
+  masters,
 }: {
   /** From ?filter= — the sidebar ticker links to the slice it counted. */
   initialFilter: string | null;
@@ -149,6 +176,7 @@ export function InboxClient({
   canAssign: boolean;
   templates: TemplateOpt[];
   bdes: BdeOpt[];
+  masters: InboxMasters;
 }) {
   // Only accept a filter the UI actually offers — a stray ?filter=foo would
   // otherwise leave the chips showing nothing selected.
@@ -208,6 +236,7 @@ export function InboxClient({
           canAssign={canAssign}
           templates={templates}
           bdes={bdes}
+          masters={masters}
           onChanged={loadList}
         />
       </div>
@@ -346,6 +375,7 @@ function ThreadPane({
   canAssign,
   templates,
   bdes,
+  masters,
   onChanged,
 }: {
   conversationId: string | null;
@@ -355,11 +385,14 @@ function ThreadPane({
   canAssign: boolean;
   templates: TemplateOpt[];
   bdes: BdeOpt[];
+  masters: InboxMasters;
   onChanged: () => void;
 }) {
   const [thread, setThread] = useState<Thread | null>(null);
   const [canAct, setCanAct] = useState(false);
   const [loading, setLoading] = useState(false);
+  /** Text the user highlighted in the thread — the source for "use this as…". */
+  const [selection, setSelection] = useState("");
   const bottomRef = useRef<HTMLDivElement | null>(null);
 
   const load = useCallback(async () => {
@@ -421,7 +454,28 @@ function ThreadPane({
           <SessionPill sessionOpen={thread.sessionOpen} sessionExpiresAt={thread.sessionExpiresAt} />
         </div>
 
-        <div className="flex-1 overflow-auto scrollbar-thin bg-surface-container-low p-md space-y-sm">
+        {/* Capture-from-message. The candidate types their name, qualification
+            and email into the chat; without this a consultant reads it here and
+            retypes it on another page, which is why so many auto-created leads
+            stay named after their phone number. */}
+        {thread.lead && canAct && (
+          <CaptureBar
+            leadId={thread.lead.id}
+            messages={thread.messages}
+            selection={selection}
+            currentEmail={thread.lead.email}
+            onSaved={() => {
+              setSelection("");
+              void load();
+              onChanged();
+            }}
+          />
+        )}
+
+        <div
+          className="flex-1 overflow-auto scrollbar-thin bg-surface-container-low p-md space-y-sm"
+          onMouseUp={() => setSelection(window.getSelection()?.toString().trim().slice(0, 200) ?? "")}
+        >
           {thread.truncated && (
             <p className="text-label-sm text-on-surface-variant text-center">
               Showing the most recent {thread.messages.length} messages.
@@ -460,6 +514,7 @@ function ThreadPane({
         canAct={canAct}
         canAssign={canAssign}
         bdes={bdes}
+        masters={masters}
         onChanged={() => {
           void load();
           onChanged();
@@ -772,12 +827,14 @@ function ContextRail({
   canAct,
   canAssign,
   bdes,
+  masters,
   onChanged,
 }: {
   thread: Thread;
   canAct: boolean;
   canAssign: boolean;
   bdes: BdeOpt[];
+  masters: InboxMasters;
   onChanged: () => void;
 }) {
   const [busy, setBusy] = useState(false);
@@ -818,13 +875,43 @@ function ContextRail({
             </Link>
             <p className="text-label-sm text-on-surface-variant">Open the full lead →</p>
           </div>
-          <dl className="space-y-sm">
-            <Row label="Stage" value={thread.lead.statusLabel} color={thread.lead.statusColor} />
-            <Row label="Service" value={thread.lead.serviceName} />
-            <Row label="Source" value={thread.lead.sourceLabel} />
-            <Row label="Temperature" value={thread.lead.temperature} />
-            <Row label="Email" value={thread.lead.email} />
-          </dl>
+
+          {/* Duplicates first — before anything is typed. A candidate who already
+              exists under another number, or whose email only surfaces later in
+              the chat, becomes two records silently; found now it is a link,
+              found in a report later it is an argument about which row is real. */}
+          {thread.duplicates.length > 0 && (
+            <div className="rounded-lg border border-amber-500/40 bg-amber-500/5 p-sm space-y-xs">
+              <p className="text-label-sm font-semibold text-amber-700">
+                {thread.duplicates.length} other lead{thread.duplicates.length === 1 ? "" : "s"} share this identity
+              </p>
+              {thread.duplicates.slice(0, 3).map((d) => (
+                <Link
+                  key={d.id}
+                  href={`/crm/leads/${d.id}`}
+                  className="block text-label-sm text-primary hover:underline truncate"
+                >
+                  {d.candidateName} · {d.status.label} <span className="text-on-surface-variant">({d.matchedOn})</span>
+                </Link>
+              ))}
+            </div>
+          )}
+
+          <LeadFields lead={thread.lead} masters={masters} canEdit={canAct} onSaved={onChanged} />
+
+          <QuickTask leadId={thread.lead.id} canEdit={canAct} />
+
+          {thread.activity.length > 0 && (
+            <div className="pt-md border-t border-outline-variant space-y-xs">
+              <span className="block text-label-sm text-on-surface-variant">Recent activity</span>
+              {thread.activity.map((a) => (
+                <p key={a.id} className="text-label-sm text-on-surface-variant">
+                  <span className="text-on-surface">{a.summary ?? a.type}</span>
+                  {a.actorName ? ` · ${a.actorName}` : ""} · {fmtRelative(a.occurredAt)}
+                </p>
+              ))}
+            </div>
+          )}
         </>
       ) : (
         <div className="space-y-xs">
@@ -876,6 +963,366 @@ function ContextRail({
           </>
         )}
       </div>
+    </div>
+  );
+}
+
+/** First email address appearing in any inbound message. */
+function emailInMessages(messages: ThreadMessage[]): string | null {
+  for (const m of messages) {
+    if (m.direction !== "in" || !m.body) continue;
+    const found = m.body.match(/[\w.+-]+@[\w-]+\.[\w.-]+/);
+    if (found) return found[0];
+  }
+  return null;
+}
+
+/**
+ * One-click capture of what the candidate typed.
+ *
+ * Two routes, because they suit different data. An EMAIL is machine-findable, so
+ * it is offered unprompted. A NAME or a place is not — so those come from
+ * whatever the consultant highlights, which is faster than any parser and never
+ * wrong in a way they cannot see.
+ *
+ * Nothing is written silently: every action is an explicit button naming the
+ * field it will set.
+ */
+function CaptureBar({
+  leadId,
+  messages,
+  selection,
+  currentEmail,
+  onSaved,
+}: {
+  leadId: string;
+  messages: ThreadMessage[];
+  selection: string;
+  currentEmail: string | null;
+  onSaved: () => void;
+}) {
+  const [busy, setBusy] = useState(false);
+  const detectedEmail = useMemo(() => emailInMessages(messages), [messages]);
+  // Only offer it while it would actually change something.
+  const offerEmail = detectedEmail && detectedEmail.toLowerCase() !== (currentEmail ?? "").toLowerCase();
+
+  async function set(patch: Record<string, unknown>) {
+    setBusy(true);
+    const res = await fetch(`/api/crm/leads/${leadId}`, {
+      method: "PATCH",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(patch),
+    }).catch(() => null);
+    setBusy(false);
+    if (res?.ok) onSaved();
+  }
+
+  if (!offerEmail && !selection) return null;
+
+  const btn =
+    "px-sm h-7 rounded-full text-label-sm font-semibold border border-primary/40 text-primary hover:bg-primary/10 transition disabled:opacity-40";
+
+  return (
+    <div className="px-md py-xs border-b border-outline-variant bg-primary/5 flex flex-wrap items-center gap-xs">
+      {offerEmail && (
+        <button type="button" disabled={busy} className={btn} onClick={() => void set({ email: detectedEmail })}>
+          Set email: {detectedEmail}
+        </button>
+      )}
+      {selection && (
+        <>
+          <span className="text-label-sm text-on-surface-variant truncate max-w-[40%]">“{selection}”</span>
+          <button type="button" disabled={busy} className={btn} onClick={() => void set({ candidateName: selection })}>
+            Use as name
+          </button>
+          <button type="button" disabled={busy} className={btn} onClick={() => void set({ country: selection })}>
+            Use as country
+          </button>
+          <button
+            type="button"
+            disabled={busy}
+            className={btn}
+            onClick={() => void set({ studyDestination: selection })}
+          >
+            Use as destination
+          </button>
+        </>
+      )}
+    </div>
+  );
+}
+
+const railInput =
+  "w-full h-8 px-sm rounded-lg border border-outline-variant bg-surface-container-lowest text-label-sm focus:border-primary outline-none";
+
+/**
+ * The lead fields worth editing WHILE reading a message.
+ *
+ * An inbound thread arrives as a phone number and nothing else, while the
+ * candidate types their name, qualification and country into the chat. Without
+ * this the consultant reads it here and retypes it on another page — which is
+ * why so many auto-created leads stay named after their phone number.
+ *
+ * Deliberately not the whole lead form. This is what you can answer from the
+ * conversation in front of you; anything else belongs behind "Open the full lead".
+ */
+function LeadFields({
+  lead,
+  masters,
+  canEdit,
+  onSaved,
+}: {
+  lead: NonNullable<Thread["lead"]>;
+  masters: InboxMasters;
+  canEdit: boolean;
+  onSaved: () => void;
+}) {
+  const [name, setName] = useState(lead.candidateName);
+  const [email, setEmail] = useState(lead.email ?? "");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [saved, setSaved] = useState<string | null>(null);
+
+  // Re-seed when the conversation changes; the component is reused across threads.
+  useEffect(() => {
+    setName(lead.candidateName);
+    setEmail(lead.email ?? "");
+    setError(null);
+    setSaved(null);
+  }, [lead.id, lead.candidateName, lead.email]);
+
+  async function save(patch: Record<string, unknown>, what: string) {
+    setBusy(true);
+    setError(null);
+    setSaved(null);
+    const res = await fetch(`/api/crm/leads/${lead.id}`, {
+      method: "PATCH",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(patch),
+    }).catch(() => null);
+    setBusy(false);
+    if (!res?.ok) {
+      const d = res ? ((await res.json().catch(() => null)) as { message?: string } | null) : null;
+      setError(d?.message ?? "That didn’t save.");
+      return;
+    }
+    setSaved(`${what} saved`);
+    onSaved();
+  }
+
+  if (!canEdit) {
+    return (
+      <dl className="space-y-sm">
+        <Row label="Stage" value={lead.statusLabel} color={lead.statusColor} />
+        <Row label="Service" value={lead.serviceName} />
+        <Row label="Source" value={lead.sourceLabel} />
+        <Row label="Qualification" value={lead.qualificationLabel} />
+        <Row label="Country" value={lead.country} />
+        <Row label="Email" value={lead.email} />
+      </dl>
+    );
+  }
+
+  const pick = (
+    label: string,
+    value: string | null,
+    options: { id: string; label: string }[],
+    field: string,
+  ) => (
+    <label className="block">
+      <span className="block text-label-sm text-on-surface-variant mb-xs">{label}</span>
+      <select
+        value={value ?? ""}
+        disabled={busy}
+        onChange={(e) => void save({ [field]: e.target.value || null }, label)}
+        className={railInput}
+      >
+        <option value="">—</option>
+        {options.map((o) => (
+          <option key={o.id} value={o.id}>
+            {o.label}
+          </option>
+        ))}
+      </select>
+    </label>
+  );
+
+  return (
+    <div className="space-y-sm">
+      {error && <p className="text-label-sm text-error">{error}</p>}
+      {saved && <p className="text-label-sm text-primary">{saved}</p>}
+
+      {/* Text fields commit on blur rather than per keystroke — a PATCH per
+          character would be a write storm, and Enter alone would miss the very
+          common case of clicking straight into the next field. */}
+      <label className="block">
+        <span className="block text-label-sm text-on-surface-variant mb-xs">Name</span>
+        <input
+          value={name}
+          disabled={busy}
+          onChange={(e) => setName(e.target.value)}
+          onBlur={() => name.trim() && name !== lead.candidateName && void save({ candidateName: name.trim() }, "Name")}
+          onKeyDown={(e) => e.key === "Enter" && e.currentTarget.blur()}
+          className={railInput}
+        />
+      </label>
+
+      <label className="block">
+        <span className="block text-label-sm text-on-surface-variant mb-xs">Email</span>
+        <input
+          value={email}
+          disabled={busy}
+          onChange={(e) => setEmail(e.target.value)}
+          onBlur={() => email !== (lead.email ?? "") && void save({ email: email.trim() || null }, "Email")}
+          onKeyDown={(e) => e.key === "Enter" && e.currentTarget.blur()}
+          className={railInput}
+        />
+      </label>
+
+      {pick("Stage", lead.statusId, masters.statuses, "statusId")}
+      {pick("Service", lead.serviceId, masters.services, "serviceId")}
+      {pick("Source", lead.sourceId, masters.sources, "sourceId")}
+      {pick("Qualification", lead.qualificationId, masters.qualifications, "qualificationId")}
+
+      <label className="block">
+        <span className="block text-label-sm text-on-surface-variant mb-xs">Country</span>
+        <select
+          value={lead.country ?? ""}
+          disabled={busy}
+          onChange={(e) => void save({ country: e.target.value || null }, "Country")}
+          className={railInput}
+        >
+          <option value="">—</option>
+          {masters.countries.map((c) => (
+            <option key={c} value={c}>
+              {c}
+            </option>
+          ))}
+        </select>
+      </label>
+
+      <label className="block">
+        <span className="block text-label-sm text-on-surface-variant mb-xs">Temperature</span>
+        <select
+          value={lead.temperature ?? ""}
+          disabled={busy}
+          onChange={(e) => void save({ temperature: e.target.value || null }, "Temperature")}
+          className={railInput}
+        >
+          <option value="">—</option>
+          <option value="hot">Hot</option>
+          <option value="warm">Warm</option>
+          <option value="cold">Cold</option>
+        </select>
+      </label>
+    </div>
+  );
+}
+
+/**
+ * Add a follow-up without leaving the conversation.
+ *
+ * Due-date presets rather than a date picker: the decision being made here is
+ * "chase this tomorrow", not "on the 19th", and a picker turns a two-second
+ * thought into a calendar interaction.
+ */
+function QuickTask({ leadId, canEdit }: { leadId: string; canEdit: boolean }) {
+  const [open, setOpen] = useState(false);
+  const [subject, setSubject] = useState("");
+  const [due, setDue] = useState<"today" | "tomorrow" | "3d" | "week">("tomorrow");
+  const [busy, setBusy] = useState(false);
+  const [note, setNote] = useState<string | null>(null);
+
+  if (!canEdit) return null;
+
+  async function add() {
+    setBusy(true);
+    setNote(null);
+    const d = new Date();
+    d.setHours(9, 0, 0, 0);
+    if (due === "tomorrow") d.setDate(d.getDate() + 1);
+    if (due === "3d") d.setDate(d.getDate() + 3);
+    if (due === "week") d.setDate(d.getDate() + 7);
+
+    const res = await fetch(`/api/crm/leads/${leadId}/tasks`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ subject: subject.trim(), dueAt: d.toISOString() }),
+    }).catch(() => null);
+    setBusy(false);
+    if (!res?.ok) {
+      setNote("That didn’t save.");
+      return;
+    }
+    setSubject("");
+    setOpen(false);
+    setNote("Task added.");
+  }
+
+  return (
+    <div className="pt-md border-t border-outline-variant space-y-xs">
+      {!open ? (
+        <button
+          type="button"
+          onClick={() => setOpen(true)}
+          className="w-full h-8 rounded-lg border border-outline-variant text-label-sm font-semibold text-on-surface-variant hover:bg-surface-container-low"
+        >
+          + Add task
+        </button>
+      ) : (
+        <div className="space-y-xs">
+          <input
+            autoFocus
+            value={subject}
+            onChange={(e) => setSubject(e.target.value)}
+            onKeyDown={(e) => e.key === "Enter" && subject.trim() && !busy && void add()}
+            placeholder="What needs doing?"
+            className={railInput}
+          />
+          <div className="flex flex-wrap gap-xs">
+            {(
+              [
+                ["today", "Today"],
+                ["tomorrow", "Tomorrow"],
+                ["3d", "In 3 days"],
+                ["week", "Next week"],
+              ] as const
+            ).map(([k, label]) => (
+              <button
+                key={k}
+                type="button"
+                onClick={() => setDue(k)}
+                className={
+                  "px-sm h-7 rounded-full text-label-sm font-semibold border transition " +
+                  (due === k
+                    ? "bg-primary text-on-primary border-primary"
+                    : "border-outline-variant text-on-surface-variant hover:bg-surface-container-low")
+                }
+              >
+                {label}
+              </button>
+            ))}
+          </div>
+          <div className="flex items-center gap-xs">
+            <button
+              type="button"
+              disabled={busy || !subject.trim()}
+              onClick={() => void add()}
+              className="h-8 px-md rounded-lg bg-primary text-on-primary text-label-sm font-semibold disabled:opacity-40"
+            >
+              {busy ? "Adding…" : "Add"}
+            </button>
+            <button
+              type="button"
+              onClick={() => setOpen(false)}
+              className="h-8 px-md text-label-sm text-on-surface-variant"
+            >
+              Cancel
+            </button>
+          </div>
+        </div>
+      )}
+      {note && <p className="text-label-sm text-primary">{note}</p>}
     </div>
   );
 }

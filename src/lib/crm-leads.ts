@@ -283,6 +283,72 @@ export async function resolveDefaultStatus() {
   });
 }
 
+export type LeadDuplicate = {
+  id: string;
+  candidateName: string;
+  email: string | null;
+  phone: string | null;
+  createdAt: string;
+  source: string | null;
+  status: { label: string; color: string | null };
+  /** Which identity matched — "email", "phone", or both. */
+  matchedOn: string;
+};
+
+/**
+ * Other leads sharing this one's email or phone identity.
+ *
+ * Extracted from the lead detail page so the WhatsApp inbox can warn with the
+ * same rule. It matters more there: the mirror creates a lead for any unknown
+ * number, so a candidate who already exists under a second number, or whose
+ * email only surfaces later in the conversation, silently becomes two records.
+ * A duplicate found while reading the message is fixable; one found in a report
+ * three weeks later is an argument about which row is real.
+ */
+export async function findLeadDuplicates(lead: {
+  id: string;
+  emailKey: string | null;
+  phoneE164: string | null;
+}): Promise<LeadDuplicate[]> {
+  const or: Prisma.LeadWhereInput[] = [];
+  if (lead.emailKey) or.push({ emailKey: lead.emailKey });
+  if (lead.phoneE164) or.push({ phoneE164: lead.phoneE164 });
+  if (or.length === 0) return [];
+
+  const rows = await prisma.lead.findMany({
+    where: { id: { not: lead.id }, OR: or },
+    orderBy: { createdAt: "asc" },
+    take: 25,
+    select: {
+      id: true,
+      candidateName: true,
+      email: true,
+      phone: true,
+      emailKey: true,
+      phoneE164: true,
+      createdAt: true,
+      source: { select: { label: true } },
+      status: { select: { label: true, color: true } },
+    },
+  });
+
+  return rows.map((d) => {
+    const on: string[] = [];
+    if (lead.emailKey && d.emailKey === lead.emailKey) on.push("email");
+    if (lead.phoneE164 && d.phoneE164 === lead.phoneE164) on.push("phone");
+    return {
+      id: d.id,
+      candidateName: d.candidateName,
+      email: d.email,
+      phone: d.phone,
+      createdAt: d.createdAt.toISOString(),
+      source: d.source?.label ?? null,
+      status: { label: d.status.label, color: d.status.color },
+      matchedOn: on.join(" + "),
+    };
+  });
+}
+
 export function getDuplicateStatus() {
   return prisma.crmLeadStatus.findUnique({ where: { code: "duplicate" } });
 }
