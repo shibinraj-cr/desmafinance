@@ -116,6 +116,7 @@ export async function assignLeadTo(
       email: updated.email,
       source: updated.source?.label,
       service: updated.service?.name,
+      isStudyAbroad: updated.service?.isStudyAbroad,
       status: updated.status?.label,
       assignedAt: updated.assignedAt,
       agentDisplayName: updated.assignedTo?.leadPulseRole?.displayName,

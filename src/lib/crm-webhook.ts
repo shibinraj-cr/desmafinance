@@ -782,12 +782,41 @@ export async function enqueueLeadAssignedWebhook(opts: {
   email: string | null | undefined;
   source: string | null | undefined;
   service: string | null | undefined;
+  /**
+   * `Service.isStudyAbroad` for this lead. Study-abroad leads have their own
+   * separate, manual-only intro (`enqueueStudyAbroadWebhook`) — this generic
+   * intro's approved template is written for a different service ("Overseas
+   * Nursing Registration"), so sending it to a study-abroad candidate would be
+   * simply wrong, regardless of which consultant it lands on.
+   */
+  isStudyAbroad: boolean | null | undefined;
   status: string | null | undefined;
   assignedAt: Date | null | undefined;
   agentDisplayName: string | null | undefined;
   agentPhone: string | null | undefined;
 }): Promise<void> {
   try {
+    if (opts.isStudyAbroad) {
+      await prisma.crmWebhookDelivery
+        .create({
+          data: {
+            event: LEAD_SKIPPED_EVENT,
+            dedupeKey: `${LEAD_SKIPPED_EVENT}:${randomUUID()}`,
+            leadId: opts.leadId,
+            assigneeUserId: opts.assigneeUserId,
+            url: "",
+            payload: {},
+            status: "failed",
+            attempts: 0,
+            maxAttempts: 0,
+            responseBody:
+              "Not sent — this lead's service is Study Abroad, which has its own separate intro (not this template).",
+          },
+        })
+        .catch(() => undefined);
+      return;
+    }
+
     const dedupeKey = leadAssignedDedupeKey(opts.leadId, opts.assigneeUserId);
     // Cheap pre-check: the unique index is the real guard (below), this just
     // avoids building a payload for the overwhelmingly common repeat case.
