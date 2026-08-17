@@ -1,6 +1,7 @@
 "use client";
 
 import { useMemo, useState } from "react";
+import { WaVoiceRecorder } from "./WaVoiceRecorder";
 
 /**
  * The WhatsApp send box — one implementation, used by the inbox and by the
@@ -167,6 +168,16 @@ export function WaComposer({
             rows={2}
             placeholder="Type a reply… (Enter to send, Shift+Enter for a new line)"
             className="flex-1 px-md py-sm rounded-lg border border-outline-variant bg-surface-container-lowest text-body-md resize-none focus:border-primary outline-none"
+          />
+          {/* Only in text mode, and that is the WhatsApp rule rather than a
+              layout choice: a voice note is free-form, so it lives or dies by
+              the same 24-hour window as typed text. There is no template
+              equivalent to fall back on outside it. */}
+          <WaVoiceRecorder
+            conversationId={conversationId}
+            disabled={sending}
+            onSent={onSent}
+            onError={(m) => setError(m || null)}
           />
           <button
             type="button"

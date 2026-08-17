@@ -29,6 +29,9 @@ import {
   type WaCapability,
   type WaMedia,
   type WaMediaStream,
+  type WaSendAudioInput,
+  type WaUploadInput,
+  type WaUploadResult,
   type WaSendResult,
   type WaSendTemplateInput,
   type WaSendTextInput,
@@ -340,6 +343,8 @@ const SUPPORTED: ReadonlySet<WaCapability> = new Set<WaCapability>([
   "sendText",
   "fetchMedia",
   "listTemplates",
+  "uploadMedia",
+  "sendAudio",
 ]);
 
 export const cloudProvider: WhatsAppProvider = {
@@ -413,6 +418,61 @@ export const cloudProvider: WhatsAppProvider = {
       logger.warn("wa_cloud_media_failed", { mediaId, message: e instanceof Error ? e.message : String(e) });
       return null;
     }
+  },
+
+  /**
+   * Put bytes on the WABA and get a media id back.
+   *
+   * Multipart, with the mime declared on the file part rather than as a separate
+   * field — that is the shape Meta's own example uses, and the API is fussier
+   * about it than the field list suggests. The id it returns is good for thirty
+   * days, which is far longer than the seconds we need it for.
+   */
+  async uploadMedia(input: WaUploadInput): Promise<WaUploadResult> {
+    const cfg = await getCloudConfig();
+    if (!cfg) return { ok: false, detail: "WhatsApp Cloud API is not configured" };
+
+    const form = new FormData();
+    form.append("messaging_product", "whatsapp");
+    form.append("type", input.mime);
+    form.append("file", new Blob([input.bytes as unknown as BlobPart], { type: input.mime }), input.fileName);
+
+    try {
+      const res = await fetch(`${GRAPH_HOST}/${cfg.apiVersion}/${cfg.phoneNumberId}/media`, {
+        method: "POST",
+        // No content-type of our own: fetch sets it with the multipart boundary,
+        // and overriding it produces a body the server cannot split.
+        headers: { authorization: `Bearer ${cfg.token}` },
+        body: form,
+        cache: "no-store",
+        signal: AbortSignal.timeout(MEDIA_TIMEOUT_MS),
+      });
+      const text = await res.text().catch(() => "");
+      if (!res.ok) {
+        const { code, message } = parseGraphError(text);
+        logger.warn("wa_cloud_upload_rejected", { status: res.status, code });
+        return { ok: false, detail: message || `Upload rejected (HTTP ${res.status})` };
+      }
+      const id = (JSON.parse(text) as { id?: string })?.id;
+      if (!id) return { ok: false, detail: "Upload succeeded but returned no media id" };
+      return { ok: true, mediaId: id };
+    } catch (e) {
+      logger.warn("wa_cloud_upload_failed", { message: e instanceof Error ? e.message : String(e) });
+      return { ok: false, detail: "The recording could not be uploaded to WhatsApp" };
+    }
+  },
+
+  async sendAudio(input: WaSendAudioInput): Promise<WaSendResult> {
+    const cfg = await getCloudConfig();
+    if (!cfg) return unsupportedResult("WhatsApp Cloud API is not configured");
+
+    return graphPost(cfg, `${cfg.phoneNumberId}/messages`, {
+      messaging_product: "whatsapp",
+      recipient_type: "individual",
+      to: toCloudRecipient(input.toE164),
+      type: "audio",
+      audio: { id: input.mediaId, voice: input.voice },
+    });
   },
 
   /**

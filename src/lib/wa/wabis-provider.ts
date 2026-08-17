@@ -25,6 +25,9 @@ import {
   type WaCapability,
   type WaMedia,
   type WaMediaStream,
+  type WaSendAudioInput,
+  type WaUploadInput,
+  type WaUploadResult,
   type WaSendResult,
   type WaSendTemplateInput,
   type WaSendTextInput,
@@ -91,6 +94,19 @@ export const wabisProvider: WhatsAppProvider = {
    */
   async downloadMedia(_mediaId: string, _range?: string | null): Promise<WaMediaStream | null> {
     return null;
+  },
+
+  /**
+   * A workflow trigger carries no payload of ours, let alone a file. Reported as
+   * unsupported rather than failed so the composer can say "switch the transport
+   * to Cloud" instead of offering a retry that can never work.
+   */
+  async uploadMedia(_input: WaUploadInput): Promise<WaUploadResult> {
+    return { ok: false, unsupported: true, detail: "Wabis cannot upload media — switch the transport to WhatsApp Cloud API" };
+  },
+
+  async sendAudio(_input: WaSendAudioInput): Promise<WaSendResult> {
+    return unsupportedResult("Wabis cannot send audio — switch the transport to WhatsApp Cloud API");
   },
 
   async listTemplates(): Promise<WaTemplateSummary[]> {

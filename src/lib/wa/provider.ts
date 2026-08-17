@@ -35,7 +35,13 @@ export type WaProviderKey = "wabis" | "cloud";
  * exists" would be useless to the composer, which needs to know whether a
  * template picker can work at all.
  */
-export type WaCapability = "sendTemplate" | "sendText" | "fetchMedia" | "listTemplates";
+export type WaCapability =
+  | "sendTemplate"
+  | "sendText"
+  | "fetchMedia"
+  | "listTemplates"
+  | "uploadMedia"
+  | "sendAudio";
 
 /**
  * The outcome of one send attempt.
@@ -151,8 +157,43 @@ export interface WhatsAppProvider {
    * gives the caller something it can pipe.
    */
   downloadMedia(mediaId: string, range?: string | null): Promise<WaMediaStream | null>;
+  /**
+   * Put a file on the provider and get a handle back.
+   *
+   * Separate from sending because Meta separates them: bytes go up first and the
+   * message then references the id. Splitting them here too means a failed
+   * upload is distinguishable from a failed send, which matters — the first is
+   * safe to retry and the second may already have reached the candidate.
+   */
+  uploadMedia(input: WaUploadInput): Promise<WaUploadResult>;
+  /**
+   * Send previously uploaded audio.
+   *
+   * `voice` asks for a push-to-talk note — waveform, microphone icon, plays
+   * without downloading — rather than a file attachment with a music icon. Meta
+   * honours it only for Ogg/Opus; anything else silently degrades to the
+   * attachment, so callers that care must send the right container.
+   */
+  sendAudio(input: WaSendAudioInput): Promise<WaSendResult>;
   listTemplates(): Promise<WaTemplateSummary[]>;
 }
+
+export type WaUploadInput = {
+  bytes: Uint8Array;
+  mime: string;
+  fileName: string;
+};
+
+export type WaUploadResult =
+  | { ok: true; mediaId: string }
+  | { ok: false; detail: string; unsupported?: boolean };
+
+export type WaSendAudioInput = {
+  toE164: string;
+  mediaId: string;
+  /** True for a voice note; false for a plain audio attachment. */
+  voice: boolean;
+};
 
 /** An attachment being read, not yet buffered. */
 export type WaMediaStream = {
