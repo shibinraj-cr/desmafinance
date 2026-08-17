@@ -28,6 +28,18 @@ export const WABIS_WEBHOOK_ENABLED_KEY = "wabis_webhook_enabled";
 export const WABIS_WEBHOOK_SECRET_KEY = "wabis_webhook_secret";
 
 /**
+ * "1" to send the lead-assignment intro through the Cloud API adapter (our own
+ * WABA) instead of the Wabis workflow above, while `study_abroad` and the
+ * re-marketing drip stay on Wabis. Deliberately its own switch rather than
+ * reusing `WA_PROVIDER_KEY`: that one also carries manual inbox replies and
+ * broadcasts, which are not part of this cutover yet, and coupling them would
+ * mean this can't go live without those being ready too. No effect unless the
+ * Cloud credentials below are also configured — see `isLeadAssignedCloudEnabled`
+ * in src/lib/crm-webhook.ts.
+ */
+export const WA_LEAD_ASSIGNED_CLOUD_KEY = "wa_lead_assigned_cloud_enabled";
+
+/**
  * Re-marketing nurturing engine (CRM → Settings → Integrations). Separate on/off
  * from the lead-assignment webhook above: a site can run the assignment intro
  * without the drip, or vice-versa. See src/lib/crm-remarketing.ts.
