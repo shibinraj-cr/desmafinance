@@ -75,9 +75,10 @@ export const REMARKETING_TOUCH_EVENT = "remarketing_touch";
 
 /**
  * The Meta-approved template the lead-assignment intro sends once it's cut over
- * to the Cloud API. Carries no `:language` suffix, so `cloudProvider.sendTemplate`
- * defaults to `"en"` — change this if the approved template is under a different
- * language code.
+ * to the Cloud API. Language pinned to `en_US` — confirmed live (2026-08-17):
+ * the bare name with no suffix defaults to `"en"` and Meta rejected it with
+ * `132001: template name (desgro_template(en_US)) does not exist in en`, i.e.
+ * this exact template is only approved under `en_US`.
  *
  * The two positional params below (`{{1}}`, `{{2}}`) are inferred from the
  * Wabis side of this same intro: its workflow fills `#!agent!#` then
@@ -86,7 +87,7 @@ export const REMARKETING_TOUCH_EVENT = "remarketing_touch";
  * verify it (CRM → Settings → WhatsApp Inbox → test send, with `templateParams`)
  * before `WA_LEAD_ASSIGNED_CLOUD_KEY` carries real leads.
  */
-export const LEAD_ASSIGNED_CLOUD_TEMPLATE = "desgro_template";
+export const LEAD_ASSIGNED_CLOUD_TEMPLATE = "desgro_template:en_US";
 
 /**
  * One timeout for every attempt, inline or retried — and they must stay equal.
