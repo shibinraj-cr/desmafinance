@@ -2637,6 +2637,17 @@ model WaMessage {
   mediaUrl  String?
   mediaMime String?
   fileName  String?
+  /// OUR copy, in blob storage — the only durable reference of the three above.
+  ///
+  /// Meta deletes inbound media SEVEN DAYS after delivery, so `mediaId` stops
+  /// resolving on a clock that starts the moment the message arrives, and
+  /// `mediaUrl` on an imported row points at Wabis's storage, which outlives our
+  /// subscription to them by nothing at all. Both are borrowed. Once this is
+  /// set, the attachment survives the provider it came from.
+  mediaStoredUrl String?
+  /// When the copy was taken. Null with a `mediaId` present means the archiver
+  /// has not reached this message yet; the sweep selects on exactly that.
+  mediaStoredAt  DateTime?
 
   /// Meta's `wamid.…`, or whatever id the relaying provider gives us. Unique —
   /// see the model note.
@@ -2669,6 +2680,8 @@ model WaMessage {
   @@index([conversationId, occurredAt])
   @@index([direction, waStatus])
   @@index([occurredAt])
+  /// The archiver's work queue: media not yet copied to our own storage.
+  @@index([mediaStoredAt])
 }
 
 /// A marketing send to a segment of leads — the "do marketing inside the CRM"

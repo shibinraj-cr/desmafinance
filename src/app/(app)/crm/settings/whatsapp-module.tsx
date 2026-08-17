@@ -42,6 +42,16 @@ type Settings = {
   wabisApi: { hasToken: boolean; tokenHint: string | null };
 };
 
+type MediaArchiveSummary = {
+  considered: number;
+  stored: number;
+  expired: number;
+  failed: number;
+  stoppedEarly: boolean;
+  remaining: number;
+  errors: string[];
+};
+
 type ImportSummary = {
   dryRun: boolean;
   subscribersSeen: number;
@@ -128,6 +138,9 @@ export function WhatsAppModuleCard() {
   const [broadcastEnabled, setBroadcastEnabled] = useState(false);
   const [batchSize, setBatchSize] = useState("");
   const [wabisApiToken, setWabisApiToken] = useState("");
+
+  const [archiveBusy, setArchiveBusy] = useState(false);
+  const [archiveResult, setArchiveResult] = useState<MediaArchiveSummary | null>(null);
 
   const [importPhone, setImportPhone] = useState("");
   const [importMax, setImportMax] = useState("25");
@@ -514,6 +527,43 @@ export function WhatsAppModuleCard() {
       </div>
 
       <div className={card + " p-lg space-y-md"}>
+        <h3 className="text-h3 text-on-surface">Keep attachments</h3>
+        <p className="text-body-md text-on-surface-variant">
+          Voice notes, photos and documents are held by whoever delivered them, not by us — and both are on a
+          clock. <strong>Meta deletes inbound media after 7 days.</strong> Attachments imported from Wabis sit on
+          Wabis&rsquo;s storage and go when that subscription does. This copies them here, after which they stay.
+        </p>
+        <p className="text-body-md text-on-surface-variant">
+          It runs by itself every night, which is comfortably inside Meta&rsquo;s 7 days. Press this to clear the
+          backlog now — worth doing <strong>before</strong> Wabis is disconnected, since those files cannot be
+          fetched afterwards.
+        </p>
+        <div className="flex flex-wrap items-center gap-sm">
+          <button type="button" onClick={() => void runArchive()} disabled={archiveBusy} className={primary}>
+            {archiveBusy ? "Copying…" : "Copy attachments now"}
+          </button>
+          {archiveResult && (
+            <span className="text-label-sm text-on-surface-variant">
+              <span className="tabular-nums font-semibold text-on-surface">{archiveResult.stored}</span> copied
+              {archiveResult.expired > 0 && (
+                <>
+                  {" · "}
+                  <span className="text-error">{archiveResult.expired} already gone</span>
+                </>
+              )}
+              {archiveResult.failed > 0 && ` · ${archiveResult.failed} failed`}
+              {" · "}
+              <span className="tabular-nums">{archiveResult.remaining}</span> still to do
+              {archiveResult.remaining > 0 && " — press again"}
+            </span>
+          )}
+        </div>
+        {archiveResult?.errors?.length ? (
+          <p className="text-label-sm text-error">{archiveResult.errors.join(" ")}</p>
+        ) : null}
+      </div>
+
+      <div className={card + " p-lg space-y-md"}>
         <h3 className="text-h3 text-on-surface">Import history from Wabis</h3>
         <p className="text-label-sm text-on-surface-variant">
           Pulls past conversations out of Wabis so the inbox doesn’t start empty. One-off, not a sync — run it before
@@ -648,6 +698,29 @@ export function WhatsAppModuleCard() {
     setKeyNote("Saved. You can dry-run now.");
     // Reload so `hasToken` flips and the Dry run button unlocks.
     void load();
+  }
+
+  async function runArchive() {
+    setArchiveBusy(true);
+    const res = await fetch("/api/crm/wa/media-archive", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ limit: 400 }),
+    }).catch(() => null);
+    setArchiveBusy(false);
+    if (!res?.ok) {
+      setArchiveResult({
+        considered: 0,
+        stored: 0,
+        expired: 0,
+        failed: 0,
+        stoppedEarly: false,
+        remaining: 0,
+        errors: ["That didn’t run. Try again."],
+      });
+      return;
+    }
+    setArchiveResult((await res.json()) as MediaArchiveSummary);
   }
 
   async function runImport(dryRun: boolean, restart = false) {
