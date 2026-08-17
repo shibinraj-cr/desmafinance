@@ -208,6 +208,23 @@ export type WabisEndpoint = {
 };
 
 /**
+ * Consultants excluded from the automated assignment intro outright, on top of
+ * (not instead of) the Study Abroad service gate below — a direct exception
+ * for someone whose leads shouldn't get this specific template regardless of
+ * how the individual lead happens to be service-tagged (including untagged).
+ *
+ * Matched case-insensitively against `LeadPulseRole.displayName`, which is
+ * fragile to a spelling change or a same-first-name collision — the service
+ * gate is the fix that generalizes; add a name here only when that isn't
+ * enough on its own.
+ */
+const EXCLUDED_ASSIGNEE_DISPLAY_NAMES = new Set(["dilna"]);
+
+export function isExcludedAssignee(displayName: string | null | undefined): boolean {
+  return EXCLUDED_ASSIGNEE_DISPLAY_NAMES.has((displayName ?? "").trim().toLowerCase());
+}
+
+/**
  * The consultant's Wabis identity. `LeadPulseRole.displayName` / `.phone` are
  * the source of truth — they already drive the CRM's `{consultant_phone}` merge
  * field. The endpoint's `agentName` / `agentPhone` override them only for the
@@ -782,12 +799,45 @@ export async function enqueueLeadAssignedWebhook(opts: {
   email: string | null | undefined;
   source: string | null | undefined;
   service: string | null | undefined;
+  /**
+   * `Service.isStudyAbroad` for this lead. Study-abroad leads have their own
+   * separate, manual-only intro (`enqueueStudyAbroadWebhook`) — this generic
+   * intro's approved template is written for a different service ("Overseas
+   * Nursing Registration"), so sending it to a study-abroad candidate would be
+   * simply wrong, regardless of which consultant it lands on.
+   */
+  isStudyAbroad: boolean | null | undefined;
   status: string | null | undefined;
   assignedAt: Date | null | undefined;
   agentDisplayName: string | null | undefined;
   agentPhone: string | null | undefined;
 }): Promise<void> {
   try {
+    const skipReason = opts.isStudyAbroad
+      ? "this lead's service is Study Abroad, which has its own separate intro (not this template)"
+      : isExcludedAssignee(opts.agentDisplayName)
+        ? "this consultant is excluded from the automated intro"
+        : null;
+    if (skipReason) {
+      await prisma.crmWebhookDelivery
+        .create({
+          data: {
+            event: LEAD_SKIPPED_EVENT,
+            dedupeKey: `${LEAD_SKIPPED_EVENT}:${randomUUID()}`,
+            leadId: opts.leadId,
+            assigneeUserId: opts.assigneeUserId,
+            url: "",
+            payload: {},
+            status: "failed",
+            attempts: 0,
+            maxAttempts: 0,
+            responseBody: `Not sent — ${skipReason}.`,
+          },
+        })
+        .catch(() => undefined);
+      return;
+    }
+
     const dedupeKey = leadAssignedDedupeKey(opts.leadId, opts.assigneeUserId);
     // Cheap pre-check: the unique index is the real guard (below), this just
     // avoids building a payload for the overwhelmingly common repeat case.

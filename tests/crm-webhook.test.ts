@@ -4,6 +4,7 @@ import {
   toAgentPhone,
   istTimestamp,
   resolveAgent,
+  isExcludedAssignee,
   isWabisWebhookUrl,
   pickEndpoint,
   STUDY_ABROAD_EVENT,
@@ -99,6 +100,23 @@ describe("resolveAgent", () => {
   });
   it("yields an empty agent phone when the consultant has no number on file", () => {
     expect(resolveAgent({ ...role, phone: null }).agentPhone).toBe("");
+  });
+});
+
+describe("isExcludedAssignee", () => {
+  it("excludes the named consultant regardless of case or whitespace", () => {
+    expect(isExcludedAssignee("Dilna")).toBe(true);
+    expect(isExcludedAssignee("dilna")).toBe(true);
+    expect(isExcludedAssignee("  DILNA  ")).toBe(true);
+  });
+  it("does not exclude anyone else, including a same-first-name near miss", () => {
+    expect(isExcludedAssignee("Priya")).toBe(false);
+    expect(isExcludedAssignee("Dilna Mathew")).toBe(false);
+  });
+  it("is false for unset", () => {
+    expect(isExcludedAssignee(null)).toBe(false);
+    expect(isExcludedAssignee(undefined)).toBe(false);
+    expect(isExcludedAssignee("")).toBe(false);
   });
 });
 
