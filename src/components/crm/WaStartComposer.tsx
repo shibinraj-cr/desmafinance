@@ -1,7 +1,7 @@
 "use client";
 
 import { useMemo, useState } from "react";
-import { fillPreview, type WaTemplateOpt } from "./WaComposer";
+import { fillPreview, renderedTemplateText, type WaTemplateOpt } from "./WaComposer";
 
 /**
  * Starts a WhatsApp thread that doesn't exist yet — the lead has never
@@ -49,7 +49,11 @@ export function WaStartComposer({
     const res = await fetch(`/api/crm/leads/${leadId}/wa/start`, {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ template: selected.name, templateParams: templateVars }),
+      body: JSON.stringify({
+        template: selected.name,
+        templateParams: templateVars,
+        renderedBody: renderedTemplateText(selected, templateVars),
+      }),
     }).catch(() => null);
     setSending(false);
 

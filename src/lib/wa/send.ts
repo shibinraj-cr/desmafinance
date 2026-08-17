@@ -50,6 +50,13 @@ export type WaSendInput = {
   /** Approved template name. Always legal, in or out of the window. */
   template?: string | null;
   templateParams?: Record<string, string>;
+  /**
+   * The template's header + body with `templateParams` already filled in —
+   * what the candidate actually receives. Display-only: it is never sent to
+   * the provider (that's `template` + `templateParams`), only persisted so
+   * the thread shows real content instead of the template's technical name.
+   */
+  renderedBody?: string | null;
 };
 
 /**
@@ -146,12 +153,17 @@ async function recordSentMessage(
   providerKey: string,
   now: Date,
 ): Promise<WaSendOutcome> {
+  // For a template send, `body` (the free-text field) is always null — the
+  // real content lives in `renderedBody`, filled in by the composer from the
+  // same template definition it showed as "This is what will be sent".
+  const displayBody = template ? input.renderedBody?.trim() || null : body;
+
   const message = await prisma.waMessage.create({
     data: {
       conversationId: conversation.id,
       direction: "out",
       type: template ? "template" : "text",
-      body,
+      body: displayBody,
       templateName: template,
       providerMessageId: result.providerMessageId,
       provider: providerKey,

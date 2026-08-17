@@ -35,6 +35,16 @@ export function fillPreview(body: string | null, params: Record<string, string>)
   return body.replace(/\{\{\s*(\d+)\s*\}\}/g, (whole, n: string) => params[n]?.trim() || whole);
 }
 
+/**
+ * The full text of a template send, header and body together — what the
+ * candidate actually receives. Sent alongside `template`/`templateParams` so
+ * the server can persist it as the outbound WaMessage's `body`; otherwise the
+ * thread has nothing to show but the template's technical name.
+ */
+export function renderedTemplateText(t: WaTemplateOpt, params: Record<string, string>): string {
+  return [t.header, fillPreview(t.body, params)].filter(Boolean).join("\n\n");
+}
+
 export function WaComposer({
   conversationId,
   sessionOpen,
@@ -86,7 +96,13 @@ export function WaComposer({
     // Exactly one of the two — the server rejects a request carrying both,
     // because only one would actually be delivered.
     const payload =
-      effectiveMode === "text" ? { body: text } : { template: selected?.name, templateParams: templateVars };
+      effectiveMode === "text"
+        ? { body: text }
+        : {
+            template: selected?.name,
+            templateParams: templateVars,
+            renderedBody: selected ? renderedTemplateText(selected, templateVars) : undefined,
+          };
     const res = await fetch(`/api/crm/wa/conversations/${conversationId}/messages`, {
       method: "POST",
       headers: { "content-type": "application/json" },

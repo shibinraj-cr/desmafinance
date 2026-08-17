@@ -15,6 +15,7 @@ const SendSchema = z.object({
   body: z.string().max(WA_MAX_TEXT_LENGTH).optional(),
   template: z.string().max(200).optional(),
   templateParams: z.record(z.string(), z.string()).optional(),
+  renderedBody: z.string().max(WA_MAX_TEXT_LENGTH).optional(),
 });
 
 /**
@@ -64,6 +65,7 @@ export const POST = withApiHandler(async (req: Request, { params }: { params: { 
     body: data.body ?? null,
     template: data.template ?? null,
     templateParams: data.templateParams,
+    renderedBody: data.renderedBody ?? null,
   });
 
   if (!result.ok) {
