@@ -4,8 +4,11 @@ import { useState, useTransition } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { Section } from "@/components/Cards";
+import { CreateLoginPanel } from "@/components/CreateLoginPanel";
 
 type ShiftLite = { id: string; code: string; name: string };
+type LoginRole = { id: string; name: string };
+type LoginStatus = { hasLogin: boolean; username: string | null };
 
 type EmpDraft = {
   id: string;
@@ -95,6 +98,8 @@ export function EmployeeEditor({
   designations,
   departmentsList,
   rolesList,
+  loginRoles,
+  login,
   canEdit,
   leaveTab,
 }: {
@@ -107,6 +112,8 @@ export function EmployeeEditor({
   designations: DesignationLite[];
   departmentsList: DepartmentLite[];
   rolesList: RoleLite[];
+  loginRoles: LoginRole[];
+  login: LoginStatus;
   canEdit: boolean;
   leaveTab: LeaveTabData;
 }) {
@@ -116,6 +123,7 @@ export function EmployeeEditor({
   const [pending, start] = useTransition();
   const [error, setError] = useState<string | null>(null);
   const [saved, setSaved] = useState(false);
+  const [showLoginPanel, setShowLoginPanel] = useState(false);
 
   async function saveProfile() {
     setError(null);
@@ -141,6 +149,50 @@ export function EmployeeEditor({
 
   return (
     <>
+      {canEdit && (
+        <Section title="Login">
+          {login.hasLogin ? (
+            <p className="text-label-sm text-on-surface-variant">
+              Has a login — username <span className="font-mono">{login.username}</span>.{" "}
+              {!showLoginPanel && (
+                <button
+                  type="button"
+                  onClick={() => setShowLoginPanel(true)}
+                  className="text-blue-700 underline"
+                >
+                  Reset password / change role
+                </button>
+              )}
+            </p>
+          ) : showLoginPanel ? null : (
+            <div className="flex items-center justify-between gap-sm">
+              <p className="text-label-sm text-on-surface-variant">No login yet.</p>
+              <button
+                type="button"
+                onClick={() => setShowLoginPanel(true)}
+                className="px-md py-sm rounded border border-outline-variant text-label-sm"
+              >
+                Create login
+              </button>
+            </div>
+          )}
+          {showLoginPanel && (
+            <div className="mt-sm">
+              <CreateLoginPanel
+                employeeId={employee.id}
+                defaultDisplayName={employee.name}
+                defaultPhone={employee.phone || null}
+                roles={loginRoles}
+                onDone={() => {
+                  setShowLoginPanel(false);
+                  start(() => router.refresh());
+                }}
+                onCancel={() => setShowLoginPanel(false)}
+              />
+            </div>
+          )}
+        </Section>
+      )}
       <div className="flex gap-sm border-b border-outline-variant mb-md">
         {(["profile", "org", "salary", "leave"] as const).map((t) => (
           <button
