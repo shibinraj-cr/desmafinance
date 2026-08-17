@@ -87,16 +87,21 @@ export const ALWAYS_VISIBLE_PAGES = ["/me/attendance", "/me/regularization"];
 // capture, so no non-admin should reach them. The page + API route guards
 // enforce the same rule server-side.
 /**
- * WhatsApp module rollout gate — ONE line to open the module to the team.
+ * WhatsApp module rollout gate. RELEASED — the mirror is live and receiving, so
+ * the inbox is open to every CRM user.
  *
- * The inbox and broadcasts ship admin-only while the conversation mirror is
- * tested against the live number, because until the mirror is switched on and
- * Wabis is forwarding messages, everyone else would see an empty inbox they
- * cannot explain. Set this to `false` to release both to every CRM user; the
- * pages, the nav and the per-lead WhatsApp tab all read it, and each already
- * authorises correctly for the wider audience (canViewLeads / canBulkEmail).
+ * This only ever controlled who could SEE the module while it was being tested.
+ * It is not the data rule and never was: what a consultant can actually read is
+ * decided per conversation by conversationVisibilityWhere (src/lib/wa/access.ts)
+ * — a BDE sees the candidates assigned to them, oversight roles see the desk.
+ * Setting this back to `true` would hide the module again; it would not tighten
+ * anything.
+ *
+ * Broadcasts stays narrower by its own rule: the page enforces canBulkEmail, and
+ * the nav entry needs an explicit /crm/broadcasts page grant, so opening the
+ * inbox does not hand every BDE a bulk-send tool.
  */
-export const WA_UI_ADMIN_ONLY = true;
+export const WA_UI_ADMIN_ONLY = false;
 
 export const ADMIN_RESTRICTED_PAGES = [
   "/marketing/lead-pulse/daily-entry",
