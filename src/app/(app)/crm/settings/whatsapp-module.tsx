@@ -163,6 +163,7 @@ export function WhatsAppModuleCard() {
   const [testPhone, setTestPhone] = useState("");
   const [testBody, setTestBody] = useState("");
   const [testTemplate, setTestTemplate] = useState("");
+  const [testParams, setTestParams] = useState("");
   const [testBusy, setTestBusy] = useState(false);
   const [testResult, setTestResult] = useState<string | null>(null);
   const [testOk, setTestOk] = useState(false);
@@ -240,6 +241,15 @@ export function WhatsAppModuleCard() {
     }
   }
 
+  /** "Priya, +919000000001" → {"1": "Priya", "2": "+919000000001"} — positional, in order typed. */
+  function parseTestParams(raw: string): Record<string, string> {
+    const values = raw
+      .split(",")
+      .map((v) => v.trim())
+      .filter((v) => v.length > 0);
+    return Object.fromEntries(values.map((v, i) => [String(i + 1), v]));
+  }
+
   async function sendTest() {
     setTestBusy(true);
     setTestResult(null);
@@ -249,7 +259,9 @@ export function WhatsAppModuleCard() {
       body: JSON.stringify({
         action: "test_send",
         phone: testPhone,
-        ...(testTemplate.trim() ? { template: testTemplate.trim() } : { body: testBody }),
+        ...(testTemplate.trim()
+          ? { template: testTemplate.trim(), templateParams: parseTestParams(testParams) }
+          : { body: testBody }),
       }),
     });
     const p = (await r.json().catch(() => ({}))) as {
@@ -501,12 +513,24 @@ export function WhatsAppModuleCard() {
           </p>
         )}
 
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-base">
+        <div className="grid grid-cols-1 md:grid-cols-4 gap-base">
           <Field label="To (your own number)">
             <input value={testPhone} onChange={(e) => setTestPhone(e.target.value)} placeholder="+91…" className={input + " w-full"} />
           </Field>
           <Field label="Template" hint="name:language, e.g. hello_world:en_US. Leave blank to send free text.">
             <input value={testTemplate} onChange={(e) => setTestTemplate(e.target.value)} className={input + " w-full font-mono text-label-sm"} />
+          </Field>
+          <Field
+            label="Template params"
+            hint={`Comma-separated, in order: {{1}}, {{2}}, … Meta rejects a template send whose count doesn't match what's approved — it'll say how many it expected.`}
+          >
+            <input
+              value={testParams}
+              onChange={(e) => setTestParams(e.target.value)}
+              placeholder="Priya, +919000000001"
+              disabled={!testTemplate.trim()}
+              className={input + " w-full"}
+            />
           </Field>
           <Field label="Message" hint="Used only when no template is given.">
             <input value={testBody} onChange={(e) => setTestBody(e.target.value)} placeholder="DesGro CRM test message." className={input + " w-full"} />
