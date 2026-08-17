@@ -139,8 +139,33 @@ export interface WhatsAppProvider {
    */
   sendText(input: WaSendTextInput): Promise<WaSendResult>;
   fetchMedia(mediaId: string): Promise<WaMedia | null>;
+  /**
+   * The attachment's BYTES, ready to stream to a browser.
+   *
+   * Separate from `fetchMedia` because the URL that call returns is not usable
+   * by anyone but this adapter: Meta's expires within minutes and needs the
+   * WABA token on the download itself. A caller that wanted to serve the file
+   * would have to hold the credential, which would put the key that unlocks
+   * every media id on the account into whichever route happened to need one
+   * attachment. Returning an opened body keeps the token where it belongs and
+   * gives the caller something it can pipe.
+   */
+  downloadMedia(mediaId: string, range?: string | null): Promise<WaMediaStream | null>;
   listTemplates(): Promise<WaTemplateSummary[]>;
 }
+
+/** An attachment being read, not yet buffered. */
+export type WaMediaStream = {
+  body: ReadableStream<Uint8Array>;
+  mime: string | null;
+  fileName: string | null;
+  /** Null when the upstream did not say; the caller must not invent one. */
+  contentLength: string | null;
+  /** Set only on a partial response, and passed through verbatim. */
+  contentRange: string | null;
+  /** 206 when the upstream honoured a byte range, 200 otherwise. */
+  status: 200 | 206;
+};
 
 /** The stock answer for a capability a transport genuinely cannot do. */
 export function unsupportedResult(what: string): WaSendResult {

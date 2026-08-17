@@ -28,6 +28,7 @@ import {
   unsupportedResult,
   type WaCapability,
   type WaMedia,
+  type WaMediaStream,
   type WaSendResult,
   type WaSendTemplateInput,
   type WaSendTextInput,
@@ -39,6 +40,8 @@ import {
 const DEFAULT_API_VERSION = "v21.0";
 const GRAPH_HOST = "https://graph.facebook.com";
 const REQUEST_TIMEOUT_MS = 10_000;
+/** Longer than an API call: this one is a file transfer, not a JSON round trip. */
+const MEDIA_TIMEOUT_MS = 25_000;
 const MAX_RESPONSE_CHARS = 2_000;
 
 /**
@@ -408,6 +411,57 @@ export const cloudProvider: WhatsAppProvider = {
       return { url: d.url, mime: d.mime_type ?? null, fileName: d.file_name ?? null };
     } catch (e) {
       logger.warn("wa_cloud_media_failed", { mediaId, message: e instanceof Error ? e.message : String(e) });
+      return null;
+    }
+  },
+
+  /**
+   * Open the attachment for streaming.
+   *
+   * Two requests, because Meta splits them: the id resolves to a signed URL, and
+   * that URL still wants the bearer token on the download. Both stay inside this
+   * adapter — the token unlocks every media id on the WABA, so it must not
+   * travel to a route that only wants one file.
+   *
+   * The body is handed back unread. A voice note is small, but a document is not
+   * necessarily, and buffering would put a whole attachment in memory before the
+   * browser saw its first byte.
+   */
+  async downloadMedia(mediaId: string, range?: string | null): Promise<WaMediaStream | null> {
+    const cfg = await getCloudConfig();
+    if (!cfg) return null;
+
+    // Resolved on every read, not cached: the signed URL is valid for five
+    // minutes, so a stored one is a link that works in testing and fails in use.
+    const media = await this.fetchMedia(mediaId);
+    if (!media) return null;
+
+    try {
+      const res = await fetch(media.url, {
+        headers: {
+          authorization: `Bearer ${cfg.token}`,
+          ...(range ? { range } : {}),
+        },
+        cache: "no-store",
+        signal: AbortSignal.timeout(MEDIA_TIMEOUT_MS),
+      });
+      if (!res.ok || !res.body) {
+        logger.warn("wa_cloud_media_download_status", { mediaId, status: res.status });
+        return null;
+      }
+      return {
+        body: res.body,
+        mime: media.mime ?? res.headers.get("content-type"),
+        fileName: media.fileName,
+        contentLength: res.headers.get("content-length"),
+        contentRange: res.headers.get("content-range"),
+        status: res.status === 206 ? 206 : 200,
+      };
+    } catch (e) {
+      logger.warn("wa_cloud_media_download_failed", {
+        mediaId,
+        message: e instanceof Error ? e.message : String(e),
+      });
       return null;
     }
   },

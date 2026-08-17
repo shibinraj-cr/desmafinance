@@ -85,6 +85,12 @@ export const GET = withApiHandler(async (_req: Request, { params }: { params: { 
           body: true,
           mediaMime: true,
           fileName: true,
+          // Whether an attachment exists — never the provider's id. The bytes
+          // come from /api/crm/wa/media/<messageId>, which authorises per
+          // conversation; a media id in the page would be a handle to a file
+          // whose only protection was that nobody had seen the number.
+          mediaId: true,
+          mediaUrl: true,
           templateName: true,
           waStatus: true,
           waErrorCode: true,
@@ -206,6 +212,7 @@ export const GET = withApiHandler(async (_req: Request, { params }: { params: { 
         body: m.body,
         mediaMime: m.mediaMime,
         fileName: m.fileName,
+        hasMedia: !!(m.mediaId || m.mediaUrl),
         templateName: m.templateName,
         waStatus: m.waStatus,
         waErrorCode: m.waErrorCode,

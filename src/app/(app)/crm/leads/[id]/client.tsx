@@ -13,6 +13,7 @@ import { StatusPill, TemperaturePill, type StatusOpt, type Opt, type BdeOpt } fr
 import { EnrollCelebration } from "@/components/EnrollCelebration";
 import { NextStepDialog, type NextStepPayload } from "@/components/crm/NextStepDialog";
 import { WaComposer, type WaTemplateOpt } from "@/components/crm/WaComposer";
+import { WaAttachment } from "@/components/crm/WaAttachment";
 import { WaStartComposer } from "@/components/crm/WaStartComposer";
 import { TaskEditDialog, type TaskEditPayload } from "@/components/crm/TaskEditDialog";
 
@@ -1879,6 +1880,7 @@ type WaMessageRow = {
   body: string | null;
   mediaMime: string | null;
   fileName: string | null;
+  hasMedia: boolean;
   templateName: string | null;
   waStatus: string | null;
   waErrorCode: string | null;
@@ -2058,7 +2060,9 @@ function WaBubble({ message }: { message: WaMessageRow }) {
   const status = message.waStatus ? WA_STATUS_GLYPH[message.waStatus] : null;
   // A media message with no caption still has to render as something — the type
   // plus filename is more use than an empty bubble.
-  const text = message.body?.trim() || (message.type !== "text" ? `[${message.type}]` : "");
+  // With a player on screen, "[audio]" reads as a failure to load rather than as
+  // a description. Only used when there is no attachment to show.
+  const text = message.body?.trim() || (message.type !== "text" && !message.hasMedia ? `[${message.type}]` : "");
 
   return (
     <div className={"flex " + (outbound ? "justify-end" : "justify-start")}>
@@ -2073,12 +2077,17 @@ function WaBubble({ message }: { message: WaMessageRow }) {
         {message.templateName && (
           <span className="block text-label-sm text-on-surface-variant font-mono">{message.templateName}</span>
         )}
-        <p className="text-body-md text-on-surface whitespace-pre-wrap break-words">{text}</p>
-        {message.fileName && (
-          <span className="block text-label-sm text-on-surface-variant">
-            {message.fileName}
-            {message.mediaMime ? ` · ${message.mediaMime}` : ""}
-          </span>
+        {message.hasMedia && (
+          <WaAttachment
+            messageId={message.id}
+            mediaMime={message.mediaMime}
+            fileName={message.fileName}
+            type={message.type}
+          />
+        )}
+        {text && <p className="text-body-md text-on-surface whitespace-pre-wrap break-words">{text}</p>}
+        {message.fileName && message.mediaMime && !message.mediaMime.startsWith("audio/") && (
+          <span className="block text-label-sm text-on-surface-variant">{message.fileName}</span>
         )}
         <div className="flex items-center justify-end gap-xs text-label-sm text-on-surface-variant">
           {outbound && message.sentByName && <span>{message.sentByName}</span>}

@@ -24,6 +24,7 @@ import {
   unsupportedResult,
   type WaCapability,
   type WaMedia,
+  type WaMediaStream,
   type WaSendResult,
   type WaSendTemplateInput,
   type WaSendTextInput,
@@ -80,6 +81,15 @@ export const wabisProvider: WhatsAppProvider = {
   },
 
   async fetchMedia(_mediaId: string): Promise<WaMedia | null> {
+    return null;
+  },
+
+  /**
+   * Nothing to open. Wabis never issued a media id — its attachments arrive as
+   * plain URLs on its own storage, which the caller reads directly rather than
+   * exchanging for anything.
+   */
+  async downloadMedia(_mediaId: string, _range?: string | null): Promise<WaMediaStream | null> {
     return null;
   },
 

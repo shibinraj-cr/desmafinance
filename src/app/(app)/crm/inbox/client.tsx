@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import { WaComposer, type WaTemplateOpt } from "@/components/crm/WaComposer";
+import { WaAttachment } from "@/components/crm/WaAttachment";
 
 /**
  * The three-pane inbox: conversation list | thread | lead context.
@@ -34,6 +35,7 @@ type ThreadMessage = {
   body: string | null;
   mediaMime: string | null;
   fileName: string | null;
+  hasMedia: boolean;
   templateName: string | null;
   waStatus: string | null;
   waErrorCode: string | null;
@@ -531,7 +533,10 @@ function SessionPill({ sessionOpen, sessionExpiresAt }: { sessionOpen: boolean; 
 function Bubble({ message }: { message: ThreadMessage }) {
   const outbound = message.direction === "out";
   const status = message.waStatus ? WA_STATUS_GLYPH[message.waStatus] : null;
-  const text = message.body?.trim() || (message.type !== "text" ? `[${message.type}]` : "");
+  // With a player on screen, "[audio]" is worse than nothing — it reads as the
+  // message having failed to load. The placeholder is only for a non-text
+  // message we have no attachment for.
+  const text = message.body?.trim() || (message.type !== "text" && !message.hasMedia ? `[${message.type}]` : "");
 
   return (
     <div className={"flex " + (outbound ? "justify-end" : "justify-start")}>
@@ -544,12 +549,17 @@ function Bubble({ message }: { message: ThreadMessage }) {
         {message.templateName && (
           <span className="block text-label-sm text-on-surface-variant font-mono">{message.templateName}</span>
         )}
-        <p className="text-body-md text-on-surface whitespace-pre-wrap break-words">{text}</p>
-        {message.fileName && (
-          <span className="block text-label-sm text-on-surface-variant">
-            {message.fileName}
-            {message.mediaMime ? ` · ${message.mediaMime}` : ""}
-          </span>
+        {message.hasMedia && (
+          <WaAttachment
+            messageId={message.id}
+            mediaMime={message.mediaMime}
+            fileName={message.fileName}
+            type={message.type}
+          />
+        )}
+        {text && <p className="text-body-md text-on-surface whitespace-pre-wrap break-words">{text}</p>}
+        {message.fileName && message.mediaMime && !message.mediaMime.startsWith("audio/") && (
+          <span className="block text-label-sm text-on-surface-variant">{message.fileName}</span>
         )}
         <div className="flex items-center justify-end gap-xs text-label-sm text-on-surface-variant">
           {outbound && message.sentByName && <span>{message.sentByName}</span>}
