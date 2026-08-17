@@ -7,7 +7,7 @@ import { getCurrentUserAndPermissions } from "@/lib/permissions";
 import { getCrmAccess, canEditLead } from "@/lib/crm-rbac";
 import { canViewConversation } from "@/lib/wa/access";
 import { findOrCreateConversationForLead } from "@/lib/wa/mirror";
-import { sendWaMessage } from "@/lib/wa/send";
+import { sendWaMessage, WA_MAX_TEXT_LENGTH } from "@/lib/wa/send";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -15,6 +15,7 @@ export const runtime = "nodejs";
 const StartSchema = z.object({
   template: z.string().min(1).max(200),
   templateParams: z.record(z.string(), z.string()).optional(),
+  renderedBody: z.string().max(WA_MAX_TEXT_LENGTH).optional(),
 });
 
 /**
@@ -85,6 +86,7 @@ export const POST = withApiHandler(async (req: Request, { params }: { params: { 
     sentById: userId,
     template: data.template,
     templateParams: data.templateParams,
+    renderedBody: data.renderedBody ?? null,
   });
 
   if (!result.ok) {
