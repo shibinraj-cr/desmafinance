@@ -142,6 +142,60 @@ async function wabisPost(
   return parsed;
 }
 
+/**
+ * Every Wabis subscriber, up to `max`, paged.
+ *
+ * Sends `limit` because Wabis refuses `/get/conversation` outright without it
+ * ("The limit field is required") and these endpoints share a house style — the
+ * previous version asked for `{page: 1}` alone, which almost certainly returned
+ * nothing and would have read as "no contacts" rather than as a rejection.
+ *
+ * Pages by following the server's own `nextOffset`, the same way conversations
+ * do, since the spec's description of `offset` as a page number contradicts the
+ * record offset it actually returns. Stops on a page that adds nobody new, so a
+ * server ignoring pagination cannot spin until the deadline.
+ */
+async function listSubscribers(
+  token: string,
+  max: number,
+  deadline: number,
+  capture: (raw: string, request: string) => void,
+): Promise<Record<string, unknown>[]> {
+  const out: Record<string, unknown>[] = [];
+  const seen = new Set<string>();
+  let offset = 1;
+
+  for (let page = 1; out.length < max; page++) {
+    if (Date.now() > deadline) break;
+
+    const payload = await wabisPost(
+      "/subscriber/list",
+      token,
+      { limit: String(PAGE_SIZE), offset: String(offset) },
+      capture,
+    );
+    const batch = findRecordArray(payload);
+    if (batch.length === 0) break;
+
+    let fresh = 0;
+    for (const s of batch) {
+      const identity = JSON.stringify(s);
+      if (seen.has(identity)) continue;
+      seen.add(identity);
+      out.push(s);
+      fresh++;
+      if (out.length >= max) break;
+    }
+    if (fresh === 0) break;
+    if (batch.length < PAGE_SIZE) break;
+
+    const next = nextOffsetOf(payload);
+    offset = next !== null && next !== offset ? next : offset + 1;
+  }
+
+  return out.slice(0, max);
+}
+
 /** The server's own next-page cursor (`nextOffset`), when it gives one. */
 export function nextOffsetOf(payload: unknown): number | null {
   const o = asObject(payload);
@@ -452,9 +506,7 @@ export async function importWabisHistory(opts: WabisImportOptions): Promise<Wabi
     subscribers = [{ phone_number: opts.onlyPhone }];
   } else {
     try {
-      subscribers = findRecordArray(
-        await wabisPost("/subscriber/list", token, { page: "1" }, capture),
-      ).slice(0, opts.maxSubscribers);
+      subscribers = await listSubscribers(token, opts.maxSubscribers, deadline, capture);
     } catch (e) {
       summary.errors.push(e instanceof Error ? e.message : String(e));
       return summary;
