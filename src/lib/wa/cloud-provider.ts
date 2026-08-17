@@ -39,8 +39,22 @@ import {
   type WhatsAppProvider,
 } from "./provider";
 
-/** Pinned so a Graph release cannot change behaviour under us. */
-const DEFAULT_API_VERSION = "v21.0";
+/**
+ * Pinned so a Graph release cannot change behaviour under us — but pinned to a
+ * version that has the features we use.
+ *
+ * v21.0 shipped in October 2024, before business-initiated voice messages
+ * existed, so it predates the `voice` flag that is the entire difference between
+ * a WhatsApp voice note and an audio file attachment. Graph's own habit with an
+ * unrecognised parameter is to ignore it rather than complain, which is the
+ * quieter and worse of the two failures: every recording would arrive as a
+ * music-icon attachment and nothing would report an error.
+ *
+ * This is only the FALLBACK. `getCloudConfig` prefers the `wa_cloud_api_version`
+ * setting and then the env var, so a stored "v21.0" still wins — worth checking
+ * on CRM → Settings before concluding this had any effect.
+ */
+const DEFAULT_API_VERSION = "v23.0";
 const GRAPH_HOST = "https://graph.facebook.com";
 const REQUEST_TIMEOUT_MS = 10_000;
 /** Longer than an API call: this one is a file transfer, not a JSON round trip. */
