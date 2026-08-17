@@ -8,6 +8,7 @@ import { getCrmAccess } from "@/lib/crm-rbac";
 import { isSessionOpen, markConversationRead } from "@/lib/wa/mirror";
 import { canActOnConversation, canAssignConversation, canViewConversation } from "@/lib/wa/access";
 import { findLeadDuplicates } from "@/lib/crm-leads";
+import { assignLeadTo } from "@/lib/crm-assign";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -230,6 +231,14 @@ const PatchSchema = z.object({
  * nothing about the deal. The lead's own status remains the single source of
  * truth for where the candidate is in the pipeline, which is why nothing here
  * touches it.
+ *
+ * Assignment is different: the Lead is the CRM's one system of record for who
+ * owns a candidate, so reassigning a thread that is linked to a lead goes
+ * through assignLeadTo — the same path the Pipeline's own assign endpoint
+ * uses — rather than writing WaConversation.assignedToId on its own. That
+ * keeps the inbox's "Owner" control and the Pipeline's assignee from ever
+ * disagreeing about who has this candidate. An unlinked thread (no lead yet)
+ * has nothing to sync to, so it still updates directly.
  */
 export const PATCH = withApiHandler(async (req: Request, { params }: { params: { id: string } }) => {
   const { userId, perms } = await getCurrentUserAndPermissions();
@@ -242,7 +251,7 @@ export const PATCH = withApiHandler(async (req: Request, { params }: { params: {
 
   const conversation = await prisma.waConversation.findUnique({
     where: { id: params.id },
-    select: { id: true, assignedToId: true, lead: { select: { assignedToId: true } } },
+    select: { id: true, leadId: true, assignedToId: true, lead: { select: { assignedToId: true } } },
   });
   if (!conversation) throw notFound();
 
@@ -252,34 +261,38 @@ export const PATCH = withApiHandler(async (req: Request, { params }: { params: {
     hasLead: !!conversation.lead,
   };
 
-  const data: { assignedToId?: string | null; status?: string } = {};
+  if (patch.assignedToId === undefined && patch.status === undefined) {
+    throw badRequest("Nothing to update", "empty_patch");
+  }
 
   if (patch.assignedToId !== undefined) {
     if (!canAssignConversation(access, actor, patch.assignedToId, userId)) throw forbidden();
-    if (patch.assignedToId) {
-      // Same roster rule the lead assign route enforces, so a thread can never
-      // be parked on someone who is not an active consultant.
-      const role = await prisma.leadPulseRole.findUnique({
-        where: { userId: patch.assignedToId },
-        select: { role: true, active: true },
-      });
-      if (!role || !role.active || (role.role !== "l1" && role.role !== "l2")) {
-        throw badRequest("Assignee must be an active L1/L2 BDE", "invalid_assignee");
+
+    if (conversation.leadId) {
+      await assignLeadTo(conversation.leadId, patch.assignedToId, userId);
+    } else {
+      if (patch.assignedToId) {
+        // Same roster rule the lead assign route enforces, so a thread can never
+        // be parked on someone who is not an active consultant.
+        const role = await prisma.leadPulseRole.findUnique({
+          where: { userId: patch.assignedToId },
+          select: { role: true, active: true },
+        });
+        if (!role || !role.active || (role.role !== "l1" && role.role !== "l2")) {
+          throw badRequest("Assignee must be an active L1/L2 BDE", "invalid_assignee");
+        }
       }
+      await prisma.waConversation.update({ where: { id: conversation.id }, data: { assignedToId: patch.assignedToId } });
     }
-    data.assignedToId = patch.assignedToId;
   }
 
   if (patch.status !== undefined) {
     if (!canActOnConversation(access, actor, userId)) throw forbidden();
-    data.status = patch.status;
+    await prisma.waConversation.update({ where: { id: conversation.id }, data: { status: patch.status } });
   }
 
-  if (Object.keys(data).length === 0) throw badRequest("Nothing to update", "empty_patch");
-
-  const updated = await prisma.waConversation.update({
+  const updated = await prisma.waConversation.findUnique({
     where: { id: params.id },
-    data,
     select: { id: true, status: true, assignedToId: true },
   });
 
