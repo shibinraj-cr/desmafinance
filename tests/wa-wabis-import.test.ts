@@ -1,6 +1,5 @@
 import { describe, it, expect } from "vitest";
 import {
-  chatIdToE164,
   findRecordArray,
   nextOffsetOf,
   normalizeWabisMessage,
@@ -11,7 +10,6 @@ import {
   wabisDirection,
   wabisErrorMessage,
 } from "@/lib/wa/wabis-import";
-import { normalizePhone } from "@/lib/crm";
 
 /**
  * These cover the parts written against an UNDOCUMENTED response shape, which is
@@ -382,57 +380,5 @@ describe("subscriberPhone", () => {
 
   it("reports nothing rather than a blank when no field carries a number", () => {
     expect(subscriberPhone({ subscriber_id: 1, first_name: "Test" })).toBeNull();
-  });
-});
-
-/**
- * The guard against the one outcome this import must never produce: a number
- * that is wrong but valid, filed under a real person who is not the sender.
- */
-describe("chatIdToE164", () => {
-  it("takes a wa_id as the complete international number it already is", () => {
-    expect(chatIdToE164("919000000001")).toBe("+919000000001"); // India
-    expect(chatIdToE164("353890000000")).toBe("+353890000000"); // Ireland
-    expect(chatIdToE164("447300000000")).toBe("+447300000000"); // UK
-    expect(chatIdToE164("35670000000")).toBe("+35670000000"); // Malta
-    expect(chatIdToE164("971550000000")).toBe("+971550000000"); // UAE
-    expect(chatIdToE164("966500000000")).toBe("+966500000000"); // Saudi
-  });
-
-  it("does NOT invent an Indian country code for a ten-digit foreign number", () => {
-    // Singapore: +65 and eight digits is exactly ten, and the CRM's own
-    // normalizePhone would rewrite it into a different, entirely plausible
-    // Indian number — attaching this thread to whoever owns that one.
-    expect(normalizePhone("6590000001")).toBe("+916590000001"); // the trap
-    expect(chatIdToE164("6590000001")).toBe("+6590000001"); // what we do instead
-
-    expect(chatIdToE164("4790000001")).toBe("+4790000001"); // Norway
-    expect(chatIdToE164("4590000001")).toBe("+4590000001"); // Denmark
-    expect(chatIdToE164("6420000001")).toBe("+6420000001"); // New Zealand
-    expect(chatIdToE164("3540000001")).toBe("+3540000001"); // Iceland
-  });
-
-  it("keeps a foreign contact off the Indian number it would otherwise collide with", () => {
-    // The whole point, stated as the collision it prevents. Under the old
-    // reading these two DIFFERENT people resolve to one identical value, and
-    // since phoneE164 is the conversation's primary identity, the second one's
-    // entire history lands in the first one's thread.
-    const singapore = "6590000001";
-    const indian = "916590000001";
-    expect(normalizePhone(singapore)).toBe(normalizePhone(indian)); // the collision
-    expect(chatIdToE164(singapore)).not.toBe(chatIdToE164(indian)); // no longer
-  });
-
-  it("treats a leading international access code as the plus it stands for", () => {
-    expect(chatIdToE164("00919000000001")).toBe("+919000000001");
-    expect(chatIdToE164("+919000000001")).toBe("+919000000001");
-  });
-
-  it("declines an implausible length instead of guessing at it", () => {
-    expect(chatIdToE164("12345")).toBeNull();
-    expect(chatIdToE164("9".repeat(16))).toBeNull();
-    expect(chatIdToE164("")).toBeNull();
-    expect(chatIdToE164(null)).toBeNull();
-    expect(chatIdToE164("not a number")).toBeNull();
   });
 });

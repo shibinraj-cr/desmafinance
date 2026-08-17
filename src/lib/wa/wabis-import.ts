@@ -22,7 +22,7 @@
  * adjustment cannot duplicate a thread.
  */
 import { prisma } from "../prisma";
-import { normalizePhone } from "../crm";
+import { waIdToE164, typedPhoneToE164 } from "./phone";
 import { logger } from "../logger";
 import {
   getSetting,
@@ -139,44 +139,12 @@ function pick(o: Record<string, unknown>, ...keys: string[]): string | null {
  * only some subscribers would bring the same silent skip back for a subset.
  *
  * Exported for the mapping test. The value is an E.164 number without its `+`,
- * so callers still owe it a `chatIdToE164`.
+ * so callers still owe it a `waIdToE164`.
  */
 export function subscriberPhone(sub: Record<string, unknown>): string | null {
   return pick(sub, "chat_id", "phone_number", "phone", "wa_id", "msisdn", "mobile");
 }
 
-/**
- * A WhatsApp id (`chat_id`) as E.164 — and deliberately NOT the CRM's shared
- * `normalizePhone`.
- *
- * `normalizePhone` assumes a bare ten-digit number is an Indian mobile, which is
- * right where it is used: a BDE typing a lead's number means the domestic one.
- * It is wrong here. A wa_id is *already* complete international — that is what
- * makes it a WhatsApp identity — so there is no country to infer, and inferring
- * one corrupts. A Singapore contact arrives as `6591234567`, ten digits, and
- * comes back `+916591234567`: not a rejected value that shows up in the skip
- * count, but a different, entirely plausible Indian number.
- *
- * That is the one outcome this import must never produce. `phoneE164` is the
- * conversation's identity and how leads are matched, so a collision files a
- * stranger's whole message history under some unrelated candidate — and since
- * messages are written once and skipped on replay, re-running does not undo it.
- * Norway, Denmark and Iceland reach ten digits the same way.
- *
- * So: take the digits as given, and refuse anything of implausible length rather
- * than guess at it. A number we decline is one line in the skip count. A number
- * we invent is a data-protection incident nobody notices.
- */
-export function chatIdToE164(raw: string | null | undefined): string | null {
-  if (!raw) return null;
-  const digits = String(raw).replace(/\D/g, "");
-  // A leading `00` is an international access code — the dialled form of `+` —
-  // and E.164 never has leading zeros after the country code, so stripping the
-  // run is safe and makes both spellings land on one value.
-  const bare = digits.replace(/^0+/, "");
-  if (bare.length < 8 || bare.length > 15) return null;
-  return `+${bare}`;
-}
 
 /**
  * One Wabis API call.
@@ -670,7 +638,7 @@ export async function importWabisHistory(opts: WabisImportOptions): Promise<Wabi
     // default IS the right reading: someone entering a bare ten-digit mobile in
     // this box means the Indian one. Normalised up front so the loop below only
     // ever sees the full-international shape a chat_id already has.
-    const typed = normalizePhone(opts.onlyPhone);
+    const typed = typedPhoneToE164(opts.onlyPhone);
     if (!typed) {
       summary.errors.push(`Could not read "${opts.onlyPhone}" as a phone number.`);
       return summary;
@@ -710,7 +678,7 @@ export async function importWabisHistory(opts: WabisImportOptions): Promise<Wabi
     summary.subscribersSeen++;
 
     const rawPhone = subscriberPhone(sub);
-    const phoneE164 = chatIdToE164(rawPhone);
+    const phoneE164 = waIdToE164(rawPhone);
     if (!phoneE164) {
       summary.skippedNoPhone++;
       return;
