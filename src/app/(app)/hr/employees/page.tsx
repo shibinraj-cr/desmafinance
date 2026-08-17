@@ -1,4 +1,5 @@
 import { redirect } from "next/navigation";
+import { prisma } from "@/lib/prisma";
 import { getCurrentUserAndPermissions } from "@/lib/permissions";
 import { isHrUser, canApproveHr } from "@/lib/hr-rbac";
 import { TopBar } from "@/components/TopBar";
@@ -25,8 +26,17 @@ export default async function EmployeesPage() {
       </>
     );
   }
-  const [employees, shifts] = await Promise.all([loadEmployees(), loadShifts()]);
   const canEdit = canApproveHr(perms);
+  const [employees, shifts, loginRoles] = await Promise.all([
+    loadEmployees(),
+    loadShifts(),
+    canEdit
+      ? prisma.role.findMany({
+          orderBy: [{ isSystem: "desc" }, { name: "asc" }],
+          select: { id: true, name: true },
+        })
+      : Promise.resolve([]),
+  ]);
   return (
     <>
       <TopBar
@@ -38,6 +48,7 @@ export default async function EmployeesPage() {
               <ImportEmployeesButton />
               <NewEmployeeButton
                 shifts={shifts.map((s) => ({ id: s.id, code: s.code, name: s.name }))}
+                loginRoles={loginRoles}
               />
             </div>
           ) : null

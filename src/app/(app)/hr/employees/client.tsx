@@ -5,8 +5,10 @@ import { createPortal } from "react-dom";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
 import { Section } from "@/components/Cards";
+import { CreateLoginPanel } from "@/components/CreateLoginPanel";
 
 type ShiftLite = { id: string; code: string; name: string };
+type LoginRole = { id: string; name: string };
 
 type Employee = {
   id: string;
@@ -166,11 +168,20 @@ export function EmployeesTable({
   );
 }
 
-export function NewEmployeeButton({ shifts }: { shifts: ShiftLite[] }) {
+export function NewEmployeeButton({
+  shifts,
+  loginRoles,
+}: {
+  shifts: ShiftLite[];
+  loginRoles: LoginRole[];
+}) {
   const router = useRouter();
   const [open, setOpen] = useState(false);
   const [pending, start] = useTransition();
   const [error, setError] = useState<string | null>(null);
+  const [createdEmployee, setCreatedEmployee] = useState<{ id: string; name: string } | null>(
+    null,
+  );
   const [draft, setDraft] = useState({
     empCode: "",
     name: "",
@@ -198,8 +209,28 @@ export function NewEmployeeButton({ shifts }: { shifts: ShiftLite[] }) {
       setError(j.error || "create failed");
       return;
     }
-    setOpen(false);
+    const { employee } = await res.json();
     start(() => router.refresh());
+    setCreatedEmployee({ id: employee.id, name: employee.name });
+  }
+  function closeModal() {
+    setOpen(false);
+    setCreatedEmployee(null);
+    setDraft({
+      empCode: "",
+      name: "",
+      designation: "",
+      department: "",
+      email: "",
+      phone: "",
+      joinDate: "",
+      shiftId: "",
+      halfHourConcession: false,
+      accountNumber: "",
+      ifsc: "",
+      bankName: "",
+      branch: "",
+    });
   }
   return (
     <>
@@ -216,11 +247,29 @@ export function NewEmployeeButton({ shifts }: { shifts: ShiftLite[] }) {
           // viewport. The trigger lives inside TopBar, whose `backdrop-blur`
           // would otherwise make this fixed element a child of the ~64px header
           // (mispositioned + the required top fields unreachable).
-          <div className="fixed inset-0 z-[1000] bg-black/40 flex items-center justify-center p-md" onClick={() => setOpen(false)}>
+          <div className="fixed inset-0 z-[1000] bg-black/40 flex items-center justify-center p-md" onClick={closeModal}>
           <div
             className="bg-surface rounded-xl shadow-2xl max-w-2xl w-full p-lg max-h-[90vh] overflow-y-auto"
             onClick={(e) => e.stopPropagation()}
           >
+            {createdEmployee ? (
+              <>
+                <h3 className="text-h3 mb-xs">{createdEmployee.name} created</h3>
+                <p className="text-label-sm text-on-surface-variant mb-md">
+                  Optionally set up a login now — pick a role (e.g. L2 for CRM access) and it&apos;s
+                  wired up in one step instead of a separate User Management visit.
+                </p>
+                <CreateLoginPanel
+                  employeeId={createdEmployee.id}
+                  defaultDisplayName={createdEmployee.name}
+                  defaultPhone={draft.phone || null}
+                  roles={loginRoles}
+                  onDone={closeModal}
+                  onCancel={closeModal}
+                />
+              </>
+            ) : (
+              <>
             <h3 className="text-h3 mb-md">New employee</h3>
             <div className="grid grid-cols-2 gap-sm">
               <Field label="Employee Code *">
@@ -332,7 +381,7 @@ export function NewEmployeeButton({ shifts }: { shifts: ShiftLite[] }) {
             </div>
             {error && <p className="text-red-700 text-label-sm mt-sm">{error}</p>}
             <div className="flex justify-end gap-sm mt-md">
-              <button onClick={() => setOpen(false)} className="px-md py-sm rounded border border-outline-variant">
+              <button onClick={closeModal} className="px-md py-sm rounded border border-outline-variant">
                 Cancel
               </button>
               <button
@@ -344,6 +393,8 @@ export function NewEmployeeButton({ shifts }: { shifts: ShiftLite[] }) {
                 Save
               </button>
             </div>
+              </>
+            )}
           </div>
         </div>,
           document.body,

@@ -27,7 +27,7 @@ export default async function EmployeeDetailPage({ params }: { params: { id: str
       </>
     );
   }
-  const [employee, shifts, designations, departments, roles] = await Promise.all([
+  const [employee, shifts, designations, departments, roles, loginRoles] = await Promise.all([
     prisma.employee.findUnique({
       where: { id: params.id },
       include: {
@@ -36,6 +36,7 @@ export default async function EmployeeDetailPage({ params }: { params: { id: str
         salaryStructures: { orderBy: { effectiveFrom: "desc" } },
         departments: { include: { department: true } },
         roleMemberships: { include: { role: true } },
+        user: { select: { id: true, username: true } },
       },
     }),
     prisma.hrShift.findMany({ orderBy: { code: "asc" } }),
@@ -50,6 +51,10 @@ export default async function EmployeeDetailPage({ params }: { params: { id: str
     prisma.hrRole.findMany({
       where: { active: true },
       orderBy: { name: "asc" },
+    }),
+    prisma.role.findMany({
+      orderBy: [{ isSystem: "desc" }, { name: "asc" }],
+      select: { id: true, name: true },
     }),
   ]);
   if (!employee) notFound();
@@ -126,6 +131,8 @@ export default async function EmployeeDetailPage({ params }: { params: { id: str
           }))}
           departmentsList={departments.map((d) => ({ id: d.id, name: d.name }))}
           rolesList={roles.map((r) => ({ id: r.id, name: r.name }))}
+          loginRoles={loginRoles}
+          login={{ hasLogin: !!employee.user, username: employee.user?.username ?? null }}
           shifts={shifts.map((s) => ({ id: s.id, code: s.code, name: s.name }))}
           structures={employee.salaryStructures.map((s) => ({
             id: s.id,
