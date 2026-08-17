@@ -103,6 +103,16 @@ export const WA_CLOUD_API_VERSION_KEY = "wa_cloud_api_version";
  */
 export const WABIS_API_TOKEN_KEY = "wabis_api_token";
 
+/**
+ * How far the Wabis history sweep has got — `{cursor, processed, done}` as JSON.
+ *
+ * A whole account cannot be imported inside one request, so the progress has to
+ * outlive it: each run resumes where the last stopped. Without it every run
+ * restarts at the first contact and the sweep never reaches the twenty-first,
+ * while still reporting work done each time.
+ */
+export const WA_IMPORT_PROGRESS_KEY = "wa_import_progress";
+
 /** Marketing broadcasts (src/lib/wa/broadcast.ts). */
 export const WA_BROADCAST_ENABLED_KEY = "wa_broadcast_enabled";
 /** Messages per drain run — the throttle that keeps us inside Meta's rate limits. */

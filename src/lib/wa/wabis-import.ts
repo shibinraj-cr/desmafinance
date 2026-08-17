@@ -25,7 +25,13 @@ import { prisma } from "../prisma";
 import { normalizePhone } from "../crm";
 import { toWabisPhone } from "../crm-webhook";
 import { logger } from "../logger";
-import { getSetting, WABIS_API_TOKEN_KEY, WA_CLOUD_PHONE_NUMBER_ID_KEY } from "../app-settings";
+import {
+  getSetting,
+  setSetting,
+  WABIS_API_TOKEN_KEY,
+  WA_CLOUD_PHONE_NUMBER_ID_KEY,
+  WA_IMPORT_PROGRESS_KEY,
+} from "../app-settings";
 import { extractBody, normalizeMessageType, parseWaTimestamp, type WaMessageType } from "./inbound";
 import { isAwaitingReply } from "./inbox";
 import { sessionExpiryFrom } from "./mirror";
@@ -44,7 +50,19 @@ export type WabisImportOptions = {
   maxSubscribers: number;
   /** Restrict to one number — the safest possible first test. */
   onlyPhone?: string | null;
+  /** Begin again from the first contact instead of resuming. */
+  restart?: boolean;
 };
+
+/**
+ * How many contacts to fetch conversations for at once.
+ *
+ * Each contact is one round trip of a second or two, so sequentially a 40-second
+ * run covered roughly twenty — which for an account of any size means clicking
+ * Import dozens of times. Modest on purpose: the goal is to stop wasting the
+ * budget on waiting, not to hammer Wabis.
+ */
+const IMPORT_CONCURRENCY = 6;
 
 export type WabisImportSummary = {
   dryRun: boolean;
@@ -81,6 +99,20 @@ export type WabisImportSummary = {
   rawResponse: string | null;
   /** Exactly what we asked for, so a wrong parameter name is visible too. */
   requestSent: string | null;
+  /**
+   * Where the next run will resume from, and how far the sweep has got.
+   *
+   * Without this a repeat run restarted at the first contact every time — the
+   * same people re-fetched forever, never reaching contact 21. For "import
+   * everything" that is the difference between a few clicks and an impossible
+   * task, and it fails silently: each run reports work done.
+   */
+  resumedFrom: number;
+  nextCursor: number;
+  /** Total contacts swept across all runs so far. */
+  totalProcessed: number;
+  /** False when the sweep has reached the end of the subscriber list. */
+  moreToDo: boolean;
   errors: string[];
 };
 
@@ -143,6 +175,36 @@ async function wabisPost(
 }
 
 /**
+ * How far the sweep has got, kept in AppSetting.
+ *
+ * A whole account cannot be imported inside one request, so progress has to
+ * outlive it. Stored as one JSON value rather than three keys because the three
+ * are only meaningful together — a cursor without its count reads as if nothing
+ * has happened.
+ */
+type ImportProgress = { cursor: number; processed: number; done: boolean };
+
+async function readImportProgress(): Promise<ImportProgress | null> {
+  const raw = await getSetting(WA_IMPORT_PROGRESS_KEY).catch(() => null);
+  if (!raw) return null;
+  try {
+    const p = JSON.parse(raw) as Partial<ImportProgress>;
+    const cursor = Number(p.cursor);
+    return {
+      cursor: Number.isFinite(cursor) && cursor > 0 ? cursor : 1,
+      processed: Number(p.processed) || 0,
+      done: !!p.done,
+    };
+  } catch {
+    return null;
+  }
+}
+
+async function writeImportProgress(p: ImportProgress): Promise<void> {
+  await setSetting(WA_IMPORT_PROGRESS_KEY, JSON.stringify(p)).catch(() => undefined);
+}
+
+/**
  * Every Wabis subscriber, up to `max`, paged.
  *
  * Sends `limit` because Wabis refuses `/get/conversation` outright without it
@@ -160,10 +222,12 @@ async function listSubscribers(
   max: number,
   deadline: number,
   capture: (raw: string, request: string) => void,
-): Promise<Record<string, unknown>[]> {
+  startOffset: number,
+): Promise<{ subscribers: Record<string, unknown>[]; nextOffset: number; exhausted: boolean }> {
   const out: Record<string, unknown>[] = [];
   const seen = new Set<string>();
-  let offset = 1;
+  let offset = startOffset;
+  let exhausted = false;
 
   for (let page = 1; out.length < max; page++) {
     if (Date.now() > deadline) break;
@@ -175,7 +239,12 @@ async function listSubscribers(
       capture,
     );
     const batch = findRecordArray(payload);
-    if (batch.length === 0) break;
+    // An empty page means we have reached the end of the list — the sweep is
+    // finished, as distinct from merely stopping on this run's limit.
+    if (batch.length === 0) {
+      exhausted = true;
+      break;
+    }
 
     let fresh = 0;
     for (const s of batch) {
@@ -186,14 +255,25 @@ async function listSubscribers(
       fresh++;
       if (out.length >= max) break;
     }
-    if (fresh === 0) break;
-    if (batch.length < PAGE_SIZE) break;
 
     const next = nextOffsetOf(payload);
-    offset = next !== null && next !== offset ? next : offset + 1;
+    const advanced = next !== null && next !== offset ? next : offset + 1;
+
+    if (fresh === 0) {
+      exhausted = true;
+      break;
+    }
+    if (batch.length < PAGE_SIZE) {
+      // A short page is the last page; the cursor still moves past it so a
+      // resume does not re-read what we just took.
+      offset = advanced;
+      exhausted = true;
+      break;
+    }
+    offset = advanced;
   }
 
-  return out.slice(0, max);
+  return { subscribers: out.slice(0, max), nextOffset: offset, exhausted };
 }
 
 /** The server's own next-page cursor (`nextOffset`), when it gives one. */
@@ -472,14 +552,22 @@ export async function importWabisHistory(opts: WabisImportOptions): Promise<Wabi
     observedSenders: [],
     rawResponse: null,
     requestSent: null,
+    resumedFrom: 1,
+    nextCursor: 1,
+    totalProcessed: 0,
+    moreToDo: false,
     errors: [],
   };
 
-  const token = (await getSetting(WABIS_API_TOKEN_KEY).catch(() => null))?.trim();
-  if (!token) {
+  const tokenOrNull = (await getSetting(WABIS_API_TOKEN_KEY).catch(() => null))?.trim();
+  if (!tokenOrNull) {
     summary.errors.push("No Wabis API token set — paste it above and press Save key.");
     return summary;
   }
+  // Aliased after the guard: processSubscriber below is a hoisted function
+  // declaration, and TypeScript drops the narrowing for anything it captures
+  // since it cannot prove the guard ran first.
+  const token: string = tokenOrNull;
 
   // Wabis scopes conversation reads to a bot's number. Reused from the Cloud
   // settings rather than asked for twice: it is the same number either way.
@@ -500,24 +588,48 @@ export async function importWabisHistory(opts: WabisImportOptions): Promise<Wabi
     }
   };
 
-  // A single number is the safest first test: one subscriber, one thread.
+  // Where the last run stopped. A sweep of a whole account cannot finish inside
+  // one request, so each run picks up where the previous left off — otherwise
+  // every run re-reads the same first contacts and the sweep never reaches the
+  // twenty-first, while still reporting work done each time.
+  //
+  // A single named number is a spot check, not part of the sweep, so it neither
+  // reads nor moves the cursor.
+  const progress = opts.onlyPhone || opts.dryRun ? null : await readImportProgress();
+  const startOffset = opts.restart || !progress ? 1 : progress.cursor;
+  summary.resumedFrom = startOffset;
+  summary.nextCursor = startOffset;
+  summary.totalProcessed = opts.restart ? 0 : (progress?.processed ?? 0);
+
   let subscribers: Record<string, unknown>[];
+  let listedNext = startOffset;
+  let exhausted = false;
   if (opts.onlyPhone) {
     subscribers = [{ phone_number: opts.onlyPhone }];
+    exhausted = true;
   } else {
     try {
-      subscribers = await listSubscribers(token, opts.maxSubscribers, deadline, capture);
+      const listed = await listSubscribers(token, opts.maxSubscribers, deadline, capture, startOffset);
+      subscribers = listed.subscribers;
+      listedNext = listed.nextOffset;
+      exhausted = listed.exhausted;
     } catch (e) {
       summary.errors.push(e instanceof Error ? e.message : String(e));
       return summary;
     }
   }
 
-  for (const sub of subscribers) {
+  // Contacts are processed several at a time: each is one round trip of a second
+  // or two, and waiting on them sequentially spent the whole budget on latency.
+  for (let i = 0; i < subscribers.length; i += IMPORT_CONCURRENCY) {
     if (Date.now() > deadline) {
       summary.stoppedEarly = true;
       break;
     }
+    await Promise.all(subscribers.slice(i, i + IMPORT_CONCURRENCY).map((sub) => processSubscriber(sub)));
+  }
+
+  async function processSubscriber(sub: Record<string, unknown>): Promise<void> {
     summary.subscribersSeen++;
 
     const rawPhone = pick(sub, "phone_number", "phone", "wa_id", "msisdn", "mobile");
@@ -525,7 +637,7 @@ export async function importWabisHistory(opts: WabisImportOptions): Promise<Wabi
     const wabisPhone = toWabisPhone(rawPhone);
     if (!phoneE164 || !wabisPhone) {
       summary.skippedNoPhone++;
-      continue;
+      return;
     }
 
     const messages: WabisRawMessage[] = [];
@@ -605,10 +717,10 @@ export async function importWabisHistory(opts: WabisImportOptions): Promise<Wabi
       offset = next !== null && next !== offset ? next : offset + 1;
     }
 
-    if (messages.length === 0) continue;
+    if (messages.length === 0) return;
     if (opts.dryRun) {
       summary.conversationsTouched++;
-      continue;
+      return;
     }
 
     try {
@@ -619,6 +731,21 @@ export async function importWabisHistory(opts: WabisImportOptions): Promise<Wabi
     } catch (e) {
       summary.errors.push(`${phoneE164}: ${e instanceof Error ? e.message : String(e)}`);
     }
+  }
+
+  // Advance the cursor only for a real sweep that actually got through its batch.
+  // A dry run must not move it, or the sweep would skip everyone it previewed.
+  if (!opts.onlyPhone && !opts.dryRun) {
+    summary.nextCursor = listedNext;
+    summary.totalProcessed += summary.subscribersSeen;
+    summary.moreToDo = !exhausted;
+    await writeImportProgress({
+      cursor: exhausted ? 1 : listedNext,
+      processed: summary.totalProcessed,
+      done: exhausted,
+    });
+  } else {
+    summary.moreToDo = !exhausted;
   }
 
   summary.observedKeys = [...keys].sort();
