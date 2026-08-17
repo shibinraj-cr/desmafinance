@@ -131,6 +131,11 @@ export type WabisImportSummary = {
   messagesUndated: number;
   /** Messages whose sender we could not classify, so did not guess at. */
   messagesUnknownSender: number;
+  /**
+   * Wabis panel activity ("Label added: …") returned interleaved with the
+   * conversation. Not messages, so not imported as chat bubbles.
+   */
+  eventsSkipped: number;
   /** Placeholder leads (named by their own number) that gained a real name. */
   leadsNamed: number;
   errors: string[];
@@ -580,6 +585,14 @@ export function wabisDirection(raw: Record<string, unknown>): "in" | "out" | nul
     "api",
     "broadcast",
     "campaign",
+    // Observed in this account's own history on the first successful read: a
+    // Wabis drip step. It is ours, and it was being skipped as unrecognised —
+    // which is the mechanism working, one round trip rather than one silent
+    // misfile.
+    "sequence",
+    "flow",
+    "workflow",
+    "chatbot",
     "template",
     "me",
   ]);
@@ -592,6 +605,31 @@ export function wabisDirection(raw: Record<string, unknown>): "in" | "out" | nul
   // missed the 1 and "1" that are far likelier than a JSON boolean.
   if (isTruthy(raw.is_outgoing) || isTruthy(raw.from_business)) return "out";
   return null;
+}
+
+/**
+ * Whether a `/get/conversation` row is a Wabis EVENT rather than a message.
+ *
+ * The endpoint returns the panel's activity log interleaved with the actual
+ * conversation. The first real read of this account produced:
+ *
+ *     { sender: "system", message_content: "Label added: Meta Leads",
+ *       wa_message_id: null, message_status: null }
+ *
+ * which is somebody tagging a contact inside Wabis. Imported as-is it becomes an
+ * outbound chat bubble reading "Label added: Meta Leads" — noise in a thread a
+ * consultant is trying to read, and permanent.
+ *
+ * Both conditions are required, because either alone would catch real messages.
+ * A WhatsApp message that Wabis actually sent or received carries Meta's own
+ * payload as JSON in `message_content`, and carries a wamid. An internal event
+ * has plain prose and no wamid, because Meta never saw it.
+ */
+export function isWabisInternalEvent(raw: Record<string, unknown>): boolean {
+  const hasWamid = !!pick(raw, "wa_message_id", "message_id", "wamid");
+  if (hasWamid) return false;
+  const content = typeof raw.message_content === "string" ? raw.message_content.trim() : "";
+  return content.length > 0 && !content.startsWith("{");
 }
 
 function isTruthy(v: unknown): boolean {
@@ -681,6 +719,7 @@ export async function importWabisHistory(opts: WabisImportOptions): Promise<Wabi
     skippedNumbers: [],
     messagesUndated: 0,
     messagesUnknownSender: 0,
+    eventsSkipped: 0,
     leadsNamed: 0,
     errors: [],
   };
@@ -932,6 +971,14 @@ export async function importWabisHistory(opts: WabisImportOptions): Promise<Wabi
         for (const k of Object.keys(raw)) keys.add(k);
 
         const normalised = normalizeWabisMessage(raw);
+
+        // Panel activity ("Label added: …") is not conversation. Checked before
+        // the sender tally so the log's own senders do not pad the list an
+        // operator is reading to spot a real misfile.
+        if (isWabisInternalEvent(raw)) {
+          summary.eventsSkipped++;
+          continue;
+        }
 
         const senderValue = pick(raw, "sender") ?? "(absent)";
         const seenSender = senders.get(senderValue);

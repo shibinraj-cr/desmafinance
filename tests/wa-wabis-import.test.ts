@@ -1,6 +1,7 @@
 import { describe, it, expect } from "vitest";
 import {
   findRecordArray,
+  isWabisInternalEvent,
   nextOffsetOf,
   normalizeWabisMessage,
   normalizeWabisStatus,
@@ -443,5 +444,59 @@ describe("subscriberName", () => {
   it("is null when there is no name at all", () => {
     expect(subscriberName({ first_name: "", last_name: "" })).toBeNull();
     expect(subscriberName({ chat_id: "919000000001" })).toBeNull();
+  });
+});
+
+/**
+ * `/get/conversation` returns the Wabis panel's own activity log interleaved
+ * with the conversation. The first real read of this account produced a "Label
+ * added" row, which would have imported as an outbound chat bubble.
+ */
+describe("isWabisInternalEvent", () => {
+  it("recognises a panel event — prose body, no wamid", () => {
+    expect(
+      isWabisInternalEvent({
+        sender: "system",
+        agent_name: "bot",
+        message_content: "Label added: Meta Leads",
+        wa_message_id: null,
+      }),
+    ).toBe(true);
+  });
+
+  it("leaves a real message alone even when it carries no wamid", () => {
+    // Both conditions are required. A failed send has no wamid but still holds
+    // Meta's payload, and it IS a message we tried to deliver.
+    expect(
+      isWabisInternalEvent({
+        sender: "bot",
+        message_content: '{"type":"text","text":{"body":"Hello there"}}',
+        wa_message_id: null,
+      }),
+    ).toBe(false);
+  });
+
+  it("leaves anything carrying a wamid alone", () => {
+    expect(
+      isWabisInternalEvent({ sender: "system", message_content: "Label added", wa_message_id: "wamid.A" }),
+    ).toBe(false);
+  });
+
+  it("does not treat an empty record as an event", () => {
+    expect(isWabisInternalEvent({})).toBe(false);
+    expect(isWabisInternalEvent({ message_content: "" })).toBe(false);
+  });
+});
+
+describe("wabisDirection on the values this account actually produced", () => {
+  // Found by the first successful read: a Wabis drip step, which the importer
+  // skipped as unrecognised until it was named — the mechanism working.
+  it("treats a sequence step as ours", () => {
+    expect(wabisDirection({ sender: "sequence" })).toBe("out");
+  });
+
+  it("treats the panel's own automation rows as ours", () => {
+    expect(wabisDirection({ sender: "system" })).toBe("out");
+    expect(wabisDirection({ sender: "automation" })).toBe("out");
   });
 });

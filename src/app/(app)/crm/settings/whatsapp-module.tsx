@@ -65,6 +65,7 @@ type ImportSummary = {
   skippedNumbers: string[];
   messagesUndated: number;
   messagesUnknownSender: number;
+  eventsSkipped: number;
   leadsNamed: number;
   errors: string[];
 };
@@ -566,7 +567,11 @@ export function WhatsAppModuleCard() {
           <Field label="Only this number" hint="Strongly recommended for the first run.">
             <input value={importPhone} onChange={(e) => setImportPhone(e.target.value)} placeholder="+91…" className={input + " w-48"} />
           </Field>
-          <Field label="Max contacts" hint="Ignored when a number is given.">
+          {/* Rounded up to a whole page on purpose: a page is the unit of work,
+              because the cursor may only step over contacts that were actually
+              processed. Said out loud here so "5" coming back as 50 reads as the
+              design rather than as a bug. */}
+          <Field label="Max contacts" hint="Rounded up to a full page of 50. Ignored when a number is given.">
             <input value={importMax} onChange={(e) => setImportMax(e.target.value)} className={input + " w-28"} />
           </Field>
         </div>
@@ -683,6 +688,7 @@ export function WhatsAppModuleCard() {
         skippedNumbers: [],
         messagesUndated: 0,
         messagesUnknownSender: 0,
+        eventsSkipped: 0,
         leadsNamed: 0,
         errors: ["The import request failed."],
       });
@@ -747,6 +753,12 @@ function ImportReport({ summary }: { summary: ImportSummary }) {
           Check the sender list below, tell me the value, and a re-run will pick them up.
         </p>
       )}
+      {summary.eventsSkipped > 0 && (
+        <p className="text-label-sm text-on-surface-variant">
+          {summary.eventsSkipped} Wabis panel events (label changes and the like) were left out — they are activity
+          log, not conversation.
+        </p>
+      )}
       {summary.messagesUndated > 0 && (
         <p className="text-label-sm text-error">
           {summary.messagesUndated} messages had no readable date and were skipped rather than stamped with today.
@@ -779,7 +791,18 @@ function ImportReport({ summary }: { summary: ImportSummary }) {
           <ul className="space-y-xs">
             {summary.observedSenders.map((s) => (
               <li key={s.value} className="text-label-sm">
-                <code className="font-mono">{s.value}</code> → {s.direction === "out" ? "us" : "the candidate"}{" "}
+                <code className="font-mono">{s.value}</code> →{" "}
+                {/* "unrecognised" must never render as one of the two real
+                    answers. It did — as "the candidate" — which hid the very
+                    ambiguity the skip exists to surface, and made a skipped
+                    message look like a filed one. */}
+                {s.direction === "out" ? (
+                  "us"
+                ) : s.direction === "in" ? (
+                  "the candidate"
+                ) : (
+                  <span className="text-error font-semibold">not recognised — skipped</span>
+                )}{" "}
                 <span className="text-on-surface-variant tabular-nums">({s.count})</span>
               </li>
             ))}
