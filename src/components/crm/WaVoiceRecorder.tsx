@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
+import { microphoneErrorMessage } from "@/lib/wa/microphone";
 
 /**
  * Record and send a WhatsApp voice note.
@@ -128,10 +129,8 @@ export function WaVoiceRecorder({
       stream = await navigator.mediaDevices.getUserMedia({
         audio: { channelCount: 1, echoCancellation: true, noiseSuppression: true },
       });
-    } catch {
-      // Denied, dismissed, or no microphone — indistinguishable from here, and
-      // the advice is the same either way.
-      onError("The microphone is not available. Check the browser's permission for this site.");
+    } catch (e) {
+      onError(microphoneErrorMessage(e));
       return;
     }
 
