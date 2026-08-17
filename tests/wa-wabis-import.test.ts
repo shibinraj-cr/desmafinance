@@ -186,14 +186,14 @@ describe("normalizeWabisMessage against the documented record", () => {
  */
 const REAL_TEMPLATE_RECORD: Record<string, unknown> = {
   id: 1302743707,
-  whatsapp_bot_subscriber_subscriber_id: "919946108136-145848",
+  whatsapp_bot_subscriber_subscriber_id: "919000000001-145848",
   whatsapp_bot_id: 145848,
   sender: "automation",
   agent_name: null,
   message_content:
     '{"name":"desgro","language":"en_US","category":"MARKETING","components":[{"type":"body","text":"Hello,\\n\\nI am *Test Agent* from *DESMA International*.","example":{"body_text":[["agent","agent_phone"]]}}]}',
   conversation_time: "2026-07-21 17:56:19",
-  wa_message_id: "wamid.HBgMOTE5OTQ2MTA4MTM2FQIAERgSM0Q1ODA4NDY5RTk2ODg2QTZGAA==",
+  wa_message_id: "wamid.HBgMOTE5MDAwMDAwMDAxFQIAERgSM0QwMDAwMDAwMDAwMDAwMDAwAA==",
   message_status: "read",
   delivery_status_updated_at: "2026-07-21 17:56:22",
   read_time: "2026-07-21 17:56:29",
