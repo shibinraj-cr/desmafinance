@@ -280,6 +280,14 @@ function UserFooter({
           {user.email ? ` · ${user.email}` : ""}
         </p>
       </div>
+      <Link
+        href="/me/account"
+        onClick={onNavigate}
+        className="w-full flex items-center gap-md px-md py-sm rounded-lg text-on-brand-variant hover:bg-brand-elevated hover:text-on-brand transition"
+      >
+        <span className="material-symbols-outlined">password</span>
+        <span className="text-label-sm">Change password</span>
+      </Link>
       <button
         onClick={() => {
           onNavigate?.();
