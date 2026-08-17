@@ -104,7 +104,7 @@ export function WhatsAppLiveBox() {
   if (!data?.enabled || data.count === 0) return null;
 
   return (
-    <div className="rounded-lg border border-brand-line bg-brand-elevated overflow-hidden shrink-0 flex flex-col max-h-[46vh]">
+    <div className="rounded-lg border border-brand-line bg-brand-elevated overflow-hidden shrink-0 flex flex-col max-h-[30vh]">
       <Link
         href={data.waiting > 0 ? "/crm/inbox?filter=needs_reply" : "/crm/inbox"}
         className="flex items-center gap-xs px-sm h-8 border-b border-brand-line hover:bg-white/5 transition shrink-0"

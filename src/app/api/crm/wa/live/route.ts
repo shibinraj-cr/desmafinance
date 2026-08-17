@@ -10,8 +10,12 @@ import { conversationVisibilityWhere } from "@/lib/wa/access";
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
 
-/** Enough to work from without turning the sidebar into a second inbox. */
-const PREVIEW_LIMIT = 8;
+/**
+ * Enough to work from without turning the sidebar into a second inbox — and
+ * short enough that the box's natural height leaves room for the nav tabs
+ * above it instead of crowding them out.
+ */
+const PREVIEW_LIMIT = 5;
 
 /**
  * GET /api/crm/wa/live — the sidebar's unanswered-conversation ticker.
