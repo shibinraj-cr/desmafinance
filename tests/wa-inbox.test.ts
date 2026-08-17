@@ -95,6 +95,25 @@ describe("buildInboxWhere", () => {
   it("combines a filter with a search", () => {
     expect((buildInboxWhere("needs_reply", scope, "98765").AND as unknown[])).toHaveLength(3);
   });
+
+  // The oversight-only consultant filter (admin/Suhaina picking a BDE to
+  // check) ANDs on top of whichever status chip is active rather than
+  // replacing it.
+  it("narrows to one consultant when an owner is given", () => {
+    expect(buildInboxWhere("all", { ...scope, owner: "u2" })).toEqual({
+      AND: [OPEN, { assignedToId: "u2" }],
+    });
+  });
+  it("combines an owner with a status filter", () => {
+    expect(buildInboxWhere("needs_reply", { ...scope, owner: "u2" })).toEqual({
+      AND: [OPEN, { assignedToId: "u2" }, { awaitingReply: true }],
+    });
+  });
+  it("resolves the 'unassigned' owner sentinel to a null assignee", () => {
+    expect(buildInboxWhere("all", { ...scope, owner: "unassigned" })).toEqual({
+      AND: [OPEN, { assignedToId: null }],
+    });
+  });
 });
 
 describe("isAwaitingReply", () => {

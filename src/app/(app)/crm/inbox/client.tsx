@@ -145,6 +145,7 @@ export function InboxClient({
   canSendText,
   canSendTemplate,
   canAssign,
+  canFilterByOwner,
   templates,
   bdes,
   masters,
@@ -158,6 +159,8 @@ export function InboxClient({
   canSendText: boolean;
   canSendTemplate: boolean;
   canAssign: boolean;
+  /** Whole-desk oversight roles only — see canViewAllConversations. */
+  canFilterByOwner: boolean;
   templates: TemplateOpt[];
   bdes: BdeOpt[];
   masters: InboxMasters;
@@ -168,6 +171,8 @@ export function InboxClient({
     FILTERS.some((f) => f.key === initialFilter) ? (initialFilter as string) : "needs_reply",
   );
   const [search, setSearch] = useState("");
+  // "" = no consultant narrowing; a userId, or the "unassigned" sentinel.
+  const [owner, setOwner] = useState("");
   const [rows, setRows] = useState<InboxRow[]>([]);
   const [counts, setCounts] = useState({ needsReply: 0, unread: 0, unassigned: 0 });
   const [listLoading, setListLoading] = useState(true);
@@ -177,13 +182,14 @@ export function InboxClient({
     setListLoading(true);
     const qs = new URLSearchParams({ filter });
     if (search.trim()) qs.set("q", search.trim());
+    if (owner) qs.set("owner", owner);
     const res = await fetch(`/api/crm/wa/conversations?${qs}`).catch(() => null);
     setListLoading(false);
     if (!res?.ok) return;
     const d = (await res.json()) as { conversations: InboxRow[]; counts: typeof counts };
     setRows(d.conversations);
     setCounts(d.counts);
-  }, [filter, search]);
+  }, [filter, search, owner]);
 
   // Debounced so typing in the search box does not fire a request per keystroke.
   useEffect(() => {
@@ -211,6 +217,10 @@ export function InboxClient({
           onSearch={setSearch}
           selectedId={selectedId}
           onSelect={setSelectedId}
+          canFilterByOwner={canFilterByOwner}
+          bdes={bdes}
+          owner={owner}
+          onOwner={setOwner}
         />
         <ThreadPane
           conversationId={selectedId}
@@ -238,6 +248,10 @@ function ConversationList({
   onSearch,
   selectedId,
   onSelect,
+  canFilterByOwner,
+  bdes,
+  owner,
+  onOwner,
 }: {
   rows: InboxRow[];
   counts: { needsReply: number; unread: number; unassigned: number };
@@ -248,6 +262,10 @@ function ConversationList({
   onSearch: (s: string) => void;
   selectedId: string | null;
   onSelect: (id: string) => void;
+  canFilterByOwner: boolean;
+  bdes: BdeOpt[];
+  owner: string;
+  onOwner: (o: string) => void;
 }) {
   return (
     <div className="flex flex-col rounded-xl border border-outline-variant bg-surface-container-lowest overflow-hidden">
@@ -259,6 +277,25 @@ function ConversationList({
           placeholder="Search name or number…"
           className="w-full h-9 px-md rounded-lg border border-outline-variant bg-surface-container-lowest text-label-sm focus:border-primary outline-none"
         />
+        {/* Oversight-only: lets admin/Suhaina check one consultant's thread
+            instead of the whole desk. Independent of the status chips below —
+            it ANDs on top, so "Needs reply" + a consultant answers "what does
+            this one BDE still owe a reply on". */}
+        {canFilterByOwner && (
+          <select
+            value={owner}
+            onChange={(e) => onOwner(e.target.value)}
+            className="w-full h-9 px-md rounded-lg border border-outline-variant bg-surface-container-lowest text-label-sm focus:border-primary outline-none"
+          >
+            <option value="">All consultants</option>
+            <option value="unassigned">Unassigned</option>
+            {bdes.map((b) => (
+              <option key={b.userId} value={b.userId}>
+                {b.displayName}
+              </option>
+            ))}
+          </select>
+        )}
         <div className="flex flex-wrap gap-xs">
           {FILTERS.map((f) => {
             const count = f.countKey ? counts[f.countKey] : 0;

@@ -35,6 +35,11 @@ export const GET = withApiHandler(async (req: Request) => {
   const sp = new URL(req.url).searchParams;
   const filter = normalizeInboxFilter(sp.get("filter"), { isBde: access.isBde });
   const search = sp.get("q");
+  // Oversight-only consultant filter (admin / supervisor / CRM team lead — see
+  // canViewAllConversations). Harmless to read for anyone else too: a
+  // consultant's `visibility` already hard-scopes them to their own threads, so
+  // this can only narrow further, never widen.
+  const owner = sp.get("owner");
   // Floored and floored-at-1: Prisma requires an Int, and a negative `take`
   // means "page backwards", which the hasMore/slice arithmetic below cannot
   // express — an unvalidated `?limit=-5` would silently return the wrong page.
@@ -43,7 +48,7 @@ export const GET = withApiHandler(async (req: Request) => {
   const cursor = sp.get("cursor");
 
   const visibility = conversationVisibilityWhere(access, userId);
-  const where = buildInboxWhere(filter, { userId, isBde: access.isBde, visibility }, search);
+  const where = buildInboxWhere(filter, { userId, isBde: access.isBde, visibility, owner }, search);
 
   const rows = await prisma.waConversation.findMany({
     where,
@@ -80,8 +85,14 @@ export const GET = withApiHandler(async (req: Request) => {
   // at — but they must exclude closed threads exactly as the lists do, or a badge
   // will promise work that clicking through cannot show.
   // Counts obey the same visibility scope as the list — a badge promising work
-  // that clicking through cannot show is worse than no badge.
-  const open = { status: { not: "closed" }, ...visibility } as const;
+  // that clicking through cannot show is worse than no badge. They also obey
+  // the owner filter, so picking a consultant re-scopes the badges to their
+  // threads rather than leaving them showing the whole desk's numbers.
+  const open = {
+    status: { not: "closed" },
+    ...visibility,
+    ...(owner ? { assignedToId: owner === "unassigned" ? null : owner } : {}),
+  };
   const [needsReply, unread, unassigned] = await Promise.all([
     prisma.waConversation.count({ where: { ...open, awaitingReply: true } }),
     prisma.waConversation.count({ where: { ...open, unreadCount: { gt: 0 } } }),
