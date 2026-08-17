@@ -41,7 +41,8 @@ import {
   WABIS_REMARKETING_ENABLED_KEY,
   WA_LEAD_ASSIGNED_CLOUD_KEY,
 } from "./app-settings";
-import { cloudProvider, isCloudConfigured } from "./wa/cloud-provider";
+import { cloudProvider, isCloudConfigured, renderTemplatePreview } from "./wa/cloud-provider";
+import { findOrCreateConversationForLead } from "./wa/mirror";
 
 export const LEAD_ASSIGNED_EVENT = "lead_assigned";
 /**
@@ -512,6 +513,8 @@ async function refreshDeliveryTarget(
  */
 async function attemptCloudLeadAssignedDelivery(row: {
   id: string;
+  leadId: string | null;
+  assigneeUserId: string | null;
   payload: unknown;
   attempts: number;
   maxAttempts: number;
@@ -528,16 +531,36 @@ async function attemptCloudLeadAssignedDelivery(row: {
     return false;
   }
 
+  // `digits` is Wabis-shaped (no `+`) from buildLeadAssignedPayload; Cloud API
+  // wants E.164, and the digits already carry the country code.
+  const toE164 = `+${digits}`;
+  const params = buildLeadAssignedCloudParams(payload?.agent ?? "", payload?.agent_phone ?? "");
   const result = await cloudProvider.sendTemplate({
-    // `digits` is Wabis-shaped (no `+`) from buildLeadAssignedPayload; Cloud API
-    // wants E.164, and the digits already carry the country code.
-    toE164: `+${digits}`,
+    toE164,
     template: LEAD_ASSIGNED_CLOUD_TEMPLATE,
-    params: buildLeadAssignedCloudParams(payload?.agent ?? "", payload?.agent_phone ?? ""),
+    params,
     endpointUrl: null,
   });
 
   if (result.ok) {
+    // Best-effort: the candidate already has the message (this mirrors it into
+    // the CRM's own inbox, it doesn't send it), so a mirror problem must never
+    // flip a genuinely-sent delivery back to anything but "sent" — it would
+    // read as never having gone out at all. Its outcome is appended to the same
+    // responseBody instead of hidden, so "sent but not mirrored, because X" is
+    // visible in the same delivery log rather than a second place to check.
+    const sentNote = result.providerMessageId ? `wamid: ${result.providerMessageId}` : result.body;
+    const mirrorNote =
+      row.leadId && row.assigneeUserId
+        ? await mirrorLeadAssignedCloudMessage({
+            leadId: row.leadId,
+            assigneeUserId: row.assigneeUserId,
+            phoneE164: toE164,
+            params,
+            providerMessageId: result.providerMessageId,
+          }).catch((e) => `mirror error: ${e instanceof Error ? e.message : String(e)}`)
+        : "mirror skipped: delivery row has no lead/assignee";
+
     await prisma.crmWebhookDelivery.update({
       where: { id: row.id },
       data: {
@@ -545,7 +568,7 @@ async function attemptCloudLeadAssignedDelivery(row: {
         deliveredAt: finishedAt,
         nextAttemptAt: null,
         responseStatus: result.status,
-        responseBody: result.providerMessageId ? `wamid: ${result.providerMessageId}` : result.body,
+        responseBody: mirrorNote ? `${sentNote} | mirror: ${mirrorNote}` : sentNote,
       },
     });
     return true;
@@ -566,6 +589,70 @@ async function attemptCloudLeadAssignedDelivery(row: {
     },
   });
   return false;
+}
+
+/**
+ * Write a successfully-sent Cloud assignment intro into the WhatsApp mirror
+ * (`WaConversation` / `WaMessage`), so it appears in the CRM's own WhatsApp
+ * inbox — the actual point of moving this off Wabis. `CrmWebhookDelivery` is
+ * the delivery/retry record; this is what the chat UI reads from, and the two
+ * are otherwise unconnected (Cloud sends are never echoed back through the
+ * inbound webhook the way a candidate's own message is).
+ *
+ * Returns null on success, or a short human-readable reason on failure — the
+ * caller appends it to the delivery row's own responseBody, so "sent, not
+ * mirrored, because X" is visible in the same place as everything else about
+ * this send, rather than failing into silence a second time.
+ */
+async function mirrorLeadAssignedCloudMessage(opts: {
+  leadId: string;
+  assigneeUserId: string;
+  phoneE164: string;
+  params: Record<string, string>;
+  providerMessageId: string | null;
+}): Promise<string | null> {
+  const found = await findOrCreateConversationForLead({
+    id: opts.leadId,
+    phoneE164: opts.phoneE164,
+    assignedToId: opts.assigneeUserId,
+  });
+  if (!found.ok) {
+    // This number's WhatsApp thread already belongs to a DIFFERENT lead — the
+    // mirror refuses to steal it rather than misfile the message. Most likely
+    // cause: two leads sharing one phone number (a re-enrollment, or a shared
+    // test number), not a bug in the send itself.
+    return `not written — this number's conversation is already linked to a different lead (${found.otherLeadId})`;
+  }
+
+  // Best-effort real body text (falls back to a plain marker on lookup
+  // failure) — never worth blocking the mirror write over, unlike the send
+  // itself which genuinely needs the template to exist.
+  const templates = await cloudProvider.listTemplates().catch(() => []);
+  const templateBody = templates.find((t) => t.name === LEAD_ASSIGNED_CLOUD_TEMPLATE.split(":")[0])?.body ?? null;
+  const body = renderTemplatePreview(templateBody, opts.params) || `[${LEAD_ASSIGNED_CLOUD_TEMPLATE}]`;
+
+  const now = new Date();
+  await prisma.waMessage.create({
+    data: {
+      conversationId: found.conversationId,
+      direction: "out",
+      type: "template",
+      body,
+      templateName: LEAD_ASSIGNED_CLOUD_TEMPLATE,
+      providerMessageId: opts.providerMessageId,
+      provider: "cloud",
+      waStatus: "sent",
+      // Null: an automation sent this, not a person — same convention as a
+      // re-marketing touch (see the WaMessage.sentById column note).
+      sentById: null,
+      occurredAt: now,
+    },
+  });
+  await prisma.waConversation.update({
+    where: { id: found.conversationId },
+    data: { lastMessageAt: now, status: "open" },
+  });
+  return null;
 }
 
 /**
