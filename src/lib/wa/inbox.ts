@@ -42,6 +42,13 @@ export type InboxScope = {
    * so "all" means "all I am allowed to see" rather than the whole desk.
    */
   visibility?: Prisma.WaConversationWhereInput;
+  /**
+   * Oversight-only narrowing to one consultant's threads — a userId, or the
+   * `"unassigned"` sentinel. Independent of `filter` (e.g. "needs_reply" +
+   * owner lets admin/Suhaina check what one BDE still owes a reply on) so it
+   * ANDs on top rather than replacing the chip.
+   */
+  owner?: string | null;
 };
 
 /** The `status` constraint a filter implies — exported so the chip counts agree with the list. */
@@ -74,6 +81,10 @@ export function buildInboxWhere(filter: WaInboxFilter, scope: InboxScope, search
   // the whole desk; a candidate's own words are not something to leave on a
   // dropdown.
   if (scope.visibility && Object.keys(scope.visibility).length > 0) and.push(scope.visibility);
+
+  if (scope.owner) {
+    and.push(scope.owner === "unassigned" ? { assignedToId: null } : { assignedToId: scope.owner });
+  }
 
   switch (filter) {
     case "mine":

@@ -8,6 +8,7 @@ import { filterTemplatesFor, leadPulseRoleOf, loadTemplateGrants, templateKey } 
 import { COUNTRIES } from "@/lib/countries";
 import { getWaMirrorConfig } from "@/lib/wa/mirror";
 import { getWaProvider } from "@/lib/wa/registry";
+import { canViewAllConversations } from "@/lib/wa/access";
 import { InboxClient } from "./client";
 
 export const dynamic = "force-dynamic";
@@ -126,6 +127,11 @@ export default async function CrmInboxPage({
           canSendText={provider.supports("sendText")}
           canSendTemplate={provider.supports("sendTemplate")}
           canAssign={access.canAssign}
+          // Whole-desk oversight roles (admin, Suhaina as Lead Pulse supervisor,
+          // a CRM team lead) get a consultant filter to check one BDE's threads;
+          // a regular consultant already can't see anyone else's (see
+          // conversationVisibilityWhere), so it would filter nothing for them.
+          canFilterByOwner={canViewAllConversations(access)}
           templates={templates}
           bdes={bdes.map((b) => ({ userId: b.userId, displayName: b.displayName }))}
           masters={{
