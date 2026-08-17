@@ -38,7 +38,9 @@ import {
   WABIS_WEBHOOK_ENABLED_KEY,
   WABIS_WEBHOOK_SECRET_KEY,
   WABIS_REMARKETING_ENABLED_KEY,
+  WA_LEAD_ASSIGNED_CLOUD_KEY,
 } from "./app-settings";
+import { cloudProvider, isCloudConfigured } from "./wa/cloud-provider";
 
 export const LEAD_ASSIGNED_EVENT = "lead_assigned";
 /**
@@ -70,6 +72,21 @@ export const CONSULTANT_ROUTED_EVENTS: ReadonlySet<string> = new Set([LEAD_ASSIG
  * `wabis_remarketing_enabled` switch — dedupe key `remarketing_touch:<campaignId>:<n>`.
  */
 export const REMARKETING_TOUCH_EVENT = "remarketing_touch";
+
+/**
+ * The Meta-approved template the lead-assignment intro sends once it's cut over
+ * to the Cloud API. Carries no `:language` suffix, so `cloudProvider.sendTemplate`
+ * defaults to `"en"` — change this if the approved template is under a different
+ * language code.
+ *
+ * The two positional params below (`{{1}}`, `{{2}}`) are inferred from the
+ * Wabis side of this same intro: its workflow fills `#!agent!#` then
+ * `#!agent_phone!#`, in that order (see the module note above). That ordering
+ * has NOT been confirmed against this template's actual approved body —
+ * verify it (CRM → Settings → WhatsApp Inbox → test send, with `templateParams`)
+ * before `WA_LEAD_ASSIGNED_CLOUD_KEY` carries real leads.
+ */
+export const LEAD_ASSIGNED_CLOUD_TEMPLATE = "desgro_template";
 
 /**
  * One timeout for every attempt, inline or retried — and they must stay equal.
@@ -262,6 +279,15 @@ export function buildLeadAssignedPayload(input: {
 }
 
 /**
+ * `desgro_template`'s two body variables as Meta's Cloud API addresses them —
+ * positionally, by number, not by Wabis's `#!agent!#` names. See the caveat on
+ * `LEAD_ASSIGNED_CLOUD_TEMPLATE` about this order being inferred, not confirmed.
+ */
+export function buildLeadAssignedCloudParams(agent: string, agentPhone: string): Record<string, string> {
+  return { "1": agent, "2": agentPhone };
+}
+
+/**
  * Idempotency key. Scoped to lead *and* consultant, so the same lead can never
  * message the same consultant twice — while a genuine reassignment to someone
  * else (when re-fire is enabled) is still a distinct, sendable event.
@@ -293,6 +319,19 @@ export async function getWabisWebhookConfig(): Promise<WabisWebhookConfig> {
     getSetting(WABIS_WEBHOOK_SECRET_KEY).catch(() => null),
   ]);
   return { enabled: enabled === "1", secret: secret?.trim() || null };
+}
+
+/**
+ * Whether the lead-assignment intro should go out through the Cloud API
+ * instead of Wabis. Requires both: the dedicated switch (an admin decision,
+ * independent of the broader `WA_PROVIDER_KEY` cutover) AND working Cloud
+ * credentials — a switch flipped ahead of configuration must not start
+ * silently failing every assignment.
+ */
+export async function isLeadAssignedCloudEnabled(): Promise<boolean> {
+  const flag = await getSetting(WA_LEAD_ASSIGNED_CLOUD_KEY).catch(() => null);
+  if (flag !== "1") return false;
+  return isCloudConfigured();
 }
 
 const endpointSelect = {
@@ -453,6 +492,75 @@ async function refreshDeliveryTarget(
 }
 
 /**
+ * The Cloud-API half of `attemptDelivery`, for `LEAD_ASSIGNED_EVENT` rows once
+ * `isLeadAssignedCloudEnabled()` is true. Split out because it shares nothing
+ * with the Wabis path below it: no per-consultant endpoint to resolve (the
+ * Cloud API addresses the candidate directly), no `postWebhook`/secret, and a
+ * richer result (`retryable`) worth actually using instead of always spending
+ * every attempt on a permanent rejection (bad template name, wrong param count).
+ *
+ * Takes the already-claimed row (the caller's `updateMany` claim covers this
+ * path too), so it only ever records the outcome, never re-claims.
+ */
+async function attemptCloudLeadAssignedDelivery(row: {
+  id: string;
+  payload: unknown;
+  attempts: number;
+  maxAttempts: number;
+}): Promise<boolean> {
+  const payload = row.payload as Partial<LeadAssignedPayload> | null;
+  const digits = payload?.phone?.trim();
+  const finishedAt = new Date();
+
+  if (!digits) {
+    await prisma.crmWebhookDelivery.update({
+      where: { id: row.id },
+      data: { status: "failed", nextAttemptAt: null, responseBody: "No phone on the queued payload." },
+    });
+    return false;
+  }
+
+  const result = await cloudProvider.sendTemplate({
+    // `digits` is Wabis-shaped (no `+`) from buildLeadAssignedPayload; Cloud API
+    // wants E.164, and the digits already carry the country code.
+    toE164: `+${digits}`,
+    template: LEAD_ASSIGNED_CLOUD_TEMPLATE,
+    params: buildLeadAssignedCloudParams(payload?.agent ?? "", payload?.agent_phone ?? ""),
+    endpointUrl: null,
+  });
+
+  if (result.ok) {
+    await prisma.crmWebhookDelivery.update({
+      where: { id: row.id },
+      data: {
+        status: "sent",
+        deliveredAt: finishedAt,
+        nextAttemptAt: null,
+        responseStatus: result.status,
+        responseBody: result.providerMessageId ? `wamid: ${result.providerMessageId}` : result.body,
+      },
+    });
+    return true;
+  }
+
+  // A non-retryable result (bad template/params, invalid number) will never
+  // succeed on retry — burning the remaining attempts on it just delays the
+  // "failed" state an admin needs to see.
+  const exhausted = row.attempts >= row.maxAttempts || result.retryable === false;
+  const delay = exhausted ? null : nextAttemptDelayMinutes(row.attempts);
+  await prisma.crmWebhookDelivery.update({
+    where: { id: row.id },
+    data: {
+      status: delay === null ? "failed" : "pending",
+      nextAttemptAt: delay === null ? null : new Date(finishedAt.getTime() + delay * 60_000),
+      responseStatus: result.status,
+      responseBody: result.body,
+    },
+  });
+  return false;
+}
+
+/**
  * Attempt one pending delivery and record the outcome. Returns true only when
  * *this* call delivered it.
  *
@@ -483,6 +591,13 @@ export async function attemptDelivery(deliveryId: string): Promise<boolean> {
 
   const row = await prisma.crmWebhookDelivery.findUnique({ where: { id: deliveryId } });
   if (!row) return false;
+
+  // Cut-over path: the assignment intro only, gated by its own switch (see
+  // `isLeadAssignedCloudEnabled`) so this can go live without touching
+  // study-abroad, the re-marketing drip, or the broader wa_provider cutover.
+  if (row.event === LEAD_ASSIGNED_EVENT && (await isLeadAssignedCloudEnabled())) {
+    return attemptCloudLeadAssignedDelivery(row);
+  }
 
   // A row that hasn't landed yet has no history to protect, so its destination
   // and agent identity are re-resolved before every attempt. Without this, an
@@ -578,9 +693,6 @@ export async function enqueueLeadAssignedWebhook(opts: {
   agentPhone: string | null | undefined;
 }): Promise<void> {
   try {
-    const cfg = await getWabisWebhookConfig();
-    if (!cfg.enabled) return;
-
     const dedupeKey = leadAssignedDedupeKey(opts.leadId, opts.assigneeUserId);
     // Cheap pre-check: the unique index is the real guard (below), this just
     // avoids building a payload for the overwhelmingly common repeat case.
@@ -594,6 +706,18 @@ export async function enqueueLeadAssignedWebhook(opts: {
       select: { id: true },
     });
     if (existing) return;
+
+    // Checked before the Wabis-specific gates below: once this is on, the intro
+    // no longer needs `wabis_webhook_enabled` (a switch an admin winding Wabis
+    // down will naturally turn off) or a per-consultant WabisWebhookEndpoint —
+    // Cloud addresses the candidate directly, no per-agent workflow to map.
+    if (await isLeadAssignedCloudEnabled()) {
+      await enqueueLeadAssignedCloudDelivery(dedupeKey, opts);
+      return;
+    }
+
+    const cfg = await getWabisWebhookConfig();
+    if (!cfg.enabled) return;
 
     const endpoint = await resolveEndpointForConsultant(opts.assigneeUserId);
 
@@ -682,6 +806,83 @@ export async function enqueueLeadAssignedWebhook(opts: {
     // other request already owns this delivery, so losing is the correct outcome.
     console.error("[crm-webhook] lead-assignment webhook not enqueued:", e);
   }
+}
+
+/**
+ * The Cloud-API half of `enqueueLeadAssignedWebhook`. No endpoint to resolve —
+ * Cloud sends to the candidate's number directly — so the only unsendable case
+ * left is a lead with no usable phone. `dedupeKey` is passed in rather than
+ * recomputed, so this stays the single dedupe check for both transports.
+ */
+async function enqueueLeadAssignedCloudDelivery(
+  dedupeKey: string,
+  opts: {
+    leadId: string;
+    assigneeUserId: string;
+    candidateName: string | null | undefined;
+    phone: string | null | undefined;
+    email: string | null | undefined;
+    source: string | null | undefined;
+    service: string | null | undefined;
+    status: string | null | undefined;
+    assignedAt: Date | null | undefined;
+    agentDisplayName: string | null | undefined;
+    agentPhone: string | null | undefined;
+  },
+): Promise<void> {
+  const { agent, agentPhone } = resolveAgent({
+    displayName: opts.agentDisplayName,
+    phone: opts.agentPhone,
+  });
+  const payload = buildLeadAssignedPayload({
+    leadId: opts.leadId,
+    candidateName: opts.candidateName,
+    phone: opts.phone,
+    email: opts.email,
+    source: opts.source,
+    service: opts.service,
+    status: opts.status,
+    assignedAt: opts.assignedAt ?? new Date(),
+    agent,
+    agentPhone,
+  });
+
+  if (!payload) {
+    await prisma.crmWebhookDelivery
+      .create({
+        data: {
+          event: LEAD_SKIPPED_EVENT,
+          dedupeKey: `${LEAD_SKIPPED_EVENT}:${randomUUID()}`,
+          leadId: opts.leadId,
+          assigneeUserId: opts.assigneeUserId,
+          url: "",
+          payload: {},
+          status: "failed",
+          attempts: 0,
+          maxAttempts: 0,
+          responseBody: "Not sent — the lead has no phone number the Cloud API can use.",
+        },
+      })
+      .catch(() => undefined);
+    return;
+  }
+
+  const created = await prisma.crmWebhookDelivery.create({
+    data: {
+      event: LEAD_ASSIGNED_EVENT,
+      dedupeKey,
+      leadId: opts.leadId,
+      assigneeUserId: opts.assigneeUserId,
+      // Descriptive, not dereferenced — attemptDelivery routes this event to
+      // the Cloud path by (event, isLeadAssignedCloudEnabled()), never by url.
+      url: `cloud:${LEAD_ASSIGNED_CLOUD_TEMPLATE}`,
+      endpointLabel: "WhatsApp Cloud API",
+      payload,
+    },
+    select: { id: true },
+  });
+
+  await attemptDelivery(created.id);
 }
 
 /** Outcome of a study-abroad send, shaped for a direct user-facing message. */
@@ -817,6 +1018,10 @@ export async function drainWebhookQueue(
   const events: string[] = [];
   // The study-abroad intro rides the same on/off switch as the assignment intro.
   if (cfg.enabled) events.push(LEAD_ASSIGNED_EVENT, STUDY_ABROAD_EVENT);
+  // The assignment intro also drains once it's cloud-routed, independent of the
+  // Wabis switch above — an admin winding Wabis down will turn `cfg.enabled`
+  // off, and a backlog of cloud-routed retries must not freeze because of it.
+  else if (await isLeadAssignedCloudEnabled()) events.push(LEAD_ASSIGNED_EVENT);
   if (remarketingEnabled) events.push(REMARKETING_TOUCH_EVENT);
   if (events.length === 0) return { attempted: 0, sent: 0, errored: 0, skipped: "automation disabled" };
 
@@ -946,7 +1151,12 @@ export async function requeueDelivery(
   // Only the consultant-routed events resolve a per-consultant endpoint; a
   // re-marketing touch carries an assigneeUserId too but sends on a global URL,
   // so it must not be judged against the (non-existent) per-consultant workflow.
+  // A cloud-routed assignment intro has no Wabis endpoint by design — judging it
+  // against one would refuse every retry with a "no workflow mapped" reason that
+  // has nothing to do with why it actually failed.
+  const cloudRouted = row.event === LEAD_ASSIGNED_EVENT && (await isLeadAssignedCloudEnabled());
   if (
+    !cloudRouted &&
     CONSULTANT_ROUTED_EVENTS.has(row.event) &&
     row.assigneeUserId &&
     !(await resolveEndpointForConsultant(row.assigneeUserId, row.event))

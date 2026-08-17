@@ -9,6 +9,7 @@ import {
   STUDY_ABROAD_EVENT,
   CONSULTANT_ROUTED_EVENTS,
   buildLeadAssignedPayload,
+  buildLeadAssignedCloudParams,
   leadAssignedDedupeKey,
   nextAttemptDelayMinutes,
   LEAD_ASSIGNED_EVENT,
@@ -224,6 +225,18 @@ describe("buildLeadAssignedPayload", () => {
   it("is null when the lead has no number Wabis could key a subscriber on", () => {
     expect(buildLeadAssignedPayload({ ...base, phone: null })).toBeNull();
     expect(buildLeadAssignedPayload({ ...base, phone: "not a phone" })).toBeNull();
+  });
+});
+
+describe("buildLeadAssignedCloudParams", () => {
+  it("maps agent then agent_phone onto Meta's positional {{1}}/{{2}}", () => {
+    // Order inferred from Wabis's own #!agent!# / #!agent_phone!# sequence — see
+    // the caveat on LEAD_ASSIGNED_CLOUD_TEMPLATE. This test pins that assumption
+    // so a future change to it is deliberate, not accidental.
+    expect(buildLeadAssignedCloudParams("Priya", "+919000000001")).toEqual({
+      "1": "Priya",
+      "2": "+919000000001",
+    });
   });
 });
 

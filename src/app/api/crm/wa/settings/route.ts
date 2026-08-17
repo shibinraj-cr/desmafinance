@@ -152,6 +152,8 @@ const TestSchema = z.object({
   /** `name:language` for a template send; omit to send free text. */
   template: z.string().max(200).optional(),
   body: z.string().max(1000).optional(),
+  /** Positional body params ("1", "2", …) for a template send that takes variables. */
+  templateParams: z.record(z.string().max(1000)).optional(),
 });
 
 const GenerateSchema = z.object({ action: z.literal("generate_secret") });
@@ -261,7 +263,12 @@ export const POST = withApiHandler(async (req: Request) => {
   // though the credentials were wrong.
   const provider = (await isCloudConfigured()) ? cloudProvider : await getWaProvider();
   const result = data.template
-    ? await provider.sendTemplate({ toE164, template: data.template, params: {}, endpointUrl: null })
+    ? await provider.sendTemplate({
+        toE164,
+        template: data.template,
+        params: data.templateParams ?? {},
+        endpointUrl: null,
+      })
     : await provider.sendText({ toE164, body: data.body?.trim() || "DesGro CRM test message." });
 
   return NextResponse.json({
