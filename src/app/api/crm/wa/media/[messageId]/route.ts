@@ -42,6 +42,7 @@ export const GET = withApiHandler(async (req: Request, { params }: { params: { m
     select: {
       mediaId: true,
       mediaUrl: true,
+      mediaStoredUrl: true,
       mediaMime: true,
       fileName: true,
       conversation: {
@@ -101,9 +102,20 @@ export const GET = withApiHandler(async (req: Request, { params }: { params: { m
  * only fail.
  */
 async function openMedia(
-  message: { mediaId: string | null; mediaUrl: string | null },
+  message: { mediaId: string | null; mediaUrl: string | null; mediaStoredUrl: string | null },
   range: string | null,
 ): Promise<WaMediaStream | null> {
+  // OUR copy first, always. It is the only one of the three that is not on a
+  // clock — and preferring it also spares a Graph round trip on every single
+  // play, since a Cloud API media id must be re-exchanged each time.
+  if (message.mediaStoredUrl) {
+    const stored = await openUrl(message.mediaStoredUrl, range);
+    if (stored) return stored;
+    // Falls through rather than failing: if our own copy is unreachable, the
+    // provider may still have the original, and that is worth trying before
+    // telling somebody their attachment is gone.
+  }
+
   if (message.mediaId) {
     const provider = await getWaProvider();
     if (provider.supports("fetchMedia")) {
@@ -116,28 +128,39 @@ async function openMedia(
   // provider data: `file:` here would turn this route into a reader of whatever
   // the server can reach, and sending our token to a third-party host merely
   // because it holds a file of ours would hand over the whole account.
-  if (message.mediaUrl && /^https?:\/\//i.test(message.mediaUrl)) {
-    try {
-      const res = await fetch(message.mediaUrl, {
-        headers: range ? { range } : {},
-        cache: "no-store",
-        signal: AbortSignal.timeout(25_000),
-      });
-      if (!res.ok || !res.body) return null;
-      return {
-        body: res.body,
-        mime: res.headers.get("content-type"),
-        fileName: null,
-        contentLength: res.headers.get("content-length"),
-        contentRange: res.headers.get("content-range"),
-        status: res.status === 206 ? 206 : 200,
-      };
-    } catch (e) {
-      logger.warn("wa_media_url_failed", { message: e instanceof Error ? e.message : String(e) });
-      return null;
-    }
-  }
+  if (message.mediaUrl) return openUrl(message.mediaUrl, range);
   return null;
+}
+
+/**
+ * Read a plain URL, with no credential of ours attached.
+ *
+ * Only http(s): a stored value is provider data, and `file:` here would turn
+ * this route into a reader of whatever the server can reach. And nothing of ours
+ * rides along — a token does not travel to a third-party host merely because
+ * that host holds a file of ours.
+ */
+async function openUrl(url: string, range: string | null): Promise<WaMediaStream | null> {
+  if (!/^https?:\/\//i.test(url)) return null;
+  try {
+    const res = await fetch(url, {
+      headers: range ? { range } : {},
+      cache: "no-store",
+      signal: AbortSignal.timeout(25_000),
+    });
+    if (!res.ok || !res.body) return null;
+    return {
+      body: res.body,
+      mime: res.headers.get("content-type"),
+      fileName: null,
+      contentLength: res.headers.get("content-length"),
+      contentRange: res.headers.get("content-range"),
+      status: res.status === 206 ? 206 : 200,
+    };
+  } catch (e) {
+    logger.warn("wa_media_url_failed", { message: e instanceof Error ? e.message : String(e) });
+    return null;
+  }
 }
 
 /** Keep a provider-supplied name out of the header grammar it is interpolated into. */
