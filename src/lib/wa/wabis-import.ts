@@ -207,10 +207,11 @@ async function writeImportProgress(p: ImportProgress): Promise<void> {
 /**
  * Every Wabis subscriber, up to `max`, paged.
  *
- * Sends `limit` because Wabis refuses `/get/conversation` outright without it
- * ("The limit field is required") and these endpoints share a house style — the
- * previous version asked for `{page: 1}` alone, which almost certainly returned
- * nothing and would have read as "no contacts" rather than as a rejection.
+ * Sends `limit` and `phone_number_id` because Wabis refuses without either — the
+ * contact list is scoped to a bot's number exactly as the conversation read is,
+ * which is not what "list my subscribers" suggests. Both were learnt from
+ * rejections rather than documentation, one per round trip, which is why the dry
+ * run reports the raw envelope.
  *
  * Pages by following the server's own `nextOffset`, the same way conversations
  * do, since the spec's description of `offset` as a page number contradicts the
@@ -223,6 +224,7 @@ async function listSubscribers(
   deadline: number,
   capture: (raw: string, request: string) => void,
   startOffset: number,
+  phoneNumberId: string | null,
 ): Promise<{ subscribers: Record<string, unknown>[]; nextOffset: number; exhausted: boolean }> {
   const out: Record<string, unknown>[] = [];
   const seen = new Set<string>();
@@ -235,7 +237,11 @@ async function listSubscribers(
     const payload = await wabisPost(
       "/subscriber/list",
       token,
-      { limit: String(PAGE_SIZE), offset: String(offset) },
+      {
+        limit: String(PAGE_SIZE),
+        offset: String(offset),
+        phone_number_id: phoneNumberId ?? "",
+      },
       capture,
     );
     const batch = findRecordArray(payload);
@@ -574,6 +580,12 @@ export async function importWabisHistory(opts: WabisImportOptions): Promise<Wabi
   const config = {
     phoneNumberId: (await getSetting(WA_CLOUD_PHONE_NUMBER_ID_KEY).catch(() => null))?.trim() || null,
   };
+  if (!config.phoneNumberId) {
+    summary.errors.push(
+      "No WhatsApp phone number id set — fill it in under Cloud API above. Wabis scopes both the contact list and every conversation to it.",
+    );
+    return summary;
+  }
 
   const deadline = Date.now() + TIME_BUDGET_MS;
   const keys = new Set<string>();
@@ -609,7 +621,14 @@ export async function importWabisHistory(opts: WabisImportOptions): Promise<Wabi
     exhausted = true;
   } else {
     try {
-      const listed = await listSubscribers(token, opts.maxSubscribers, deadline, capture, startOffset);
+      const listed = await listSubscribers(
+        token,
+        opts.maxSubscribers,
+        deadline,
+        capture,
+        startOffset,
+        config.phoneNumberId,
+      );
       subscribers = listed.subscribers;
       listedNext = listed.nextOffset;
       exhausted = listed.exhausted;
