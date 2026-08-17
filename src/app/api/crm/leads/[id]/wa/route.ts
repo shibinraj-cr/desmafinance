@@ -6,6 +6,8 @@ import { getCurrentUserAndPermissions } from "@/lib/permissions";
 import { getCrmAccess, canEditLead } from "@/lib/crm-rbac";
 import { isSessionOpen, markConversationRead } from "@/lib/wa/mirror";
 import { canViewConversation } from "@/lib/wa/access";
+import { getWaProvider } from "@/lib/wa/registry";
+import { filterTemplatesFor, leadPulseRoleOf, loadTemplateGrants, templateKey } from "@/lib/wa/template-access";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -16,15 +18,18 @@ const MESSAGE_LIMIT = 200;
 /**
  * GET /api/crm/leads/[id]/wa — the lead's WhatsApp thread.
  *
- * Read-only, and only as far as Phase 1 goes: this is the mirror the CRM stores,
- * not a live pull from the provider. If the mirror is off or the candidate has
- * never messaged, `conversation` is null and the UI says so plainly rather than
- * pretending the thread is empty.
+ * Reads the mirror the CRM stores, not a live pull from the provider. If the
+ * mirror is off or the candidate has never messaged, `conversation` is null and
+ * the UI says so plainly rather than pretending the thread is empty.
  *
- * Visibility follows the lead, not the conversation: anyone who can VIEW the
- * lead may read what was said about it (same rule as notes and the timeline),
- * while `canReply` reports the stricter edit right so the UI can be honest about
- * what the viewer will be able to do once sending lands in Phase 2.
+ * Returns `send` alongside — the transport's capabilities and the templates THIS
+ * user may use — so the lead page can offer the same composer as the inbox. It
+ * rides with the thread rather than being threaded as props through the whole
+ * lead-detail page, since this panel is the only thing there that needs it.
+ *
+ * Two different permissions come back. `canReply` is the lead's edit right; the
+ * thread itself is separately scoped by canViewConversation, because a lead is a
+ * name and a stage while a conversation is the candidate's own words.
  */
 export const GET = withApiHandler(async (_req: Request, { params }: { params: { id: string } }) => {
   const { userId, perms } = await getCurrentUserAndPermissions();
@@ -89,6 +94,36 @@ export const GET = withApiHandler(async (_req: Request, { params }: { params: { 
 
   const canReply = canEditLead(access, lead, userId);
 
+  // Capabilities and templates ride along with the thread rather than being
+  // threaded as props through the whole lead-detail page — this panel is the
+  // only thing on it that needs them, and the templates are per-user anyway.
+  const provider = await getWaProvider();
+  const [waTemplates, grants, myTier] = await Promise.all([
+    provider.listTemplates().catch(() => []),
+    loadTemplateGrants().catch(() => []),
+    leadPulseRoleOf(userId).catch(() => null),
+  ]);
+  const templates = filterTemplatesFor(
+    waTemplates.filter((t) => t.status === "APPROVED"),
+    access,
+    grants,
+    myTier,
+  ).map((t) => ({
+    id: templateKey(t.name, t.language),
+    name: templateKey(t.name, t.language),
+    label: `${t.name} (${t.language})`,
+    body: t.body,
+    header: t.header,
+    variableCount: t.variableCount,
+  }));
+
+  const send = {
+    providerLabel: provider.label,
+    canSendText: provider.supports("sendText"),
+    canSendTemplate: provider.supports("sendTemplate"),
+    templates,
+  };
+
   // Lead VISIBILITY is open across the CRM, but a WhatsApp thread is the
   // candidate's own words — so it is scoped even here, on a lead the consultant
   // is otherwise allowed to open. They see the lead; they do not see someone
@@ -101,11 +136,11 @@ export const GET = withApiHandler(async (_req: Request, { params }: { params: { 
       userId,
     )
   ) {
-    return NextResponse.json({ conversation: null, canReply, restricted: true });
+    return NextResponse.json({ conversation: null, canReply, restricted: true, send });
   }
 
   if (!conversation) {
-    return NextResponse.json({ conversation: null, canReply });
+    return NextResponse.json({ conversation: null, canReply, send });
   }
 
   // Opening the thread clears the badge — but only for someone who owns the
@@ -145,5 +180,6 @@ export const GET = withApiHandler(async (_req: Request, { params }: { params: { 
       truncated: conversation.messages.length === MESSAGE_LIMIT,
     },
     canReply,
+    send,
   });
 });

@@ -1,6 +1,6 @@
 "use client";
 
-import { Fragment, useEffect, useMemo, useState } from "react";
+import { Fragment, useCallback, useEffect, useMemo, useState } from "react";
 import { createPortal } from "react-dom";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
@@ -12,6 +12,7 @@ import { COUNTRIES, countryCodeFor } from "@/lib/countries";
 import { StatusPill, TemperaturePill, type StatusOpt, type Opt, type BdeOpt } from "../client";
 import { EnrollCelebration } from "@/components/EnrollCelebration";
 import { NextStepDialog, type NextStepPayload } from "@/components/crm/NextStepDialog";
+import { WaComposer, type WaTemplateOpt } from "@/components/crm/WaComposer";
 import { TaskEditDialog, type TaskEditPayload } from "@/components/crm/TaskEditDialog";
 
 export type PartyOpt = { id: string; label: string; phone: string | null };
@@ -1904,29 +1905,39 @@ const WA_STATUS_GLYPH: Record<string, { icon: string; cls: string; label: string
   failed: { icon: "error", cls: "text-error", label: "Failed" },
 };
 
+type WaPanelData = {
+  conversation: WaConversationDTO | null;
+  canReply: boolean;
+  send?: {
+    providerLabel: string;
+    canSendText: boolean;
+    canSendTemplate: boolean;
+    templates: WaTemplateOpt[];
+  };
+};
+
 function WhatsAppThreadPanel({ leadId, leadName }: { leadId: string; leadName: string }) {
-  const [data, setData] = useState<{ conversation: WaConversationDTO | null; canReply: boolean } | null>(null);
+  const [data, setData] = useState<WaPanelData | null>(null);
   const [loading, setLoading] = useState(true);
   const [failed, setFailed] = useState(false);
 
-  useEffect(() => {
-    let cancelled = false;
-    (async () => {
-      setLoading(true);
-      setFailed(false);
-      const res = await fetch(`/api/crm/leads/${leadId}/wa`).catch(() => null);
-      if (cancelled) return;
-      setLoading(false);
-      if (!res?.ok) {
-        setFailed(true);
-        return;
-      }
-      setData((await res.json()) as { conversation: WaConversationDTO | null; canReply: boolean });
-    })();
-    return () => {
-      cancelled = true;
-    };
+  // Named so the composer can refresh the thread after sending, rather than
+  // leaving the message the consultant just sent invisible until a reload.
+  const load = useCallback(async () => {
+    setLoading(true);
+    setFailed(false);
+    const res = await fetch(`/api/crm/leads/${leadId}/wa`).catch(() => null);
+    setLoading(false);
+    if (!res?.ok) {
+      setFailed(true);
+      return;
+    }
+    setData((await res.json()) as WaPanelData);
   }, [leadId]);
+
+  useEffect(() => {
+    void load();
+  }, [load]);
 
   const conversation = data?.conversation ?? null;
 
@@ -1997,11 +2008,21 @@ function WhatsAppThreadPanel({ leadId, leadName }: { leadId: string; leadName: s
             ))}
           </div>
 
-          <p className="text-label-sm text-on-surface-variant">
-            {data?.canReply
-              ? "Read-only for now — reply in Wabis. Sending from the CRM arrives with the inbox."
-              : "Read-only — only the assigned consultant or an admin can reply to this lead."}
-          </p>
+          {/* The same composer the inbox uses — one implementation, so the
+              24-hour window rule and template handling cannot drift between the
+              two places a consultant might reply from. */}
+          {data?.send && (
+            <WaComposer
+              conversationId={conversation.id}
+              sessionOpen={conversation.sessionOpen}
+              canAct={data.canReply}
+              canSendText={data.send.canSendText}
+              canSendTemplate={data.send.canSendTemplate}
+              providerLabel={data.send.providerLabel}
+              templates={data.send.templates}
+              onSent={load}
+            />
+          )}
         </>
       )}
     </div>
