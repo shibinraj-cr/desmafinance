@@ -56,6 +56,10 @@ type ImportSummary = {
   observedSenders: { value: string; direction: string; count: number }[];
   rawResponse: string | null;
   requestSent: string | null;
+  resumedFrom: number;
+  nextCursor: number;
+  totalProcessed: number;
+  moreToDo: boolean;
   errors: string[];
 };
 
@@ -574,11 +578,25 @@ export function WhatsAppModuleCard() {
           <button
             type="button"
             className={primary}
-            disabled={importBusy || !importResult || importResult.dryRun === false}
+            disabled={importBusy || !importResult}
             onClick={() => void runImport(false)}
             title={!importResult ? "Do a dry run first" : undefined}
           >
             Import for real
+          </button>
+          {/* Resuming is the default, so restarting has to be deliberate —
+              otherwise a mis-click sends the sweep back to contact one and it
+              re-fetches everything it already has. */}
+          <button
+            type="button"
+            className={ghost}
+            disabled={importBusy}
+            title="Sweep from the first contact again"
+            onClick={() => {
+              if (confirm("Start the sweep again from the first contact?")) void runImport(false, true);
+            }}
+          >
+            Start over
           </button>
         </div>
 
@@ -621,7 +639,7 @@ export function WhatsAppModuleCard() {
     void load();
   }
 
-  async function runImport(dryRun: boolean) {
+  async function runImport(dryRun: boolean, restart = false) {
     setImportBusy(true);
     setImportResult(null);
     const r = await fetch("/api/crm/wa/import", {
@@ -631,6 +649,7 @@ export function WhatsAppModuleCard() {
         dryRun,
         maxSubscribers: Math.max(1, Math.min(500, Number(importMax) || 25)),
         onlyPhone: importPhone.trim() || null,
+        restart,
       }),
     }).catch(() => null);
     setImportBusy(false);
@@ -649,6 +668,10 @@ export function WhatsAppModuleCard() {
         observedSenders: [],
         rawResponse: null,
         requestSent: null,
+        resumedFrom: 0,
+        nextCursor: 0,
+        totalProcessed: 0,
+        moreToDo: false,
         errors: ["The import request failed."],
       });
       return;
@@ -672,6 +695,20 @@ function ImportReport({ summary }: { summary: ImportSummary }) {
           {!summary.dryRun && ` · ${summary.messagesImported} stored · ${summary.leadsMatched} matched to a lead`}
         </span>
       </p>
+
+      {/* Progress across runs. A sweep of a whole account takes several, so the
+          question after each one is "is this advancing?" — and without a number
+          on screen, every run looks identical. */}
+      {!summary.dryRun && summary.totalProcessed > 0 && (
+        <p className="text-body-md text-on-surface">
+          <span className="tabular-nums font-semibold">{summary.totalProcessed}</span> contacts swept so far.{" "}
+          {summary.moreToDo ? (
+            <span className="text-on-surface-variant">Press Import again to continue from here.</span>
+          ) : (
+            <span className="text-primary font-semibold">That was the last of them — the sweep is complete.</span>
+          )}
+        </p>
+      )}
 
       {summary.stoppedEarly && (
         <p className="text-label-sm text-on-surface-variant">

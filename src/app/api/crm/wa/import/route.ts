@@ -15,6 +15,8 @@ const Schema = z.object({
   dryRun: z.boolean().default(true),
   maxSubscribers: z.number().int().min(1).max(500).default(25),
   onlyPhone: z.string().max(30).nullable().optional(),
+  /** Sweep from the first contact again rather than resuming. */
+  restart: z.boolean().default(false),
 });
 
 /**
@@ -39,6 +41,7 @@ export const POST = withApiHandler(async (req: Request) => {
     dryRun: opts.dryRun,
     maxSubscribers: opts.maxSubscribers,
     onlyPhone: opts.onlyPhone?.trim() || null,
+    restart: opts.restart,
   });
 
   return NextResponse.json(summary);
