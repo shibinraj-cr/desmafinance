@@ -144,6 +144,122 @@ export async function sendWaMessage(input: WaSendInput): Promise<WaSendOutcome> 
   }
 }
 
+/**
+ * Send a recorded voice note.
+ *
+ * Kept beside `sendWaMessage` rather than folded into it because the shapes do
+ * not overlap: there is no template variant, nothing to length-check, and the
+ * payload is bytes rather than a string. What it DOES share is the rule that
+ * matters — a voice note is free-form, so the 24-hour window applies exactly as
+ * it does to text, and no template escape hatch exists for it.
+ *
+ * The bytes are expected to be Ogg/Opus mono already; `remuxToOggOpus` is the
+ * one place that is established, and this refuses to double-guess it.
+ */
+export async function sendWaVoiceNote(input: {
+  conversationId: string;
+  sentById: string;
+  bytes: Uint8Array;
+  /** False when the browser could only manage a format Meta treats as a file. */
+  voice: boolean;
+  mime: string;
+}): Promise<WaSendOutcome> {
+  const conversation = await prisma.waConversation.findUnique({
+    where: { id: input.conversationId },
+    select: { id: true, phoneE164: true, leadId: true, sessionExpiresAt: true },
+  });
+  if (!conversation) return { ok: false, reason: "no_conversation", detail: "Conversation not found" };
+
+  if (!isSessionOpen(conversation.sessionExpiresAt)) {
+    return {
+      ok: false,
+      reason: "session_closed",
+      detail: "The 24-hour reply window has closed — send an approved template instead",
+    };
+  }
+
+  const provider = await getWaProvider();
+  if (!provider.supports("sendAudio")) {
+    return { ok: false, reason: "unsupported", detail: `${provider.label} cannot send audio` };
+  }
+
+  const uploaded = await provider.uploadMedia({
+    bytes: input.bytes,
+    mime: input.mime,
+    fileName: "voice-note.ogg",
+  });
+  if (!uploaded.ok) {
+    // Nothing has reached the candidate yet, so this one IS safe to retry —
+    // which is exactly why upload and send are separate calls.
+    return {
+      ok: false,
+      reason: uploaded.unsupported ? "unsupported" : "send_failed",
+      detail: uploaded.detail,
+    };
+  }
+
+  const result = await provider.sendAudio({
+    toE164: conversation.phoneE164,
+    mediaId: uploaded.mediaId,
+    voice: input.voice,
+  });
+  if (!result.ok) {
+    if (result.unsupported) return { ok: false, reason: "unsupported", detail: result.body };
+    logger.warn("wa_voice_send_failed", { conversationId: conversation.id, status: result.status });
+    return { ok: false, reason: "send_failed", detail: result.body || "The voice note could not be sent" };
+  }
+
+  // Past this line the candidate HAS it — the same rule as text: a bookkeeping
+  // failure must never be reported as a send failure, or it gets sent twice.
+  const now = new Date();
+  try {
+    const message = await prisma.waMessage.create({
+      data: {
+        conversationId: conversation.id,
+        direction: "out",
+        type: "audio",
+        body: null,
+        // Recorded so the thread can play back what we sent. Meta keeps uploaded
+        // media for thirty days, after which this plays nothing — the same
+        // archival question inbound media raises, and answered the same way for
+        // now: not here.
+        mediaId: uploaded.mediaId,
+        mediaMime: input.mime,
+        providerMessageId: result.providerMessageId,
+        provider: provider.key,
+        waStatus: "sent",
+        sentById: input.sentById,
+        occurredAt: now,
+      },
+      select: { id: true },
+    });
+
+    await prisma.waConversation.update({
+      where: { id: conversation.id },
+      data: { lastMessageAt: now, status: "open", awaitingReply: false },
+    });
+
+    if (conversation.leadId) {
+      await recordLeadActivity({
+        leadId: conversation.leadId,
+        actorId: input.sentById,
+        type: "WHATSAPP_SENT",
+        summary: input.voice ? "WhatsApp voice note sent" : "WhatsApp audio sent",
+        metadata: { channel: "whatsapp", via: "inbox", providerMessageId: result.providerMessageId },
+      });
+    }
+
+    return { ok: true, messageId: message.id, providerMessageId: result.providerMessageId };
+  } catch (e) {
+    logger.error("wa_voice_persisted_failed", {
+      conversationId: conversation.id,
+      providerMessageId: result.providerMessageId,
+      message: e instanceof Error ? e.message : String(e),
+    });
+    return { ok: true, messageId: "", providerMessageId: result.providerMessageId };
+  }
+}
+
 async function recordSentMessage(
   conversation: { id: string; leadId: string | null },
   input: WaSendInput,

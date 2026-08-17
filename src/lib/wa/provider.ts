@@ -35,7 +35,13 @@ export type WaProviderKey = "wabis" | "cloud";
  * exists" would be useless to the composer, which needs to know whether a
  * template picker can work at all.
  */
-export type WaCapability = "sendTemplate" | "sendText" | "fetchMedia" | "listTemplates";
+export type WaCapability =
+  | "sendTemplate"
+  | "sendText"
+  | "fetchMedia"
+  | "listTemplates"
+  | "uploadMedia"
+  | "sendAudio";
 
 /**
  * The outcome of one send attempt.
@@ -139,8 +145,68 @@ export interface WhatsAppProvider {
    */
   sendText(input: WaSendTextInput): Promise<WaSendResult>;
   fetchMedia(mediaId: string): Promise<WaMedia | null>;
+  /**
+   * The attachment's BYTES, ready to stream to a browser.
+   *
+   * Separate from `fetchMedia` because the URL that call returns is not usable
+   * by anyone but this adapter: Meta's expires within minutes and needs the
+   * WABA token on the download itself. A caller that wanted to serve the file
+   * would have to hold the credential, which would put the key that unlocks
+   * every media id on the account into whichever route happened to need one
+   * attachment. Returning an opened body keeps the token where it belongs and
+   * gives the caller something it can pipe.
+   */
+  downloadMedia(mediaId: string, range?: string | null): Promise<WaMediaStream | null>;
+  /**
+   * Put a file on the provider and get a handle back.
+   *
+   * Separate from sending because Meta separates them: bytes go up first and the
+   * message then references the id. Splitting them here too means a failed
+   * upload is distinguishable from a failed send, which matters — the first is
+   * safe to retry and the second may already have reached the candidate.
+   */
+  uploadMedia(input: WaUploadInput): Promise<WaUploadResult>;
+  /**
+   * Send previously uploaded audio.
+   *
+   * `voice` asks for a push-to-talk note — waveform, microphone icon, plays
+   * without downloading — rather than a file attachment with a music icon. Meta
+   * honours it only for Ogg/Opus; anything else silently degrades to the
+   * attachment, so callers that care must send the right container.
+   */
+  sendAudio(input: WaSendAudioInput): Promise<WaSendResult>;
   listTemplates(): Promise<WaTemplateSummary[]>;
 }
+
+export type WaUploadInput = {
+  bytes: Uint8Array;
+  mime: string;
+  fileName: string;
+};
+
+export type WaUploadResult =
+  | { ok: true; mediaId: string }
+  | { ok: false; detail: string; unsupported?: boolean };
+
+export type WaSendAudioInput = {
+  toE164: string;
+  mediaId: string;
+  /** True for a voice note; false for a plain audio attachment. */
+  voice: boolean;
+};
+
+/** An attachment being read, not yet buffered. */
+export type WaMediaStream = {
+  body: ReadableStream<Uint8Array>;
+  mime: string | null;
+  fileName: string | null;
+  /** Null when the upstream did not say; the caller must not invent one. */
+  contentLength: string | null;
+  /** Set only on a partial response, and passed through verbatim. */
+  contentRange: string | null;
+  /** 206 when the upstream honoured a byte range, 200 otherwise. */
+  status: 200 | 206;
+};
 
 /** The stock answer for a capability a transport genuinely cannot do. */
 export function unsupportedResult(what: string): WaSendResult {

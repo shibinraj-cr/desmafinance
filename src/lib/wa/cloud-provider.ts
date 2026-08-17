@@ -28,6 +28,10 @@ import {
   unsupportedResult,
   type WaCapability,
   type WaMedia,
+  type WaMediaStream,
+  type WaSendAudioInput,
+  type WaUploadInput,
+  type WaUploadResult,
   type WaSendResult,
   type WaSendTemplateInput,
   type WaSendTextInput,
@@ -39,6 +43,8 @@ import {
 const DEFAULT_API_VERSION = "v21.0";
 const GRAPH_HOST = "https://graph.facebook.com";
 const REQUEST_TIMEOUT_MS = 10_000;
+/** Longer than an API call: this one is a file transfer, not a JSON round trip. */
+const MEDIA_TIMEOUT_MS = 25_000;
 const MAX_RESPONSE_CHARS = 2_000;
 
 /**
@@ -337,6 +343,8 @@ const SUPPORTED: ReadonlySet<WaCapability> = new Set<WaCapability>([
   "sendText",
   "fetchMedia",
   "listTemplates",
+  "uploadMedia",
+  "sendAudio",
 ]);
 
 export const cloudProvider: WhatsAppProvider = {
@@ -408,6 +416,112 @@ export const cloudProvider: WhatsAppProvider = {
       return { url: d.url, mime: d.mime_type ?? null, fileName: d.file_name ?? null };
     } catch (e) {
       logger.warn("wa_cloud_media_failed", { mediaId, message: e instanceof Error ? e.message : String(e) });
+      return null;
+    }
+  },
+
+  /**
+   * Put bytes on the WABA and get a media id back.
+   *
+   * Multipart, with the mime declared on the file part rather than as a separate
+   * field — that is the shape Meta's own example uses, and the API is fussier
+   * about it than the field list suggests. The id it returns is good for thirty
+   * days, which is far longer than the seconds we need it for.
+   */
+  async uploadMedia(input: WaUploadInput): Promise<WaUploadResult> {
+    const cfg = await getCloudConfig();
+    if (!cfg) return { ok: false, detail: "WhatsApp Cloud API is not configured" };
+
+    const form = new FormData();
+    form.append("messaging_product", "whatsapp");
+    form.append("type", input.mime);
+    form.append("file", new Blob([input.bytes as unknown as BlobPart], { type: input.mime }), input.fileName);
+
+    try {
+      const res = await fetch(`${GRAPH_HOST}/${cfg.apiVersion}/${cfg.phoneNumberId}/media`, {
+        method: "POST",
+        // No content-type of our own: fetch sets it with the multipart boundary,
+        // and overriding it produces a body the server cannot split.
+        headers: { authorization: `Bearer ${cfg.token}` },
+        body: form,
+        cache: "no-store",
+        signal: AbortSignal.timeout(MEDIA_TIMEOUT_MS),
+      });
+      const text = await res.text().catch(() => "");
+      if (!res.ok) {
+        const { code, message } = parseGraphError(text);
+        logger.warn("wa_cloud_upload_rejected", { status: res.status, code });
+        return { ok: false, detail: message || `Upload rejected (HTTP ${res.status})` };
+      }
+      const id = (JSON.parse(text) as { id?: string })?.id;
+      if (!id) return { ok: false, detail: "Upload succeeded but returned no media id" };
+      return { ok: true, mediaId: id };
+    } catch (e) {
+      logger.warn("wa_cloud_upload_failed", { message: e instanceof Error ? e.message : String(e) });
+      return { ok: false, detail: "The recording could not be uploaded to WhatsApp" };
+    }
+  },
+
+  async sendAudio(input: WaSendAudioInput): Promise<WaSendResult> {
+    const cfg = await getCloudConfig();
+    if (!cfg) return unsupportedResult("WhatsApp Cloud API is not configured");
+
+    return graphPost(cfg, `${cfg.phoneNumberId}/messages`, {
+      messaging_product: "whatsapp",
+      recipient_type: "individual",
+      to: toCloudRecipient(input.toE164),
+      type: "audio",
+      audio: { id: input.mediaId, voice: input.voice },
+    });
+  },
+
+  /**
+   * Open the attachment for streaming.
+   *
+   * Two requests, because Meta splits them: the id resolves to a signed URL, and
+   * that URL still wants the bearer token on the download. Both stay inside this
+   * adapter — the token unlocks every media id on the WABA, so it must not
+   * travel to a route that only wants one file.
+   *
+   * The body is handed back unread. A voice note is small, but a document is not
+   * necessarily, and buffering would put a whole attachment in memory before the
+   * browser saw its first byte.
+   */
+  async downloadMedia(mediaId: string, range?: string | null): Promise<WaMediaStream | null> {
+    const cfg = await getCloudConfig();
+    if (!cfg) return null;
+
+    // Resolved on every read, not cached: the signed URL is valid for five
+    // minutes, so a stored one is a link that works in testing and fails in use.
+    const media = await this.fetchMedia(mediaId);
+    if (!media) return null;
+
+    try {
+      const res = await fetch(media.url, {
+        headers: {
+          authorization: `Bearer ${cfg.token}`,
+          ...(range ? { range } : {}),
+        },
+        cache: "no-store",
+        signal: AbortSignal.timeout(MEDIA_TIMEOUT_MS),
+      });
+      if (!res.ok || !res.body) {
+        logger.warn("wa_cloud_media_download_status", { mediaId, status: res.status });
+        return null;
+      }
+      return {
+        body: res.body,
+        mime: media.mime ?? res.headers.get("content-type"),
+        fileName: media.fileName,
+        contentLength: res.headers.get("content-length"),
+        contentRange: res.headers.get("content-range"),
+        status: res.status === 206 ? 206 : 200,
+      };
+    } catch (e) {
+      logger.warn("wa_cloud_media_download_failed", {
+        mediaId,
+        message: e instanceof Error ? e.message : String(e),
+      });
       return null;
     }
   },
