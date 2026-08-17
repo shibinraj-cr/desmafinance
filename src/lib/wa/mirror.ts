@@ -25,7 +25,8 @@
  */
 import type { Prisma } from "@prisma/client";
 import { prisma } from "../prisma";
-import { normalizePhone, computeDedupeKey } from "../crm";
+import { computeDedupeKey } from "../crm";
+import { waIdToE164 } from "./phone";
 import { recordLeadActivity } from "../crm-activity";
 import { resolveDefaultStatus } from "../crm-leads";
 import { logger } from "../logger";
@@ -215,7 +216,12 @@ export async function ingestInboundMessage(
   msg: WaInboundMessage,
   config: WaMirrorConfig,
 ): Promise<WaIngestOutcome> {
-  const phoneE164 = normalizePhone(msg.from);
+  // `msg.from` is the provider's wa_id — already complete international. Read as
+  // such, never through the CRM's domestic-default normaliser: that turns every
+  // ten-digit foreign number (Singapore, Norway, Denmark, New Zealand, Iceland)
+  // into a plausible Indian one, filing the sender's messages under whoever owns
+  // it and addressing the reply to them. See waIdToE164.
+  const phoneE164 = waIdToE164(msg.from);
   if (!phoneE164) return { ok: false, reason: "no_phone" };
 
   try {

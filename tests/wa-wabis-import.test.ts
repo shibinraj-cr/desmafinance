@@ -6,6 +6,8 @@ import {
   normalizeWabisStatus,
   parseWabisTime,
   redactSample,
+  subscriberName,
+  subscriberPhone,
   wabisDirection,
   wabisErrorMessage,
 } from "@/lib/wa/wabis-import";
@@ -65,9 +67,9 @@ describe("normalizeWabisMessage", () => {
     }
   });
 
-  it("treats anything unrecognised as INBOUND — the safer misfile", () => {
-    expect(normalizeWabisMessage({}).direction).toBe("in");
-    expect(normalizeWabisMessage({ direction: "something_new" }).direction).toBe("in");
+  it("reports an unrecognised sender as unknown rather than filing it", () => {
+    expect(normalizeWabisMessage({}).direction).toBeNull();
+    expect(normalizeWabisMessage({ direction: "something_new" }).direction).toBeNull();
   });
 
   it("reads the body under any of its plausible names", () => {
@@ -185,14 +187,14 @@ describe("normalizeWabisMessage against the documented record", () => {
  */
 const REAL_TEMPLATE_RECORD: Record<string, unknown> = {
   id: 1302743707,
-  whatsapp_bot_subscriber_subscriber_id: "919946108136-145848",
+  whatsapp_bot_subscriber_subscriber_id: "919000000001-145848",
   whatsapp_bot_id: 145848,
   sender: "automation",
   agent_name: null,
   message_content:
     '{"name":"desgro","language":"en_US","category":"MARKETING","components":[{"type":"body","text":"Hello,\\n\\nI am *Test Agent* from *DESMA International*.","example":{"body_text":[["agent","agent_phone"]]}}]}',
   conversation_time: "2026-07-21 17:56:19",
-  wa_message_id: "wamid.HBgMOTE5OTQ2MTA4MTM2FQIAERgSM0Q1ODA4NDY5RTk2ODg2QTZGAA==",
+  wa_message_id: "wamid.HBgMOTE5MDAwMDAwMDAxFQIAERgSM0QwMDAwMDAwMDAwMDAwMDAwAA==",
   message_status: "read",
   delivery_status_updated_at: "2026-07-21 17:56:22",
   read_time: "2026-07-21 17:56:29",
@@ -261,13 +263,34 @@ describe("wabisDirection", () => {
     expect(wabisDirection({ sender: "unknown_value", agent_name: "Priya" })).toBe("out");
   });
 
-  // The value set is undocumented, so an unrecognised sender must fall the safe
-  // way: a wrongly-inbound message reads as the candidate saying something odd,
-  // a wrongly-outbound one looks like we said something we never did.
-  it("defaults an unknown sender to inbound", () => {
-    expect(wabisDirection({ sender: "user" })).toBe("in");
-    expect(wabisDirection({ sender: "something_new" })).toBe("in");
-    expect(wabisDirection({})).toBe("in");
+  it("recognises the inbound markers explicitly", () => {
+    for (const sender of ["user", "subscriber", "customer", "contact", "client"]) {
+      expect(wabisDirection({ sender })).toBe("in");
+    }
+  });
+
+  // The value set is undocumented, and defaulting was the wrong answer in both
+  // directions: this account's history is overwhelmingly ours, so an unknown
+  // value defaulted to inbound misfiles our own messages into the candidate's
+  // bubble at scale — permanently, since a written row dedupes on re-run. Null
+  // means the record is skipped and the value is reported, which one extra line
+  // in the map and a re-run can recover.
+  it("declines to classify a sender it does not know", () => {
+    expect(wabisDirection({ sender: "something_new" })).toBeNull();
+    expect(wabisDirection({})).toBeNull();
+  });
+
+  it("covers the send channels Wabis never documented", () => {
+    for (const sender of ["admin", "livechat", "human", "api", "broadcast", "outbound"]) {
+      expect(wabisDirection({ sender })).toBe("out");
+    }
+  });
+
+  // A PHP/MySQL backend returns 1, not true.
+  it("reads a truthy outgoing flag in the shapes a backend actually sends", () => {
+    expect(wabisDirection({ is_outgoing: 1 })).toBe("out");
+    expect(wabisDirection({ is_outgoing: "1" })).toBe("out");
+    expect(wabisDirection({ from_business: "true" })).toBe("out");
   });
 });
 
@@ -279,6 +302,28 @@ describe("parseWabisTime", () => {
     expect(parseWabisTime(null)).toBeNull();
     expect(parseWabisTime("")).toBeNull();
     expect(parseWabisTime(12345)).toBeNull();
+  });
+
+  // A MySQL DATETIME(6) renders fractional seconds, and the exact-length regex
+  // sent every one of those to a fallback that read it in the SERVER's zone —
+  // so one thread could mix correct rows with rows 5h30m later, and a reply
+  // would sort before the message it answered.
+  it("reads the same instant however many digits Wabis renders", () => {
+    const expected = "2024-07-28T07:51:03.000Z";
+    expect(parseWabisTime("2024-07-28 13:21:03.000000")?.toISOString()).toBe(expected);
+    expect(parseWabisTime("2024-07-28T13:21:03")?.toISOString()).toBe(expected);
+    expect(parseWabisTime("2024-7-28 13:21:03")?.toISOString()).toBe(expected);
+    expect(parseWabisTime("2024-07-28 13:21")?.toISOString()).toBe("2024-07-28T07:51:00.000Z");
+  });
+
+  it("refuses a zone-less value it cannot place, rather than assuming the server's zone", () => {
+    expect(parseWabisTime("28/07/2024 13:21:03")).toBeNull();
+    expect(parseWabisTime("Jul 28 2024 13:21")).toBeNull();
+  });
+
+  it("still accepts a value that carries its own zone", () => {
+    expect(parseWabisTime("2024-07-28T07:51:03Z")?.toISOString()).toBe("2024-07-28T07:51:03.000Z");
+    expect(parseWabisTime("2024-07-28T13:21:03+05:30")?.toISOString()).toBe("2024-07-28T07:51:03.000Z");
   });
 });
 
@@ -338,5 +383,65 @@ describe("redactSample", () => {
 
   it("passes through a non-object unchanged", () => {
     expect(redactSample("plain")).toBe("plain");
+  });
+});
+
+/**
+ * The subscriber record, whose real shape only became visible once the listing
+ * endpoint was coaxed into answering. The number is under `chat_id`, which none
+ * of the phone-shaped guesses covered, so every contact was skipped as "no
+ * usable number" and the account read as empty rather than as mis-mapped.
+ *
+ * Values below are fabricated behind real country-code prefixes — the repo is
+ * public, and a fixture is a poor reason to publish somebody's number.
+ */
+describe("subscriberPhone", () => {
+  const record = {
+    subscriber_id: 78410976,
+    chat_id: "919000000001",
+    first_name: "Test Contact",
+    last_name: "",
+    email: null,
+    gender: null,
+    assigned_agent_id: null,
+    unseen_count: 0,
+    last_message_time: "2025-06-27 07:51:04",
+    custom_fields: null,
+  };
+
+  it("reads the number Wabis actually sends", () => {
+    expect(subscriberPhone(record)).toBe("919000000001");
+  });
+
+  it("still reads the phone-shaped names, in case they appear for some subscriber", () => {
+    expect(subscriberPhone({ phone_number: "919000000001" })).toBe("919000000001");
+    expect(subscriberPhone({ wa_id: "919000000001" })).toBe("919000000001");
+  });
+
+  it("prefers chat_id over the guesses when both are present", () => {
+    expect(subscriberPhone({ chat_id: "919000000001", phone: "919000000002" })).toBe("919000000001");
+  });
+
+  it("reports nothing rather than a blank when no field carries a number", () => {
+    expect(subscriberPhone({ subscriber_id: 1, first_name: "Test" })).toBeNull();
+  });
+});
+
+describe("subscriberName", () => {
+  it("takes the name Wabis knows, so imported threads are not a wall of digits", () => {
+    expect(subscriberName({ first_name: "Test Contact", last_name: "" })).toBe("Test Contact");
+    expect(subscriberName({ first_name: "Test", last_name: "Contact" })).toBe("Test Contact");
+  });
+
+  // Some panels fill the name field with the number. Storing that would look
+  // like a name while telling nobody anything.
+  it("rejects a name that is only the number again", () => {
+    expect(subscriberName({ first_name: "919000000001" })).toBeNull();
+    expect(subscriberName({ first_name: "+919000000001" })).toBeNull();
+  });
+
+  it("is null when there is no name at all", () => {
+    expect(subscriberName({ first_name: "", last_name: "" })).toBeNull();
+    expect(subscriberName({ chat_id: "919000000001" })).toBeNull();
   });
 });

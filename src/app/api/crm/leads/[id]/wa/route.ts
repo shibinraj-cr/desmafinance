@@ -71,7 +71,12 @@ export const GET = withApiHandler(async (_req: Request, { params }: { params: { 
       unreadCount: true,
       assignedToId: true,
       messages: {
-        orderBy: { occurredAt: "asc" },
+        // NEWEST first, reversed below for display. Ascending with a cap shows
+        // the OLDEST 200 — which was invisible while no thread had 200 rows, and
+        // becomes the default the moment months of history are imported: the
+        // reader lands on 2024 template blasts with every recent message below
+        // the cap, and a composer under a conversation that ends a year ago.
+        orderBy: { occurredAt: "desc" },
         take: MESSAGE_LIMIT,
         select: {
           id: true,
@@ -164,7 +169,8 @@ export const GET = withApiHandler(async (_req: Request, { params }: { params: { 
       sessionExpiresAt: conversation.sessionExpiresAt,
       /// Whether free text is still legal — see WA_SESSION_WINDOW_MS.
       sessionOpen: isSessionOpen(conversation.sessionExpiresAt),
-      messages: conversation.messages.map((m) => ({
+      // Back into reading order — the query took the newest slice, not the oldest.
+      messages: [...conversation.messages].reverse().map((m) => ({
         id: m.id,
         direction: m.direction,
         type: m.type,

@@ -207,7 +207,7 @@ describe("extractDeliveryEvents", () => {
 
   it("parses our own flat shape (per-workflow block / test curl)", () => {
     const events = extractDeliveryEvents({
-      phone: "919946108136",
+      phone: "919000000001",
       status: "failed",
       error_code: "131049",
       campaign_id: "camp1",
@@ -215,7 +215,7 @@ describe("extractDeliveryEvents", () => {
     });
     expect(events).toHaveLength(1);
     expect(events[0]).toMatchObject({
-      phone: "919946108136",
+      phone: "919000000001",
       status: "failed",
       errorCode: "131049",
       campaignId: "camp1",
@@ -248,7 +248,7 @@ describe("parseCsv", () => {
 describe("parseWabisDeliveryReport", () => {
   const csv = [
     '#,"Phone Number","Message Status","Schedule Time","Delivered Time","Read Time","Failed Time","Error Message"',
-    '1,"=""919946108136""",Completed,"28th Jul 26 17:52",,,"28th Jul 26 17:52","(Error Code : 131049 )In order to maintain a healthy ecosystem, the message failed."',
+    '1,"=""919000000001""",Completed,"28th Jul 26 17:52",,,"28th Jul 26 17:52","(Error Code : 131049 )In order to maintain a healthy ecosystem, the message failed."',
     '2,"=""917994260775""",Completed,"29th Jul 26 09:20","29th Jul 26 09:21","29th Jul 26 09:37",,',
     '3,"=""919995155800""",Completed,"30th Jul 26 16:55","30th Jul 26 16:55",,,',
     '4,"=""918943420319""",Completed,"30th Jul 26 16:38",,,"30th Jul 26 16:38","(Error Code : 131026 )Message Undeliverable."',
@@ -257,7 +257,7 @@ describe("parseWabisDeliveryReport", () => {
   it("unwraps the Excel phone form and derives outcome + error code", () => {
     const rows = parseWabisDeliveryReport(csv);
     expect(rows).toHaveLength(4);
-    expect(rows[0]).toMatchObject({ phone: "919946108136", status: "failed", errorCode: "131049" });
+    expect(rows[0]).toMatchObject({ phone: "919000000001", status: "failed", errorCode: "131049" });
     expect(rows[1]).toMatchObject({ phone: "917994260775", status: "read", errorCode: null });
     expect(rows[2]).toMatchObject({ phone: "919995155800", status: "delivered", errorCode: null });
     expect(rows[3]).toMatchObject({ phone: "918943420319", status: "failed", errorCode: "131026" });
