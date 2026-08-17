@@ -229,13 +229,15 @@ describe("buildLeadAssignedPayload", () => {
 });
 
 describe("buildLeadAssignedCloudParams", () => {
-  it("maps agent then agent_phone onto Meta's positional {{1}}/{{2}}", () => {
-    // Order inferred from Wabis's own #!agent!# / #!agent_phone!# sequence — see
-    // the caveat on LEAD_ASSIGNED_CLOUD_TEMPLATE. This test pins that assumption
-    // so a future change to it is deliberate, not accidental.
+  it("fills all four slots from just agent name and phone, per the approved body", () => {
+    // Confirmed against desgro_template's real text: {{1}}/{{4}} = agent name
+    // (opens and signs the message), {{2}}/{{3}} = agent phone (call-me and
+    // WhatsApp-me lines) — see the caveat on LEAD_ASSIGNED_CLOUD_TEMPLATE.
     expect(buildLeadAssignedCloudParams("Priya", "+919000000001")).toEqual({
       "1": "Priya",
       "2": "+919000000001",
+      "3": "+919000000001",
+      "4": "Priya",
     });
   });
 });

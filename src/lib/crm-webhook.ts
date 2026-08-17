@@ -80,12 +80,17 @@ export const REMARKETING_TOUCH_EVENT = "remarketing_touch";
  * `132001: template name (desgro_template(en_US)) does not exist in en`, i.e.
  * this exact template is only approved under `en_US`.
  *
- * The two positional params below (`{{1}}`, `{{2}}`) are inferred from the
- * Wabis side of this same intro: its workflow fills `#!agent!#` then
- * `#!agent_phone!#`, in that order (see the module note above). That ordering
- * has NOT been confirmed against this template's actual approved body —
- * verify it (CRM → Settings → WhatsApp Inbox → test send, with `templateParams`)
- * before `WA_LEAD_ASSIGNED_CLOUD_KEY` carries real leads.
+ * Confirmed live (2026-08-17) via the approved body text itself (CRM → lead →
+ * WhatsApp tab → Start conversation → template picker):
+ *
+ *   Hi, This is *{{1}}* from DESMA International. … please contact me
+ *   directly: Call: {{2}}  WhatsApp: {{3}} … Regards, *{{4}}*
+ *
+ * Four slots, but only two distinct values — agent name and agent phone, each
+ * repeated: {{1}}=agent, {{2}}=agent_phone, {{3}}=agent_phone, {{4}}=agent.
+ * Not the 2-variable guess this constant originally shipped with (inferred
+ * from Wabis's `#!agent!#`/`#!agent_phone!#` naming, which turned out to only
+ * describe which VALUES get used, not how many template slots they fill).
  */
 export const LEAD_ASSIGNED_CLOUD_TEMPLATE = "desgro_template:en_US";
 
@@ -280,12 +285,13 @@ export function buildLeadAssignedPayload(input: {
 }
 
 /**
- * `desgro_template`'s two body variables as Meta's Cloud API addresses them —
- * positionally, by number, not by Wabis's `#!agent!#` names. See the caveat on
- * `LEAD_ASSIGNED_CLOUD_TEMPLATE` about this order being inferred, not confirmed.
+ * `desgro_template`'s four body slots, confirmed against the approved text
+ * (see `LEAD_ASSIGNED_CLOUD_TEMPLATE`) — two distinct values, each used twice:
+ * the agent's name opens and signs the message ({{1}}, {{4}}), their phone is
+ * given for both the call-me and WhatsApp-me lines ({{2}}, {{3}}).
  */
 export function buildLeadAssignedCloudParams(agent: string, agentPhone: string): Record<string, string> {
-  return { "1": agent, "2": agentPhone };
+  return { "1": agent, "2": agentPhone, "3": agentPhone, "4": agent };
 }
 
 /**
