@@ -402,8 +402,12 @@ export function WhatsAppModuleCard() {
               className={input + " w-full font-mono text-label-sm"}
             />
           </Field>
-          <Field label="Graph API version" hint="Blank uses the pinned default (v21.0).">
-            <input value={apiVersion} onChange={(e) => setApiVersion(e.target.value)} placeholder="v21.0" className={input + " w-full font-mono text-label-sm"} />
+          {/* The hint used to name v21.0, which is how v21.0 ended up saved here
+              — and v21.0 predates the `voice` flag, so voice notes silently
+              arrived as file attachments. A field that recommends a version has
+              to keep that recommendation current. */}
+          <Field label="Graph API version" hint="Blank uses the pinned default (v23.0). Voice notes need v23.0 or newer.">
+            <input value={apiVersion} onChange={(e) => setApiVersion(e.target.value)} placeholder="v23.0" className={input + " w-full font-mono text-label-sm"} />
           </Field>
         </div>
 
