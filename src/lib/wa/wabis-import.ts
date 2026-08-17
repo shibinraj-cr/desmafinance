@@ -23,7 +23,6 @@
  */
 import { prisma } from "../prisma";
 import { normalizePhone } from "../crm";
-import { toWabisPhone } from "../crm-webhook";
 import { logger } from "../logger";
 import {
   getSetting,
@@ -127,6 +126,56 @@ function pick(o: Record<string, unknown>, ...keys: string[]): string | null {
     if (typeof v === "number" && Number.isFinite(v)) return String(v);
   }
   return null;
+}
+
+/**
+ * The contact's number out of a `/subscriber/list` record.
+ *
+ * `chat_id` first because it is the only field a real response has ever carried:
+ * Wabis calls a subscriber's WhatsApp id a chat id, so every phone-shaped guess
+ * missed and the whole account reported back as "no usable number" — a silent
+ * skip that looked like an empty account rather than a mapping error. The other
+ * names stay as fallbacks; nothing here is documented, and a field present on
+ * only some subscribers would bring the same silent skip back for a subset.
+ *
+ * Exported for the mapping test. The value is an E.164 number without its `+`,
+ * so callers still owe it a `chatIdToE164`.
+ */
+export function subscriberPhone(sub: Record<string, unknown>): string | null {
+  return pick(sub, "chat_id", "phone_number", "phone", "wa_id", "msisdn", "mobile");
+}
+
+/**
+ * A WhatsApp id (`chat_id`) as E.164 — and deliberately NOT the CRM's shared
+ * `normalizePhone`.
+ *
+ * `normalizePhone` assumes a bare ten-digit number is an Indian mobile, which is
+ * right where it is used: a BDE typing a lead's number means the domestic one.
+ * It is wrong here. A wa_id is *already* complete international — that is what
+ * makes it a WhatsApp identity — so there is no country to infer, and inferring
+ * one corrupts. A Singapore contact arrives as `6591234567`, ten digits, and
+ * comes back `+916591234567`: not a rejected value that shows up in the skip
+ * count, but a different, entirely plausible Indian number.
+ *
+ * That is the one outcome this import must never produce. `phoneE164` is the
+ * conversation's identity and how leads are matched, so a collision files a
+ * stranger's whole message history under some unrelated candidate — and since
+ * messages are written once and skipped on replay, re-running does not undo it.
+ * Norway, Denmark and Iceland reach ten digits the same way.
+ *
+ * So: take the digits as given, and refuse anything of implausible length rather
+ * than guess at it. A number we decline is one line in the skip count. A number
+ * we invent is a data-protection incident nobody notices.
+ */
+export function chatIdToE164(raw: string | null | undefined): string | null {
+  if (!raw) return null;
+  const digits = String(raw).replace(/\D/g, "");
+  // A leading `00` is an international access code — the dialled form of `+` —
+  // and E.164 never has leading zeros after the country code, so stripping the
+  // run is safe and makes both spellings land on one value.
+  const bare = digits.replace(/^0+/, "");
+  if (bare.length < 8 || bare.length > 15) return null;
+  return `+${bare}`;
 }
 
 /**
@@ -617,7 +666,16 @@ export async function importWabisHistory(opts: WabisImportOptions): Promise<Wabi
   let listedNext = startOffset;
   let exhausted = false;
   if (opts.onlyPhone) {
-    subscribers = [{ phone_number: opts.onlyPhone }];
+    // Typed by a person, not returned by the API — so here the CRM's domestic
+    // default IS the right reading: someone entering a bare ten-digit mobile in
+    // this box means the Indian one. Normalised up front so the loop below only
+    // ever sees the full-international shape a chat_id already has.
+    const typed = normalizePhone(opts.onlyPhone);
+    if (!typed) {
+      summary.errors.push(`Could not read "${opts.onlyPhone}" as a phone number.`);
+      return summary;
+    }
+    subscribers = [{ chat_id: typed.slice(1) }];
     exhausted = true;
   } else {
     try {
@@ -651,13 +709,16 @@ export async function importWabisHistory(opts: WabisImportOptions): Promise<Wabi
   async function processSubscriber(sub: Record<string, unknown>): Promise<void> {
     summary.subscribersSeen++;
 
-    const rawPhone = pick(sub, "phone_number", "phone", "wa_id", "msisdn", "mobile");
-    const phoneE164 = normalizePhone(rawPhone);
-    const wabisPhone = toWabisPhone(rawPhone);
-    if (!phoneE164 || !wabisPhone) {
+    const rawPhone = subscriberPhone(sub);
+    const phoneE164 = chatIdToE164(rawPhone);
+    if (!phoneE164) {
       summary.skippedNoPhone++;
       return;
     }
+    // Wabis wants the same digits back without the plus. Derived from the value
+    // we just settled on rather than re-parsed from the raw field, so what we ask
+    // Wabis about and what we file the answer under cannot drift apart.
+    const wabisPhone = phoneE164.slice(1);
 
     const messages: WabisRawMessage[] = [];
     // Guards against pagination not advancing and returning the same page
