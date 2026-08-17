@@ -31,6 +31,7 @@
  * row).
  */
 import { randomUUID } from "node:crypto";
+import { Prisma } from "@prisma/client";
 import { prisma } from "./prisma";
 import { normalizePhone } from "./crm";
 import {
@@ -809,9 +810,37 @@ export async function enqueueLeadAssignedWebhook(opts: {
 
     await attemptDelivery(created.id);
   } catch (e) {
-    // Includes the unique-constraint race (two assigns landing together): the
-    // other request already owns this delivery, so losing is the correct outcome.
     console.error("[crm-webhook] lead-assignment webhook not enqueued:", e);
+    // The unique-constraint race (two assigns landing together, both trying to
+    // create the same dedupeKey) is expected and not worth recording — the
+    // other request already owns this delivery, so losing is the correct
+    // outcome, and a row already exists for anyone checking the log.
+    //
+    // Anything else is a genuine bug, and until now it vanished completely: no
+    // row, no visible error anywhere, just a console.error only Vercel's own
+    // logs would ever show — which is exactly how a real failure here read as
+    // "nothing sent, no trace" instead of a diagnosable error. Recorded the
+    // same way an unmapped consultant already is, so it surfaces in the same
+    // delivery log (CRM → Settings → Integrations) instead of staying invisible.
+    const isDedupeRace = e instanceof Prisma.PrismaClientKnownRequestError && e.code === "P2002";
+    if (!isDedupeRace) {
+      await prisma.crmWebhookDelivery
+        .create({
+          data: {
+            event: LEAD_SKIPPED_EVENT,
+            dedupeKey: `${LEAD_SKIPPED_EVENT}:${randomUUID()}`,
+            leadId: opts.leadId,
+            assigneeUserId: opts.assigneeUserId,
+            url: "",
+            payload: {},
+            status: "failed",
+            attempts: 0,
+            maxAttempts: 0,
+            responseBody: `Not sent — unexpected error: ${e instanceof Error ? e.message : String(e)}`,
+          },
+        })
+        .catch(() => undefined);
+    }
   }
 }
 
