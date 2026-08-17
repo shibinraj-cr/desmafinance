@@ -71,7 +71,12 @@ export const GET = withApiHandler(async (_req: Request, { params }: { params: { 
     select: {
       ...conversationSelect,
       messages: {
-        orderBy: { occurredAt: "asc" },
+        // NEWEST first, reversed below for display. Ascending with a cap shows
+        // the OLDEST 200 — which was invisible while no thread had 200 rows, and
+        // becomes the default the moment months of history are imported: the
+        // reader lands on 2024 template blasts with every recent message below
+        // the cap, and a composer under a conversation that ends a year ago.
+        orderBy: { occurredAt: "desc" },
         take: MESSAGE_LIMIT,
         select: {
           id: true,
@@ -193,7 +198,8 @@ export const GET = withApiHandler(async (_req: Request, { params }: { params: { 
             name: conversation.assignedTo.leadPulseRole?.displayName ?? conversation.assignedTo.username,
           }
         : null,
-      messages: conversation.messages.map((m) => ({
+      // Back into reading order — the query took the newest slice, not the oldest.
+      messages: [...conversation.messages].reverse().map((m) => ({
         id: m.id,
         direction: m.direction,
         type: m.type,

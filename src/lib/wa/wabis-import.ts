@@ -32,8 +32,7 @@ import {
   WA_IMPORT_PROGRESS_KEY,
 } from "../app-settings";
 import { extractBody, normalizeMessageType, parseWaTimestamp, type WaMessageType } from "./inbound";
-import { isAwaitingReply } from "./inbox";
-import { sessionExpiryFrom } from "./mirror";
+import { sessionExpiryFrom, isSessionOpen } from "./mirror";
 
 const WABIS_BASE = "https://bot.wabis.in/api/v1/whatsapp";
 const REQUEST_TIMEOUT_MS = 15_000;
@@ -112,6 +111,28 @@ export type WabisImportSummary = {
   totalProcessed: number;
   /** False when the sweep has reached the end of the subscriber list. */
   moreToDo: boolean;
+  /**
+   * Contacts a previous run could not fetch, retried at the start of this one,
+   * and how many are still outstanding. A failure that is recorded but never
+   * revisited is indistinguishable from one that was dropped.
+   */
+  retried: number;
+  stillFailing: number;
+  /**
+   * The numbers we could not read, not just how many. On a run that happens
+   * once, "5 contacts had no usable number" is a fact nobody can act on.
+   */
+  skippedNumbers: string[];
+  /**
+   * Messages Wabis gave us with no readable time, which are dropped rather than
+   * stamped with the clock. Reported because a non-zero count here means real
+   * history was left behind and someone should decide what to do about it.
+   */
+  messagesUndated: number;
+  /** Messages whose sender we could not classify, so did not guess at. */
+  messagesUnknownSender: number;
+  /** Placeholder leads (named by their own number) that gained a real name. */
+  leadsNamed: number;
   errors: string[];
 };
 
@@ -143,6 +164,31 @@ function pick(o: Record<string, unknown>, ...keys: string[]): string | null {
  */
 export function subscriberPhone(sub: Record<string, unknown>): string | null {
   return pick(sub, "chat_id", "phone_number", "phone", "wa_id", "msisdn", "mobile");
+}
+
+/**
+ * The contact's name, as WhatsApp knows them.
+ *
+ * Worth taking because of where these threads land. `storeThread` only ever
+ * MATCHES a lead, so a Wabis contact who was never in the CRM arrives with no
+ * lead at all, and the inbox falls back to the number — leaving an operator
+ * scrolling a wall of digits with no way to tell one thread from another. The
+ * live mirror has the same gap by necessity: an unknown number really is
+ * unknown. Here it is not, and the name costs nothing extra to carry.
+ *
+ * A "name" that is just the number again is rejected — some panels fill the
+ * field that way, and storing it would look like a name while telling nobody
+ * anything.
+ */
+export function subscriberName(sub: Record<string, unknown>): string | null {
+  const joined = [pick(sub, "first_name"), pick(sub, "last_name")]
+    .filter(Boolean)
+    .join(" ")
+    .replace(/\s+/g, " ")
+    .trim();
+  if (!joined) return null;
+  if (!/\D/.test(joined.replace(/^\+/, ""))) return null;
+  return joined.slice(0, 120);
 }
 
 
@@ -199,7 +245,26 @@ async function wabisPost(
  * are only meaningful together — a cursor without its count reads as if nothing
  * has happened.
  */
-type ImportProgress = { cursor: number; processed: number; done: boolean };
+type ImportProgress = {
+  cursor: number;
+  processed: number;
+  done: boolean;
+  /**
+   * Contacts whose fetch failed, kept by number so a later run can retry them.
+   *
+   * Without this the cursor has only two options at a failure, and both are
+   * wrong: hold, and one permanently broken contact blocks the sweep forever;
+   * advance, and that contact's history is gone with no record of whose it was —
+   * the only trace being a string in the JSON response of a run that otherwise
+   * reported success. Naming them lets the cursor move on AND the work be
+   * finished, which is the whole difference between "mostly imported" and
+   * "imported".
+   */
+  failed: string[];
+};
+
+/** Enough to be worth draining, small enough that a systemic outage cannot grow it without bound. */
+const MAX_FAILED_TRACKED = 200;
 
 async function readImportProgress(): Promise<ImportProgress | null> {
   const raw = await getSetting(WA_IMPORT_PROGRESS_KEY).catch(() => null);
@@ -211,6 +276,7 @@ async function readImportProgress(): Promise<ImportProgress | null> {
       cursor: Number.isFinite(cursor) && cursor > 0 ? cursor : 1,
       processed: Number(p.processed) || 0,
       done: !!p.done,
+      failed: Array.isArray(p.failed) ? p.failed.filter((v): v is string => typeof v === "string") : [],
     };
   } catch {
     return null;
@@ -222,7 +288,7 @@ async function writeImportProgress(p: ImportProgress): Promise<void> {
 }
 
 /**
- * Every Wabis subscriber, up to `max`, paged.
+ * ONE page of Wabis subscribers.
  *
  * Sends `limit` and `phone_number_id` because Wabis refuses without either — the
  * contact list is scoped to a bot's number exactly as the conversation read is,
@@ -230,73 +296,38 @@ async function writeImportProgress(p: ImportProgress): Promise<void> {
  * rejections rather than documentation, one per round trip, which is why the dry
  * run reports the raw envelope.
  *
- * Pages by following the server's own `nextOffset`, the same way conversations
- * do, since the spec's description of `offset` as a page number contradicts the
- * record offset it actually returns. Stops on a page that adds nobody new, so a
- * server ignoring pagination cannot spin until the deadline.
+ * A page at a time, deliberately, and the whole page is returned. The previous
+ * version fetched up to `max` records and threw away the rest of the page it
+ * stopped inside — at the default of 25 against a page size of 50, that is
+ * records 26-50 of every page discarded while the cursor still stepped over
+ * them. They were then unreachable at any setting, and a short final page
+ * partially consumed still reported the sweep complete. A page is now the unit
+ * of work as well as the unit of fetching, so "where we are" and "what we did"
+ * cannot disagree.
  */
-async function listSubscribers(
+async function fetchSubscriberPage(
   token: string,
-  max: number,
-  deadline: number,
+  offset: number,
   capture: (raw: string, request: string) => void,
-  startOffset: number,
-  phoneNumberId: string | null,
-): Promise<{ subscribers: Record<string, unknown>[]; nextOffset: number; exhausted: boolean }> {
-  const out: Record<string, unknown>[] = [];
-  const seen = new Set<string>();
-  let offset = startOffset;
-  let exhausted = false;
+  phoneNumberId: string,
+): Promise<{ subscribers: Record<string, unknown>[]; nextOffset: number; lastPage: boolean }> {
+  const payload = await wabisPost(
+    "/subscriber/list",
+    token,
+    { limit: String(PAGE_SIZE), offset: String(offset), phone_number_id: phoneNumberId },
+    capture,
+  );
+  const batch = findRecordArray(payload);
 
-  for (let page = 1; out.length < max; page++) {
-    if (Date.now() > deadline) break;
+  // Follow the server's own cursor when it offers one. The spec calls `offset` a
+  // page number while the response returns what looks like a record offset, and
+  // it documents neither reconciliation — so we take whatever it hands back and
+  // only fall back to stepping by one when it hands back nothing.
+  const next = nextOffsetOf(payload);
+  const nextOffset = next !== null && next !== offset ? next : offset + 1;
 
-    const payload = await wabisPost(
-      "/subscriber/list",
-      token,
-      {
-        limit: String(PAGE_SIZE),
-        offset: String(offset),
-        phone_number_id: phoneNumberId ?? "",
-      },
-      capture,
-    );
-    const batch = findRecordArray(payload);
-    // An empty page means we have reached the end of the list — the sweep is
-    // finished, as distinct from merely stopping on this run's limit.
-    if (batch.length === 0) {
-      exhausted = true;
-      break;
-    }
-
-    let fresh = 0;
-    for (const s of batch) {
-      const identity = JSON.stringify(s);
-      if (seen.has(identity)) continue;
-      seen.add(identity);
-      out.push(s);
-      fresh++;
-      if (out.length >= max) break;
-    }
-
-    const next = nextOffsetOf(payload);
-    const advanced = next !== null && next !== offset ? next : offset + 1;
-
-    if (fresh === 0) {
-      exhausted = true;
-      break;
-    }
-    if (batch.length < PAGE_SIZE) {
-      // A short page is the last page; the cursor still moves past it so a
-      // resume does not re-read what we just took.
-      offset = advanced;
-      exhausted = true;
-      break;
-    }
-    offset = advanced;
-  }
-
-  return { subscribers: out.slice(0, max), nextOffset: offset, exhausted };
+  // A short page is the last one. An empty page is the end proper.
+  return { subscribers: batch, nextOffset, lastPage: batch.length < PAGE_SIZE };
 }
 
 /** The server's own next-page cursor (`nextOffset`), when it gives one. */
@@ -349,7 +380,8 @@ export function findRecordArray(payload: unknown): Record<string, unknown>[] {
 
 export type WabisRawMessage = {
   providerMessageId: string | null;
-  direction: "in" | "out";
+  /** Null when `sender` was a value we do not recognise — such a record is skipped, not guessed at. */
+  direction: "in" | "out" | null;
   type: WaMessageType;
   body: string | null;
   mediaUrl: string | null;
@@ -378,6 +410,7 @@ export function normalizeWabisMessage(raw: Record<string, unknown>): WabisRawMes
   // helpers do the rest, since the inner object is Meta's own message shape.
   const inner = parseMessageContent(raw.message_content);
   const contentString = typeof raw.message_content === "string" ? raw.message_content : null;
+  const direction = wabisDirection(raw);
 
   // A template definition carries no top-level `type` — it is identified by
   // having a name and components — so it would otherwise be filed as plain text.
@@ -406,17 +439,20 @@ export function normalizeWabisMessage(raw: Record<string, unknown>): WabisRawMes
     // storing it in providerMessageId would poison the unique index that makes
     // re-running the import safe.
     providerMessageId: pick(raw, "wa_message_id", "message_id", "wamid"),
-    direction: wabisDirection(raw),
+    direction,
     type,
     body,
     mediaUrl,
     occurredAt: parseWabisTime(raw.conversation_time) ?? parseWaTimestamp(raw.timestamp ?? raw.created_at ?? raw.sent_at),
     templateName: isTemplate ? pick(inner!, "name") : null,
     // Wabis already recorded what Meta did with each message, so imported
-    // threads arrive with real delivery ticks instead of a wall of unknowns.
-    waStatus: normalizeWabisStatus(pick(raw, "message_status")),
-    waErrorMessage: pick(raw, "failed_reason"),
-    readAt: parseWabisTime(raw.read_time),
+    // threads arrive with real delivery ticks instead of a wall of unknowns —
+    // but only on OUR messages. Delivery state describes something we sent; on
+    // an inbound row it draws our own ticks on the candidate's bubble, claiming
+    // we delivered a message they wrote to us.
+    waStatus: direction === "out" ? normalizeWabisStatus(pick(raw, "message_status")) : null,
+    waErrorMessage: direction === "out" ? pick(raw, "failed_reason") : null,
+    readAt: direction === "out" ? parseWabisTime(raw.read_time) : null,
   };
 }
 
@@ -499,26 +535,68 @@ export function parseMessageContent(value: unknown): Record<string, unknown> | n
 }
 
 /**
- * Which way a Wabis message went.
+ * Which way a Wabis message went, or NULL when we cannot tell.
  *
- * The field is `sender`, and its value set is NOT documented — the spec's only
- * example shows `"bot"`. So the outbound markers we know are matched explicitly
- * and everything else falls to inbound, which is the safer misfile: a wrongly
- * inbound message reads as the candidate saying something odd, a wrongly
- * outbound one looks like we said something we never did.
+ * The field is `sender` and its value set is not documented — the spec's only
+ * example is `"bot"`, and the account has since produced `"automation"`. So the
+ * values Wabis uses for a human live-chat reply, an API send or a broadcast are
+ * all still unknown, and "admin", "livechat", "human", "api", "broadcast", even
+ * "outbound", would every one of them have fallen through.
+ *
+ * This used to default to inbound on the grounds that it was the safer misfile.
+ * It is not, for history like this: the account's traffic is overwhelmingly
+ * ours, so an unknown value misfiles at scale, and each one is our own outgoing
+ * message drawn in the candidate's bubble, setting lastInboundAt to its own time
+ * — which then flags the thread as awaiting a reply and computes a free-text
+ * window from a message we sent. Written once, permanent on re-run, and the
+ * report that would reveal the unknown value is only produced afterwards.
+ *
+ * Null means the caller skips the record and the sweep reports the value it did
+ * not recognise. Unknown-then-skip is recoverable by extending the map and
+ * running again; unknown-then-guess is not recoverable at all.
  *
  * `agent_name` is a separate axis — human versus automation — but a message
  * carrying one was necessarily sent BY us, so it settles direction too.
  */
-export function wabisDirection(raw: Record<string, unknown>): "in" | "out" {
+export function wabisDirection(raw: Record<string, unknown>): "in" | "out" | null {
   const sender = (
     pick(raw, "sender", "direction", "type_of_message", "message_direction", "sent_by", "is_sent") ?? ""
   ).toLowerCase();
-  const OUTBOUND = new Set(["bot", "agent", "business", "out", "outgoing", "sent", "system", "automation"]);
+
+  const OUTBOUND = new Set([
+    "bot",
+    "agent",
+    "business",
+    "out",
+    "outgoing",
+    "outbound",
+    "sent",
+    "system",
+    "automation",
+    "admin",
+    "livechat",
+    "live_chat",
+    "human",
+    "api",
+    "broadcast",
+    "campaign",
+    "template",
+    "me",
+  ]);
+  const INBOUND = new Set(["user", "subscriber", "customer", "contact", "client", "in", "incoming", "inbound", "them"]);
+
   if (OUTBOUND.has(sender)) return "out";
+  if (INBOUND.has(sender)) return "in";
   if (pick(raw, "agent_name")) return "out";
-  if (raw.is_outgoing === true || raw.from_business === true) return "out";
-  return "in";
+  // Truthy in the shapes a PHP/MySQL backend actually returns — `=== true` alone
+  // missed the 1 and "1" that are far likelier than a JSON boolean.
+  if (isTruthy(raw.is_outgoing) || isTruthy(raw.from_business)) return "out";
+  return null;
+}
+
+function isTruthy(v: unknown): boolean {
+  if (v === true || v === 1) return true;
+  return typeof v === "string" && ["1", "true", "yes"].includes(v.trim().toLowerCase());
 }
 
 /**
@@ -539,9 +617,28 @@ export function parseWabisTime(value: unknown): Date | null {
   if (typeof value !== "string") return null;
   const t = value.trim();
   if (!t) return null;
-  const m = t.match(/^(\d{4})-(\d{2})-(\d{2})[ T](\d{2}):(\d{2}):(\d{2})$/);
-  if (!m) return parseWaTimestamp(t);
-  return parseWaTimestamp(`${m[1]}-${m[2]}-${m[3]}T${m[4]}:${m[5]}:${m[6]}${WABIS_UTC_OFFSET}`);
+
+  // Seconds optional, fractional seconds optional — MySQL DATETIME(6) renders
+  // `17:56:19.000000`, and the exact-length regex sent every one of those down
+  // the fallback, where `new Date()` read it in the SERVER's zone. That is the
+  // very mistake WABIS_UTC_OFFSET exists to prevent, and it is worse than a
+  // uniform error: the same thread ends up mixing correctly-read rows with rows
+  // 5h30m later, so a reply sorts before the message it answers.
+  const m = t.match(/^(\d{4})-(\d{1,2})-(\d{1,2})[ T](\d{1,2}):(\d{2})(?::(\d{2}))?(?:\.\d+)?$/);
+  if (m) {
+    const p = (v: string | undefined, fallback = "00") => (v ?? fallback).padStart(2, "0");
+    return parseWaTimestamp(
+      `${m[1]}-${p(m[2])}-${p(m[3])}T${p(m[4])}:${m[5]}:${p(m[6])}${WABIS_UTC_OFFSET}`,
+    );
+  }
+
+  // Anything else is only trusted when it carries its own zone, or is a bare
+  // epoch. A zone-less string that reaches `new Date()` silently acquires the
+  // server's zone, and a wrong time on a one-off import is permanent.
+  const zoned = /(?:Z|[+-]\d{2}:?\d{2})$/i.test(t);
+  const epoch = /^\d{9,13}$/.test(t);
+  if (!zoned && !epoch) return null;
+  return parseWaTimestamp(t);
 }
 
 /** Redact anything that looks like a token before a raw sample reaches a browser. */
@@ -579,7 +676,23 @@ export async function importWabisHistory(opts: WabisImportOptions): Promise<Wabi
     nextCursor: 1,
     totalProcessed: 0,
     moreToDo: false,
+    retried: 0,
+    stillFailing: 0,
+    skippedNumbers: [],
+    messagesUndated: 0,
+    messagesUnknownSender: 0,
+    leadsNamed: 0,
     errors: [],
+  };
+
+  /**
+   * Contacts to hand to the next run. Deliberately a plain array appended to
+   * from concurrent work — JavaScript runs one of these at a time, so there is
+   * no interleaving hazard, and the set-uniquing happens once at the end.
+   */
+  const stillFailing: string[] = [];
+  const recordFailure = (wabisPhone: string) => {
+    if (stillFailing.length < MAX_FAILED_TRACKED) stillFailing.push(wabisPhone);
   };
 
   const tokenOrNull = (await getSetting(WABIS_API_TOKEN_KEY).catch(() => null))?.trim();
@@ -625,14 +738,49 @@ export async function importWabisHistory(opts: WabisImportOptions): Promise<Wabi
   // A single named number is a spot check, not part of the sweep, so it neither
   // reads nor moves the cursor.
   const progress = opts.onlyPhone || opts.dryRun ? null : await readImportProgress();
+
+  // A finished sweep stays finished until someone says otherwise. `done` used to
+  // be written and never read, so the click after "the sweep is complete"
+  // re-fetched the whole account from the first contact — re-running storeThread
+  // over threads the live mirror had since taken ownership of.
+  if (progress?.done && !opts.restart && !opts.onlyPhone) {
+    summary.resumedFrom = progress.cursor;
+    summary.nextCursor = progress.cursor;
+    summary.totalProcessed = progress.processed;
+    summary.moreToDo = false;
+    summary.errors.push(
+      "The sweep already reached the end. Press Start over if you genuinely want to run it again from the first contact.",
+    );
+    return summary;
+  }
+
   const startOffset = opts.restart || !progress ? 1 : progress.cursor;
   summary.resumedFrom = startOffset;
   summary.nextCursor = startOffset;
   summary.totalProcessed = opts.restart ? 0 : (progress?.processed ?? 0);
 
-  let subscribers: Record<string, unknown>[];
-  let listedNext = startOffset;
+  // Contacts are processed several at a time: each is one round trip of a second
+  // or two, and waiting on them sequentially spent the whole budget on latency.
+  // Returns false when the batch did not finish, which is what holds the cursor.
+  async function runBatchOf(
+    page: Record<string, unknown>[],
+  ): Promise<{ finished: boolean; consumed: number }> {
+    for (let i = 0; i < page.length; i += IMPORT_CONCURRENCY) {
+      if (Date.now() > deadline) {
+        summary.stoppedEarly = true;
+        return { finished: false, consumed: i };
+      }
+      const slice = page.slice(i, i + IMPORT_CONCURRENCY);
+      const done = await Promise.all(slice.map((sub) => processSubscriber(sub)));
+      if (done.some((ok) => !ok)) return { finished: false, consumed: i + slice.length };
+    }
+    return { finished: true, consumed: page.length };
+  }
+
   let exhausted = false;
+  /** Contacts counted in subscribersSeen that were retries of earlier failures. */
+  let retriedSeen = 0;
+
   if (opts.onlyPhone) {
     // Typed by a person, not returned by the API — so here the CRM's domestic
     // default IS the right reading: someone entering a bare ten-digit mobile in
@@ -643,45 +791,82 @@ export async function importWabisHistory(opts: WabisImportOptions): Promise<Wabi
       summary.errors.push(`Could not read "${opts.onlyPhone}" as a phone number.`);
       return summary;
     }
-    subscribers = [{ chat_id: typed.slice(1) }];
+    await processSubscriber({ chat_id: typed.slice(1) });
     exhausted = true;
   } else {
-    try {
-      const listed = await listSubscribers(
-        token,
-        opts.maxSubscribers,
-        deadline,
-        capture,
-        startOffset,
-        config.phoneNumberId,
-      );
-      subscribers = listed.subscribers;
-      listedNext = listed.nextOffset;
-      exhausted = listed.exhausted;
-    } catch (e) {
-      summary.errors.push(e instanceof Error ? e.message : String(e));
-      return summary;
+    // Contacts a previous run could not fetch, retried before the sweep goes any
+    // further — a failure that is only ever recorded and never revisited is the
+    // same as one that was dropped.
+    const retrying = opts.restart ? [] : (progress?.failed ?? []);
+    if (retrying.length > 0) {
+      summary.retried = retrying.length;
+      const { consumed } = await runBatchOf(retrying.map((chatId) => ({ chat_id: chatId })));
+      // Anything that failed again has already put itself back on the list; the
+      // ones this run never reached have to be kept by hand, or the retry list
+      // would quietly empty itself without the work being done.
+      stillFailing.push(...retrying.slice(consumed));
+      // A retry is work redone, not ground gained. Counting it toward the swept
+      // total would walk "N contacts swept so far" past the size of the account.
+      retriedSeen = summary.subscribersSeen;
+    }
+
+    // Page by page, advancing the cursor ONLY past a page that finished. A page
+    // redone after an interrupted run costs a few re-fetches, all of which
+    // dedupe; a cursor that steps over contacts nobody processed loses their
+    // history permanently, and the summary reports success either way.
+    let offset = startOffset;
+    while (summary.subscribersSeen < opts.maxSubscribers) {
+      if (Date.now() > deadline) {
+        summary.stoppedEarly = true;
+        break;
+      }
+
+      let page: Awaited<ReturnType<typeof fetchSubscriberPage>>;
+      try {
+        page = await fetchSubscriberPage(token, offset, capture, config.phoneNumberId);
+      } catch (e) {
+        summary.errors.push(e instanceof Error ? e.message : String(e));
+        break;
+      }
+
+      if (page.subscribers.length === 0) {
+        exhausted = true;
+        break;
+      }
+
+      const { finished } = await runBatchOf(page.subscribers);
+      if (!finished) break;
+
+      // Only now, with every contact on it accounted for, does the page count as
+      // swept.
+      offset = page.nextOffset;
+      summary.nextCursor = offset;
+      if (page.lastPage) {
+        exhausted = true;
+        break;
+      }
     }
   }
 
-  // Contacts are processed several at a time: each is one round trip of a second
-  // or two, and waiting on them sequentially spent the whole budget on latency.
-  for (let i = 0; i < subscribers.length; i += IMPORT_CONCURRENCY) {
-    if (Date.now() > deadline) {
-      summary.stoppedEarly = true;
-      break;
-    }
-    await Promise.all(subscribers.slice(i, i + IMPORT_CONCURRENCY).map((sub) => processSubscriber(sub)));
-  }
-
-  async function processSubscriber(sub: Record<string, unknown>): Promise<void> {
+  /**
+   * One contact, start to finish.
+   *
+   * Returns FALSE when the contact could not be finished — which is how the
+   * cursor learns not to step over them. Everything this function reports as
+   * true is either imported or deliberately recorded as skipped; nothing falls
+   * between the two silently.
+   */
+  async function processSubscriber(sub: Record<string, unknown>): Promise<boolean> {
     summary.subscribersSeen++;
 
     const rawPhone = subscriberPhone(sub);
     const phoneE164 = waIdToE164(rawPhone);
     if (!phoneE164) {
       summary.skippedNoPhone++;
-      return;
+      // Named, not just counted: "5 contacts had no usable number" cannot be
+      // acted on, and on a one-shot run the list is the only chance to act.
+      if (summary.skippedNumbers.length < 50 && rawPhone) summary.skippedNumbers.push(rawPhone);
+      return true;
     }
     // Wabis wants the same digits back without the plus. Derived from the value
     // we just settled on rather than re-parsed from the raw field, so what we ask
@@ -703,8 +888,14 @@ export async function importWabisHistory(opts: WabisImportOptions): Promise<Wabi
     let offset = 1;
     for (let page = 1; ; page++) {
       if (Date.now() > deadline) {
+        // Abandon the contact rather than store what we have. A half-fetched
+        // thread looks complete in the inbox — the aggregates recompute over the
+        // partial set — so nobody could tell it was missing most of its history
+        // without going back to Wabis for that specific number. Refetching it
+        // whole next run costs a round trip; the alternative costs a repair
+        // script and someone knowing to write one.
         summary.stoppedEarly = true;
-        break;
+        return false;
       }
       let payload: unknown;
       let batch: Record<string, unknown>[];
@@ -726,8 +917,12 @@ export async function importWabisHistory(opts: WabisImportOptions): Promise<Wabi
         );
         batch = findRecordArray(payload);
       } catch (e) {
+        // Remembered by number, not just reported. A one-off run's error strings
+        // live in a browser tab; the contact behind them has to outlive it or
+        // their history is simply gone, and nobody can name whose.
         summary.errors.push(`${phoneE164}: ${e instanceof Error ? e.message : String(e)}`);
-        break;
+        recordFailure(wabisPhone);
+        return true;
       }
       if (batch.length === 0) break;
 
@@ -741,7 +936,16 @@ export async function importWabisHistory(opts: WabisImportOptions): Promise<Wabi
         const senderValue = pick(raw, "sender") ?? "(absent)";
         const seenSender = senders.get(senderValue);
         if (seenSender) seenSender.count++;
-        else senders.set(senderValue, { direction: normalised.direction, count: 1 });
+        else senders.set(senderValue, { direction: normalised.direction ?? "unrecognised", count: 1 });
+
+        // An unrecognised sender is left out rather than filed on a guess. It
+        // shows up in observedSenders, the map gets one more value, and a re-run
+        // picks the record up — none of which is possible once a wrong direction
+        // has been written and deduped against.
+        if (normalised.direction === null) {
+          summary.messagesUnknownSender++;
+          continue;
+        }
 
         // Identity for the repeat check. Falling back to the whole record keeps
         // the guard working for a provider that returns no id at all — without
@@ -765,36 +969,46 @@ export async function importWabisHistory(opts: WabisImportOptions): Promise<Wabi
       offset = next !== null && next !== offset ? next : offset + 1;
     }
 
-    if (messages.length === 0) return;
+    if (messages.length === 0) return true;
     if (opts.dryRun) {
       summary.conversationsTouched++;
-      return;
+      return true;
     }
 
     try {
-      const imported = await storeThread(phoneE164, messages);
+      const imported = await storeThread(phoneE164, messages, subscriberName(sub));
       summary.conversationsTouched++;
       summary.messagesImported += imported.stored;
+      summary.messagesUndated += imported.undated;
       if (imported.leadMatched) summary.leadsMatched++;
+      if (imported.namedLead) summary.leadsNamed++;
     } catch (e) {
       summary.errors.push(`${phoneE164}: ${e instanceof Error ? e.message : String(e)}`);
+      recordFailure(wabisPhone);
     }
+    return true;
   }
 
-  // Advance the cursor only for a real sweep that actually got through its batch.
-  // A dry run must not move it, or the sweep would skip everyone it previewed.
+  // The cursor is written from pages that FINISHED — summary.nextCursor was
+  // advanced page by page above and is still `startOffset` if none did. A dry
+  // run must not move it at all, or the sweep would skip everyone it previewed,
+  // and a single named number is a spot check rather than part of the sweep.
   if (!opts.onlyPhone && !opts.dryRun) {
-    summary.nextCursor = listedNext;
-    summary.totalProcessed += summary.subscribersSeen;
-    summary.moreToDo = !exhausted;
+    summary.totalProcessed += summary.subscribersSeen - retriedSeen;
+    summary.moreToDo = !exhausted || stillFailing.length > 0;
     await writeImportProgress({
-      cursor: exhausted ? 1 : listedNext,
+      // Keep the final position rather than rewinding to 1. Resetting it made
+      // "the sweep is complete" and "start again from the beginning" the same
+      // state, so the next click silently re-imported the whole account.
+      cursor: summary.nextCursor,
       processed: summary.totalProcessed,
-      done: exhausted,
+      done: exhausted && stillFailing.length === 0,
+      failed: [...new Set(stillFailing)].slice(0, MAX_FAILED_TRACKED),
     });
   } else {
     summary.moreToDo = !exhausted;
   }
+  summary.stillFailing = [...new Set(stillFailing)].length;
 
   summary.observedKeys = [...keys].sort();
   summary.observedSenders = [...senders.entries()]
@@ -819,12 +1033,28 @@ export async function importWabisHistory(opts: WabisImportOptions): Promise<Wabi
 async function storeThread(
   phoneE164: string,
   messages: readonly WabisRawMessage[],
-): Promise<{ stored: number; leadMatched: boolean }> {
+  contactName: string | null,
+): Promise<{ stored: number; leadMatched: boolean; undated: number; namedLead: boolean }> {
   const lead = await prisma.lead.findFirst({
     where: { OR: [{ phoneE164 }, { altPhoneE164: phoneE164 }] },
     orderBy: { createdAt: "asc" },
-    select: { id: true, assignedToId: true },
+    select: { id: true, assignedToId: true, candidateName: true },
   });
+
+  // History with no readable time is dropped, never stamped with the clock.
+  // `occurredAt: new Date()` turned an absent field into a wrong-but-plausible
+  // one: a 2025 message dated today, pinned to the top of the thread, and — if
+  // inbound — opening a 24-hour reply window that closed months ago, so the
+  // composer offers free text that Meta then rejects. parseWaTimestamp goes out
+  // of its way not to guess; this threw that away one line later.
+  // The predicate narrows both fields at once: an unrecognised sender was
+  // already dropped upstream, and saying so here keeps that guarantee in the
+  // types rather than in a comment somebody has to trust.
+  const datable = messages.filter(
+    (m): m is WabisRawMessage & { occurredAt: Date; direction: "in" | "out" } =>
+      !!m.occurredAt && m.direction !== null,
+  );
+  const undated = messages.length - datable.length;
 
   const conversation = await prisma.waConversation.upsert({
     where: { phoneE164 },
@@ -832,26 +1062,36 @@ async function storeThread(
       phoneE164,
       leadId: lead?.id ?? null,
       assignedToId: lead?.assignedToId ?? null,
-      status: "open",
+      // Historic threads arrive closed. The inbox's default view is "needs
+      // reply", so importing a year of conversations open would bury every
+      // genuinely unanswered live thread under hundreds of dead ones — the same
+      // harm the deliberate `unreadCount: 0` decision below was taken to avoid.
+      status: "closed",
     },
+    // An existing conversation belongs to the live mirror; the import adds
+    // messages to it and does not touch its triage state.
     update: lead ? { leadId: lead.id } : {},
-    select: { id: true },
+    select: { id: true, status: true },
   });
 
   const stored = await prisma.waMessage.createMany({
-    data: messages.map((m) => ({
+    data: datable.map((m) => ({
       conversationId: conversation.id,
       direction: m.direction,
       type: m.type,
       body: m.body,
       mediaUrl: m.mediaUrl,
-      providerMessageId: m.providerMessageId,
+      // A row with no wamid cannot dedupe: Postgres treats NULLs as distinct, so
+      // `skipDuplicates` never fires and every re-run inserts another copy. The
+      // synthetic key is namespaced by provider and phone so it can never be
+      // mistaken for — or collide with — a Meta wamid.
+      providerMessageId: m.providerMessageId ?? syntheticMessageKey(phoneE164, m),
       provider: "wabis",
       templateName: m.templateName,
       waStatus: m.waStatus,
       waErrorMessage: m.waErrorMessage,
       readAt: m.readAt,
-      occurredAt: m.occurredAt ?? new Date(),
+      occurredAt: m.occurredAt,
     })),
     // The replay guard: re-running after adjusting the field mapping cannot
     // duplicate anything that already landed.
@@ -863,7 +1103,7 @@ async function storeThread(
     prisma.waMessage.findFirst({
       where: { conversationId: conversation.id },
       orderBy: { occurredAt: "desc" },
-      select: { occurredAt: true },
+      select: { occurredAt: true, direction: true },
     }),
     prisma.waMessage.findFirst({
       where: { conversationId: conversation.id, direction: "in" },
@@ -881,9 +1121,44 @@ async function storeThread(
       lastMessageAt,
       lastInboundAt,
       sessionExpiresAt: lastInboundAt ? sessionExpiryFrom(lastInboundAt) : null,
-      awaitingReply: isAwaitingReply({ lastInboundAt, lastMessageAt }),
+      // Only a thread whose reply window is genuinely still open can be waiting
+      // on us — anything older cannot be answered with free text anyway, so
+      // flagging it adds a task nobody can do. Decided from the newest message's
+      // DIRECTION rather than comparing two second-precision timestamps, because
+      // a bot answering inside the same second reads as a tie and ties resolved
+      // to "awaiting".
+      awaitingReply:
+        !!lastInboundAt && isSessionOpen(sessionExpiryFrom(lastInboundAt)) && newest?.direction === "in",
     },
   });
 
-  return { stored: stored.count, leadMatched: !!lead };
+  // Give a placeholder lead its real name. `createInboundLead` names an unknown
+  // number after the number itself, deliberately — but Wabis knows who they are,
+  // so leaving the digits in place would be choosing the worse of two values we
+  // hold at once. A lead somebody has actually named is never overwritten.
+  let namedLead = false;
+  if (lead && contactName && lead.candidateName === phoneE164) {
+    await prisma.lead
+      .updateMany({ where: { id: lead.id, candidateName: phoneE164 }, data: { candidateName: contactName } })
+      .then((r) => {
+        namedLead = r.count > 0;
+      })
+      .catch(() => undefined);
+  }
+
+  return { stored: stored.count, leadMatched: !!lead, undated, namedLead };
+}
+
+/**
+ * A dedupe key for a message Wabis gave us no wamid for.
+ *
+ * Deterministic, so the same row on a later run collides with itself rather than
+ * inserting a second copy — which is the entire point, since re-running is the
+ * documented way to recover from a mapping fix. Namespaced with a `wabis:`
+ * prefix that no Meta wamid can have.
+ */
+function syntheticMessageKey(phoneE164: string, m: WabisRawMessage): string {
+  const at = m.occurredAt ? m.occurredAt.toISOString() : "undated";
+  const body = (m.body ?? m.mediaUrl ?? "").slice(0, 80);
+  return `wabis:${phoneE164}:${at}:${m.direction}:${body}`;
 }

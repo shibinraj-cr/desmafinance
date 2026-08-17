@@ -60,6 +60,12 @@ type ImportSummary = {
   nextCursor: number;
   totalProcessed: number;
   moreToDo: boolean;
+  retried: number;
+  stillFailing: number;
+  skippedNumbers: string[];
+  messagesUndated: number;
+  messagesUnknownSender: number;
+  leadsNamed: number;
   errors: string[];
 };
 
@@ -672,6 +678,12 @@ export function WhatsAppModuleCard() {
         nextCursor: 0,
         totalProcessed: 0,
         moreToDo: false,
+        retried: 0,
+        stillFailing: 0,
+        skippedNumbers: [],
+        messagesUndated: 0,
+        messagesUnknownSender: 0,
+        leadsNamed: 0,
         errors: ["The import request failed."],
       });
       return;
@@ -716,7 +728,40 @@ function ImportReport({ summary }: { summary: ImportSummary }) {
         </p>
       )}
       {summary.skippedNoPhone > 0 && (
-        <p className="text-label-sm text-on-surface-variant">{summary.skippedNoPhone} contacts had no usable number.</p>
+        <div className="text-label-sm text-on-surface-variant">
+          <p>{summary.skippedNoPhone} contacts had no usable number.</p>
+          {/* Named, not just counted — on a run that happens once, a bare number
+              is a fact nobody can act on. */}
+          {summary.skippedNumbers.length > 0 && (
+            <code className="block font-mono break-all mt-xs">{summary.skippedNumbers.join(", ")}</code>
+          )}
+        </div>
+      )}
+
+      {/* What the run deliberately left behind, rather than guessed at. Each of
+          these is history that is still in Wabis, so it matters that the number
+          is visible while Wabis is still there to re-read. */}
+      {summary.messagesUnknownSender > 0 && (
+        <p className="text-label-sm text-error">
+          {summary.messagesUnknownSender} messages were skipped — their sender was a value we do not recognise.
+          Check the sender list below, tell me the value, and a re-run will pick them up.
+        </p>
+      )}
+      {summary.messagesUndated > 0 && (
+        <p className="text-label-sm text-error">
+          {summary.messagesUndated} messages had no readable date and were skipped rather than stamped with today.
+        </p>
+      )}
+      {summary.retried > 0 && (
+        <p className="text-label-sm text-on-surface-variant">
+          Retried {summary.retried} contacts that failed earlier
+          {summary.stillFailing > 0 ? `; ${summary.stillFailing} still failing and will be retried again.` : " — all fetched."}
+        </p>
+      )}
+      {summary.leadsNamed > 0 && (
+        <p className="text-label-sm text-on-surface-variant">
+          {summary.leadsNamed} leads that were named after their own number now carry the contact&rsquo;s real name.
+        </p>
       )}
 
       {summary.observedKeys.length > 0 && (
