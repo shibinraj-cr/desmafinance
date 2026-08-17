@@ -13,6 +13,7 @@ import { StatusPill, TemperaturePill, type StatusOpt, type Opt, type BdeOpt } fr
 import { EnrollCelebration } from "@/components/EnrollCelebration";
 import { NextStepDialog, type NextStepPayload } from "@/components/crm/NextStepDialog";
 import { WaComposer, type WaTemplateOpt } from "@/components/crm/WaComposer";
+import { WaStartComposer } from "@/components/crm/WaStartComposer";
 import { TaskEditDialog, type TaskEditPayload } from "@/components/crm/TaskEditDialog";
 
 export type PartyOpt = { id: string; label: string; phone: string | null };
@@ -363,7 +364,7 @@ export function LeadDetail({
       )}
 
       {tab === "whatsapp" && access.canSeeWhatsApp && (
-        <WhatsAppThreadPanel leadId={lead.id} leadName={lead.candidateName} />
+        <WhatsAppThreadPanel leadId={lead.id} leadName={lead.candidateName} phoneE164={lead.phoneE164} />
       )}
 
       {tab === "history" && <HistoryPanel leadId={lead.id} bdes={masters.bdes} />}
@@ -1908,6 +1909,8 @@ const WA_STATUS_GLYPH: Record<string, { icon: string; cls: string; label: string
 type WaPanelData = {
   conversation: WaConversationDTO | null;
   canReply: boolean;
+  /** A conversation exists but belongs to someone else's thread hand-off — don't offer to start one. */
+  restricted?: boolean;
   send?: {
     providerLabel: string;
     canSendText: boolean;
@@ -1916,7 +1919,15 @@ type WaPanelData = {
   };
 };
 
-function WhatsAppThreadPanel({ leadId, leadName }: { leadId: string; leadName: string }) {
+function WhatsAppThreadPanel({
+  leadId,
+  leadName,
+  phoneE164,
+}: {
+  leadId: string;
+  leadName: string;
+  phoneE164: string | null;
+}) {
   const [data, setData] = useState<WaPanelData | null>(null);
   const [loading, setLoading] = useState(true);
   const [failed, setFailed] = useState(false);
@@ -1967,6 +1978,19 @@ function WhatsAppThreadPanel({ leadId, leadName }: { leadId: string; leadName: s
             Messages appear here once {leadName || "this candidate"} writes to the business number and the conversation
             mirror is switched on in CRM → Settings.
           </p>
+          {!data?.restricted && phoneE164 && data?.send && (
+            <div className="pt-sm border-t border-outline-variant">
+              <WaStartComposer
+                leadId={leadId}
+                leadName={leadName}
+                canAct={data.canReply}
+                canSendTemplate={data.send.canSendTemplate}
+                providerLabel={data.send.providerLabel}
+                templates={data.send.templates}
+                onSent={load}
+              />
+            </div>
+          )}
         </div>
       )}
 

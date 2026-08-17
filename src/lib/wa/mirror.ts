@@ -530,3 +530,59 @@ export async function markConversationRead(conversationId: string): Promise<void
     .update({ where: { id: conversationId }, data: { unreadCount: 0 } })
     .catch(() => undefined);
 }
+
+export type FindOrCreateConversationResult =
+  | { ok: true; conversationId: string }
+  /** `phoneE164` is already a thread on a DIFFERENT lead — refuse rather than steal it. */
+  | { ok: false; reason: "linked_elsewhere"; otherLeadId: string };
+
+/**
+ * The conversation a consultant is about to send the FIRST outbound message
+ * on. Every other write path in this file only ever touches a row an inbound
+ * message already created; this is the one place the CRM originates a thread.
+ *
+ * Found the same way the read path finds one — by lead link, then by number
+ * for an unlinked row — so a thread a stranger's earlier message already
+ * created is claimed here rather than duplicated (`phoneE164` is unique,
+ * so a blind create would just throw).
+ */
+export async function findOrCreateConversationForLead(lead: {
+  id: string;
+  phoneE164: string;
+  assignedToId: string | null;
+}): Promise<FindOrCreateConversationResult> {
+  const existing = await prisma.waConversation.findFirst({
+    where: { OR: [{ leadId: lead.id }, { phoneE164: lead.phoneE164, leadId: null }] },
+    select: { id: true, leadId: true },
+  });
+  if (existing) {
+    if (existing.leadId && existing.leadId !== lead.id) {
+      return { ok: false, reason: "linked_elsewhere", otherLeadId: existing.leadId };
+    }
+    if (!existing.leadId) {
+      await prisma.waConversation.update({
+        where: { id: existing.id },
+        data: { leadId: lead.id, assignedToId: lead.assignedToId },
+      });
+    }
+    return { ok: true, conversationId: existing.id };
+  }
+
+  // A number that already belongs to a thread on another lead (re-enrollment,
+  // most likely) fails the unique constraint here rather than earlier, since
+  // the `existing` lookup above only checks rows linked to THIS lead or
+  // unlinked ones — this is the same "linked elsewhere" case, just caught late.
+  try {
+    const created = await prisma.waConversation.create({
+      data: { phoneE164: lead.phoneE164, leadId: lead.id, assignedToId: lead.assignedToId, status: "open" },
+      select: { id: true },
+    });
+    return { ok: true, conversationId: created.id };
+  } catch {
+    const other = await prisma.waConversation.findUnique({
+      where: { phoneE164: lead.phoneE164 },
+      select: { leadId: true },
+    });
+    return { ok: false, reason: "linked_elsewhere", otherLeadId: other?.leadId ?? lead.id };
+  }
+}
