@@ -724,7 +724,23 @@ export function LeadsTable({
     !!search.get("ageMin") ||
     !!search.get("ageMax") ||
     !!search.get("assignedOn") ||
+    !!search.get("from") ||
+    !!search.get("to") ||
     !!search.get("q");
+
+  // Created-date range filter ("from"/"to" + period=custom — shared with the
+  // TopBar's period-preset DateFilter so the two controls always stay in sync).
+  const createdFrom = search.get("from") ?? "";
+  const createdTo = search.get("to") ?? "";
+  function updateCreatedRange(patch: { from?: string; to?: string }) {
+    const nextFrom = patch.from ?? createdFrom;
+    const nextTo = patch.to ?? createdTo;
+    update({
+      from: nextFrom || null,
+      to: nextTo || null,
+      period: nextFrom || nextTo ? "custom" : null,
+    });
+  }
 
   // Export link mirrors the current filters (drop pagination — export all matches).
   const exportParams = new URLSearchParams(search.toString());
@@ -966,6 +982,29 @@ export function LeadsTable({
           />
         </label>
 
+        <label
+          className={selectClass + " inline-flex items-center gap-xs text-on-surface-variant"}
+          title="Show only leads created within this date range"
+        >
+          <span className="material-symbols-outlined" style={{ fontSize: 18 }}>
+            event
+          </span>
+          <span className="whitespace-nowrap">Created</span>
+          <input
+            type="date"
+            value={createdFrom}
+            onChange={(e) => updateCreatedRange({ from: e.target.value })}
+            className="bg-transparent outline-none text-on-surface"
+          />
+          <span aria-hidden>–</span>
+          <input
+            type="date"
+            value={createdTo}
+            onChange={(e) => updateCreatedRange({ to: e.target.value })}
+            className="bg-transparent outline-none text-on-surface"
+          />
+        </label>
+
         {masters.campaigns.length > 0 && (
           <select className={selectClass} value={search.get("campaign") ?? ""} onChange={(e) => update({ campaign: e.target.value || null })}>
             <option value="">All campaigns</option>
@@ -1050,7 +1089,7 @@ export function LeadsTable({
         {anyFilter && (
           <button
             type="button"
-            onClick={() => update({ status: null, source: null, service: null, assignee: null, campaign: null, country: null, studyDestination: null, ageMin: null, ageMax: null, assignedOn: null, q: null })}
+            onClick={() => update({ status: null, source: null, service: null, assignee: null, campaign: null, country: null, studyDestination: null, ageMin: null, ageMax: null, assignedOn: null, from: null, to: null, period: null, q: null })}
             className="h-9 px-md rounded-lg border border-outline-variant text-label-sm text-on-surface-variant hover:text-on-surface hover:bg-surface-container-low transition"
           >
             Clear all
