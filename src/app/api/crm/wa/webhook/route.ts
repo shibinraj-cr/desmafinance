@@ -4,6 +4,7 @@ import { extractInboundMessages } from "@/lib/wa/inbound";
 import { getWaMirrorConfig, ingestInboundMessages } from "@/lib/wa/mirror";
 import { verifyMetaSignature, WA_SIGNATURE_HEADER } from "@/lib/wa/signature";
 import { logger } from "@/lib/logger";
+import { applyDeliveryStatuses, extractDeliveryStatuses } from "@/lib/wa/delivery-status";
 
 /** A body we cannot parse is not an error here — see the always-200 note below. */
 function parseJson(raw: string): unknown {
@@ -100,10 +101,20 @@ async function handle(req: Request): Promise<NextResponse> {
     messages = extractInboundMessages(Object.fromEntries(url.searchParams));
   }
 
+  // Statuses ride the SAME subscription as messages, and were being thrown away
+  // here — which is why every message the CRM ever sent showed one grey tick
+  // forever. Handled before the empty-batch return, because a status-only batch
+  // is the common case: one send produces one message and then three callbacks.
+  const statuses = extractDeliveryStatuses(body);
+  if (statuses.length > 0) {
+    const applied = await applyDeliveryStatuses(statuses);
+    if (messages.length === 0) return NextResponse.json({ ok: true, received: 0, statuses: applied });
+  }
+
   if (messages.length === 0) {
-    // Most likely a status-only batch, which belongs to the delivery-status
-    // hook. Logged so an unrecognised envelope is diagnosable, without echoing
-    // the payload itself — these carry candidate phone numbers.
+    // Neither a message nor a status we recognise. Logged so an unfamiliar
+    // envelope is diagnosable, without echoing the payload itself — these carry
+    // candidate phone numbers.
     logger.info("wa_webhook_no_messages", { keys: body && typeof body === "object" ? Object.keys(body) : null });
     return NextResponse.json({ ok: true, received: 0 });
   }

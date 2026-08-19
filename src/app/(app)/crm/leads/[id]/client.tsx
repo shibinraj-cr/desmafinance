@@ -14,6 +14,7 @@ import { EnrollCelebration } from "@/components/EnrollCelebration";
 import { NextStepDialog, type NextStepPayload } from "@/components/crm/NextStepDialog";
 import { WaComposer, type WaTemplateOpt } from "@/components/crm/WaComposer";
 import { WaAttachment } from "@/components/crm/WaAttachment";
+import { statusTooltip } from "@/lib/wa/status-label";
 import { WaStartComposer } from "@/components/crm/WaStartComposer";
 import { TaskEditDialog, type TaskEditPayload } from "@/components/crm/TaskEditDialog";
 
@@ -1884,6 +1885,8 @@ type WaMessageRow = {
   templateName: string | null;
   waStatus: string | null;
   waErrorCode: string | null;
+  waErrorMessage: string | null;
+  waStatusAt: string | null;
   occurredAt: string;
   sentByName: string | null;
 };
@@ -2096,7 +2099,7 @@ function WaBubble({ message }: { message: WaMessageRow }) {
             <span
               className={"material-symbols-outlined " + status.cls}
               style={{ fontSize: 14 }}
-              title={message.waErrorCode ? `${status.label} (${message.waErrorCode})` : status.label}
+              title={statusTooltip(status.label, message)}
             >
               {status.icon}
             </span>

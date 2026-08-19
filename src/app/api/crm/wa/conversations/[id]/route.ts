@@ -95,6 +95,11 @@ export const GET = withApiHandler(async (_req: Request, { params }: { params: { 
           templateName: true,
           waStatus: true,
           waErrorCode: true,
+          waErrorMessage: true,
+          // The tick alone answers "did it arrive"; the time answers "when", and
+          // a failure's own sentence answers "why" without anybody having to
+          // look up a Meta error code.
+          waStatusAt: true,
           occurredAt: true,
           sentBy: { select: { username: true, leadPulseRole: { select: { displayName: true } } } },
         },
@@ -217,6 +222,8 @@ export const GET = withApiHandler(async (_req: Request, { params }: { params: { 
         templateName: m.templateName,
         waStatus: m.waStatus,
         waErrorCode: m.waErrorCode,
+        waErrorMessage: m.waErrorMessage,
+        waStatusAt: m.waStatusAt,
         occurredAt: m.occurredAt,
         sentByName: m.sentBy?.leadPulseRole?.displayName ?? m.sentBy?.username ?? null,
       })),

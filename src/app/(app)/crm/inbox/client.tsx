@@ -4,6 +4,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import { WaComposer, type WaTemplateOpt } from "@/components/crm/WaComposer";
 import { WaAttachment } from "@/components/crm/WaAttachment";
+import { statusTooltip } from "@/lib/wa/status-label";
 
 /**
  * The three-pane inbox: conversation list | thread | lead context.
@@ -39,6 +40,8 @@ type ThreadMessage = {
   templateName: string | null;
   waStatus: string | null;
   waErrorCode: string | null;
+  waErrorMessage: string | null;
+  waStatusAt: string | null;
   occurredAt: string;
   sentByName: string | null;
 };
@@ -605,7 +608,7 @@ function Bubble({ message }: { message: ThreadMessage }) {
             <span
               className={"material-symbols-outlined " + status.cls}
               style={{ fontSize: 14 }}
-              title={message.waErrorCode ? `${status.label} (${message.waErrorCode})` : status.label}
+              title={statusTooltip(status.label, message)}
             >
               {status.icon}
             </span>
