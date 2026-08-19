@@ -1,0 +1,13 @@
+-- When a sent message's delivery state last changed.
+--
+-- `waStatus` has existed since the mirror shipped and has never moved off
+-- 'sent': Meta's status callbacks arrive on the same webhook as messages, and
+-- the endpoint recognised them as "not a message" and dropped them. Now that
+-- they are recorded, the time matters as much as the state — the gap between
+-- `occurredAt` and this is how long a message took to reach the phone, or to be
+-- read, which is the question anybody asking "did it get there" is really
+-- asking.
+--
+-- `CrmWebhookDelivery` has carried the same column since the Wabis delivery hook
+-- was built; this brings the CRM's own messages up to the same standard.
+ALTER TABLE "WaMessage" ADD COLUMN "waStatusAt" TIMESTAMP(3);

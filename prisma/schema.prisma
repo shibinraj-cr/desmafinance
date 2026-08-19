@@ -2664,6 +2664,10 @@ model WaMessage {
   waStatus       String?
   waErrorCode    String?
   waErrorMessage String?
+  /// When that state last changed, from Meta's own clock where it gave one.
+  /// Distinct from `occurredAt`, which is when the message was sent — the gap
+  /// between the two is how long it took to reach the phone, or to be read.
+  waStatusAt     DateTime?
   readAt         DateTime?
 
   /// The CRM user who sent it. Null on inbound, and on an outbound message an
