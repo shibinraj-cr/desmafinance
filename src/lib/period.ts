@@ -29,7 +29,7 @@ export type Period =
   | { kind: "month"; label: string }
   | { kind: "quarter"; q: 1 | 2 | 3 | 4 }
   | { kind: "half"; h: 1 | 2 }
-  | { kind: "custom"; from: Date; to: Date };
+  | { kind: "custom"; from?: Date; to?: Date };
 
 export type Range = { from?: Date; to?: Date };
 
@@ -90,13 +90,17 @@ export function parsePeriod(searchParams: { period?: string; from?: string; to?:
   if (MONTH_TO_INDEX[p] !== undefined) {
     return { kind: "month", label: p };
   }
-  if (p === "custom" && searchParams.from && searchParams.to) {
-    const from = new Date(searchParams.from);
-    const toDate = new Date(searchParams.to);
+  // A custom range may be open-ended (only `from` or only `to` set) — e.g. the
+  // Leads "Created" filter applies each side independently as it's typed.
+  if (p === "custom" && (searchParams.from || searchParams.to)) {
+    const from = searchParams.from ? new Date(searchParams.from) : undefined;
+    let to = searchParams.to ? new Date(searchParams.to) : undefined;
     // Treat `to` as inclusive end-of-day
-    toDate.setUTCDate(toDate.getUTCDate() + 1);
-    if (!isNaN(+from) && !isNaN(+toDate) && from < toDate) {
-      return { kind: "custom", from, to: toDate };
+    if (to) to.setUTCDate(to.getUTCDate() + 1);
+    const fromOk = !from || !isNaN(+from);
+    const toOk = !to || !isNaN(+to);
+    if (fromOk && toOk && (!from || !to || from < to)) {
+      return { kind: "custom", from, to };
     }
   }
   return { kind: "all" };
@@ -115,9 +119,12 @@ export function periodLabel(period: Period): string {
     case "half":
       return `H${period.h} (${labelForHalf(period.h)})`;
     case "custom": {
-      const f = period.from.toISOString().slice(0, 10);
-      const t = new Date(+period.to - 86400000).toISOString().slice(0, 10);
-      return `${f} → ${t}`;
+      const f = period.from ? period.from.toISOString().slice(0, 10) : null;
+      const t = period.to ? new Date(+period.to - 86400000).toISOString().slice(0, 10) : null;
+      if (f && t) return `${f} → ${t}`;
+      if (f) return `From ${f}`;
+      if (t) return `Until ${t}`;
+      return "Custom range";
     }
   }
 }
