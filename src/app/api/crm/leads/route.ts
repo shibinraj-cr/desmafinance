@@ -159,7 +159,7 @@ export const POST = withApiHandler(async (req: Request) => {
   if (dupOr.length) {
     const dup = await prisma.lead.findFirst({
       where: { OR: dupOr },
-      select: { id: true },
+      select: { id: true, emailKey: true, phoneE164: true, altPhoneE164: true },
       orderBy: { createdAt: "asc" },
     });
     if (dup) {
@@ -170,7 +170,22 @@ export const POST = withApiHandler(async (req: Request) => {
       const outcome = await recordReInquiry({ leadId: dup.id, source: "Manual entry", campaign, actorId: userId }, ctx);
       if (outcome) await notifySupervisorOfReInquiries([outcome], ctx, new URL(req.url).origin);
       const existing = await prisma.lead.findUnique({ where: { id: dup.id }, include: leadRowInclude });
-      return NextResponse.json({ lead: serializeLead(existing!), reInquiry: true, duplicateOf: dup.id }, { status: 200 });
+      // Tell the caller WHICH identifier collided, so a manual creator gets a
+      // precise "this number/email already belongs to <lead>" notice instead of
+      // a silent success. Phone wins when both matched — it's the field the
+      // creator most likely mistyped.
+      const phoneMatched =
+        (!!dup.phoneE164 && phoneKeys.includes(dup.phoneE164)) ||
+        (!!dup.altPhoneE164 && phoneKeys.includes(dup.altPhoneE164));
+      return NextResponse.json(
+        {
+          lead: serializeLead(existing!),
+          reInquiry: true,
+          duplicateOf: dup.id,
+          matchedOn: phoneMatched ? "phone" : "email",
+        },
+        { status: 200 },
+      );
     }
   }
 
