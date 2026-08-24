@@ -39,6 +39,16 @@ export const CRM_ASSIGN_PAGE = "/crm/assign";
 export const CRM_HISTORY_PAGE = "/crm/history";
 
 /**
+ * The BDE Enrollment dashboard (`/crm/team/bde-enrollment`) — a money view of
+ * enrolment & conversion figures, built admin-only. Granting a role this page
+ * lets it view that dashboard WITHOUT any other admin-only page, e.g. a
+ * marketing supervisor who needs enrolment figures but not the rest of the
+ * admin surface. Checked directly by the page (not part of `CrmAccess`, since
+ * nothing else derives from it).
+ */
+export const CRM_BDE_ENROLLMENT_PAGE = "/crm/team/bde-enrollment";
+
+/**
  * Resolved CRM capabilities for the current user. Mirrors the shape of
  * `LeadPulseAccess` — a single object the page/API layers branch on.
  *
