@@ -5,6 +5,7 @@ import { unauthorized, forbidden, badRequest } from "@/lib/http-error";
 import { getCurrentUserAndPermissions } from "@/lib/permissions";
 import { getCrmAccess } from "@/lib/crm-rbac";
 import { prisma } from "@/lib/prisma";
+import { parseTouchTemplates, TOUCH_PARAM_TOKENS } from "@/lib/crm-remarketing-templates";
 import {
   getSetting,
   setSetting,
@@ -326,15 +327,33 @@ export const POST = withApiHandler(async (req: Request) => {
     }
 
     const templates = (body.templates ?? []).map((t) => t.trim());
+    const templateParams = (body.templateParams ?? []).map((t) => t.trim());
     if (transport === "cloud") {
-      // A template addressed without its language is the one mistake that looks
-      // fine and fails at Meta, per candidate, so it is refused here.
-      const malformed = templates.find((t) => t && !/^[^:]+:[^:]+$/.test(t.replace(/^([^:]*:[^:]*):.*$/, "$1")));
+      // Validated with the ENGINE'S OWN parser rather than a regex of its own.
+      // A hand-written check here disagreed with it about where to split, so the
+      // page could accept a value the sender then read differently — and that
+      // mistake looks fine and fails at Meta, per candidate.
+      const malformed = templates.find((t) => t && parseTouchTemplates(t)[0] === null);
       if (malformed) {
         throw badRequest(
           `Templates must be written as name:language — "${malformed}" is missing one of them.`,
           "invalid_template",
         );
+      }
+      // A mistyped field name defers its touch every night, forever, and says so
+      // only in a server log. Refused at the point somebody can still fix it.
+      for (const line of templateParams) {
+        const bad = line
+          .split(",")
+          .map((t) => t.trim().toLowerCase())
+          .filter(Boolean)
+          .find((t) => !(TOUCH_PARAM_TOKENS as readonly string[]).includes(t));
+        if (bad) {
+          throw badRequest(
+            `"${bad}" is not a field a touch can use. Choose from: ${TOUCH_PARAM_TOKENS.join(", ")}.`,
+            "invalid_token",
+          );
+        }
       }
     }
     // Drop trailing empties; store newline-positional (line i = touch i).
@@ -349,7 +368,7 @@ export const POST = withApiHandler(async (req: Request) => {
       setSetting(REMARKETING_TEMPLATES_KEY, trimTrailing(templates).join("\n"), userId),
       setSetting(
         REMARKETING_TEMPLATE_PARAMS_KEY,
-        trimTrailing((body.templateParams ?? []).map((t) => t.trim())).join("\n"),
+        trimTrailing(templateParams).join("\n"),
         userId,
       ),
     ]);

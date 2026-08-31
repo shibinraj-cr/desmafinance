@@ -53,11 +53,16 @@ export function RemarketingSettingsCard() {
   const [enrolCount, setEnrolCount] = useState<number | null>(null);
   const [enrolCapped, setEnrolCapped] = useState(false);
   const [enrolMsg, setEnrolMsg] = useState<string | null>(null);
+  const [loadFailed, setLoadFailed] = useState(false);
 
   const load = useCallback(async () => {
     setLoading(true);
-    const r = await fetch("/api/crm/integrations/wabis");
-    if (r.ok) {
+    const r = await fetch("/api/crm/integrations/wabis").catch(() => null);
+    // A failed load left every field at its empty default, and the form stayed
+    // savable — so one Save on a page that never loaded would blank the live
+    // campaign configuration. The form is not rendered until this succeeds.
+    setLoadFailed(!r?.ok);
+    if (r?.ok) {
       const rm = ((await r.json()) as { remarketing: Remarketing }).remarketing;
       setEnabled(rm.enabled);
       setUrls([0, 1, 2, 3].map((i) => rm.urls[i] ?? ""));
@@ -78,6 +83,7 @@ export function RemarketingSettingsCard() {
     setBusy(true);
     setNote(null);
     setError(null);
+    if (loadFailed) return;
     const r = await fetch("/api/crm/integrations/wabis", {
       method: "POST",
       headers: { "content-type": "application/json" },
@@ -221,7 +227,14 @@ export function RemarketingSettingsCard() {
 
       {loading && <p className="text-body-md text-on-surface-variant">Loading…</p>}
 
-      {!loading && (
+      {!loading && loadFailed && (
+        <p className="text-body-md text-error">
+          The current settings could not be loaded, so the form is hidden — saving now would blank the live campaign
+          configuration. Reload the page.
+        </p>
+      )}
+
+      {!loading && !loadFailed && (
         <>
           {error && (
             <div className="rounded-lg bg-error-container text-on-error-container px-md py-sm text-body-md">{error}</div>

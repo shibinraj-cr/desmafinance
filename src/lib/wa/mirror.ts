@@ -1,16 +1,15 @@
 /**
  * Storing inbound WhatsApp messages against the right lead.
  *
- * Phase 1 of moving the shared inbox into the CRM, and deliberately the boring
- * half: this module only WRITES what happened. It advances no pipeline stage,
- * ends no campaign and sends nothing back. The re-marketing reply path
- * (handleRemarketingReply) keeps running exactly as it does today, through its
- * own endpoint, so deploying the mirror changes no live automation — it just
- * means the conversation is finally readable from the CRM.
+ * Mostly this module only WRITES what happened — it advances no pipeline stage
+ * and sends nothing back. The one exception is deliberate: an inbound message
+ * ENDS a running re-marketing campaign.
  *
- * Widening the reply rule ("any reply advances", not just a keyword-matched one)
- * becomes possible the moment every message lands here, but that is a behaviour
- * change and belongs to its own commit.
+ * That used to belong to Wabis, whose keyword flow called our inbound endpoint.
+ * Once the drip sends through our own WABA there is no such flow, so without
+ * this a candidate could answer and keep receiving touches telling them we had
+ * not heard from them. Every inbound message arrives here, which makes this the
+ * only place that can know.
  *
  * Two rules carry the correctness of this file:
  *
@@ -372,6 +371,26 @@ export async function ingestInboundMessage(
           data: { lastActivityAt: occurredAt },
         })
         .catch(() => undefined);
+    }
+
+    // A reply ends a re-marketing campaign.
+    //
+    // Under Wabis this only ever happened because a keyword flow over there
+    // called our inbound endpoint — so the moment Wabis is disconnected, nothing
+    // would notice a candidate answering, and the drip would keep messaging
+    // somebody who had already said yes. Every inbound message arrives here, so
+    // here is where it belongs.
+    //
+    // Reached only on `stored`, never on a duplicate: a webhook redelivery must
+    // not re-open and re-close a campaign. Best-effort, like every other write in
+    // this function — a nurturing decision must never cost us the message.
+    if (conversation.leadId) {
+      const { handleRemarketingReply } = await import("../crm-remarketing");
+      await handleRemarketingReply({
+        leadId: conversation.leadId,
+        phone: phoneE164,
+        text: msg.body,
+      }).catch(() => undefined);
     }
 
     return {
