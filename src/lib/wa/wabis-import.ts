@@ -112,6 +112,11 @@ export type WabisImportSummary = {
   /** False when the sweep has reached the end of the subscriber list. */
   moreToDo: boolean;
   /**
+   * Wabis asked us to slow down. Not an error: the run kept its place and the
+   * next one continues, which is why the caller waits rather than stopping.
+   */
+  rateLimited: boolean;
+  /**
    * Contacts a previous run could not fetch, retried at the start of this one,
    * and how many are still outstanding. A failure that is recorded but never
    * revisited is indistinguishable from one that was dropped.
@@ -140,6 +145,25 @@ export type WabisImportSummary = {
   leadsNamed: number;
   errors: string[];
 };
+
+/**
+ * Wabis asking us to slow down.
+ *
+ * Its own type because the response to it is different in kind: an error means
+ * something is wrong and the operator should look at it, whereas this means the
+ * sweep is working and should pause. Conflating them made a rate-limited run
+ * look like a broken one, and cost the whole run.
+ */
+export class WabisRateLimitError extends Error {
+  constructor(detail: string) {
+    super(`Wabis rate limit: ${detail}`);
+    this.name = "WabisRateLimitError";
+  }
+}
+
+function isRateLimit(e: unknown): boolean {
+  return e instanceof WabisRateLimitError;
+}
 
 function asObject(v: unknown): Record<string, unknown> | null {
   return v && typeof v === "object" && !Array.isArray(v) ? (v as Record<string, unknown>) : null;
@@ -223,6 +247,11 @@ async function wabisPost(
   // The API key is the one thing that must never reach a browser; every other
   // parameter is exactly what we need to see.
   capture?.(text.slice(0, 1500), `POST ${path} ${new URLSearchParams({ apiToken: "REDACTED", ...params })}`);
+  // Rate limiting is not a failure — it is Wabis asking us to come back in a
+  // minute, and it is the ordinary outcome of sweeping a large account rather
+  // than a sign anything is wrong. Distinguished from a real error so the run
+  // can stop cleanly, keep its place, and say when to try again.
+  if (res.status === 429) throw new WabisRateLimitError(text.slice(0, 300));
   if (!res.ok) throw new Error(`Wabis ${path} → HTTP ${res.status}: ${text.slice(0, 300)}`);
 
   let parsed: unknown;
@@ -714,6 +743,7 @@ export async function importWabisHistory(opts: WabisImportOptions): Promise<Wabi
     nextCursor: 1,
     totalProcessed: 0,
     moreToDo: false,
+    rateLimited: false,
     retried: 0,
     stillFailing: 0,
     skippedNumbers: [],
@@ -864,7 +894,10 @@ export async function importWabisHistory(opts: WabisImportOptions): Promise<Wabi
       try {
         page = await fetchSubscriberPage(token, offset, capture, config.phoneNumberId);
       } catch (e) {
-        summary.errors.push(e instanceof Error ? e.message : String(e));
+        // Either way the cursor stays put, so nothing is lost — but only one of
+        // these is worth an operator's attention.
+        if (isRateLimit(e)) summary.rateLimited = true;
+        else summary.errors.push(e instanceof Error ? e.message : String(e));
         break;
       }
 
@@ -956,6 +989,13 @@ export async function importWabisHistory(opts: WabisImportOptions): Promise<Wabi
         );
         batch = findRecordArray(payload);
       } catch (e) {
+        // Rate limiting says nothing about this contact, so it must not be
+        // recorded as a failure or stepped over. Returning false leaves the page
+        // unfinished, which holds the cursor exactly where it is.
+        if (isRateLimit(e)) {
+          summary.rateLimited = true;
+          return false;
+        }
         // Remembered by number, not just reported. A one-off run's error strings
         // live in a browser tab; the contact behind them has to outlive it or
         // their history is simply gone, and nobody can name whose.
