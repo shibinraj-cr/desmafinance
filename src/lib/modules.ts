@@ -267,6 +267,15 @@ export const MODULES: AppModule[] = [
         group: "TOOLS",
       },
       {
+        // The whole drip, not just its failures: what has gone out, what is due,
+        // and which touch earned the reply. Same access as Campaign Delivery —
+        // a consultant should be able to see the schedule for their own leads.
+        href: "/crm/remarketing",
+        label: "Re-marketing",
+        icon: "campaign",
+        group: "TOOLS",
+      },
+      {
         // Not adminOnly: gated by an explicit page grant so the Marketing Admin
         // can be given the Meta reconciliation tool without full CRM admin.
         href: "/crm/meta-reconcile",
