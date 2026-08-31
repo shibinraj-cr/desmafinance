@@ -128,6 +128,34 @@ describe("isCampaignExpired", () => {
 });
 
 describe("matchesReengageKeyword", () => {
+  // Once every inbound message reaches us directly, "blank keywords = any reply
+  // advances" stops being harmless: a refusal would move the lead to Follow-Up
+  // and tell a consultant to ring somebody who asked to be left alone.
+  it("never treats a refusal as re-engagement, whatever the allow-list says", () => {
+    for (const reply of [
+      "STOP",
+      "please stop",
+      "not interested",
+      "Not Interested, thanks",
+      "unsubscribe",
+      "do not contact me",
+      "remove me from this list",
+      "wrong number",
+    ]) {
+      expect(matchesReengageKeyword(reply, [])).toBe(false);
+    }
+  });
+
+  it("keeps a refusal out even when it contains a configured keyword", () => {
+    // "no, not interested" contains "interested" — checking the allow-list first
+    // would re-admit exactly the reply we must not act on.
+    expect(matchesReengageKeyword("no, not interested", ["interested"])).toBe(false);
+  });
+
+  it("still counts a reply with no text — a photo is engagement", () => {
+    expect(matchesReengageKeyword(null, [])).toBe(true);
+  });
+
   it("advances on any reply when no keywords are configured", () => {
     expect(matchesReengageKeyword("anything", [])).toBe(true);
     expect(matchesReengageKeyword("", [])).toBe(true);

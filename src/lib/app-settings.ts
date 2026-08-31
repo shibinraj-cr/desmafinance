@@ -65,6 +65,42 @@ export const WABIS_REMARKETING_KEYWORDS_KEY = "wabis_remarketing_keywords";
 export const WABIS_INBOUND_SECRET_KEY = "wabis_inbound_secret";
 
 /**
+ * Which transport carries a re-marketing touch — "wabis" (default) or "cloud".
+ *
+ * Deliberately its own switch rather than reusing `wa_provider`, which decides
+ * how the INBOX sends. The two move at different times: the inbox cut over to
+ * the Cloud API months before the drip could, and either must be reversible
+ * without dragging the other back with it.
+ *
+ * Both transports must never run at once — a candidate would receive every touch
+ * twice — so this is a switch, not a pair of toggles.
+ */
+export const REMARKETING_TRANSPORT_KEY = "remarketing_transport";
+
+/**
+ * Approved template per touch, positional and newline-separated, as
+ * `name:language` — e.g. `touchpoint_two_remarketing:en_US`.
+ *
+ * The Cloud API addresses a template by NAME, where a Wabis workflow addressed it
+ * by URL with the template welded inside. That difference is the migration: the
+ * CRM never knew which template a workflow fired, and now it has to.
+ *
+ * Language is stored per touch rather than globally because Meta matches on the
+ * exact pair and rejects a mismatch outright — and these four are not uniform.
+ */
+export const REMARKETING_TEMPLATES_KEY = "remarketing_templates";
+
+/**
+ * Variable values per touch, positional and newline-separated: a comma-separated
+ * list of field tokens filling `{{1}}`, `{{2}}`, … in order.
+ *
+ * Meta rejects a send whose parameter count does not match the template, so a
+ * touch whose template wants variables and has no mapping is NOT sent — the
+ * alternative is discovering it as a rejection, per candidate, in production.
+ */
+export const REMARKETING_TEMPLATE_PARAMS_KEY = "remarketing_template_params";
+
+/**
  * WhatsApp conversation mirror (src/lib/wa/*).
  *
  * - PROVIDER_KEY: which transport carries WhatsApp — "wabis" (default) or

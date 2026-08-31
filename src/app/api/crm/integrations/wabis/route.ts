@@ -5,6 +5,7 @@ import { unauthorized, forbidden, badRequest } from "@/lib/http-error";
 import { getCurrentUserAndPermissions } from "@/lib/permissions";
 import { getCrmAccess } from "@/lib/crm-rbac";
 import { prisma } from "@/lib/prisma";
+import { parseTouchTemplates, TOUCH_PARAM_TOKENS } from "@/lib/crm-remarketing-templates";
 import {
   getSetting,
   setSetting,
@@ -15,6 +16,9 @@ import {
   WABIS_REMARKETING_OFFSETS_KEY,
   WABIS_REMARKETING_KEYWORDS_KEY,
   WABIS_INBOUND_SECRET_KEY,
+  REMARKETING_TRANSPORT_KEY,
+  REMARKETING_TEMPLATES_KEY,
+  REMARKETING_TEMPLATE_PARAMS_KEY,
 } from "@/lib/app-settings";
 import {
   resolveAgent,
@@ -94,8 +98,21 @@ export const GET = withApiHandler(async () => {
   const access = await getCrmAccess(userId, perms);
   if (!access.canManageSettings) throw forbidden();
 
-  const [enabled, secret, endpoints, deliveries, consultants, rmEnabled, rmUrls, rmOffsets, rmKeywords, rmInboundSecret] =
-    await Promise.all([
+  const [
+    enabled,
+    secret,
+    endpoints,
+    deliveries,
+    consultants,
+    rmEnabled,
+    rmUrls,
+    rmOffsets,
+    rmKeywords,
+    rmInboundSecret,
+    rmTransport,
+    rmTemplates,
+    rmTemplateParams,
+  ] = await Promise.all([
     getSetting(WABIS_WEBHOOK_ENABLED_KEY),
     getSetting(WABIS_WEBHOOK_SECRET_KEY),
     prisma.wabisWebhookEndpoint.findMany({
@@ -138,6 +155,9 @@ export const GET = withApiHandler(async () => {
     getSetting(WABIS_REMARKETING_OFFSETS_KEY),
     getSetting(WABIS_REMARKETING_KEYWORDS_KEY),
     getSetting(WABIS_INBOUND_SECRET_KEY),
+    getSetting(REMARKETING_TRANSPORT_KEY),
+    getSetting(REMARKETING_TEMPLATES_KEY),
+    getSetting(REMARKETING_TEMPLATE_PARAMS_KEY),
   ]);
 
   return NextResponse.json({
@@ -167,6 +187,9 @@ export const GET = withApiHandler(async () => {
       offsets: rmOffsets ?? "5,19,33,45",
       keywords: rmKeywords ?? "",
       inboundSecret: rmInboundSecret ?? "",
+      transport: (rmTransport ?? "").trim() === "cloud" ? "cloud" : "wabis",
+      templates: [0, 1, 2, 3].map((i) => ((rmTemplates ?? "").split("\n")[i] ?? "").trim()),
+      templateParams: [0, 1, 2, 3].map((i) => ((rmTemplateParams ?? "").split("\n")[i] ?? "").trim()),
     },
     deliveries: deliveries.map((d) => ({
       ...d,
@@ -201,6 +224,9 @@ const PostSchema = z.discriminatedUnion("action", [
     offsets: z.string().trim().max(100),
     keywords: z.string().trim().max(500),
     inboundSecret: z.string().trim().max(200),
+    transport: z.enum(["wabis", "cloud"]).optional(),
+    templates: z.array(z.string().trim().max(200)).max(8).optional(),
+    templateParams: z.array(z.string().trim().max(200)).max(8).optional(),
   }),
   z.object({
     action: z.literal("test_remarketing"),
@@ -216,6 +242,13 @@ const PostSchema = z.discriminatedUnion("action", [
     touch: z.number().int().min(1).max(4).optional(),
   }),
 ]);
+
+/** Drop trailing blanks but keep interior ones — position IS the touch number. */
+function trimTrailing(values: string[]): string[] {
+  const out = [...values];
+  while (out.length && !out[out.length - 1]) out.pop();
+  return out;
+}
 
 // POST /api/crm/integrations/wabis — save global config, send a test, re-fire, drain.
 export const POST = withApiHandler(async (req: Request) => {
@@ -281,10 +314,47 @@ export const POST = withApiHandler(async (req: Request) => {
   }
 
   if (body.action === "save_remarketing") {
+    const transport = body.transport ?? "wabis";
     const urls = body.urls.map((u) => u.trim());
-    const bad = urls.find((u) => u && !isWabisWebhookUrl(u));
-    if (bad) {
-      throw badRequest("Enter valid https Wabis workflow URLs (each must contain /webhook/).", "invalid_url");
+    // Only enforced when Wabis is actually carrying the drip. After the cutover
+    // the URLs are dead weight kept for a rollback, and refusing to save the page
+    // because of a URL nothing reads would be an odd way to be strict.
+    if (transport === "wabis") {
+      const bad = urls.find((u) => u && !isWabisWebhookUrl(u));
+      if (bad) {
+        throw badRequest("Enter valid https Wabis workflow URLs (each must contain /webhook/).", "invalid_url");
+      }
+    }
+
+    const templates = (body.templates ?? []).map((t) => t.trim());
+    const templateParams = (body.templateParams ?? []).map((t) => t.trim());
+    if (transport === "cloud") {
+      // Validated with the ENGINE'S OWN parser rather than a regex of its own.
+      // A hand-written check here disagreed with it about where to split, so the
+      // page could accept a value the sender then read differently — and that
+      // mistake looks fine and fails at Meta, per candidate.
+      const malformed = templates.find((t) => t && parseTouchTemplates(t)[0] === null);
+      if (malformed) {
+        throw badRequest(
+          `Templates must be written as name:language — "${malformed}" is missing one of them.`,
+          "invalid_template",
+        );
+      }
+      // A mistyped field name defers its touch every night, forever, and says so
+      // only in a server log. Refused at the point somebody can still fix it.
+      for (const line of templateParams) {
+        const bad = line
+          .split(",")
+          .map((t) => t.trim().toLowerCase())
+          .filter(Boolean)
+          .find((t) => !(TOUCH_PARAM_TOKENS as readonly string[]).includes(t));
+        if (bad) {
+          throw badRequest(
+            `"${bad}" is not a field a touch can use. Choose from: ${TOUCH_PARAM_TOKENS.join(", ")}.`,
+            "invalid_token",
+          );
+        }
+      }
     }
     // Drop trailing empties; store newline-positional (line i = touch i).
     while (urls.length && !urls[urls.length - 1]) urls.pop();
@@ -294,6 +364,13 @@ export const POST = withApiHandler(async (req: Request) => {
       setSetting(WABIS_REMARKETING_OFFSETS_KEY, body.offsets.trim(), userId),
       setSetting(WABIS_REMARKETING_KEYWORDS_KEY, body.keywords.trim(), userId),
       setSetting(WABIS_INBOUND_SECRET_KEY, body.inboundSecret.trim(), userId),
+      setSetting(REMARKETING_TRANSPORT_KEY, transport, userId),
+      setSetting(REMARKETING_TEMPLATES_KEY, trimTrailing(templates).join("\n"), userId),
+      setSetting(
+        REMARKETING_TEMPLATE_PARAMS_KEY,
+        trimTrailing(templateParams).join("\n"),
+        userId,
+      ),
     ]);
     return NextResponse.json({ ok: true });
   }

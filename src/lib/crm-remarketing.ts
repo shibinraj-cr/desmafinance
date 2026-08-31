@@ -27,6 +27,7 @@
  * the cron that triggered it.
  */
 import { randomUUID } from "node:crypto";
+import { Prisma } from "@prisma/client";
 import { prisma } from "./prisma";
 import { normalizePhone } from "./crm";
 import {
@@ -35,6 +36,9 @@ import {
   WABIS_REMARKETING_URLS_KEY,
   WABIS_REMARKETING_OFFSETS_KEY,
   WABIS_REMARKETING_KEYWORDS_KEY,
+  REMARKETING_TRANSPORT_KEY,
+  REMARKETING_TEMPLATES_KEY,
+  REMARKETING_TEMPLATE_PARAMS_KEY,
 } from "./app-settings";
 import {
   REMARKETING_TOUCH_EVENT,
@@ -50,6 +54,15 @@ import {
 } from "./crm-webhook";
 import { recordLeadActivity } from "./crm-activity";
 import { REMARKETING_STATUS_CODE } from "./crm-reinquiry";
+import {
+  buildTouchParams,
+  parseTouchParams,
+  parseTouchTemplates,
+  parseTransport,
+  type TouchTemplate,
+} from "./crm-remarketing-templates";
+import { cloudProvider } from "./wa/cloud-provider";
+import { findOrCreateConversationForLead } from "./wa/mirror";
 
 /** The Follow-Up stage a responding lead advances to. */
 export const FOLLOW_UP_STATUS_CODE = "follow_up";
@@ -97,20 +110,36 @@ export type RemarketingConfig = {
   offsets: number[];
   /** Positive-intent reply keywords (lowercased). Empty = advance on any reply. */
   keywords: string[];
+  /**
+   * Which transport carries a touch. Its own switch, separate from the inbox's
+   * `wa_provider`: the inbox cut over to the Cloud API long before the drip
+   * could, and either must be reversible without dragging the other back.
+   */
+  transport: "wabis" | "cloud";
+  /** Approved template per touch, positional. Cloud transport only. */
+  templates: (TouchTemplate | null)[];
+  /** Field tokens filling that template's variables, positional. */
+  templateParams: string[][];
 };
 
 export async function getRemarketingConfig(): Promise<RemarketingConfig> {
-  const [enabled, urls, offsets, keywords] = await Promise.all([
+  const [enabled, urls, offsets, keywords, transport, templates, templateParams] = await Promise.all([
     getSetting(WABIS_REMARKETING_ENABLED_KEY).catch(() => null),
     getSetting(WABIS_REMARKETING_URLS_KEY).catch(() => null),
     getSetting(WABIS_REMARKETING_OFFSETS_KEY).catch(() => null),
     getSetting(WABIS_REMARKETING_KEYWORDS_KEY).catch(() => null),
+    getSetting(REMARKETING_TRANSPORT_KEY).catch(() => null),
+    getSetting(REMARKETING_TEMPLATES_KEY).catch(() => null),
+    getSetting(REMARKETING_TEMPLATE_PARAMS_KEY).catch(() => null),
   ]);
   return {
     enabled: enabled === "1",
     urls: parseUrls(urls),
     offsets: parseOffsets(offsets),
     keywords: parseKeywords(keywords),
+    transport: parseTransport(transport),
+    templates: parseTouchTemplates(templates),
+    templateParams: parseTouchParams(templateParams),
   };
 }
 
@@ -157,6 +186,29 @@ export function parseKeywords(raw: string | null | undefined): string[] {
     .filter(Boolean);
 }
 
+/**
+ * Replies that must never be read as interest.
+ *
+ * Checked ahead of the positive allow-list rather than instead of it, so a
+ * configured keyword cannot accidentally re-admit a refusal — "no, not
+ * interested" contains "interested".
+ */
+const NEGATIVE_REPLY_TERMS = [
+  "stop",
+  "unsubscribe",
+  "not interested",
+  "no interest",
+  "dont contact",
+  "don't contact",
+  "do not contact",
+  "remove me",
+  "wrong number",
+  "already done",
+  "not required",
+  "no thanks",
+  "no thank you",
+] as const;
+
 /** Whole calendar days between two instants (≥ 0; 0 when `to` precedes `from`). */
 export function daysBetween(from: Date, to: Date): number {
   const ms = to.getTime() - from.getTime();
@@ -202,8 +254,18 @@ export function isCampaignExpired(input: {
  * substring) — the guard against a "STOP" / "not interested" reviving a lead.
  */
 export function matchesReengageKeyword(text: string | null | undefined, keywords: string[]): boolean {
-  if (keywords.length === 0) return true;
   const t = (text ?? "").toLowerCase();
+  // A refusal is never re-engagement, whatever the allow-list says — and with the
+  // allow-list blank (the shipped default, "any reply advances") nothing else
+  // would stop it. That default was harmless while a Wabis keyword flow was the
+  // real gate; once every inbound message reaches us directly it is not, and
+  // "not interested" would move the lead to Follow-Up and tell a consultant to
+  // ring somebody who had just asked to be left alone.
+  if (NEGATIVE_REPLY_TERMS.some((k) => t.includes(k))) return false;
+  // A reply with no text is still a reply — a photo of a passport page is
+  // engagement, and the candidate chose to send it. Only the keyword-matching
+  // branch below needs words to work with.
+  if (keywords.length === 0) return true;
   if (!t.trim()) return false;
   return keywords.some((k) => t.includes(k));
 }
@@ -325,6 +387,35 @@ type SchedulerLead = {
  * as sent. Returns false only for a transient reason to try again next run
  * (missing/invalid URL).
  */
+/**
+ * How many `{{n}}` values each configured template wants.
+ *
+ * Fetched ONCE per scheduler run and passed down, because a run may send several
+ * hundred touches and asking Meta for the catalogue per lead would spend the
+ * whole time budget on the same answer. Empty on the Wabis transport, which never
+ * needs it, and empty on a failed fetch — a template whose variable count we
+ * could not learn is reported as unmapped rather than sent with a guess.
+ */
+async function loadTemplateVariableCounts(config: RemarketingConfig): Promise<Map<string, number> | null> {
+  const map = new Map<string, number>();
+  if (config.transport !== "cloud") return map;
+  const wanted = new Set(config.templates.filter(Boolean).map((t) => `${t!.name}:${t!.language}`));
+  if (wanted.size === 0) return map;
+
+  const catalogue = await cloudProvider.listTemplates().catch(() => []);
+  // NULL means "we could not ask", which is not the same as "the template has no
+  // variables" — and conflating the two would send a parameter-less template and
+  // then mark the touch done. listTemplates swallows every failure into an empty
+  // array, so an empty catalogue is the signal.
+  if (catalogue.length === 0) return null;
+
+  for (const t of catalogue) {
+    const key = `${t.name}:${t.language}`;
+    if (wanted.has(key)) map.set(key, t.variableCount);
+  }
+  return map;
+}
+
 async function enqueueRemarketingTouch(opts: {
   campaignId: string;
   lead: SchedulerLead;
@@ -334,8 +425,16 @@ async function enqueueRemarketingTouch(opts: {
   touchIndex: number;
   config: RemarketingConfig;
   now: Date;
+  /** Cloud transport only. NULL when the catalogue could not be read. */
+  templateVars?: Map<string, number> | null;
 }): Promise<boolean> {
   const { lead, touchIndex, config } = opts;
+
+  // The whole cutover, in one branch. Everything below this line is the Wabis
+  // path, left exactly as it was, so flipping the switch back is a configuration
+  // change rather than a deploy.
+  if (config.transport === "cloud") return sendCloudTouch(opts);
+
   // The agent to name in the message AND for Wabis to assign the chat to: the
   // lead's current owner, else the owner recorded on the campaign.
   const ownerId = lead.assignedToId ?? opts.ownerUserId ?? null;
@@ -440,6 +539,385 @@ async function enqueueRemarketingTouch(opts: {
   }
 }
 
+/**
+ * Send one touch as an approved template through our own WABA.
+ *
+ * Three records come out of a send, and each earns its place:
+ *
+ *   - a `WaMessage` on the candidate's thread, so the drip is finally VISIBLE.
+ *     Under Wabis a touch went out and left no trace in the CRM, so a consultant
+ *     opening a conversation could not see what the system had already said to
+ *     their candidate — the most-felt limitation of the old design.
+ *   - a `CrmWebhookDelivery`, because the outbox is what Campaign Delivery and
+ *     the re-marketing report both read. Writing it keeps every existing view
+ *     working across the cutover instead of blanking on the day it happens.
+ *   - the campaign's own touch stamp, written by the caller.
+ *
+ * Delivery status then arrives on the message by wamid, from Meta directly,
+ * rather than second-hand through a Wabis callback.
+ */
+async function sendCloudTouch(opts: {
+  campaignId: string;
+  lead: SchedulerLead;
+  ownerUserId?: string | null;
+  touchIndex: number;
+  config: RemarketingConfig;
+  now: Date;
+  /** `name:language` -> variable count. NULL when the catalogue could not be read. */
+  templateVars?: Map<string, number> | null;
+}): Promise<boolean> {
+  const { lead, touchIndex, config } = opts;
+  const ownerId = lead.assignedToId ?? opts.ownerUserId ?? null;
+  const dedupeKey = `${REMARKETING_TOUCH_EVENT}:${opts.campaignId}:${touchIndex}`;
+
+  const template = config.templates[touchIndex - 1] ?? null;
+  if (!template) {
+    // Not stamped: an admin filling this in later should find the touch still
+    // waiting, exactly as a missing workflow URL behaves on the other transport.
+    console.warn(`[crm-remarketing] no template configured for touch ${touchIndex}; deferred`);
+    return false;
+  }
+
+  const phoneE164 = normalizePhone(lead.phone);
+  if (!phoneE164) {
+    await recordTouchOutcome({
+      dedupeKey,
+      leadId: lead.id,
+      ownerId,
+      touchIndex,
+      template,
+      phone: "",
+      name: lead.candidateName,
+      campaignId: opts.campaignId,
+      now: opts.now,
+      status: "failed",
+      detail: "Not sent — the lead has no usable phone number.",
+    });
+    // Stamped: a phoneless lead must not be retried every night forever.
+    return true;
+  }
+
+  const [role, endpoint] = ownerId
+    ? await Promise.all([
+        prisma.leadPulseRole.findUnique({ where: { userId: ownerId }, select: { displayName: true, phone: true } }),
+        prisma.wabisWebhookEndpoint.findFirst({
+          where: { consultantId: ownerId, purpose: LEAD_ASSIGNED_EVENT, isActive: true },
+          select: { agentName: true, agentPhone: true },
+        }),
+      ])
+    : [null, null];
+  const { agent, agentPhone } = resolveAgent({ displayName: role?.displayName, phone: role?.phone, endpoint });
+
+  const key = `${template.name}:${template.language}`;
+
+  // "We could not ask" is not "it has no variables". Deferring costs a night;
+  // guessing sends a parameter-less template to every due candidate and marks
+  // each touch done, so the mistake is unrepeatable and silent.
+  if (!opts.templateVars) {
+    console.warn(`[crm-remarketing] template catalogue unavailable; touch ${touchIndex} deferred`);
+    return false;
+  }
+  const variableCount = opts.templateVars.get(key);
+  if (variableCount === undefined) {
+    console.warn(`[crm-remarketing] ${key} is not an approved template on this WABA; touch ${touchIndex} deferred`);
+    return false;
+  }
+
+  const built = buildTouchParams({
+    variableCount,
+    tokens: config.templateParams[touchIndex - 1] ?? [],
+    from: {
+      name: lead.candidateName,
+      agent,
+      agentPhone,
+      service: lead.service?.name ?? null,
+      source: lead.source?.label ?? null,
+      country: null,
+    },
+  });
+  if (!built.ok) {
+    // A config fault defers — mapping the variables and running again should
+    // send the touch. A fault in the LEAD does not: no name means no name
+    // tomorrow either, so it is recorded and the touch is stamped rather than
+    // holding the campaign still forever.
+    const leadFault = built.reason === "empty_value";
+    console.warn(`[crm-remarketing] touch ${touchIndex} params unusable: ${built.detail}`);
+    if (leadFault) {
+      await recordTouchOutcome({
+        dedupeKey,
+        leadId: lead.id,
+        ownerId,
+        touchIndex,
+        template,
+        phone: phoneE164,
+        name: lead.candidateName,
+        campaignId: opts.campaignId,
+        now: opts.now,
+        status: "failed",
+        detail: `Not sent — ${built.detail}.`,
+      });
+    }
+    return leadFault;
+  }
+
+  // CLAIM BEFORE SENDING. This is the ordering the Wabis branch has always had
+  // and the cloud path did not: it sent first and recorded afterwards, so the
+  // unique `dedupeKey` — the entire duplicate guard — was checked only after the
+  // candidate already had the message. Two runs overlapping (the nightly cron
+  // and an admin pressing Run now) would each see an unstamped touch and each
+  // send it. A row inserted first means the loser of that race loses at the
+  // database and sends nothing.
+  const claim = await claimTouch({
+    dedupeKey,
+    leadId: lead.id,
+    ownerId,
+    touchIndex,
+    template,
+    phone: phoneE164,
+    name: lead.candidateName,
+    campaignId: opts.campaignId,
+    now: opts.now,
+  });
+  // Taken: somebody else holds this touch, so the caller stamps it and moves on —
+  // exactly what the Wabis branch does on the same collision.
+  if (claim === "taken") return true;
+  // Error: nothing was written and nothing was sent. Deferring costs a night;
+  // stamping it would lose the touch and claim it was delivered.
+  if (claim === "error") return false;
+
+  const result = await cloudProvider.sendTemplate({
+    // `name:language` in one string — the adapter's existing convention, because
+    // a WABA can hold the same template in several languages and Meta treats
+    // them as different templates. These four are not uniform, so the language
+    // travels with every send rather than defaulting.
+    toE164: phoneE164,
+    template: key,
+    params: built.params,
+    endpointUrl: null,
+  });
+
+  if (!result.ok) {
+    // Three outcomes, not two — and collapsing them is what made the previous
+    // version lose messages while reporting them as sent.
+    //
+    // The claim row is the duplicate guard, so leaving it behind on a failure
+    // means tomorrow's run collides with it, reads the collision as "somebody
+    // else is sending this", and stamps the touch as sent. A rate limit would
+    // therefore silently burn the touch and write "touch N sent" on the lead's
+    // timeline for a message nobody received.
+    const permanent = result.retryable === false || result.unsupported === true;
+    // `status === null` means the request never completed — a timeout or a
+    // dropped connection. Meta may well have sent the message anyway, so this is
+    // the one case that must NOT be retried: an unrecallable duplicate is worse
+    // than a missing touch, and here we genuinely cannot tell which happened.
+    const outcomeUnknown = result.status === null;
+
+    if (permanent || outcomeUnknown) {
+      await settleTouch({
+        dedupeKey,
+        status: "failed",
+        detail: outcomeUnknown
+          ? `No response from Meta — not retried, in case it was delivered: ${result.body}`
+          : result.body,
+        providerMessageId: result.providerMessageId,
+        now: opts.now,
+      });
+      if (permanent) {
+        // The policy the cloud path was missing entirely: stop the campaign, and
+        // flag a number that is simply not on WhatsApp so nothing tries it again.
+        await applyHardDeliveryFailure({
+          leadId: lead.id,
+          // META's code, not the HTTP status. PERMANENT_UNDELIVERABLE_CODES
+          // holds values like 131026, so an HTTP 400 would match nothing.
+          errorCode: result.errorCode ?? null,
+          errorMessage: result.body,
+          touch: touchIndex,
+          now: opts.now,
+        }).catch(() => undefined);
+      }
+      console.warn(`[crm-remarketing] touch ${touchIndex} not sent: ${result.body}`);
+      return true;
+    }
+
+    // A definite, transient rejection — a rate limit or an upstream fault, with a
+    // status proving Meta answered and did not accept it. Releasing the claim is
+    // what makes "retry tomorrow" actually possible.
+    await releaseTouch(dedupeKey);
+    console.warn(`[crm-remarketing] touch ${touchIndex} deferred: ${result.body}`);
+    return false;
+  }
+
+  await settleTouch({
+    dedupeKey,
+    status: "sent",
+    detail: `Sent as ${key}`,
+    providerMessageId: result.providerMessageId,
+    now: opts.now,
+  });
+
+  // The part Wabis could never do: put it in the thread.
+  await recordTouchOnThread({
+    lead: { id: lead.id, phoneE164, assignedToId: ownerId },
+    template,
+    providerMessageId: result.providerMessageId,
+    now: opts.now,
+  }).catch((e) => {
+    // The candidate HAS the message. Failing to mirror it is a bookkeeping
+    // problem and must never be reported as a failed send, or tomorrow's run
+    // would send it again.
+    console.error("[crm-remarketing] touch sent but not mirrored:", e);
+  });
+
+  return true;
+}
+
+/** What every outbox row for a touch carries, whichever way it ends. */
+type TouchRowInput = {
+  dedupeKey: string;
+  leadId: string;
+  ownerId: string | null;
+  touchIndex: number;
+  template: TouchTemplate;
+  phone: string;
+  name: string | null;
+  campaignId: string;
+  now: Date;
+};
+
+/**
+ * Take the touch, or discover somebody else already has.
+ *
+ * The unique `dedupeKey` does the work; the insert either succeeds or it does
+ * not, and nothing between here and the send can change that answer. Returning
+ * false means a concurrent run owns this touch and this one must not send.
+ */
+async function claimTouch(input: TouchRowInput): Promise<"claimed" | "taken" | "error"> {
+  try {
+    await prisma.crmWebhookDelivery.create({
+      data: {
+        event: REMARKETING_TOUCH_EVENT,
+        dedupeKey: input.dedupeKey,
+        leadId: input.leadId,
+        assigneeUserId: input.ownerId,
+        // No URL on this transport. Naming the template keeps the column
+        // meaningful rather than blank, and it is what somebody reading the
+        // delivery log actually wants to know.
+        url: `cloud:${input.template.name}:${input.template.language}`,
+        endpointLabel: `Re-marketing touch ${input.touchIndex}`,
+        // The failures report reads `touch` out of the payload to say WHICH
+        // touch failed; an empty object blanked that column.
+        payload: {
+          touch: input.touchIndex,
+          touch_label: `Touch ${input.touchIndex}`,
+          lead_id: input.leadId,
+          campaign_id: input.campaignId,
+          phone: input.phone,
+          name: (input.name ?? "").trim(),
+          template: `${input.template.name}:${input.template.language}`,
+          sent_at: istTimestamp(input.now),
+        },
+        status: "pending",
+        attempts: 1,
+        maxAttempts: 1,
+      },
+    });
+    return "claimed";
+  } catch (e) {
+    // The unique constraint means another run owns this touch, and the caller
+    // should move on. ANYTHING ELSE — a pool timeout, a dropped connection —
+    // means nothing was written and nothing was sent, and treating that as
+    // "taken" stamped the touch as delivered with no record of it anywhere.
+    // Neon behind a pooler, twenty concurrent claims a batch, is exactly where
+    // that happens.
+    if (e instanceof Prisma.PrismaClientKnownRequestError && e.code === "P2002") return "taken";
+    console.error("[crm-remarketing] could not claim touch:", e);
+    return "error";
+  }
+}
+
+/** Give the touch back, so a transient failure can genuinely be retried. */
+async function releaseTouch(dedupeKey: string): Promise<void> {
+  await prisma.crmWebhookDelivery
+    // Guarded on `pending` and never-delivered: releasing a row that recorded a
+    // real send would let the next run send it again.
+    .deleteMany({ where: { dedupeKey, status: "pending", deliveredAt: null } })
+    .catch(() => undefined);
+}
+
+/** Record how the claimed send actually went. */
+async function settleTouch(input: {
+  dedupeKey: string;
+  status: "sent" | "failed";
+  detail: string;
+  providerMessageId: string | null;
+  now: Date;
+}): Promise<void> {
+  await prisma.crmWebhookDelivery
+    .updateMany({
+      where: { dedupeKey: input.dedupeKey },
+      data: {
+        status: input.status,
+        // Kept so a delivery callback can be joined back to the touch later —
+        // without it the outbox row and the WaMessage share no key at all.
+        responseBody: `${input.providerMessageId ? `${input.providerMessageId} — ` : ""}${input.detail}`.slice(0, 500),
+        lastAttemptAt: input.now,
+        deliveredAt: input.status === "sent" ? input.now : null,
+      },
+    })
+    .catch(() => undefined);
+}
+
+/** A terminal outcome with no send attached — a lead we cannot message at all. */
+async function recordTouchOutcome(
+  input: TouchRowInput & { status: "sent" | "failed"; detail: string },
+): Promise<void> {
+  if ((await claimTouch(input)) !== "claimed") return;
+  await settleTouch({
+    dedupeKey: input.dedupeKey,
+    status: input.status,
+    detail: input.detail,
+    providerMessageId: null,
+    now: input.now,
+  });
+}
+
+/** Mirror the touch onto the candidate's WhatsApp thread. */
+async function recordTouchOnThread(input: {
+  lead: { id: string; phoneE164: string; assignedToId: string | null };
+  template: TouchTemplate;
+  providerMessageId: string | null;
+  now: Date;
+}): Promise<void> {
+  const conversation = await findOrCreateConversationForLead(input.lead);
+  if (!conversation.ok) return;
+
+  await prisma.waMessage.create({
+    data: {
+      conversationId: conversation.conversationId,
+      direction: "out",
+      type: "template",
+      body: null,
+      templateName: input.template.name,
+      providerMessageId: input.providerMessageId,
+      provider: "cloud",
+      // Our transport verdict. Meta's own answer overwrites it by wamid when the
+      // status callback lands.
+      waStatus: "sent",
+      // No author: an automation sent this, and attributing it to the consultant
+      // would put words in their mouth.
+      sentById: null,
+      occurredAt: input.now,
+    },
+  });
+
+  // `lastMessageAt` only — sending never extends the candidate's 24-hour reply
+  // window, and a template is legal outside it anyway.
+  await prisma.waConversation.update({
+    where: { id: conversation.conversationId },
+    data: { lastMessageAt: input.now },
+  });
+}
+
 // ── Daily scheduler (driven by /api/cron/crm-webhooks) ──────────────────────
 
 /**
@@ -456,6 +934,9 @@ export async function runRemarketingScheduler(): Promise<{
 }> {
   const config = await getRemarketingConfig();
   if (!config.enabled) return { touchesSent: 0, completed: 0, stopped: 0, skipped: "remarketing disabled" };
+
+  // One catalogue fetch for the whole run, not one per lead.
+  const templateVars = await loadTemplateVariableCounts(config);
 
   const now = new Date();
   const campaigns = await prisma.crmRemarketingCampaign.findMany({
@@ -581,6 +1062,7 @@ export async function runRemarketingScheduler(): Promise<{
             touchIndex: due,
             config,
             now,
+            templateVars,
           });
           if (!handled) return false;
           await prisma.crmRemarketingCampaign.update({
@@ -1078,34 +1560,12 @@ export async function handleWabisDeliveryStatus(input: {
     }
 
     // FAILED → stop any running campaign for this lead (any-hard-failure policy).
-    const permanent = errorCode ? PERMANENT_UNDELIVERABLE_CODES.has(errorCode) : false;
-    await prisma.crmRemarketingCampaign
-      .updateMany({
-        where: { leadId, status: "running" },
-        data: {
-          status: "stopped",
-          endedReason: `delivery_failed${errorCode ? `_${errorCode}` : ""}`,
-          endedAt: now,
-        },
-      })
-      .catch(() => undefined);
-
-    if (permanent) {
-      await prisma.lead
-        .update({
-          where: { id: leadId },
-          data: { whatsappUndeliverableAt: now, whatsappUndeliverableReason: errorCode },
-        })
-        .catch(() => undefined);
-    }
-
-    await recordLeadActivity({
+    const permanent = await applyHardDeliveryFailure({
       leadId,
-      type: "REMARKETING_TOUCH_FAILED",
-      summary: permanent
-        ? `WhatsApp undeliverable (${errorCode}) — number flagged, re-marketing stopped`
-        : `WhatsApp delivery failed${errorCode ? ` (${errorCode})` : ""} — re-marketing stopped`,
-      metadata: { errorCode, errorMessage, touch: input.touch ?? null, permanent },
+      errorCode,
+      errorMessage,
+      touch: input.touch ?? null,
+      now,
     });
 
     return { ok: true, action: "failed_stopped", leadId, waStatus, reason: errorCode ?? "failed" };
@@ -1113,6 +1573,64 @@ export async function handleWabisDeliveryStatus(input: {
     console.error("[crm-remarketing] handleWabisDeliveryStatus failed:", e);
     return { ok: false, reason: "error" };
   }
+}
+
+/**
+ * What a hard delivery failure means for the lead, on EITHER transport.
+ *
+ * Extracted because the cloud path had none of it. Under Wabis a failed touch
+ * stopped the campaign and — for a number that is simply not on WhatsApp —
+ * flagged the lead so future campaigns skip it. Sending through our own WABA
+ * bypassed all of that, so a dead number would have been messaged again on
+ * every touch and again by the next campaign, which is both wasted spend and
+ * exactly the behaviour Meta's quality rating punishes.
+ *
+ * Returns whether the number was flagged permanently.
+ */
+async function applyHardDeliveryFailure(input: {
+  leadId: string;
+  errorCode: string | null;
+  errorMessage: string | null;
+  touch: number | null;
+  now: Date;
+}): Promise<boolean> {
+  const permanent = input.errorCode ? PERMANENT_UNDELIVERABLE_CODES.has(input.errorCode) : false;
+
+  await prisma.crmRemarketingCampaign
+    .updateMany({
+      where: { leadId: input.leadId, status: "running" },
+      data: {
+        status: "stopped",
+        endedReason: `delivery_failed${input.errorCode ? `_${input.errorCode}` : ""}`,
+        endedAt: input.now,
+      },
+    })
+    .catch(() => undefined);
+
+  if (permanent) {
+    await prisma.lead
+      .update({
+        where: { id: input.leadId },
+        data: { whatsappUndeliverableAt: input.now, whatsappUndeliverableReason: input.errorCode },
+      })
+      .catch(() => undefined);
+  }
+
+  await recordLeadActivity({
+    leadId: input.leadId,
+    type: "REMARKETING_TOUCH_FAILED",
+    summary: permanent
+      ? `WhatsApp undeliverable (${input.errorCode}) — number flagged, re-marketing stopped`
+      : `WhatsApp delivery failed${input.errorCode ? ` (${input.errorCode})` : ""} — re-marketing stopped`,
+    metadata: {
+      errorCode: input.errorCode,
+      errorMessage: input.errorMessage,
+      touch: input.touch,
+      permanent,
+    },
+  });
+
+  return permanent;
 }
 
 // ── Wabis delivery-report backfill (one-time CSV import) ────────────────────
@@ -1261,12 +1779,84 @@ export async function importWabisDeliveryReport(opts: {
  * names for mapping. Logged like any delivery (unique dedupe key) so it can never
  * collide with — or suppress — a real touch.
  */
+/**
+ * The test send, on the transport that is actually live.
+ *
+ * It used to fire through Wabis whichever transport was configured, so after the
+ * cutover "Send test touch" would prove the wrong thing entirely — a real
+ * WhatsApp message down a path the drip no longer uses, reporting success while
+ * the live path stayed untested. This is the ONE place a template can be tried
+ * before it reaches a candidate, which makes getting it wrong worse than not
+ * having it.
+ */
+async function sendTestCloudTouch(opts: {
+  phone: string;
+  touch: number;
+  config: RemarketingConfig;
+}): Promise<{ ok: boolean; status: number | null; body: string; error?: string }> {
+  const template = opts.config.templates[opts.touch - 1] ?? null;
+  if (!template) {
+    return { ok: false, status: null, body: "", error: `Set a template for touch ${opts.touch} and save it first.` };
+  }
+  const toE164 = normalizePhone(opts.phone);
+  if (!toE164) {
+    return { ok: false, status: null, body: "", error: "Enter a valid mobile number to send the test to." };
+  }
+
+  const key = `${template.name}:${template.language}`;
+  const vars = await loadTemplateVariableCounts(opts.config);
+  if (!vars) {
+    return { ok: false, status: null, body: "", error: "Could not read the approved template list from Meta. Check the Cloud API credentials." };
+  }
+  const variableCount = vars.get(key);
+  if (variableCount === undefined) {
+    return { ok: false, status: null, body: "", error: `"${key}" is not an approved template on this WhatsApp account.` };
+  }
+
+  // A stub lead, clearly marked. Real values would be a nicer preview and a worse
+  // test: the point is to prove the template and its parameter count, and a
+  // recognisable placeholder makes an accidental send to a candidate obvious.
+  const built = buildTouchParams({
+    variableCount,
+    tokens: opts.config.templateParams[opts.touch - 1] ?? [],
+    from: {
+      name: "Test Candidate",
+      agent: "Test Agent",
+      agentPhone: "+910000000000",
+      service: "Test Service",
+      source: "Test",
+      country: "Test",
+    },
+  });
+  if (!built.ok) {
+    return { ok: false, status: null, body: "", error: `Cannot send — ${built.detail}.` };
+  }
+
+  const result = await cloudProvider.sendTemplate({
+    toE164,
+    template: key,
+    params: built.params,
+    endpointUrl: null,
+  });
+  return {
+    ok: result.ok,
+    status: result.status,
+    body: result.ok ? `Sent ${key} to ${toE164}` : result.body,
+    error: result.ok ? undefined : result.body,
+  };
+}
+
 export async function sendTestRemarketingTouch(opts: {
   phone: string;
   touch?: number;
 }): Promise<{ ok: boolean; status: number | null; body: string; error?: string }> {
   const config = await getRemarketingConfig();
   const touch = opts.touch && opts.touch >= 1 && opts.touch <= 4 ? opts.touch : 1;
+
+  if (config.transport === "cloud") {
+    return sendTestCloudTouch({ phone: opts.phone, touch, config });
+  }
+
   const url = urlForTouch(config, touch);
   if (!url) {
     return { ok: false, status: null, body: "", error: `Set a valid workflow URL for touch ${touch} and save it first.` };
