@@ -5,6 +5,9 @@ import { useCallback, useEffect, useState } from "react";
 type Remarketing = {
   enabled: boolean;
   urls: string[];
+  transport?: "wabis" | "cloud";
+  templates?: string[];
+  templateParams?: string[];
   offsets: string;
   keywords: string;
   inboundSecret: string;
@@ -31,6 +34,9 @@ export function RemarketingSettingsCard() {
 
   const [enabled, setEnabled] = useState(false);
   const [urls, setUrls] = useState<string[]>(["", "", "", ""]);
+  const [transport, setTransport] = useState<"wabis" | "cloud">("wabis");
+  const [templates, setTemplates] = useState<string[]>(["", "", "", ""]);
+  const [templateParams, setTemplateParams] = useState<string[]>(["", "", "", ""]);
   const [offsets, setOffsets] = useState("5,19,33");
   const [keywords, setKeywords] = useState("");
   const [inboundSecret, setInboundSecret] = useState("");
@@ -55,6 +61,9 @@ export function RemarketingSettingsCard() {
       const rm = ((await r.json()) as { remarketing: Remarketing }).remarketing;
       setEnabled(rm.enabled);
       setUrls([0, 1, 2, 3].map((i) => rm.urls[i] ?? ""));
+      setTransport(rm.transport === "cloud" ? "cloud" : "wabis");
+      setTemplates([0, 1, 2, 3].map((i) => rm.templates?.[i] ?? ""));
+      setTemplateParams([0, 1, 2, 3].map((i) => rm.templateParams?.[i] ?? ""));
       setOffsets(rm.offsets);
       setKeywords(rm.keywords);
       setInboundSecret(rm.inboundSecret);
@@ -72,7 +81,7 @@ export function RemarketingSettingsCard() {
     const r = await fetch("/api/crm/integrations/wabis", {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ action: "save_remarketing", enabled, urls, offsets, keywords, inboundSecret }),
+      body: JSON.stringify({ action: "save_remarketing", enabled, urls, offsets, keywords, inboundSecret, transport, templates, templateParams }),
     });
     const payload = (await r.json().catch(() => ({}))) as Record<string, unknown>;
     setBusy(false);
@@ -226,7 +235,82 @@ export function RemarketingSettingsCard() {
             Run re-marketing campaigns
           </label>
 
+          {/* The cutover switch. Its own setting, separate from the inbox's
+              provider: the two moved at different times and either must be
+              reversible without dragging the other back. */}
           <div className="space-y-sm">
+            <div className="text-label-sm text-on-surface-variant">
+              <span className="font-medium">Send touches through</span> — never both at once, or a candidate receives
+              every touch twice.
+            </div>
+            <div className="inline-flex rounded-lg border border-outline-variant overflow-hidden">
+              {(["wabis", "cloud"] as const).map((t) => (
+                <button
+                  key={t}
+                  type="button"
+                  onClick={() => setTransport(t)}
+                  className={
+                    "px-md h-8 text-label-sm font-semibold transition " +
+                    (transport === t
+                      ? "bg-primary text-on-primary"
+                      : "bg-surface-container-lowest text-on-surface-variant hover:bg-surface-container-low")
+                  }
+                >
+                  {t === "wabis" ? "Wabis workflows" : "Our WABA (Cloud API)"}
+                </button>
+              ))}
+            </div>
+            {transport === "cloud" && (
+              <p className="text-label-sm text-on-surface-variant">
+                Touches go out as approved templates on our own number, land in the candidate&rsquo;s WhatsApp thread,
+                and report delivery status from Meta directly. The Wabis URLs below are ignored.
+              </p>
+            )}
+          </div>
+
+          {transport === "cloud" && (
+            <div className="space-y-sm">
+              <div className="text-label-sm text-on-surface-variant">
+                Approved template <span className="font-medium">per touch</span>, as
+                <code className="mx-xs font-mono">name:language</code> — the exact pair from WhatsApp Manager. Meta
+                treats the same template in another language as a different template and rejects a mismatch, so
+                <code className="mx-xs font-mono">en</code> and <code className="mx-xs font-mono">en_US</code> are not
+                interchangeable.
+              </div>
+              {[0, 1, 2, 3].map((i) => (
+                <div key={i} className="flex flex-wrap items-center gap-base">
+                  <span className="w-[64px] shrink-0 text-label-sm text-on-surface-variant">Touch {i + 1}</span>
+                  <input
+                    className={input + " flex-1 min-w-[16rem] font-mono"}
+                    value={templates[i] ?? ""}
+                    onChange={(e) => setTemplates((prev) => prev.map((u, j) => (j === i ? e.target.value : u)))}
+                    placeholder="touchpoint_one_remarketing:en"
+                  />
+                  <input
+                    className={input + " w-56 font-mono"}
+                    value={templateParams[i] ?? ""}
+                    onChange={(e) => setTemplateParams((prev) => prev.map((u, j) => (j === i ? e.target.value : u)))}
+                    placeholder="first_name, agent"
+                  />
+                </div>
+              ))}
+              <p className="text-label-sm text-on-surface-variant">
+                The second box fills the template&rsquo;s <code className="font-mono">{"{{1}}"}</code>,
+                <code className="font-mono">{"{{2}}"}</code> … in order. Available fields:
+                <code className="mx-xs font-mono">name</code>
+                <code className="mr-xs font-mono">first_name</code>
+                <code className="mr-xs font-mono">agent</code>
+                <code className="mr-xs font-mono">agent_phone</code>
+                <code className="mr-xs font-mono">service</code>
+                <code className="mr-xs font-mono">source</code>
+                <code className="font-mono">country</code>. Leave blank for a template with no variables. A touch whose
+                variables are unmapped is <span className="font-medium">not sent</span> — Meta rejects a mismatched
+                count, and a blank value would greet somebody by nothing at all.
+              </p>
+            </div>
+          )}
+
+          <div className={"space-y-sm" + (transport === "cloud" ? " opacity-50" : "")}>
             <div className="text-label-sm text-on-surface-variant">
               Wabis workflow URL <span className="font-medium">per touch</span> — one Wabis workflow sends one template
               (no in-flow branching), so each touch needs its own webhook URL. Leave a touch blank to skip it. Timing
