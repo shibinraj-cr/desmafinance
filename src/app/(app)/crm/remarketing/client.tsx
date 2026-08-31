@@ -145,6 +145,45 @@ export function RemarketingClient({
 
   const card = "bg-surface-container-lowest border border-outline-variant rounded-xl";
 
+  /**
+   * The headline, in words.
+   *
+   * Everything below is in the funnel already, but "has touch 2 reached anybody"
+   * is the question this page was built for and it was still being answered by
+   * reading a cell out of a table. A configured touch that has never sent is the
+   * striking fact, so it is the one stated outright.
+   */
+  const headline = useMemo(() => {
+    const configured = funnel.filter((f) => offsets[f.index - 1] !== undefined);
+    const totalSent = configured.reduce((n, f) => n + f.sent, 0);
+    if (configured.length === 0) return "No touch schedule is configured, so nothing can be sent.";
+    if (totalSent === 0) return "No touch has been sent to anybody yet.";
+
+    const never = configured.filter((f) => f.sent === 0).map((f) => f.index);
+    const reached = configured
+      .filter((f) => f.sent > 0)
+      .map((f) => `touch ${f.index} to ${f.sent.toLocaleString()}`)
+      .join(", ");
+
+    if (never.length === 0) return `Every configured touch has been sent — ${reached}.`;
+    const list =
+      never.length === 1
+        ? `Touch ${never[0]} has`
+        : `Touches ${never.slice(0, -1).join(", ")} and ${never[never.length - 1]} have`;
+    return `${list} never been sent to anybody. So far: ${reached}.`;
+  }, [funnel, offsets]);
+
+  /** The very next thing the drip will do, named. */
+  const nextUp = useMemo(() => {
+    const upcoming = rows
+      .filter((r) => r.status === "running" && r.nextAt)
+      .sort((a, b) => a.nextAt!.localeCompare(b.nextAt!))[0];
+    if (!upcoming) return null;
+    return `Next: touch ${upcoming.nextIndex} for ${upcoming.candidateName}, ${
+      upcoming.nextDue ? "due now" : `on ${fmt(upcoming.nextAt)}`
+    }.`;
+  }, [rows]);
+
   return (
     <div className="p-margin space-y-lg">
       {/* State of the engine, stated plainly. Every number below is meaningless
@@ -174,6 +213,8 @@ export function RemarketingClient({
           later touches earn their cost. */}
       <div className={card + " p-lg"}>
         <h2 className="text-h3 text-on-surface mb-xs">Per touch</h2>
+        <p className="text-body-md text-on-surface mb-xs">{headline}</p>
+        {nextUp && <p className="text-label-sm text-on-surface-variant mb-xs">{nextUp}</p>}
         <p className="text-label-sm text-on-surface-variant mb-md">
           A reply is credited to the last touch sent before it — an attribution rule, not a recorded fact.
         </p>
