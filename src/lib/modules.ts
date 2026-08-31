@@ -271,7 +271,10 @@ export const MODULES: AppModule[] = [
         // and which touch earned the reply. Same access as Campaign Delivery —
         // a consultant should be able to see the schedule for their own leads.
         href: "/crm/remarketing",
-        label: "Re-marketing",
+        // "Re-marketing Report", not "Re-marketing": Settings already has a tab
+        // by that name for the CONFIG, and two identically-named destinations
+        // sent the first person looking for this page to the wrong one.
+        label: "Re-marketing Report",
         icon: "campaign",
         group: "TOOLS",
       },

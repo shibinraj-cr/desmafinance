@@ -32,7 +32,7 @@ export default async function CrmRemarketingPage() {
   if (!access.canViewLeads) {
     return (
       <>
-        <TopBar title="Re-marketing" subtitle="Touch-point schedule and results" />
+        <TopBar title="Re-marketing Report" subtitle="Touch-point schedule and results" />
         <div className="p-margin">
           <div className="rounded-xl border border-outline-variant bg-surface-container-lowest p-lg text-on-surface-variant">
             The re-marketing report is available to CRM users only.
@@ -157,7 +157,7 @@ export default async function CrmRemarketingPage() {
 
   return (
     <>
-      <TopBar title="Re-marketing" subtitle="Touch-point schedule and results" />
+      <TopBar title="Re-marketing Report" subtitle="Touch-point schedule and results" />
       <RemarketingClient
         rows={rows}
         funnel={funnel}
