@@ -133,7 +133,7 @@ export const WA_MIRROR_AUTOCREATE_KEY = "wa_mirror_autocreate_leads";
  * - APP_SECRET: verifies Meta's `X-Hub-Signature-256` on inbound webhooks. Without
  *   it the mirror falls back to the shared-secret check, which is weaker but
  *   still closed.
- * - API_VERSION: pinned (e.g. "v21.0") so a Graph API release cannot change
+ * - API_VERSION: pinned (e.g. "v23.0") so a Graph API release cannot change
  *   behaviour underneath us.
  */
 export const WA_CLOUD_PHONE_NUMBER_ID_KEY = "wa_cloud_phone_number_id";
