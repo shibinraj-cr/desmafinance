@@ -679,7 +679,11 @@ async function sendCloudTouch(opts: {
       // flag a number that is simply not on WhatsApp so nothing tries it again.
       await applyHardDeliveryFailure({
         leadId: lead.id,
-        errorCode: result.status != null ? String(result.status) : null,
+        // META's code, not the HTTP status. PERMANENT_UNDELIVERABLE_CODES holds
+        // values like 131026, so passing a 400 here would match nothing and a
+        // number that is simply not on WhatsApp would never be flagged — the
+        // exact policy this call exists to apply.
+        errorCode: result.errorCode ?? null,
         errorMessage: result.body,
         touch: touchIndex,
         now: opts.now,
