@@ -27,6 +27,7 @@
  * the cron that triggered it.
  */
 import { randomUUID } from "node:crypto";
+import { Prisma } from "@prisma/client";
 import { prisma } from "./prisma";
 import { normalizePhone } from "./crm";
 import {
@@ -185,6 +186,29 @@ export function parseKeywords(raw: string | null | undefined): string[] {
     .filter(Boolean);
 }
 
+/**
+ * Replies that must never be read as interest.
+ *
+ * Checked ahead of the positive allow-list rather than instead of it, so a
+ * configured keyword cannot accidentally re-admit a refusal — "no, not
+ * interested" contains "interested".
+ */
+const NEGATIVE_REPLY_TERMS = [
+  "stop",
+  "unsubscribe",
+  "not interested",
+  "no interest",
+  "dont contact",
+  "don't contact",
+  "do not contact",
+  "remove me",
+  "wrong number",
+  "already done",
+  "not required",
+  "no thanks",
+  "no thank you",
+] as const;
+
 /** Whole calendar days between two instants (≥ 0; 0 when `to` precedes `from`). */
 export function daysBetween(from: Date, to: Date): number {
   const ms = to.getTime() - from.getTime();
@@ -230,8 +254,18 @@ export function isCampaignExpired(input: {
  * substring) — the guard against a "STOP" / "not interested" reviving a lead.
  */
 export function matchesReengageKeyword(text: string | null | undefined, keywords: string[]): boolean {
-  if (keywords.length === 0) return true;
   const t = (text ?? "").toLowerCase();
+  // A refusal is never re-engagement, whatever the allow-list says — and with the
+  // allow-list blank (the shipped default, "any reply advances") nothing else
+  // would stop it. That default was harmless while a Wabis keyword flow was the
+  // real gate; once every inbound message reaches us directly it is not, and
+  // "not interested" would move the lead to Follow-Up and tell a consultant to
+  // ring somebody who had just asked to be left alone.
+  if (NEGATIVE_REPLY_TERMS.some((k) => t.includes(k))) return false;
+  // A reply with no text is still a reply — a photo of a passport page is
+  // engagement, and the candidate chose to send it. Only the keyword-matching
+  // branch below needs words to work with.
+  if (keywords.length === 0) return true;
   if (!t.trim()) return false;
   return keywords.some((k) => t.includes(k));
 }
@@ -633,7 +667,7 @@ async function sendCloudTouch(opts: {
   // and an admin pressing Run now) would each see an unstamped touch and each
   // send it. A row inserted first means the loser of that race loses at the
   // database and sends nothing.
-  const claimed = await claimTouch({
+  const claim = await claimTouch({
     dedupeKey,
     leadId: lead.id,
     ownerId,
@@ -644,11 +678,12 @@ async function sendCloudTouch(opts: {
     campaignId: opts.campaignId,
     now: opts.now,
   });
-  if (!claimed) {
-    // Somebody else holds this touch. Handled, so the caller stamps it and moves
-    // on — exactly what the Wabis branch does on the same collision.
-    return true;
-  }
+  // Taken: somebody else holds this touch, so the caller stamps it and moves on —
+  // exactly what the Wabis branch does on the same collision.
+  if (claim === "taken") return true;
+  // Error: nothing was written and nothing was sent. Deferring costs a night;
+  // stamping it would lose the touch and claim it was delivered.
+  if (claim === "error") return false;
 
   const result = await cloudProvider.sendTemplate({
     // `name:language` in one string — the adapter's existing convention, because
@@ -661,37 +696,64 @@ async function sendCloudTouch(opts: {
     endpointUrl: null,
   });
 
+  if (!result.ok) {
+    // Three outcomes, not two — and collapsing them is what made the previous
+    // version lose messages while reporting them as sent.
+    //
+    // The claim row is the duplicate guard, so leaving it behind on a failure
+    // means tomorrow's run collides with it, reads the collision as "somebody
+    // else is sending this", and stamps the touch as sent. A rate limit would
+    // therefore silently burn the touch and write "touch N sent" on the lead's
+    // timeline for a message nobody received.
+    const permanent = result.retryable === false || result.unsupported === true;
+    // `status === null` means the request never completed — a timeout or a
+    // dropped connection. Meta may well have sent the message anyway, so this is
+    // the one case that must NOT be retried: an unrecallable duplicate is worse
+    // than a missing touch, and here we genuinely cannot tell which happened.
+    const outcomeUnknown = result.status === null;
+
+    if (permanent || outcomeUnknown) {
+      await settleTouch({
+        dedupeKey,
+        status: "failed",
+        detail: outcomeUnknown
+          ? `No response from Meta — not retried, in case it was delivered: ${result.body}`
+          : result.body,
+        providerMessageId: result.providerMessageId,
+        now: opts.now,
+      });
+      if (permanent) {
+        // The policy the cloud path was missing entirely: stop the campaign, and
+        // flag a number that is simply not on WhatsApp so nothing tries it again.
+        await applyHardDeliveryFailure({
+          leadId: lead.id,
+          // META's code, not the HTTP status. PERMANENT_UNDELIVERABLE_CODES
+          // holds values like 131026, so an HTTP 400 would match nothing.
+          errorCode: result.errorCode ?? null,
+          errorMessage: result.body,
+          touch: touchIndex,
+          now: opts.now,
+        }).catch(() => undefined);
+      }
+      console.warn(`[crm-remarketing] touch ${touchIndex} not sent: ${result.body}`);
+      return true;
+    }
+
+    // A definite, transient rejection — a rate limit or an upstream fault, with a
+    // status proving Meta answered and did not accept it. Releasing the claim is
+    // what makes "retry tomorrow" actually possible.
+    await releaseTouch(dedupeKey);
+    console.warn(`[crm-remarketing] touch ${touchIndex} deferred: ${result.body}`);
+    return false;
+  }
+
   await settleTouch({
     dedupeKey,
-    status: result.ok ? "sent" : "failed",
-    detail: result.ok ? `Sent as ${key}` : result.body,
+    status: "sent",
+    detail: `Sent as ${key}`,
     providerMessageId: result.providerMessageId,
     now: opts.now,
   });
-
-  if (!result.ok) {
-    // A rejection Meta will repeat tomorrow is stamped so the campaign moves on;
-    // a transient one is not, so it is retried. Discarding `retryable` burned a
-    // touch on a rate limit or a network blip.
-    const permanent = result.retryable === false || result.unsupported === true;
-    if (permanent) {
-      // The policy the cloud path was missing entirely: stop the campaign, and
-      // flag a number that is simply not on WhatsApp so nothing tries it again.
-      await applyHardDeliveryFailure({
-        leadId: lead.id,
-        // META's code, not the HTTP status. PERMANENT_UNDELIVERABLE_CODES holds
-        // values like 131026, so passing a 400 here would match nothing and a
-        // number that is simply not on WhatsApp would never be flagged — the
-        // exact policy this call exists to apply.
-        errorCode: result.errorCode ?? null,
-        errorMessage: result.body,
-        touch: touchIndex,
-        now: opts.now,
-      }).catch(() => undefined);
-    }
-    console.warn(`[crm-remarketing] touch ${touchIndex} rejected: ${result.body}`);
-    return permanent;
-  }
 
   // The part Wabis could never do: put it in the thread.
   await recordTouchOnThread({
@@ -729,7 +791,7 @@ type TouchRowInput = {
  * not, and nothing between here and the send can change that answer. Returning
  * false means a concurrent run owns this touch and this one must not send.
  */
-async function claimTouch(input: TouchRowInput): Promise<boolean> {
+async function claimTouch(input: TouchRowInput): Promise<"claimed" | "taken" | "error"> {
   try {
     await prisma.crmWebhookDelivery.create({
       data: {
@@ -759,11 +821,27 @@ async function claimTouch(input: TouchRowInput): Promise<boolean> {
         maxAttempts: 1,
       },
     });
-    return true;
-  } catch {
-    // Almost always the unique constraint: another run claimed it first.
-    return false;
+    return "claimed";
+  } catch (e) {
+    // The unique constraint means another run owns this touch, and the caller
+    // should move on. ANYTHING ELSE — a pool timeout, a dropped connection —
+    // means nothing was written and nothing was sent, and treating that as
+    // "taken" stamped the touch as delivered with no record of it anywhere.
+    // Neon behind a pooler, twenty concurrent claims a batch, is exactly where
+    // that happens.
+    if (e instanceof Prisma.PrismaClientKnownRequestError && e.code === "P2002") return "taken";
+    console.error("[crm-remarketing] could not claim touch:", e);
+    return "error";
   }
+}
+
+/** Give the touch back, so a transient failure can genuinely be retried. */
+async function releaseTouch(dedupeKey: string): Promise<void> {
+  await prisma.crmWebhookDelivery
+    // Guarded on `pending` and never-delivered: releasing a row that recorded a
+    // real send would let the next run send it again.
+    .deleteMany({ where: { dedupeKey, status: "pending", deliveredAt: null } })
+    .catch(() => undefined);
 }
 
 /** Record how the claimed send actually went. */
@@ -793,8 +871,7 @@ async function settleTouch(input: {
 async function recordTouchOutcome(
   input: TouchRowInput & { status: "sent" | "failed"; detail: string },
 ): Promise<void> {
-  const claimed = await claimTouch(input);
-  if (!claimed) return;
+  if ((await claimTouch(input)) !== "claimed") return;
   await settleTouch({
     dedupeKey: input.dedupeKey,
     status: input.status,

@@ -384,7 +384,12 @@ export async function ingestInboundMessage(
     // Reached only on `stored`, never on a duplicate: a webhook redelivery must
     // not re-open and re-close a campaign. Best-effort, like every other write in
     // this function — a nurturing decision must never cost us the message.
-    if (conversation.leadId) {
+    // Never for an opt-out. That same message was stamped as one thirty lines
+    // above, and passing it on here would advance the lead to Follow-Up and
+    // notify a consultant that they "replied and are back in Follow-Up" — so
+    // somebody rings the person who just asked to be left alone. The opt-out
+    // already stops the campaign; this call has nothing left to add.
+    if (conversation.leadId && !isOptOutMessage(msg.body)) {
       const { handleRemarketingReply } = await import("../crm-remarketing");
       await handleRemarketingReply({
         leadId: conversation.leadId,
