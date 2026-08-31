@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 
 /**
  * WhatsApp module settings — the conversation mirror, the Cloud API credentials
@@ -70,6 +70,7 @@ type ImportSummary = {
   nextCursor: number;
   totalProcessed: number;
   moreToDo: boolean;
+  rateLimited: boolean;
   retried: number;
   stillFailing: number;
   skippedNumbers: string[];
@@ -141,6 +142,10 @@ export function WhatsAppModuleCard() {
 
   const [archiveBusy, setArchiveBusy] = useState(false);
   const [archiveResult, setArchiveResult] = useState<MediaArchiveSummary | null>(null);
+
+  const autoRunRef = useRef(false);
+  const [autoRun, setAutoRun] = useState(false);
+  const [autoNote, setAutoNote] = useState<string | null>(null);
 
   const [importPhone, setImportPhone] = useState("");
   const [importMax, setImportMax] = useState("25");
@@ -669,6 +674,24 @@ export function WhatsAppModuleCard() {
           >
             Import for real
           </button>
+          {/* The one that finishes it. Pressing Import by hand a few dozen times,
+              waiting out a rate limit each time without knowing how long, is not
+              a reasonable way to sweep an account. */}
+          <button
+            type="button"
+            className={autoRun ? ghost : primary}
+            disabled={importBusy && !autoRun}
+            onClick={() => {
+              if (autoRun) {
+                autoRunRef.current = false;
+                setAutoNote("Stopping after this run — the sweep keeps its place.");
+                return;
+              }
+              void runUntilDone();
+            }}
+          >
+            {autoRun ? "Stop" : "Run until done"}
+          </button>
           {/* Resuming is the default, so restarting has to be deliberate —
               otherwise a mis-click sends the sweep back to contact one and it
               re-fetches everything it already has. */}
@@ -684,6 +707,18 @@ export function WhatsAppModuleCard() {
             Start over
           </button>
         </div>
+
+        {autoNote && (
+          <p className={"text-label-sm " + (autoRun ? "text-on-surface" : "text-primary font-semibold")}>
+            {autoRun && (
+              <span className="material-symbols-outlined align-middle mr-xs animate-spin" style={{ fontSize: 14 }}>
+                progress_activity
+              </span>
+            )}
+            {autoNote}
+            {autoRun && " Leave this tab open."}
+          </p>
+        )}
 
         {importResult && <ImportReport summary={importResult} />}
       </div>
@@ -724,6 +759,56 @@ export function WhatsAppModuleCard() {
     void load();
   }
 
+  /**
+   * Press once, walk away.
+   *
+   * Wabis rate-limits per minute, and a whole account is far more contacts than
+   * one 40-second request can carry — so finishing the sweep meant pressing
+   * Import a few dozen times, waiting out a 429 each time without knowing how
+   * long. The loop lives in the browser rather than on the server because the
+   * platform caps a function at 60 seconds: no amount of server work can outrun
+   * that, but a tab can simply keep asking.
+   *
+   * Deliberately paced. Wabis's limit is the real constraint on how fast this can
+   * finish, so racing it just converts successful runs into rejected ones.
+   */
+  async function runUntilDone() {
+    autoRunRef.current = true;
+    setAutoRun(true);
+    setAutoNote(null);
+
+    // A guard, not a target: at ~50 contacts a run this is far more than any
+    // account here needs, and it stops a bug looping this tab forever.
+    for (let i = 0; i < 200 && autoRunRef.current; i++) {
+      const summary = await runImport(false);
+      if (!summary) {
+        setAutoNote("Stopped — that run failed. Press Run until done to pick up where it left off.");
+        break;
+      }
+      if (!summary.moreToDo) {
+        setAutoNote("Finished — every contact has been swept.");
+        break;
+      }
+      if (summary.errors.length > 0) {
+        setAutoNote("Stopped on an error. Read it below; the sweep kept its place.");
+        break;
+      }
+
+      // The pause that matters. A rate-limited run did no work, so waiting out
+      // their window is the fastest way through, not the slowest.
+      const wait = summary.rateLimited ? 65_000 : 3_000;
+      if (summary.rateLimited) {
+        setAutoNote(`Wabis asked us to slow down — waiting a minute. ${summary.totalProcessed} contacts swept so far.`);
+      } else {
+        setAutoNote(`${summary.totalProcessed} contacts swept so far. Still going…`);
+      }
+      await new Promise((r) => setTimeout(r, wait));
+    }
+
+    autoRunRef.current = false;
+    setAutoRun(false);
+  }
+
   async function runArchive() {
     setArchiveBusy(true);
     const res = await fetch("/api/crm/wa/media-archive", {
@@ -747,7 +832,8 @@ export function WhatsAppModuleCard() {
     setArchiveResult((await res.json()) as MediaArchiveSummary);
   }
 
-  async function runImport(dryRun: boolean, restart = false) {
+  /** Returns the summary so the run-until-done loop can decide what to do next. */
+  async function runImport(dryRun: boolean, restart = false): Promise<ImportSummary | null> {
     setImportBusy(true);
     setImportResult(null);
     const r = await fetch("/api/crm/wa/import", {
@@ -780,6 +866,7 @@ export function WhatsAppModuleCard() {
         nextCursor: 0,
         totalProcessed: 0,
         moreToDo: false,
+        rateLimited: false,
         retried: 0,
         stillFailing: 0,
         skippedNumbers: [],
@@ -789,9 +876,11 @@ export function WhatsAppModuleCard() {
         leadsNamed: 0,
         errors: ["The import request failed."],
       });
-      return;
+      return null;
     }
-    setImportResult((await r.json()) as ImportSummary);
+    const summary = (await r.json()) as ImportSummary;
+    setImportResult(summary);
+    return summary;
   }
 }
 
