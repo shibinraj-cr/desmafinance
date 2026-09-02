@@ -14,6 +14,13 @@ const PatchSchema = z.object({
   password: z.string().min(8).max(200).optional(),
   /** Soft-disable / re-enable the account (keeps all data; blocks sign-in). */
   isActive: z.boolean().optional(),
+  /** Change the login username (e.g. an empCode-based one to a name-based one). */
+  username: z
+    .string()
+    .min(3)
+    .max(60)
+    .regex(/^[a-zA-Z0-9._@-]+$/, "Use letters, numbers, . _ @ -")
+    .optional(),
 });
 
 export async function PATCH(req: NextRequest, { params }: { params: { id: string } }) {
@@ -76,6 +83,15 @@ export async function PATCH(req: NextRequest, { params }: { params: { id: string
     }
   }
 
+  let newUsername: string | null = null;
+  if (data.username !== undefined) {
+    newUsername = data.username.trim().toLowerCase();
+    if (newUsername !== target.username) {
+      const clash = await prisma.user.findUnique({ where: { username: newUsername } });
+      if (clash) return NextResponse.json({ error: "username_taken" }, { status: 409 });
+    }
+  }
+
   const update: Record<string, unknown> = {};
   if (data.isActive !== undefined) update.isActive = data.isActive;
   if (newRoleRecord) {
@@ -84,6 +100,7 @@ export async function PATCH(req: NextRequest, { params }: { params: { id: string
   }
   if (data.email !== undefined) update.email = data.email ? data.email.trim().toLowerCase() : null;
   if (data.password) update.passwordHash = await bcrypt.hash(data.password, 12);
+  if (newUsername !== null) update.username = newUsername;
 
   const updated = await prisma.user.update({
     where: { id: params.id },
@@ -107,11 +124,13 @@ export async function PATCH(req: NextRequest, { params }: { params: { id: string
     userId,
     changes: {
       before: {
+        username: target.username,
         roleName: target.roleRef?.name ?? target.role,
         email: target.email,
         isActive: target.isActive,
       },
       after: {
+        username: updated.username,
         roleName: updated.roleRef?.name ?? updated.role,
         email: updated.email,
         isActive: updated.isActive,
