@@ -44,6 +44,7 @@ export default async function UsersPage() {
         isActive: true,
         roleRef: { select: { id: true, name: true } },
         createdAt: true,
+        employeeProfile: { select: { name: true } },
       },
     }),
     prisma.role.findMany({
@@ -63,6 +64,7 @@ export default async function UsersPage() {
       created: u.createdAt.toISOString().slice(0, 10),
       isActive: u.isActive,
       roleId: u.roleId ?? null,
+      employeeName: u.employeeProfile?.name ?? null,
     };
   });
   const activeCount = rows.filter((r) => r.isActive).length;

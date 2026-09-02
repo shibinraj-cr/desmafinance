@@ -166,9 +166,19 @@ export function NewUserButton({ roles }: { roles: RoleOption[] }) {
   );
 }
 
+/** First name, lowercase, letters only — matches the convention used for
+ * real accounts (e.g. "suhaina"). Just a prompt() default; the server does
+ * the real uniqueness check on save. */
+function suggestUsername(employeeName: string | null): string {
+  if (!employeeName) return "";
+  const first = employeeName.trim().toLowerCase().split(/\s+/)[0] ?? "";
+  return first.replace(/[^a-z]/g, "");
+}
+
 export function UserActions({
   userId,
   username,
+  employeeName,
   currentRoleId,
   isSelf,
   isActive,
@@ -176,6 +186,7 @@ export function UserActions({
 }: {
   userId: string;
   username: string;
+  employeeName: string | null;
   currentRoleId: string | null;
   isSelf: boolean;
   isActive: boolean;
@@ -183,6 +194,29 @@ export function UserActions({
 }) {
   const router = useRouter();
   const [busy, setBusy] = useState(false);
+
+  async function renameUsername() {
+    const suggestion = suggestUsername(employeeName);
+    const next = prompt(
+      `New username for ${username}${employeeName ? ` (${employeeName})` : ""}:`,
+      suggestion || username,
+    );
+    if (!next || next.trim().toLowerCase() === username) return;
+    setBusy(true);
+    const res = await fetch(`/api/users/${userId}`, {
+      method: "PATCH",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ username: next.trim() }),
+    });
+    setBusy(false);
+    if (!res.ok) {
+      const data = await res.json().catch(() => ({}));
+      alert(errorLabels[data?.error as string] ?? "Failed to change username.");
+      return;
+    }
+    alert(`Username changed to "${next.trim().toLowerCase()}". They'll need to use it (not the old one) next time they sign in.`);
+    router.refresh();
+  }
 
   async function setActive(next: boolean) {
     const msg = next
@@ -279,6 +313,17 @@ export function UserActions({
       </select>
       <button
         type="button"
+        onClick={renameUsername}
+        disabled={busy}
+        title="Change username"
+        className="p-xs text-on-surface-variant hover:text-accent transition disabled:opacity-40"
+      >
+        <span className="material-symbols-outlined" style={{ fontSize: 18 }}>
+          edit
+        </span>
+      </button>
+      <button
+        type="button"
         onClick={resetPassword}
         disabled={busy}
         title="Reset password"
@@ -334,6 +379,7 @@ type UserRow = {
   created: string;
   isActive: boolean;
   roleId: string | null;
+  employeeName: string | null;
 };
 
 /**
@@ -423,6 +469,7 @@ export function UsersTable({
                     <UserActions
                       userId={u.id}
                       username={u.username}
+                      employeeName={u.employeeName}
                       currentRoleId={u.roleId}
                       isSelf={u.id === currentUserId}
                       isActive={u.isActive}
