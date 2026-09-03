@@ -3936,3 +3936,32 @@ model HiringAiCall {
   @@index([feature, createdAt])
   @@index([createdAt])
 }
+
+/// Durable domain events the hiring module publishes for OTHER modules to
+/// consume. Today there is exactly one producer (`hire.completed`) and no
+/// consumer — People Ops is explicitly out of scope — which is the whole point:
+/// the handoff is a row somebody else can read later, not a write into employee
+/// tables that this module has no business making.
+///
+/// An outbox rather than an in-process callback, so a consumer built next year
+/// can replay everything it missed instead of needing to have been listening.
+model HiringDomainEvent {
+  id          String    @id @default(cuid())
+  /// 'hire.completed'
+  type        String
+  /// Payload shape is per `type` and versioned by `version`.
+  payload     Json
+  version     Int       @default(1)
+  /// Set by a consumer when it has handled the event; null means unconsumed.
+  consumedAt  DateTime?
+  consumedBy  String?
+  /// Idempotency: one event per (type, subject) — re-hiring the same person for
+  /// the same job does not emit twice.
+  subjectType String
+  subjectId   String
+  occurredAt  DateTime  @default(now())
+
+  @@unique([type, subjectType, subjectId])
+  @@index([type, consumedAt])
+  @@index([occurredAt])
+}

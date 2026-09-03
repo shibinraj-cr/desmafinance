@@ -1,6 +1,7 @@
 import type { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
 import { badRequest, notFound, conflict } from "@/lib/http-error";
+import { emitHireCompleted, buildHireCompletedPayload } from "./events";
 
 /**
  * Stage movement — the one place an application changes stage.
@@ -95,6 +96,16 @@ export async function moveApplication(opts: {
 
     return updated;
   });
+
+  // Moving into a `won` stage IS the hire. Emitting here rather than from a
+  // separate "mark hired" action means there is exactly one way to be hired,
+  // and therefore exactly one place the handoff event can be missed from.
+  // Best-effort by construction: emitHireCompleted never throws, because a hire
+  // that happened must not be rolled back by a failure to announce it.
+  if (toStage.kind === "won") {
+    const payload = await buildHireCompletedPayload(app.id);
+    if (payload) await emitHireCompleted(payload);
+  }
 
   return {
     applicationId: result.id,
