@@ -93,6 +93,13 @@ export const POST = withApiHandler(async (req: Request) => {
     );
   }
 
+  // Estimate the audience up front so a DRAFT shows a real count in the list
+  // instead of a bare 0 (which reads as "no one matched"). It is a live upper
+  // bound — the exact, skip-adjusted total is frozen by materialiseAudience at
+  // queue time, which overwrites this. Skipped for the queue path, which
+  // materialises immediately anyway.
+  const estimate = data.queue ? 0 : await countSegment(data.segment as LeadFilterParams);
+
   const broadcast = await prisma.waBroadcast.create({
     data: {
       name: data.name,
@@ -102,6 +109,7 @@ export const POST = withApiHandler(async (req: Request) => {
       scheduledAt: data.scheduledAt ? new Date(data.scheduledAt) : null,
       // Always born a draft — see below.
       status: "draft",
+      totalRecipients: estimate,
       createdById: userId,
     },
     select: { id: true },
@@ -117,6 +125,5 @@ export const POST = withApiHandler(async (req: Request) => {
     return NextResponse.json({ id: broadcast.id, totalRecipients: total, skipped });
   }
 
-  const estimate = await countSegment(data.segment as LeadFilterParams);
   return NextResponse.json({ id: broadcast.id, estimate });
 });

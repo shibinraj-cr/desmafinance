@@ -29,9 +29,14 @@ import {
 } from "../app-settings";
 import { getWaProvider } from "./registry";
 
-/** Recipients per drain run, unless an admin overrides it. */
+/**
+ * Recipients per drain run, unless an admin overrides it via `wa_broadcast_batch`.
+ * The ceiling is a guard, not a throughput promise: the wall-clock budget below
+ * (and Meta's per-24h messaging tier) cap what actually goes out in a run, so a
+ * value far above what fits in the budget simply spills to the next run.
+ */
 const DEFAULT_BATCH_SIZE = 100;
-const MAX_BATCH_SIZE = 500;
+const MAX_BATCH_SIZE = 1000;
 
 /**
  * Wall-clock budget for one drain pass. Vercel kills the request at 60s, and a

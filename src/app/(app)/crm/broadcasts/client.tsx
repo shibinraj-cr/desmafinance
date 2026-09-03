@@ -21,6 +21,16 @@ type BroadcastRow = {
   createdByName: string | null;
 };
 
+/** Pre-fill values for the form — empty for a new campaign, a draft's own for edit. */
+type FormInitial = {
+  name: string;
+  templateName: string;
+  status: string;
+  service: string;
+  source: string;
+  variableMap: Record<string, string>;
+};
+
 const STATUS_TONE: Record<string, string> = {
   draft: "bg-surface-container text-on-surface-variant",
   scheduled: "bg-amber-500/15 text-amber-600",
@@ -54,6 +64,7 @@ export function BroadcastsClient({
   const [rows, setRows] = useState<BroadcastRow[]>([]);
   const [loading, setLoading] = useState(true);
   const [creating, setCreating] = useState(false);
+  const [editing, setEditing] = useState<{ id: string; initial: FormInitial } | null>(null);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -67,6 +78,36 @@ export function BroadcastsClient({
   useEffect(() => {
     void load();
   }, [load]);
+
+  // Open the edit form for a draft — fetch its full segment/variableMap first,
+  // since the list row doesn't carry them.
+  const openEdit = useCallback(async (id: string) => {
+    const res = await fetch(`/api/crm/wa/broadcasts/${id}`).catch(() => null);
+    if (!res?.ok) return;
+    const d = (await res.json()) as {
+      broadcast: {
+        name: string;
+        templateName: string;
+        segment: Record<string, unknown> | null;
+        variableMap: Record<string, string> | null;
+      };
+    };
+    const seg = (d.broadcast.segment ?? {}) as Record<string, unknown>;
+    setCreating(false);
+    setEditing({
+      id,
+      initial: {
+        name: d.broadcast.name,
+        templateName: d.broadcast.templateName,
+        status: typeof seg.status === "string" ? seg.status : "",
+        service: typeof seg.service === "string" ? seg.service : "",
+        source: typeof seg.source === "string" ? seg.source : "",
+        variableMap: d.broadcast.variableMap ?? {},
+      },
+    });
+  }, []);
+
+  const showForm = creating || !!editing;
 
   return (
     <div className="space-y-lg">
@@ -92,7 +133,10 @@ export function BroadcastsClient({
         {canBroadcast && (
           <button
             type="button"
-            onClick={() => setCreating(true)}
+            onClick={() => {
+              setEditing(null);
+              setCreating(true);
+            }}
             className="h-9 px-lg rounded-lg bg-primary text-on-primary text-label-sm font-semibold"
           >
             New campaign
@@ -100,17 +144,20 @@ export function BroadcastsClient({
         )}
       </div>
 
-      {creating && (
-        <CreateForm
+      {showForm && (
+        <BroadcastForm
+          key={editing ? `edit:${editing.id}` : "new"}
           templates={templates}
           mergeFields={mergeFields}
           statuses={statuses}
           services={services}
           sources={sources}
-          onClose={() => setCreating(false)}
-          onCreated={() => {
+          broadcastId={editing?.id}
+          initial={editing?.initial}
+          onReload={load}
+          onClose={() => {
             setCreating(false);
-            void load();
+            setEditing(null);
           }}
         />
       )}
@@ -146,7 +193,7 @@ export function BroadcastsClient({
                 </tr>
               )}
               {rows.map((b) => (
-                <BroadcastRowView key={b.id} row={b} onChanged={load} />
+                <BroadcastRowView key={b.id} row={b} onChanged={load} onEdit={() => void openEdit(b.id)} />
               ))}
             </tbody>
           </table>
@@ -156,7 +203,15 @@ export function BroadcastsClient({
   );
 }
 
-function BroadcastRowView({ row, onChanged }: { row: BroadcastRow; onChanged: () => void }) {
+function BroadcastRowView({
+  row,
+  onChanged,
+  onEdit,
+}: {
+  row: BroadcastRow;
+  onChanged: () => void;
+  onEdit: () => void;
+}) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -168,6 +223,20 @@ function BroadcastRowView({ row, onChanged }: { row: BroadcastRow; onChanged: ()
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ action }),
     }).catch(() => null);
+    setBusy(false);
+    if (!res?.ok) {
+      const d = res ? ((await res.json().catch(() => null)) as { message?: string } | null) : null;
+      setError(d?.message ?? "That didn’t work.");
+      return;
+    }
+    onChanged();
+  }
+
+  async function remove() {
+    if (typeof window !== "undefined" && !window.confirm(`Delete campaign “${row.name}”? This can’t be undone.`)) return;
+    setBusy(true);
+    setError(null);
+    const res = await fetch(`/api/crm/wa/broadcasts/${row.id}`, { method: "DELETE" }).catch(() => null);
     setBusy(false);
     if (!res?.ok) {
       const d = res ? ((await res.json().catch(() => null)) as { message?: string } | null) : null;
@@ -197,15 +266,26 @@ function BroadcastRowView({ row, onChanged }: { row: BroadcastRow; onChanged: ()
           {row.status}
         </span>
       </td>
-      <td className="px-md py-sm text-right tabular-nums">{row.totalRecipients}</td>
+      <td className="px-md py-sm text-right tabular-nums">
+        {row.totalRecipients}
+        {row.status === "draft" && <span className="text-on-surface-variant"> est.</span>}
+      </td>
       <td className="px-md py-sm text-right tabular-nums text-emerald-600">{row.sentCount}</td>
       <td className="px-md py-sm text-right tabular-nums text-error">{row.failedCount || ""}</td>
       <td className="px-md py-sm text-right tabular-nums text-on-surface-variant">{row.skippedCount || ""}</td>
       <td className="px-md py-sm text-right whitespace-nowrap">
         {row.status === "draft" && (
-          <ActionBtn busy={busy} onClick={() => void act("queue")}>
-            Queue
-          </ActionBtn>
+          <>
+            <ActionBtn busy={busy} onClick={onEdit}>
+              Edit
+            </ActionBtn>
+            <ActionBtn busy={busy} onClick={() => void act("queue")}>
+              Queue
+            </ActionBtn>
+            <ActionBtn busy={busy} danger onClick={() => void remove()}>
+              Delete
+            </ActionBtn>
+          </>
         )}
         {(row.status === "scheduled" || row.status === "sending") && (
           <>
@@ -216,6 +296,11 @@ function BroadcastRowView({ row, onChanged }: { row: BroadcastRow; onChanged: ()
               Cancel
             </ActionBtn>
           </>
+        )}
+        {row.status === "cancelled" && (
+          <ActionBtn busy={busy} danger onClick={() => void remove()}>
+            Delete
+          </ActionBtn>
         )}
       </td>
     </tr>
@@ -251,36 +336,49 @@ function ActionBtn({
 }
 
 /**
- * Build a campaign: pick the audience with the CRM's own lead filters, pick an
- * approved template, map its numbered variables to merge tokens, then preview
- * the count before anything is frozen.
+ * Build or edit a campaign: pick the audience with the CRM's own lead filters,
+ * pick an approved template, map its numbered variables to merge tokens, and see
+ * the live audience count. "Save draft" keeps this form open and refreshes the
+ * count; "Queue" freezes the audience and starts the send.
  */
-function CreateForm({
+function BroadcastForm({
   templates,
   mergeFields,
   statuses,
   services,
   sources,
+  broadcastId,
+  initial,
+  onReload,
   onClose,
-  onCreated,
 }: {
   templates: TemplateOpt[];
   mergeFields: MergeField[];
   statuses: Opt[];
   services: Opt[];
   sources: Opt[];
+  broadcastId?: string;
+  initial?: FormInitial;
+  onReload: () => void;
   onClose: () => void;
-  onCreated: () => void;
 }) {
-  const [name, setName] = useState("");
-  const [templateName, setTemplateName] = useState("");
-  const [status, setStatus] = useState("");
-  const [service, setService] = useState("");
-  const [source, setSource] = useState("");
-  const [variableMap, setVariableMap] = useState<Record<string, string>>({});
+  // `startedInEdit` fixes the heading/labels for the session; `effectiveId` is the
+  // campaign the form is bound to — the prop when editing, else the id of the draft
+  // this form created on its first save. Once set, later saves UPDATE that draft
+  // instead of POSTing another one (the create form now stays open).
+  const startedInEdit = !!broadcastId;
+  const [createdId, setCreatedId] = useState<string | null>(null);
+  const effectiveId = broadcastId ?? createdId;
+  const [name, setName] = useState(initial?.name ?? "");
+  const [templateName, setTemplateName] = useState(initial?.templateName ?? "");
+  const [status, setStatus] = useState(initial?.status ?? "");
+  const [service, setService] = useState(initial?.service ?? "");
+  const [source, setSource] = useState(initial?.source ?? "");
+  const [variableMap, setVariableMap] = useState<Record<string, string>>(initial?.variableMap ?? {});
   const [estimate, setEstimate] = useState<number | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [note, setNote] = useState<string | null>(null);
 
   const approved = templates.filter((t) => t.status === "APPROVED");
   const segment: Record<string, string> = {};
@@ -288,23 +386,70 @@ function CreateForm({
   if (service) segment.service = service;
   if (source) segment.source = source;
 
-  async function create(queue: boolean) {
+  async function save(queue: boolean) {
     setBusy(true);
     setError(null);
-    const res = await fetch("/api/crm/wa/broadcasts", {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ name, templateName, segment, variableMap, queue }),
-    }).catch(() => null);
-    setBusy(false);
-    if (!res?.ok) {
-      const d = res ? ((await res.json().catch(() => null)) as { message?: string } | null) : null;
-      setError(d?.message ?? "The campaign could not be created.");
-      return;
+    setNote(null);
+    try {
+      // First save of a brand-new campaign: POST exactly once. Everything after
+      // binds to the returned id and takes the update path below.
+      if (!effectiveId) {
+        const res = await fetch("/api/crm/wa/broadcasts", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ name, templateName, segment, variableMap, queue }),
+        }).catch(() => null);
+        const d = res ? ((await res.json().catch(() => ({}))) as { id?: string; estimate?: number; message?: string }) : {};
+        if (!res?.ok) {
+          setError(d.message ?? "The campaign could not be saved.");
+          return;
+        }
+        onReload();
+        if (queue) {
+          onClose();
+          return;
+        }
+        // Bind the still-open form to the draft it just created, so the next
+        // Save/Queue updates it rather than creating a second one.
+        if (d.id) setCreatedId(d.id);
+        if (typeof d.estimate === "number") setEstimate(d.estimate);
+        setNote("Draft saved.");
+        return;
+      }
+
+      // Update the existing (or just-created) draft, then optionally queue it.
+      const res = await fetch(`/api/crm/wa/broadcasts/${effectiveId}`, {
+        method: "PATCH",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ action: "update", name, templateName, segment, variableMap }),
+      }).catch(() => null);
+      const d = res ? ((await res.json().catch(() => ({}))) as { estimate?: number; message?: string }) : {};
+      if (!res?.ok) {
+        setError(d.message ?? "The changes could not be saved.");
+        return;
+      }
+      if (typeof d.estimate === "number") setEstimate(d.estimate);
+      onReload();
+      if (queue) {
+        const q = await fetch(`/api/crm/wa/broadcasts/${effectiveId}`, {
+          method: "PATCH",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ action: "queue" }),
+        }).catch(() => null);
+        if (!q?.ok) {
+          const qd = q ? ((await q.json().catch(() => ({}))) as { message?: string }) : {};
+          setError(qd.message ?? "Saved, but queuing failed.");
+          onReload();
+          return;
+        }
+        onReload();
+        onClose();
+        return;
+      }
+      setNote(startedInEdit ? "Changes saved." : "Draft saved.");
+    } finally {
+      setBusy(false);
     }
-    const d = (await res.json()) as { estimate?: number };
-    if (!queue && typeof d.estimate === "number") setEstimate(d.estimate);
-    onCreated();
   }
 
   const inputCls =
@@ -312,8 +457,9 @@ function CreateForm({
 
   return (
     <div className="rounded-xl border border-outline-variant bg-surface-container-lowest p-lg space-y-md">
-      <h3 className="text-h3 text-on-surface">New campaign</h3>
+      <h3 className="text-h3 text-on-surface">{startedInEdit ? "Edit campaign" : "New campaign"}</h3>
       {error && <p className="text-label-sm text-error">{error}</p>}
+      {note && <p className="text-label-sm text-emerald-600">{note}</p>}
 
       <div className="grid grid-cols-1 md:grid-cols-2 gap-base">
         <label className="block">
@@ -398,7 +544,8 @@ function CreateForm({
 
       {estimate !== null && (
         <p className="text-body-md text-on-surface">
-          This audience currently matches <span className="font-semibold tabular-nums">{estimate}</span> leads.
+          This audience currently matches <span className="font-semibold tabular-nums">{estimate}</span> leads (before
+          opted-out / undeliverable / no-phone are skipped at queue time).
         </p>
       )}
 
@@ -406,21 +553,21 @@ function CreateForm({
         <button
           type="button"
           disabled={busy || !name.trim() || !templateName}
-          onClick={() => void create(false)}
+          onClick={() => void save(false)}
           className="h-9 px-lg rounded-lg border border-outline-variant text-label-sm font-semibold text-on-surface-variant disabled:opacity-40"
         >
-          Save draft &amp; preview count
+          {startedInEdit ? "Save changes & preview count" : "Save draft & preview count"}
         </button>
         <button
           type="button"
           disabled={busy || !name.trim() || !templateName}
-          onClick={() => void create(true)}
+          onClick={() => void save(true)}
           className="h-9 px-lg rounded-lg bg-primary text-on-primary text-label-sm font-semibold disabled:opacity-40"
         >
           Queue campaign
         </button>
         <button type="button" onClick={onClose} className="h-9 px-md text-label-sm text-on-surface-variant">
-          Cancel
+          Close
         </button>
       </div>
       <p className="text-label-sm text-on-surface-variant">

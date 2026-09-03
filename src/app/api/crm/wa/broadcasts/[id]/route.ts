@@ -5,7 +5,8 @@ import { withApiHandler } from "@/lib/api";
 import { unauthorized, forbidden, notFound, badRequest } from "@/lib/http-error";
 import { getCurrentUserAndPermissions } from "@/lib/permissions";
 import { getCrmAccess } from "@/lib/crm-rbac";
-import { drainBroadcasts, materialiseAudience } from "@/lib/wa/broadcast";
+import { drainBroadcasts, materialiseAudience, countSegment } from "@/lib/wa/broadcast";
+import type { LeadFilterParams } from "@/lib/crm-leads";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -60,9 +61,20 @@ export const GET = withApiHandler(async (_req: Request, { params }: { params: { 
   return NextResponse.json({ broadcast, recipients });
 });
 
-const PatchSchema = z.object({
-  action: z.enum(["queue", "cancel", "send_now"]),
-});
+const PatchSchema = z.discriminatedUnion("action", [
+  z.object({ action: z.literal("queue") }),
+  z.object({ action: z.literal("cancel") }),
+  z.object({ action: z.literal("send_now") }),
+  // Edit a DRAFT: same fields as create. Recomputes the audience estimate.
+  z.object({
+    action: z.literal("update"),
+    name: z.string().min(1).max(200),
+    templateName: z.string().min(1).max(200),
+    segment: z.record(z.string(), z.unknown()).default({}),
+    variableMap: z.record(z.string(), z.string()).optional(),
+    scheduledAt: z.string().datetime().nullable().optional(),
+  }),
+]);
 
 /**
  * PATCH — queue a draft, cancel, or drain immediately.
@@ -77,13 +89,38 @@ export const PATCH = withApiHandler(async (req: Request, { params }: { params: {
   const access = await getCrmAccess(userId, perms);
   if (!access.canBulkEmail) throw forbidden();
 
-  const { action } = PatchSchema.parse(await req.json().catch(() => null));
+  const body = PatchSchema.parse(await req.json().catch(() => null));
+  const { action } = body;
 
   const broadcast = await prisma.waBroadcast.findUnique({
     where: { id: params.id },
     select: { id: true, status: true },
   });
   if (!broadcast) throw notFound();
+
+  if (body.action === "update") {
+    // Only a draft is editable — once queued the recipient list is frozen and the
+    // campaign is a record of what was sent, not a thing to rewrite.
+    if (broadcast.status !== "draft") throw badRequest("Only a draft can be edited", "not_draft");
+    const estimate = await countSegment(body.segment as LeadFilterParams);
+    await prisma.waBroadcast.update({
+      where: { id: params.id },
+      data: {
+        name: body.name,
+        templateName: body.templateName,
+        segment: body.segment as object,
+        variableMap: body.variableMap ?? undefined,
+        // Only touch scheduledAt when the caller actually sent it — an edit that
+        // omits it (the UI never sets one) must not silently clear a schedule.
+        ...(body.scheduledAt !== undefined
+          ? { scheduledAt: body.scheduledAt ? new Date(body.scheduledAt) : null }
+          : {}),
+        // Keep the shown audience in step with the edited filter.
+        totalRecipients: estimate,
+      },
+    });
+    return NextResponse.json({ ok: true, estimate });
+  }
 
   if (action === "queue") {
     if (broadcast.status !== "draft") throw badRequest("Only a draft can be queued", "not_draft");
@@ -118,4 +155,27 @@ export const PATCH = withApiHandler(async (req: Request, { params }: { params: {
   if (broadcast.status === "draft") throw badRequest("Queue the campaign first", "not_queued");
   const summary = await drainBroadcasts();
   return NextResponse.json({ ok: true, ...summary });
+});
+
+/**
+ * DELETE — remove a campaign. Only a DRAFT (never sent) or a CANCELLED one, so a
+ * finished or in-flight send stays on the record. Recipient rows cascade.
+ */
+export const DELETE = withApiHandler(async (_req: Request, { params }: { params: { id: string } }) => {
+  const { userId, perms } = await getCurrentUserAndPermissions();
+  if (!userId || !perms) throw unauthorized();
+  const access = await getCrmAccess(userId, perms);
+  if (!access.canBulkEmail) throw forbidden();
+
+  const broadcast = await prisma.waBroadcast.findUnique({
+    where: { id: params.id },
+    select: { status: true },
+  });
+  if (!broadcast) throw notFound();
+  if (broadcast.status !== "draft" && broadcast.status !== "cancelled") {
+    throw badRequest("Only a draft or a cancelled campaign can be deleted", "not_deletable");
+  }
+
+  await prisma.waBroadcast.delete({ where: { id: params.id } });
+  return NextResponse.json({ ok: true });
 });
