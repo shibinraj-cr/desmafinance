@@ -5,6 +5,8 @@ import { getWaMirrorConfig, ingestInboundMessages } from "@/lib/wa/mirror";
 import { verifyMetaSignature, WA_SIGNATURE_HEADER } from "@/lib/wa/signature";
 import { logger } from "@/lib/logger";
 import { applyDeliveryStatuses, extractDeliveryStatuses } from "@/lib/wa/delivery-status";
+import { extractTemplateStatusUpdates } from "@/lib/wa/template-status";
+import { applyTemplateStatusUpdates } from "@/lib/wa/templates";
 
 /** A body we cannot parse is not an error here — see the always-200 note below. */
 function parseJson(raw: string): unknown {
@@ -29,6 +31,11 @@ export const maxDuration = 30;
  * Meta did with a message we sent. This one stores what was actually SAID, which
  * neither of those has ever captured. Keeping it separate means deploying the
  * mirror cannot disturb a live automation.
+ *
+ * Also carries two things that are not messages at all and share the same
+ * subscription: delivery statuses, and TEMPLATE approval events. Both are
+ * handled here rather than at their own endpoints because Meta delivers them to
+ * one callback URL and there is no way to split them upstream.
  *
  * Accepts Meta's native batched envelope (`entry[].changes[].value.messages[]`)
  * as well as the flat shapes a relay sends — see extractInboundMessages. The
@@ -88,14 +95,38 @@ async function handle(req: Request): Promise<NextResponse> {
     if (provided !== secret) return NextResponse.json({ error: "unauthorized" }, { status: 401 });
   }
 
+  const body = parseJson(rawBody);
+
+  // Template APPROVALS ride the same subscription, on their own field — and are
+  // handled ABOVE the mirror gate on purpose. `wa_mirror_enabled` governs
+  // storing candidates' conversations, which is a different decision from
+  // wanting to know Meta approved a template; someone running with the mirror
+  // off would otherwise never hear back about a submission.
+  //
+  // This only fires while the app is subscribed to
+  // `message_template_status_update`, a separate checkbox from `messages` on
+  // the WABA subscription. The sync in CRM → Templates is the backstop.
+  const templateUpdates = extractTemplateStatusUpdates(body);
+  const templatesApplied =
+    templateUpdates.length > 0
+      ? await applyTemplateStatusUpdates(templateUpdates).catch((e) => {
+          // A template status is a cache of Meta's answer and a sync settles it
+          // anyway, so a storage failure is not worth asking Meta to redeliver
+          // the batch — which would redeliver the messages alongside it.
+          logger.warn("wa_template_status_apply_failed", { message: e instanceof Error ? e.message : String(e) });
+          return 0;
+        })
+      : 0;
+
   const config = await getWaMirrorConfig();
-  if (!config.enabled) return NextResponse.json({ ok: true, skipped: "mirror_disabled" });
+  if (!config.enabled) {
+    return NextResponse.json({ ok: true, skipped: "mirror_disabled", templates: templatesApplied });
+  }
 
   // Body first, query string second. A GET-with-query-params relay is a shape
   // this team already configures — both pre-existing Wabis hooks read fields
   // from the body OR the query for exactly that reason — and a bare test curl
   // is the fastest way to prove the endpoint is wired at all.
-  const body = parseJson(rawBody);
   let messages = extractInboundMessages(body);
   if (messages.length === 0 && [...url.searchParams.keys()].some((k) => k !== "key")) {
     messages = extractInboundMessages(Object.fromEntries(url.searchParams));
@@ -108,15 +139,22 @@ async function handle(req: Request): Promise<NextResponse> {
   const statuses = extractDeliveryStatuses(body);
   if (statuses.length > 0) {
     const applied = await applyDeliveryStatuses(statuses);
-    if (messages.length === 0) return NextResponse.json({ ok: true, received: 0, statuses: applied });
+    if (messages.length === 0) {
+      return NextResponse.json({ ok: true, received: 0, statuses: applied, templates: templatesApplied });
+    }
   }
+
 
   if (messages.length === 0) {
     // Neither a message nor a status we recognise. Logged so an unfamiliar
     // envelope is diagnosable, without echoing the payload itself — these carry
     // candidate phone numbers.
-    logger.info("wa_webhook_no_messages", { keys: body && typeof body === "object" ? Object.keys(body) : null });
-    return NextResponse.json({ ok: true, received: 0 });
+    // A template event carries no messages, so it would land here and be
+    // logged as an unrecognised envelope — hence the count in the answer.
+    if (templatesApplied === 0) {
+      logger.info("wa_webhook_no_messages", { keys: body && typeof body === "object" ? Object.keys(body) : null });
+    }
+    return NextResponse.json({ ok: true, received: 0, templates: templatesApplied });
   }
 
   const summary = await ingestInboundMessages(messages, config);

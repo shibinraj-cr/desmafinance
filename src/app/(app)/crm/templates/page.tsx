@@ -28,7 +28,7 @@ export default async function CrmTemplatesPage() {
   const templates = await listMessageTemplates();
   return (
     <>
-      <TopBar title="Message Templates" subtitle="Reusable email & WhatsApp messages for the CRM" />
+      <TopBar title="Message Templates" subtitle="Email, WhatsApp quick replies, and templates submitted to Meta for approval" />
       <div className="p-margin">
         <MessageTemplatesClient templates={templates} />
       </div>

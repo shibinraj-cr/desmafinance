@@ -25,6 +25,7 @@ import {
 } from "../app-settings";
 import { logger } from "../logger";
 import {
+  unsupportedMutation,
   unsupportedResult,
   type WaCapability,
   type WaMedia,
@@ -35,6 +36,8 @@ import {
   type WaSendResult,
   type WaSendTemplateInput,
   type WaSendTextInput,
+  type WaTemplateMutationResult,
+  type WaTemplateSubmission,
   type WaTemplateSummary,
   type WhatsAppProvider,
 } from "./provider";
@@ -241,6 +244,63 @@ async function graphPost(cfg: CloudConfig, path: string, payload: unknown): Prom
 }
 
 /**
+ * One Graph call that CHANGES a template, with the template-shaped answer.
+ *
+ * Separate from `graphPost` rather than sharing it, because the two speak about
+ * different things: a send comes back with a `wamid` and a retryable/terminal
+ * verdict that a drain loop acts on, while this comes back with a template id
+ * and a review status and is never retried automatically — a resubmission that
+ * quietly ran twice would put two identical templates in front of Meta's
+ * reviewers. Never throws; a transport failure is a result.
+ */
+async function graphMutate(
+  cfg: CloudConfig,
+  path: string,
+  method: "POST" | "DELETE",
+  payload: unknown,
+): Promise<WaTemplateMutationResult> {
+  try {
+    const res = await fetch(`${GRAPH_HOST}/${cfg.apiVersion}/${path}`, {
+      method,
+      headers: {
+        authorization: `Bearer ${cfg.token}`,
+        ...(payload ? { "content-type": "application/json" } : {}),
+      },
+      ...(payload ? { body: JSON.stringify(payload) } : {}),
+      cache: "no-store",
+      signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+    });
+    const text = await res.text().catch(() => "");
+
+    if (!res.ok) {
+      const { code, message } = parseGraphError(text);
+      logger.warn("wa_cloud_template_rejected", { status: res.status, code });
+      return { ok: false, detail: message || `HTTP ${res.status}`, code };
+    }
+
+    // Create answers { id, status, category }; edit and delete answer
+    // { success: true } with no id, which is why none of these are required.
+    const parsed = (() => {
+      try {
+        return JSON.parse(text) as { id?: unknown; status?: unknown; category?: unknown; success?: unknown };
+      } catch {
+        return null;
+      }
+    })();
+
+    return {
+      ok: true,
+      metaId: typeof parsed?.id === "string" && parsed.id ? parsed.id : null,
+      status: typeof parsed?.status === "string" ? parsed.status : null,
+      category: typeof parsed?.category === "string" ? parsed.category : null,
+    };
+  } catch (e) {
+    const msg = e instanceof Error ? `${e.name}: ${e.message}` : "request failed";
+    return { ok: false, detail: truncate(msg), code: null };
+  }
+}
+
+/**
  * How many distinct `{{n}}` placeholders a template body carries.
  *
  * Counts DISTINCT indexes, not occurrences — `{{1}}` used twice is still one
@@ -338,6 +398,47 @@ export async function subscribeAppToWaba(): Promise<{ ok: boolean; detail: strin
   }
 }
 
+type RawTemplate = {
+  id?: string;
+  name?: string;
+  language?: string;
+  category?: string;
+  status?: string;
+  rejected_reason?: string;
+  components?: { type?: string; format?: string; text?: string }[];
+};
+
+/** Meta returns 25 templates a page by default; this asks for the maximum. */
+const TEMPLATE_PAGE_SIZE = 200;
+/** A backstop, not a cap we expect to reach: 20 pages is 4,000 templates. */
+const MAX_TEMPLATE_PAGES = 20;
+
+/** One page of Meta's catalogue, flattened into the shape the CRM speaks. */
+function mapTemplatePage(rows: RawTemplate[]): WaTemplateSummary[] {
+  return rows
+    .filter((t): t is { name: string; language: string } & typeof t => !!t?.name && !!t.language)
+    .map((t) => {
+      const components = t.components ?? [];
+      const partOf = (type: string) =>
+        components.find((c) => (c.type ?? "").toUpperCase() === type && typeof c.text === "string")?.text ?? null;
+      const body = partOf("BODY");
+      const reason = (t.rejected_reason ?? "").trim();
+      return {
+        id: t.id ?? null,
+        name: t.name,
+        language: t.language,
+        category: t.category ?? null,
+        status: t.status ?? "UNKNOWN",
+        body,
+        header: partOf("HEADER"),
+        variableCount: countTemplateVariables(body),
+        // Meta says NONE rather than omitting the field, and a literal
+        // "NONE" rendered next to an approved template reads as a rejection.
+        rejectedReason: reason && reason.toUpperCase() !== "NONE" ? reason : null,
+      };
+    });
+}
+
 const SUPPORTED: ReadonlySet<WaCapability> = new Set<WaCapability>([
   "sendTemplate",
   "sendText",
@@ -345,6 +446,7 @@ const SUPPORTED: ReadonlySet<WaCapability> = new Set<WaCapability>([
   "listTemplates",
   "uploadMedia",
   "sendAudio",
+  "manageTemplates",
 ]);
 
 export const cloudProvider: WhatsAppProvider = {
@@ -538,46 +640,114 @@ export const cloudProvider: WhatsAppProvider = {
     const cfg = await getCloudConfig();
     if (!cfg?.wabaId) return [];
 
+    const collected: WaTemplateSummary[] = [];
     try {
       // `components` is what carries the actual message text. Without it a
       // preview can only show the template's name, and a consultant picking by
       // name alone is how the wrong message goes out.
-      const url = `${GRAPH_HOST}/${cfg.apiVersion}/${cfg.wabaId}/message_templates?fields=name,language,category,status,components&limit=200`;
-      const res = await fetch(url, {
-        headers: { authorization: `Bearer ${cfg.token}` },
-        cache: "no-store",
-        signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
-      });
-      if (!res.ok) return [];
-      const d = (await res.json()) as {
-        data?: {
-          name?: string;
-          language?: string;
-          category?: string;
-          status?: string;
-          components?: { type?: string; format?: string; text?: string }[];
-        }[];
-      };
-      return (d?.data ?? [])
-        .filter((t): t is { name: string; language: string } & typeof t => !!t?.name && !!t.language)
-        .map((t) => {
-          const components = t.components ?? [];
-          const partOf = (type: string) =>
-            components.find((c) => (c.type ?? "").toUpperCase() === type && typeof c.text === "string")?.text ?? null;
-          const body = partOf("BODY");
-          return {
-            name: t.name,
-            language: t.language,
-            category: t.category ?? null,
-            status: t.status ?? "UNKNOWN",
-            body,
-            header: partOf("HEADER"),
-            variableCount: countTemplateVariables(body),
-          };
+      // `id` and `rejected_reason` were not requested before, because nothing
+      // could act on them. Both are load-bearing now: the id is how an edit or a
+      // single-language delete addresses a template, and the reason is the only
+      // explanation an author gets for a refusal.
+      const url = `${GRAPH_HOST}/${cfg.apiVersion}/${cfg.wabaId}/message_templates?fields=id,name,language,category,status,components,rejected_reason&limit=${TEMPLATE_PAGE_SIZE}`;
+      // PAGED, not a single 200-row read. The sync marks a local template
+      // DELETED when Meta's catalogue no longer contains it, so a truncated
+      // catalogue would quietly declare every template past the first page gone.
+      let next: string | null = url;
+      let pages = 0;
+
+      while (next && pages < MAX_TEMPLATE_PAGES) {
+        pages += 1;
+        const res: Response = await fetch(next, {
+          headers: { authorization: `Bearer ${cfg.token}` },
+          cache: "no-store",
+          signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
         });
+        // A failure PART WAY THROUGH is not a short catalogue — it is an unknown
+        // one. Returning what we have would let the sync delete the rest.
+        if (!res.ok) return [];
+        const d = (await res.json()) as {
+          data?: {
+            id?: string;
+            name?: string;
+            language?: string;
+            category?: string;
+            status?: string;
+            rejected_reason?: string;
+            components?: { type?: string; format?: string; text?: string }[];
+          }[];
+          paging?: { next?: string };
+        };
+        collected.push(...mapTemplatePage(d?.data ?? []));
+        next = typeof d?.paging?.next === "string" && d.paging.next ? d.paging.next : null;
+      }
+
+      if (next) logger.warn("wa_cloud_templates_truncated", { pages });
+      return collected;
     } catch (e) {
       logger.warn("wa_cloud_templates_failed", { message: e instanceof Error ? e.message : String(e) });
       return [];
     }
+  },
+
+  /**
+   * Submit a template for review.
+   *
+   * A 200 here means Meta ACCEPTED the submission, not that the template is
+   * usable — the response carries `status: "PENDING"` and a human decides
+   * later, typically in minutes but occasionally in days. The returned id is the
+   * only handle on it afterwards, so losing it means the template can never be
+   * edited or deleted from this side.
+   */
+  async createTemplate(input: WaTemplateSubmission): Promise<WaTemplateMutationResult> {
+    const cfg = await getCloudConfig();
+    if (!cfg) return unsupportedMutation("WhatsApp Cloud API is not configured — set it in CRM → Settings");
+    if (!cfg.wabaId) {
+      return unsupportedMutation("WhatsApp Business Account ID is not set — templates live on the WABA, not the phone number");
+    }
+
+    return graphMutate(cfg, `${cfg.wabaId}/message_templates`, "POST", {
+      name: input.name,
+      language: input.language,
+      category: input.category,
+      components: input.components,
+    });
+  },
+
+  /**
+   * Edit an approved, rejected or paused template.
+   *
+   * Addressed by the TEMPLATE's id rather than the WABA's — a distinction worth
+   * stating because posting an edit to the WABA silently creates a second
+   * template with the same name instead of changing the one you meant. Meta
+   * caps edits of an approved template at ten per month; the eleventh comes back
+   * as an ordinary rejection.
+   */
+  async updateTemplate(
+    metaId: string,
+    input: Omit<WaTemplateSubmission, "name" | "language">,
+  ): Promise<WaTemplateMutationResult> {
+    const cfg = await getCloudConfig();
+    if (!cfg) return unsupportedMutation("WhatsApp Cloud API is not configured");
+
+    return graphMutate(cfg, metaId, "POST", { category: input.category, components: input.components });
+  },
+
+  /**
+   * Delete a template.
+   *
+   * Meta's delete is BY NAME and takes every language with it, which is almost
+   * never what deleting one row means — so `hsm_id` is sent whenever we have it,
+   * narrowing the delete to that single language. Either way the template stops
+   * being sendable immediately and Meta keeps the name reserved for 30 days.
+   */
+  async deleteTemplate(name: string, metaId?: string | null): Promise<WaTemplateMutationResult> {
+    const cfg = await getCloudConfig();
+    if (!cfg) return unsupportedMutation("WhatsApp Cloud API is not configured");
+    if (!cfg.wabaId) return unsupportedMutation("WhatsApp Business Account ID is not set");
+
+    const qs = new URLSearchParams({ name });
+    if (metaId) qs.set("hsm_id", metaId);
+    return graphMutate(cfg, `${cfg.wabaId}/message_templates?${qs.toString()}`, "DELETE", null);
   },
 };

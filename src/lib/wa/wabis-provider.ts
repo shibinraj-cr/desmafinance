@@ -21,6 +21,7 @@
  */
 import { getWabisWebhookConfig, postWebhook } from "../crm-webhook";
 import {
+  unsupportedMutation,
   unsupportedResult,
   type WaCapability,
   type WaMedia,
@@ -31,6 +32,7 @@ import {
   type WaSendResult,
   type WaSendTemplateInput,
   type WaSendTextInput,
+  type WaTemplateMutationResult,
   type WaTemplateSummary,
   type WhatsAppProvider,
 } from "./provider";
@@ -111,5 +113,20 @@ export const wabisProvider: WhatsAppProvider = {
 
   async listTemplates(): Promise<WaTemplateSummary[]> {
     return [];
+  },
+
+  // Template management is Meta's, not Wabis's. Wabis holds partner access to
+  // our WABA and can manage templates through their own panel, but exposes no
+  // API we could drive — so authoring here has to address Meta directly.
+  async createTemplate(): Promise<WaTemplateMutationResult> {
+    return unsupportedMutation("Templates can only be submitted through the WhatsApp Cloud API — switch the transport in CRM → Settings");
+  },
+
+  async updateTemplate(): Promise<WaTemplateMutationResult> {
+    return unsupportedMutation("Templates can only be edited through the WhatsApp Cloud API");
+  },
+
+  async deleteTemplate(): Promise<WaTemplateMutationResult> {
+    return unsupportedMutation("Templates can only be deleted through the WhatsApp Cloud API");
   },
 };
