@@ -146,12 +146,25 @@ export function WhatsAppMetaTemplates({
   const [editing, setEditing] = useState<{ template: WaTemplateDTO | null; spec: WaTemplateSpec } | null>(null);
   const [syncing, setSyncing] = useState(false);
   const [syncNote, setSyncNote] = useState<string | null>(null);
+  const [loadError, setLoadError] = useState<string | null>(null);
 
   const load = useCallback(async () => {
     setLoading(true);
+    setLoadError(null);
     const r = await fetch("/api/crm/wa/templates").catch(() => null);
     setLoading(false);
-    if (!r?.ok) return;
+    if (!r?.ok) {
+      // Said out loud rather than falling through to the empty state. "No
+      // templates yet" next to a catalogue that failed to load is the worst
+      // possible answer — it reads as a confirmed fact, and the most likely
+      // cause is that the table has not been migrated onto this environment yet.
+      setLoadError(
+        r?.status === 403
+          ? "You don't have access to WhatsApp templates."
+          : "The template list couldn't be loaded. If this environment was just deployed, the templates table may not be migrated yet.",
+      );
+      return;
+    }
     setData((await r.json()) as Payload);
   }, []);
 
@@ -256,7 +269,11 @@ export function WhatsAppMetaTemplates({
 
       {loading && <div className={card + " p-lg text-on-surface-variant"}>Loading templates…</div>}
 
-      {!loading && templates.length === 0 && (
+      {!loading && loadError && (
+        <div className="rounded-lg bg-error-container text-on-error-container px-md py-sm text-body-sm">{loadError}</div>
+      )}
+
+      {!loading && !loadError && templates.length === 0 && (
         <div className="rounded-xl border border-dashed border-outline-variant bg-surface-container-lowest p-xl text-center text-on-surface-variant">
           No templates yet. Write one and submit it — Meta has to approve it before it can be sent to a candidate who
           hasn&apos;t messaged us.
