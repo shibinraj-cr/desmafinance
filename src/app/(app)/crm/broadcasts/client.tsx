@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { MultiSelect } from "@/components/MultiSelect";
 import { listParam } from "@/lib/filter-params";
 
@@ -31,7 +31,25 @@ type FormInitial = {
   service: string[];
   source: string[];
   variableMap: Record<string, string>;
+  engagedWithinDays: string;
 };
+
+/** Human meaning for the Meta/WhatsApp error codes broadcasts hit in practice. */
+const ERROR_MEANING: Record<string, string> = {
+  "131026": "Undeliverable — not on WhatsApp / bad number",
+  "131049": "Frequency-capped — Meta cold-marketing limit",
+  "131047": "Re-engagement outside the 24h window",
+  "131048": "Spam rate limit hit on this number",
+  "130472": "In a Meta experiment group — not delivered",
+  "131056": "Pair rate limit — too many to this recipient",
+  "132000": "Template params don't match the template",
+  "132001": "Template not found / not approved",
+  "133010": "Number not registered on the WABA",
+};
+function errMeaning(code: string | null): string {
+  if (!code) return "No code reported";
+  return ERROR_MEANING[code] ?? `Error ${code}`;
+}
 
 const STATUS_TONE: Record<string, string> = {
   draft: "bg-surface-container text-on-surface-variant",
@@ -50,6 +68,7 @@ export function BroadcastsClient({
   templates,
   mergeFields,
   statuses,
+  coldStageIds,
   services,
   sources,
 }: {
@@ -60,6 +79,7 @@ export function BroadcastsClient({
   templates: TemplateOpt[];
   mergeFields: MergeField[];
   statuses: Opt[];
+  coldStageIds: string[];
   services: Opt[];
   sources: Opt[];
 }) {
@@ -67,6 +87,7 @@ export function BroadcastsClient({
   const [loading, setLoading] = useState(true);
   const [creating, setCreating] = useState(false);
   const [editing, setEditing] = useState<{ id: string; initial: FormInitial } | null>(null);
+  const [viewing, setViewing] = useState<{ id: string; name: string } | null>(null);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -95,7 +116,9 @@ export function BroadcastsClient({
       };
     };
     const seg = (d.broadcast.segment ?? {}) as Record<string, unknown>;
+    const engaged = Number(seg.engagedWithinDays);
     setCreating(false);
+    setViewing(null);
     setEditing({
       id,
       initial: {
@@ -107,6 +130,7 @@ export function BroadcastsClient({
         service: listParam(seg.service as string | string[] | undefined),
         source: listParam(seg.source as string | string[] | undefined),
         variableMap: d.broadcast.variableMap ?? {},
+        engagedWithinDays: Number.isFinite(engaged) && engaged > 0 ? String(engaged) : "",
       },
     });
   }, []);
@@ -139,6 +163,7 @@ export function BroadcastsClient({
             type="button"
             onClick={() => {
               setEditing(null);
+              setViewing(null);
               setCreating(true);
             }}
             className="h-9 px-lg rounded-lg bg-primary text-on-primary text-label-sm font-semibold"
@@ -154,6 +179,7 @@ export function BroadcastsClient({
           templates={templates}
           mergeFields={mergeFields}
           statuses={statuses}
+          coldStageIds={coldStageIds}
           services={services}
           sources={sources}
           broadcastId={editing?.id}
@@ -163,6 +189,15 @@ export function BroadcastsClient({
             setCreating(false);
             setEditing(null);
           }}
+        />
+      )}
+
+      {viewing && (
+        <FailurePanel
+          key={`view:${viewing.id}`}
+          broadcastId={viewing.id}
+          name={viewing.name}
+          onClose={() => setViewing(null)}
         />
       )}
 
@@ -197,7 +232,17 @@ export function BroadcastsClient({
                 </tr>
               )}
               {rows.map((b) => (
-                <BroadcastRowView key={b.id} row={b} onChanged={load} onEdit={() => void openEdit(b.id)} />
+                <BroadcastRowView
+                  key={b.id}
+                  row={b}
+                  onChanged={load}
+                  onEdit={() => void openEdit(b.id)}
+                  onViewFailures={() => {
+                    setCreating(false);
+                    setEditing(null);
+                    setViewing({ id: b.id, name: b.name });
+                  }}
+                />
               ))}
             </tbody>
           </table>
@@ -211,10 +256,12 @@ function BroadcastRowView({
   row,
   onChanged,
   onEdit,
+  onViewFailures,
 }: {
   row: BroadcastRow;
   onChanged: () => void;
   onEdit: () => void;
+  onViewFailures: () => void;
 }) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -278,6 +325,11 @@ function BroadcastRowView({
       <td className="px-md py-sm text-right tabular-nums text-error">{row.failedCount || ""}</td>
       <td className="px-md py-sm text-right tabular-nums text-on-surface-variant">{row.skippedCount || ""}</td>
       <td className="px-md py-sm text-right whitespace-nowrap">
+        {row.failedCount > 0 && (
+          <ActionBtn busy={busy} onClick={onViewFailures}>
+            Failures
+          </ActionBtn>
+        )}
         {row.status === "draft" && (
           <>
             <ActionBtn busy={busy} onClick={onEdit}>
@@ -349,6 +401,7 @@ function BroadcastForm({
   templates,
   mergeFields,
   statuses,
+  coldStageIds,
   services,
   sources,
   broadcastId,
@@ -359,6 +412,7 @@ function BroadcastForm({
   templates: TemplateOpt[];
   mergeFields: MergeField[];
   statuses: Opt[];
+  coldStageIds: string[];
   services: Opt[];
   sources: Opt[];
   broadcastId?: string;
@@ -378,6 +432,7 @@ function BroadcastForm({
   const [status, setStatus] = useState<string[]>(initial?.status ?? []);
   const [service, setService] = useState<string[]>(initial?.service ?? []);
   const [source, setSource] = useState<string[]>(initial?.source ?? []);
+  const [engagedDays, setEngagedDays] = useState<string>(initial?.engagedWithinDays ?? "");
   const [variableMap, setVariableMap] = useState<Record<string, string>>(initial?.variableMap ?? {});
   const [estimate, setEstimate] = useState<number | null>(null);
   const [busy, setBusy] = useState(false);
@@ -387,10 +442,20 @@ function BroadcastForm({
   const approved = templates.filter((t) => t.status === "APPROVED");
   // Stored as JSON and read back as LeadFilterParams, which takes one value or
   // several per key — so a segment can be "Study Abroad OR Nursing".
-  const segment: Record<string, string[]> = {};
+  const segment: Record<string, unknown> = {};
   if (status.length) segment.status = status;
   if (service.length) segment.service = service;
   if (source.length) segment.source = source;
+  // Only leads who messaged us within N days — the deliverability lever.
+  if (engagedDays) segment.engagedWithinDays = Number(engagedDays);
+
+  // Warn before queuing a Marketing template at a cold audience (re-marketing /
+  // lost stages), which mostly fails (131049/131026) and hurts the number's
+  // quality rating. Not blocking — just honest.
+  const selectedTemplate = approved.find((t) => `${t.name}:${t.language}` === templateName) ?? null;
+  const isMarketing = (selectedTemplate?.category ?? "").toUpperCase() === "MARKETING";
+  const hasColdStage = status.some((id) => coldStageIds.includes(id));
+  const showColdWarning = isMarketing && hasColdStage && !engagedDays;
 
   async function save(queue: boolean) {
     setBusy(true);
@@ -511,10 +576,31 @@ function BroadcastForm({
             selected={source}
             onChange={setSource}
           />
+          <select
+            value={engagedDays}
+            onChange={(e) => setEngagedDays(e.target.value)}
+            className={inputCls}
+            aria-label="Only leads who replied recently"
+          >
+            <option value="">Anyone who matches</option>
+            <option value="7">Replied in last 7 days</option>
+            <option value="30">Replied in last 30 days</option>
+            <option value="90">Replied in last 90 days</option>
+          </select>
         </div>
         <p className="text-label-sm text-on-surface-variant mt-xs">
-          Opted-out and undeliverable numbers are excluded automatically and reported as skipped.
+          Opted-out and undeliverable numbers are excluded automatically and reported as skipped.{" "}
+          <span className="font-medium">Replied in last N days</span> restricts the send to leads who messaged you — the
+          audience a marketing template actually reaches.
         </p>
+        {showColdWarning && (
+          <div className="mt-sm rounded-lg border border-amber-500/40 bg-amber-500/10 px-md py-sm text-label-sm text-amber-700">
+            <span className="font-semibold">Heads-up:</span> this is a Marketing template to a cold stage (re-marketing /
+            lost). Meta throttles marketing to never-engaged numbers, so most will fail (131049 / 131026) and a high
+            failure rate lowers your number&apos;s quality rating. Use a warmer stage, a <span className="font-medium">Utility</span>{" "}
+            template, or set <span className="font-medium">“Replied in last N days.”</span>
+          </div>
+        )}
       </div>
 
       <div>
@@ -574,6 +660,127 @@ function BroadcastForm({
         Queuing freezes the audience into a fixed recipient list, so the campaign can be reported on and resumed even if
         leads change afterwards.
       </p>
+    </div>
+  );
+}
+
+type RecipientRow = {
+  id: string;
+  phoneE164: string;
+  status: string;
+  skipReason: string | null;
+  waErrorCode: string | null;
+  waErrorMessage: string | null;
+  lead: { id: string; candidateName: string | null } | null;
+};
+
+/**
+ * Why a broadcast's recipients failed — the panel the list never had. Fetches the
+ * campaign detail (failures first) and shows a by-error-code breakdown plus the
+ * individual bounces, so "107 failed" stops being a mystery.
+ */
+function FailurePanel({ broadcastId, name, onClose }: { broadcastId: string; name: string; onClose: () => void }) {
+  const [loading, setLoading] = useState(true);
+  const [recipients, setRecipients] = useState<RecipientRow[]>([]);
+  const [counts, setCounts] = useState<{ failedCount: number; skippedCount: number } | null>(null);
+
+  useEffect(() => {
+    let alive = true;
+    void (async () => {
+      setLoading(true);
+      const res = await fetch(`/api/crm/wa/broadcasts/${broadcastId}`).catch(() => null);
+      if (!alive) return;
+      setLoading(false);
+      if (!res?.ok) return;
+      const d = (await res.json()) as {
+        broadcast: { failedCount: number; skippedCount: number };
+        recipients: RecipientRow[];
+      };
+      setCounts({ failedCount: d.broadcast.failedCount, skippedCount: d.broadcast.skippedCount });
+      setRecipients(d.recipients);
+    })();
+    return () => {
+      alive = false;
+    };
+  }, [broadcastId]);
+
+  const failed = useMemo(() => recipients.filter((r) => r.status === "failed"), [recipients]);
+  const byCode = useMemo(() => {
+    const m = new Map<string, number>();
+    for (const r of failed) {
+      const k = r.waErrorCode ?? "none";
+      m.set(k, (m.get(k) ?? 0) + 1);
+    }
+    return [...m.entries()].sort((a, b) => b[1] - a[1]);
+  }, [failed]);
+
+  return (
+    <div className="rounded-xl border border-outline-variant bg-surface-container-lowest p-lg space-y-md">
+      <div className="flex items-center justify-between gap-base">
+        <h3 className="text-h3 text-on-surface">Failures — {name}</h3>
+        <button type="button" onClick={onClose} className="h-9 px-md text-label-sm text-on-surface-variant">
+          Close
+        </button>
+      </div>
+
+      {loading ? (
+        <p className="text-body-md text-on-surface-variant">Loading…</p>
+      ) : (
+        <>
+          <p className="text-label-sm text-on-surface-variant">
+            {counts?.failedCount ?? failed.length} failed · {counts?.skippedCount ?? 0} skipped. A hard failure (131026)
+            flags the number so later sends skip it; 131049 is Meta&apos;s cold-marketing cap.
+          </p>
+
+          <div className="flex flex-wrap gap-base">
+            {byCode.map(([code, n]) => (
+              <span
+                key={code}
+                className="inline-flex items-center rounded-lg border border-outline-variant bg-surface-container-low px-md py-xs text-label-sm text-on-surface-variant"
+              >
+                <span className="font-semibold text-on-surface">{code === "none" ? "No code" : code}</span>
+                <span className="ml-xs">· {n} · {errMeaning(code === "none" ? null : code)}</span>
+              </span>
+            ))}
+          </div>
+
+          <div className="rounded-xl border border-outline-variant overflow-hidden">
+            <div className="overflow-auto scrollbar-thin max-h-[420px]">
+              <table className="w-full text-body-sm">
+                <thead className="bg-surface-container-low text-on-surface-variant sticky top-0">
+                  <tr>
+                    <th className="px-md py-sm text-label-sm uppercase tracking-wider text-left">Lead</th>
+                    <th className="px-md py-sm text-label-sm uppercase tracking-wider text-left">Phone</th>
+                    <th className="px-md py-sm text-label-sm uppercase tracking-wider text-left">Why it failed</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {failed.length === 0 && (
+                    <tr>
+                      <td colSpan={3} className="px-md py-lg text-center text-on-surface-variant">
+                        No failed recipients in this campaign.
+                      </td>
+                    </tr>
+                  )}
+                  {failed.map((r) => (
+                    <tr key={r.id} className="border-t border-outline-variant align-top">
+                      <td className="px-md py-sm">{r.lead?.candidateName || "(unnamed)"}</td>
+                      <td className="px-md py-sm font-mono">{r.phoneE164}</td>
+                      <td className="px-md py-sm">
+                        <span className="font-medium text-on-surface">{r.waErrorCode ?? "—"}</span>
+                        <span className="text-on-surface-variant"> · {errMeaning(r.waErrorCode)}</span>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </div>
+          {recipients.length >= 200 && (
+            <p className="text-label-sm text-on-surface-variant">Showing the first 200 recipients (failures first).</p>
+          )}
+        </>
+      )}
     </div>
   );
 }

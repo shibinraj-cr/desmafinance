@@ -145,9 +145,46 @@ const AUDIENCE_SELECT = {
   assignedTo: { select: { username: true, leadPulseRole: { select: { displayName: true, phone: true } } } },
 } as const;
 
+/**
+ * Meta error codes that mean the NUMBER cannot receive WhatsApp at all, so a
+ * broadcast that hits one flags the lead and every later broadcast + the
+ * re-marketing drip skip it. Deliberately narrow: only 131026 ("not on WhatsApp /
+ * invalid number") is a true dead-number verdict. Transient/window codes (131000
+ * generic, 131047 24h re-engagement, 131049 frequency cap) are NOT here — flagging
+ * a valid lead undeliverable over one of those would silence it forever.
+ */
+const PERMANENT_UNDELIVERABLE_CODES: ReadonlySet<string> = new Set(["131026"]);
+
+/**
+ * The audience where-clause. `buildLeadWhere` for the stage/service/source
+ * filters, PLUS an optional "engaged" gate: only leads on a number that MESSAGED
+ * US within N days. This is the single biggest deliverability lever — a marketing
+ * template to people who have replied lands, whereas the same to a cold list is
+ * throttled/blocked by Meta.
+ *
+ * The gate is by PHONE, not by the lead→conversation relation: a thread is keyed
+ * by phone (unique) and linked to whichever lead is oldest, so gating on the
+ * relation would drop re-enrolled sibling leads that share an engaged number.
+ * Async because it first reads the set of engaged numbers.
+ */
+export async function broadcastLeadWhere(segment: LeadFilterParams): Promise<Prisma.LeadWhereInput> {
+  const where = buildLeadWhere(segment);
+  const days = Number((segment as { engagedWithinDays?: unknown }).engagedWithinDays);
+  if (Number.isFinite(days) && days > 0) {
+    const cutoff = new Date(Date.now() - days * 86_400_000);
+    const engaged = await prisma.waConversation.findMany({
+      where: { lastInboundAt: { gte: cutoff } },
+      select: { phoneE164: true },
+    });
+    // An empty set correctly matches nobody (nobody engaged in the window).
+    where.phoneE164 = { in: engaged.map((c) => c.phoneE164) };
+  }
+  return where;
+}
+
 /** How many leads a segment currently matches — the preview count. */
 export async function countSegment(segment: LeadFilterParams): Promise<number> {
-  return prisma.lead.count({ where: buildLeadWhere(segment) });
+  return prisma.lead.count({ where: await broadcastLeadWhere(segment) });
 }
 
 /**
@@ -166,6 +203,9 @@ export async function materialiseAudience(broadcastId: string): Promise<{ total:
 
   const segment = (broadcast.segment ?? {}) as LeadFilterParams;
   const variableMap = (broadcast.variableMap ?? null) as Record<string, string> | null;
+  // Resolve the audience where ONCE (the engaged gate reads a set of numbers) and
+  // reuse it for every chunk, so the frozen list matches the preview exactly.
+  const where = await broadcastLeadWhere(segment);
 
   const CHUNK = 500;
   let cursor: string | null = null;
@@ -192,7 +232,7 @@ export async function materialiseAudience(broadcastId: string): Promise<{ total:
     // result — TypeScript sees the cycle and gives up, inferring `any`.
     const page: { cursor?: { id: string }; skip?: number } = cursor ? { cursor: { id: cursor }, skip: 1 } : {};
     const leads = await prisma.lead.findMany({
-      where: buildLeadWhere(segment),
+      where,
       orderBy: { id: "asc" },
       take: CHUNK,
       ...page,
@@ -315,6 +355,7 @@ async function drainOne(
     take: batchSize,
     select: {
       id: true,
+      leadId: true,
       phoneE164: true,
       renderedParams: true,
       // Re-read at SEND time, not trusted from materialisation. A campaign on
@@ -398,6 +439,18 @@ async function drainOne(
           waErrorMessage: result.body.slice(0, 300),
         },
       });
+      // A permanently-undeliverable number (131026 not on WhatsApp) is a property
+      // of the PHONE, not this campaign or this lead row: flag every lead sharing
+      // the number (re-enrollment copies it per service) so every later broadcast
+      // AND the re-marketing drip skip it, instead of re-hitting a dead number.
+      if (recipient.phoneE164 && result.errorCode && PERMANENT_UNDELIVERABLE_CODES.has(result.errorCode)) {
+        await prisma.lead
+          .updateMany({
+            where: { phoneE164: recipient.phoneE164, whatsappUndeliverableAt: null },
+            data: { whatsappUndeliverableAt: new Date(), whatsappUndeliverableReason: result.errorCode },
+          })
+          .catch(() => undefined);
+      }
     }
 
     if (INTER_SEND_DELAY_MS > 0) await sleep(INTER_SEND_DELAY_MS);
