@@ -13,6 +13,7 @@
  */
 
 import { Prisma } from "@prisma/client";
+import { listParam, oneOf } from "./filter-params";
 import { prisma } from "./prisma";
 import { addDays, todayIst, toPrismaDate } from "./lead-pulse-dates";
 
@@ -1409,7 +1410,7 @@ export async function getSourceDisqualifiedAnalysis(
 export async function getPipelineForecast(
   year: number,
   month: number,
-  opts?: { userId?: string },
+  opts?: { userId?: string | string[] },
 ): Promise<{
   byBde: Array<{
     userId: string;
@@ -1442,8 +1443,8 @@ export async function getPipelineForecast(
   // All L2 BDEs (matches the rest of the dashboard — historical rosters
   // included so old data stays visible).
   const roles = await prisma.leadPulseRole.findMany({
-    where: opts?.userId
-      ? { userId: opts.userId, role: "l2" }
+    where: listParam(opts?.userId).length
+      ? { userId: oneOf(listParam(opts?.userId)), role: "l2" }
       : { role: "l2" },
     orderBy: [{ displayName: "asc" }],
   });

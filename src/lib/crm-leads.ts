@@ -2,6 +2,9 @@ import { Prisma } from "@prisma/client";
 import { prisma } from "./prisma";
 import { ageFromDob, dobRangeForAge } from "./age";
 import { normalizeTemperature, type LeadTemperature } from "./crm";
+import { listParam, oneOf, oneParam } from "./filter-params";
+import { parseAgeParam } from "./age";
+import { parsePeriod, rangeFor } from "./period";
 
 // Kept as a literal rather than importing REMARKETING_STATUS_CODE from
 // crm-reinquiry: this module is type-imported by client components, and
@@ -105,22 +108,30 @@ export function serializeLead(l: LeadWithRels): LeadRow {
   };
 }
 
+/**
+ * Every categorical filter takes one value or many: pass a bare string for a
+ * single pick (a drill-down link, a saved bookmark) or an array for a
+ * multi-select, and the builder emits `=` or `IN (...)` accordingly.
+ */
+export type MultiFilterValue = string | string[] | undefined;
+
 export type LeadFilterParams = {
-  status?: string;
-  source?: string;
-  service?: string;
+  status?: MultiFilterValue;
+  source?: MultiFilterValue;
+  service?: MultiFilterValue;
   /**
-   * Consultant filter. A userId restricts to that BDE; `"unassigned"` matches
-   * leads with no consultant; `"all"` (or undefined) applies no assignee filter.
-   * Resolve the raw query value through {@link resolveAssigneeFilter} first so
-   * the BDE "my leads" default is applied consistently.
+   * Consultant filter. UserIds restrict to those BDEs; `"unassigned"` matches
+   * leads with no consultant (and combines with userIds as an OR); `"all"` (or
+   * undefined) applies no assignee filter. Resolve the raw query value through
+   * {@link resolveAssigneeFilter} first so the BDE "my leads" default is
+   * applied consistently.
    */
-  assignee?: string;
-  campaign?: string;
-  /** Lead temperature code (`'hot' | 'warm' | 'cold'`). Invalid values are ignored. */
-  temperature?: string;
-  country?: string;
-  studyDestination?: string;
+  assignee?: MultiFilterValue;
+  campaign?: MultiFilterValue;
+  /** Lead temperature codes (`'hot' | 'warm' | 'cold'`). Invalid values are ignored. */
+  temperature?: MultiFilterValue;
+  country?: MultiFilterValue;
+  studyDestination?: MultiFilterValue;
   /** Inclusive minimum age in years (translated to a `dob` upper bound). */
   ageMin?: number;
   /** Inclusive maximum age in years (translated to a `dob` lower bound). */
@@ -151,22 +162,56 @@ export function assignedDayRange(day: string | undefined): { from: Date; to: Dat
   return { from, to };
 }
 
+/**
+ * Apply the consultant filter. Unlike the other multi-selects this one mixes
+ * real userIds with two sentinels, so it can't collapse to a plain `IN`:
+ *
+ *  - `"all"` anywhere in the selection is the BDE "All leads" opt-out and wins
+ *    outright — no assignee filter at all.
+ *  - `"unassigned"` matches `assignedToId IS NULL`, which combines with picked
+ *    userIds as an OR ("Unassigned + Priya" = both piles).
+ *
+ * The OR goes into `where.AND` rather than `where.OR`, which the free-text `q`
+ * search already owns — the two must intersect, not union.
+ */
+function assignedToFilter(where: Prisma.LeadWhereInput, raw: MultiFilterValue): void {
+  const values = listParam(raw);
+  if (values.length === 0 || values.includes("all")) return;
+  const unassigned = values.includes("unassigned");
+  const userIds = values.filter((v) => v !== "unassigned");
+  if (unassigned && userIds.length > 0) {
+    const or: Prisma.LeadWhereInput[] = [{ assignedToId: null }, { assignedToId: oneOf(userIds) }];
+    where.AND = [...(Array.isArray(where.AND) ? where.AND : where.AND ? [where.AND] : []), { OR: or }];
+    return;
+  }
+  where.assignedToId = unassigned ? null : oneOf(userIds);
+}
+
 /** Build the Prisma `where` for the leads list. Shared by the list page and the GET API so they never drift. */
 export function buildLeadWhere(p: LeadFilterParams): Prisma.LeadWhereInput {
   const where: Prisma.LeadWhereInput = {};
-  if (p.status) where.statusId = p.status;
-  if (p.source) where.sourceId = p.source;
-  if (p.service) where.serviceId = p.service;
-  // "all" (the BDE "All leads" opt-out) applies no assignee filter.
-  if (p.assignee === "unassigned") where.assignedToId = null;
-  else if (p.assignee && p.assignee !== "all") where.assignedToId = p.assignee;
-  if (p.campaign) where.campaign = p.campaign;
-  // Only apply the temperature filter for a recognised code (guards against a
+  // Each of these is `=` for one pick, `IN (...)` for several, absent for none.
+  const statusId = oneOf(listParam(p.status));
+  if (statusId !== undefined) where.statusId = statusId;
+  const sourceId = oneOf(listParam(p.source));
+  if (sourceId !== undefined) where.sourceId = sourceId;
+  const serviceId = oneOf(listParam(p.service));
+  if (serviceId !== undefined) where.serviceId = serviceId;
+  assignedToFilter(where, p.assignee);
+  const campaign = oneOf(listParam(p.campaign));
+  if (campaign !== undefined) where.campaign = campaign;
+  // Only apply the temperature filter for recognised codes (guards against a
   // stray/legacy query value silently matching nothing).
-  const temperature = normalizeTemperature(p.temperature);
-  if (temperature) where.temperature = temperature;
-  if (p.country) where.country = p.country;
-  if (p.studyDestination) where.studyDestination = p.studyDestination;
+  const temperature = oneOf(
+    listParam(p.temperature)
+      .map(normalizeTemperature)
+      .filter((t): t is LeadTemperature => !!t),
+  );
+  if (temperature !== undefined) where.temperature = temperature;
+  const country = oneOf(listParam(p.country));
+  if (country !== undefined) where.country = country;
+  const studyDestination = oneOf(listParam(p.studyDestination));
+  if (studyDestination !== undefined) where.studyDestination = studyDestination;
   // Age filter → indexed `dob` range. A candidate with no dob never matches an
   // age filter (dob IS NULL is excluded by a gte/lte bound), which is intended.
   if (p.ageMin !== undefined || p.ageMax !== undefined) {
@@ -225,6 +270,66 @@ export function buildLeadWhere(p: LeadFilterParams): Prisma.LeadWhereInput {
 }
 
 /**
+ * Either shape a query string arrives in: `URLSearchParams` in a route handler,
+ * or Next's plain `searchParams` object in a server component.
+ */
+export type LeadQuerySource = URLSearchParams | { [k: string]: string | string[] | undefined };
+
+function readAll(sp: LeadQuerySource, key: string): string[] {
+  return listParam(sp instanceof URLSearchParams ? sp.getAll(key) : sp[key]);
+}
+
+function readOne(sp: LeadQuerySource, key: string): string | undefined {
+  return oneParam(sp instanceof URLSearchParams ? sp.getAll(key) : sp[key]);
+}
+
+/**
+ * Turn a leads query string into {@link LeadFilterParams}.
+ *
+ * The list page, the GET list API, the export and the bulk-ids endpoint all
+ * parse the identical set of params, so they share this one reader — otherwise
+ * "Export Excel" or "select all matching" can quietly disagree with the table
+ * the user is looking at.
+ */
+export function leadFilterParamsFromQuery(
+  sp: LeadQuerySource,
+  opts: { isBde: boolean; userId: string },
+): LeadFilterParams {
+  const range = rangeFor(
+    parsePeriod({
+      period: readOne(sp, "period"),
+      from: readOne(sp, "from"),
+      to: readOne(sp, "to"),
+    }),
+  );
+  const assigned = assignedDayRange(readOne(sp, "assignedOn"));
+  return {
+    status: readAll(sp, "status"),
+    source: readAll(sp, "source"),
+    service: readAll(sp, "service"),
+    // BDEs default to their own queue ("my leads") until they pick a consultant
+    // or explicitly choose "All leads"; everyone else sees all leads.
+    assignee: resolveAssigneeFilter(readAll(sp, "assignee"), opts),
+    campaign: readAll(sp, "campaign"),
+    temperature: readAll(sp, "temperature"),
+    country: readAll(sp, "country"),
+    studyDestination: readAll(sp, "studyDestination"),
+    ageMin: parseAgeParam(readOne(sp, "ageMin")),
+    ageMax: parseAgeParam(readOne(sp, "ageMax")),
+    q: readOne(sp, "q"),
+    from: range.from,
+    to: range.to,
+    assignedFrom: assigned?.from,
+    assignedTo: assigned?.to,
+  };
+}
+
+/** Sort key for the leads list — single-valued, unlike every categorical filter. */
+export function leadSortFromQuery(sp: LeadQuerySource): string | undefined {
+  return readOne(sp, "sort");
+}
+
+/**
  * Resolve the effective `assignee` filter from the raw query value, applying the
  * BDE default: a BDE who hasn't picked an assignee sees their own queue, so the
  * leads list lands on "my leads" by default. They can still view everyone by
@@ -235,10 +340,14 @@ export function buildLeadWhere(p: LeadFilterParams): Prisma.LeadWhereInput {
  * the default view never drifts between them.
  */
 export function resolveAssigneeFilter(
-  raw: string | undefined,
+  raw: MultiFilterValue,
   opts: { isBde: boolean; userId: string },
-): string | undefined {
-  if (raw) return raw; // explicit choice: a userId, "unassigned", or "all"
+): string | string[] | undefined {
+  const picked = listParam(raw);
+  // Explicit choice: userIds, "unassigned", and/or "all". A single pick is
+  // returned as a bare string so callers that compare it still work.
+  if (picked.length === 1) return picked[0];
+  if (picked.length > 1) return picked;
   return opts.isBde ? opts.userId : undefined;
 }
 
@@ -576,11 +685,11 @@ export function serializeCrmTaskListRow(t: CrmTaskWithRels): CrmTaskListRow {
 }
 
 export type CrmTaskFilterParams = {
-  status?: string; // 'open' | 'done' (undefined = all)
-  assignee?: string; // userId | 'unassigned'
-  priority?: string; // 'low' | 'normal' | 'high'
-  due?: string; // 'overdue' | 'today' | 'week' | 'no_date'
-  kind?: string; // 'reinquiry' — re-inquiry / re-engage follow-ups
+  status?: MultiFilterValue; // 'open' | 'done' (undefined/both = all)
+  assignee?: MultiFilterValue; // userIds | 'unassigned' | 'all'
+  priority?: MultiFilterValue; // 'low' | 'normal' | 'high'
+  due?: MultiFilterValue; // 'overdue' | 'today' | 'week' | 'no_date'
+  kind?: MultiFilterValue; // 'reinquiry' — re-inquiry / re-engage follow-ups
   q?: string; // matches task subject OR lead name
   /** Injected "now" so date math is stable within a request. */
   now?: Date;
@@ -600,31 +709,49 @@ function startOfDay(d: Date): Date {
 /** Build the Prisma `where` for the cross-lead task list. */
 export function buildCrmTaskWhere(p: CrmTaskFilterParams): Prisma.CrmTaskWhereInput {
   const where: Prisma.CrmTaskWhereInput = {};
-  if (p.status === "open" || p.status === "done") where.status = p.status;
+  const and: Prisma.CrmTaskWhereInput[] = [];
+
+  // Picking both 'open' and 'done' is the same as picking neither: no filter.
+  const statuses = listParam(p.status).filter((v) => v === "open" || v === "done");
+  if (statuses.length === 1) where.status = statuses[0];
+
   // "all" is the BDE "All tasks" opt-out (not a narrowing filter), so it applies
   // no assignee restriction — mirrors buildLeadWhere.
-  if (p.assignee === "unassigned") where.assignedToId = null;
-  else if (p.assignee && p.assignee !== "all") where.assignedToId = p.assignee;
-  if (p.priority === "low" || p.priority === "normal" || p.priority === "high") {
-    where.priority = p.priority;
+  const assignees = listParam(p.assignee);
+  if (assignees.length > 0 && !assignees.includes("all")) {
+    const unassigned = assignees.includes("unassigned");
+    const userIds = assignees.filter((v) => v !== "unassigned");
+    if (unassigned && userIds.length > 0) {
+      and.push({ OR: [{ assignedToId: null }, { assignedToId: oneOf(userIds) }] });
+    } else {
+      where.assignedToId = unassigned ? null : oneOf(userIds);
+    }
   }
-  if (p.kind === "reinquiry") {
+
+  const priority = oneOf(
+    listParam(p.priority).filter((v) => v === "low" || v === "normal" || v === "high"),
+  );
+  if (priority !== undefined) where.priority = priority;
+
+  if (listParam(p.kind).includes("reinquiry")) {
     where.subject = { contains: REINQUIRY_TASK_SUBJECT_NEEDLE, mode: "insensitive" };
   }
 
+  // Due buckets are date predicates rather than column values, so several picks
+  // union as an OR rather than an `IN`. "Overdue" carries `status: open` inside
+  // its own branch (only an open task can be overdue) instead of overwriting the
+  // status filter — so "Done + Overdue" honestly matches nothing.
   const today = startOfDay(p.now ?? new Date());
   const tomorrow = new Date(today.getTime() + 24 * 60 * 60 * 1000);
   const weekEnd = new Date(today.getTime() + 7 * 24 * 60 * 60 * 1000);
-  if (p.due === "overdue") {
-    where.dueAt = { lt: today };
-    where.status = "open"; // only open tasks can be overdue
-  } else if (p.due === "today") {
-    where.dueAt = { gte: today, lt: tomorrow };
-  } else if (p.due === "week") {
-    where.dueAt = { gte: today, lt: weekEnd };
-  } else if (p.due === "no_date") {
-    where.dueAt = null;
+  const dueClauses: Prisma.CrmTaskWhereInput[] = [];
+  for (const due of listParam(p.due)) {
+    if (due === "overdue") dueClauses.push({ dueAt: { lt: today }, status: "open" });
+    else if (due === "today") dueClauses.push({ dueAt: { gte: today, lt: tomorrow } });
+    else if (due === "week") dueClauses.push({ dueAt: { gte: today, lt: weekEnd } });
+    else if (due === "no_date") dueClauses.push({ dueAt: null });
   }
+  if (dueClauses.length > 0) and.push({ OR: dueClauses });
 
   const q = p.q?.trim();
   if (q) {
@@ -633,7 +760,45 @@ export function buildCrmTaskWhere(p: CrmTaskFilterParams): Prisma.CrmTaskWhereIn
       { lead: { candidateName: { contains: q, mode: "insensitive" } } },
     ];
   }
+  if (and.length > 0) where.AND = and;
   return where;
+}
+
+/**
+ * Turn a tasks query string into {@link CrmTaskFilterParams}. Shared by the
+ * board, the list API and the export so the three never drift.
+ *
+ * The board opens on OPEN tasks — the actionable view — so an absent `status`
+ * defaults to `["open"]`. Ticking both Open and Done (or the legacy
+ * `?status=all` link) widens it back to everything.
+ */
+export function crmTaskFilterParamsFromQuery(
+  sp: LeadQuerySource,
+  opts: { isBde: boolean; userId: string; now?: Date },
+): CrmTaskFilterParams {
+  const status = readAll(sp, "status");
+  return {
+    status: status.length > 0 ? status : ["open"],
+    assignee: resolveAssigneeFilter(readAll(sp, "assignee"), opts),
+    priority: readAll(sp, "priority"),
+    due: readAll(sp, "due"),
+    kind: readAll(sp, "kind"),
+    q: readOne(sp, "q"),
+    now: opts.now,
+  };
+}
+
+/**
+ * Narrow the Tasks board's stat chips to the same consultants as the list, so
+ * the counts can never disagree with the rows underneath them. Sentinel-only
+ * selections ("all", "unassigned") and an empty pick leave the counts global.
+ */
+export function crmTaskAssigneeScope(assignee: MultiFilterValue): Prisma.CrmTaskWhereInput {
+  const values = listParam(assignee);
+  if (values.includes("all")) return {};
+  const userIds = values.filter((v) => v !== "unassigned");
+  if (userIds.length === 0) return {};
+  return { assignedToId: oneOf(userIds) };
 }
 
 /**

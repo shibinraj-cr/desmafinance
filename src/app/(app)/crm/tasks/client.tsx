@@ -4,6 +4,8 @@ import { useEffect, useState } from "react";
 import Link from "next/link";
 import { useRouter, usePathname, useSearchParams } from "next/navigation";
 import type { CrmTaskListRow } from "@/lib/crm-leads";
+import { MultiSelect } from "@/components/MultiSelect";
+import { listParam, applyFilterPatch } from "@/lib/filter-params";
 import { DEFAULT_STATUS_COLOR } from "@/lib/crm";
 import { NextStepDialog, type NextStepPayload } from "@/components/crm/NextStepDialog";
 import { TaskEditDialog, type TaskEditPayload } from "@/components/crm/TaskEditDialog";
@@ -114,15 +116,19 @@ export function TasksBoard({
     setQ(search.get("q") ?? "");
   }, [search]);
 
-  function update(patch: Record<string, string | null>, keepPage = false) {
+  // A patch value may be a list (every categorical filter is a multi-select, so
+  // it round-trips as repeated query keys) or a scalar (sort, the page).
+  function update(patch: Record<string, string | string[] | null>, keepPage = false) {
     const params = new URLSearchParams(search.toString());
-    for (const [k, v] of Object.entries(patch)) {
-      if (v === null || v === "") params.delete(k);
-      else params.set(k, v);
-    }
+    applyFilterPatch(params, patch);
     if (!keepPage && !("page" in patch)) params.delete("page");
     const qs = params.toString();
     router.push(qs ? `${pathname}?${qs}` : pathname);
+  }
+
+  /** Current selection for a multi-select filter, straight off the query string. */
+  function picked(key: string): string[] {
+    return listParam(search.getAll(key));
   }
 
   const totalPages = Math.max(1, Math.ceil(total / pageSize));
@@ -131,29 +137,38 @@ export function TasksBoard({
   exportParams.delete("page");
   const exportHref = "/api/crm/tasks/export" + (exportParams.toString() ? `?${exportParams.toString()}` : "");
   const today = startOfToday();
-  const statusVal = search.get("status") ?? "open";
-  const dueVal = search.get("due") ?? "";
+  // Mirrors the server default: the board opens on OPEN tasks until the user
+  // ticks something else. Ticking both Open and Done widens it to everything.
+  const statusVals = picked("status").length > 0 ? picked("status") : ["open"];
+  const dueVals = picked("due");
   // Effective assignee mirrors the server default: a BDE with no explicit
   // assignee lands on their own queue ("my tasks"); non-BDEs (and the explicit
   // "All tasks" / "all" choice) see everyone. Used for the select value + chips.
-  const rawAssignee = search.get("assignee");
-  const assigneeVal = rawAssignee ?? (access.isBde ? access.userId : "all");
-  const kindVal = search.get("kind") ?? "";
+  const assigneeVals = picked("assignee").length > 0 ? picked("assignee") : [access.isBde ? access.userId : "all"];
+  const kindVals = picked("kind");
   const anyFilter =
-    !!search.get("status") ||
-    !!search.get("assignee") ||
-    !!search.get("priority") ||
-    !!search.get("due") ||
-    !!search.get("kind") ||
+    picked("status").length > 0 ||
+    picked("assignee").length > 0 ||
+    picked("priority").length > 0 ||
+    dueVals.length > 0 ||
+    kindVals.length > 0 ||
     !!search.get("q");
+
+  // The chips each describe one exact selection, so they only light up when
+  // that's the whole selection — not when it's one of several picks.
+  const only = (vals: string[]) => (vals.length === 1 ? vals[0] : null);
+  const statusVal = only(statusVals);
+  const dueVal = only(dueVals);
+  const assigneeVal = only(assigneeVals);
+  const kindVal = only(kindVals);
 
   // Quick-filter chips. `active` highlights the chip when its filter is set.
   // Each chip is a one-click preset: it sets the dimension(s) it owns and clears
   // the others (status/assignee/priority/due/kind) so the chips stay exclusive.
   // "No narrowing" = the plain open list with no due/kind/priority facet, used so
   // the All/My scope chips light up only when nothing else is filtering.
-  const noNarrowing = statusVal === "open" && !dueVal && !kindVal && !search.get("priority");
-  const chips: { key: string; label: string; count?: number; active: boolean; patch: Record<string, string | null> }[] = [
+  const noNarrowing = statusVal === "open" && dueVals.length === 0 && kindVals.length === 0 && picked("priority").length === 0;
+  const chips: { key: string; label: string; count?: number; active: boolean; patch: Record<string, string | string[] | null> }[] = [
     { key: "open", label: "All open", count: counts.open, active: assigneeVal === "all" && noNarrowing, patch: { status: null, assignee: "all", priority: null, due: null, kind: null, q: null } },
     { key: "overdue", label: "Overdue", count: counts.overdue, active: dueVal === "overdue", patch: { due: "overdue", status: null, assignee: null, priority: null, kind: null } },
     { key: "today", label: "Due today", count: counts.dueToday, active: dueVal === "today", patch: { due: "today", status: null, assignee: null, priority: null, kind: null } },
@@ -313,36 +328,53 @@ export function TasksBoard({
           </div>
         </form>
 
-        <select className={selectClass} value={statusVal} onChange={(e) => update({ status: e.target.value })}>
-          <option value="open">Open</option>
-          <option value="done">Done</option>
-          <option value="all">All statuses</option>
-        </select>
+        {/* Both ticked (or neither, via Clear) is "all statuses" — clearing
+            falls back to the board's open-only default. */}
+        <MultiSelect
+          placeholder="Open tasks"
+          options={[
+            { value: "open", label: "Open" },
+            { value: "done", label: "Done" },
+          ]}
+          selected={statusVals}
+          onChange={(next) => update({ status: next })}
+        />
 
-        <select className={selectClass} value={assigneeVal} onChange={(e) => update({ assignee: e.target.value })}>
-          <option value="all">All consultants</option>
-          <option value="unassigned">Unassigned</option>
-          {bdes.map((b) => (
-            <option key={b.userId} value={b.userId}>
-              {b.displayName}
-            </option>
-          ))}
-        </select>
+        <MultiSelect
+          placeholder="All consultants"
+          options={[
+            { value: "all", label: "All consultants" },
+            { value: "unassigned", label: "Unassigned" },
+            ...bdes.map((b) => ({ value: b.userId, label: b.displayName })),
+          ]}
+          selected={assigneeVals}
+          onChange={(next) => update({ assignee: next.length ? next : "all" })}
+        />
 
-        <select className={selectClass} value={search.get("priority") ?? ""} onChange={(e) => update({ priority: e.target.value || null })}>
-          <option value="">All priorities</option>
-          <option value="high">High</option>
-          <option value="normal">Normal</option>
-          <option value="low">Low</option>
-        </select>
+        <MultiSelect
+          placeholder="All priorities"
+          options={[
+            { value: "high", label: "High" },
+            { value: "normal", label: "Normal" },
+            { value: "low", label: "Low" },
+          ]}
+          selected={picked("priority")}
+          onChange={(next) => update({ priority: next })}
+        />
 
-        <select className={selectClass} value={dueVal} onChange={(e) => update({ due: e.target.value || null })}>
-          <option value="">Any due date</option>
-          <option value="overdue">Overdue</option>
-          <option value="today">Due today</option>
-          <option value="week">Due this week</option>
-          <option value="no_date">No due date</option>
-        </select>
+        {/* Due buckets union rather than narrow: "Overdue + No due date" shows
+            both piles. */}
+        <MultiSelect
+          placeholder="Any due date"
+          options={[
+            { value: "overdue", label: "Overdue" },
+            { value: "today", label: "Due today" },
+            { value: "week", label: "Due this week" },
+            { value: "no_date", label: "No due date" },
+          ]}
+          selected={dueVals}
+          onChange={(next) => update({ due: next })}
+        />
 
         <select className={selectClass} value={search.get("sort") ?? "due_asc"} onChange={(e) => update({ sort: e.target.value })}>
           {SORT_OPTIONS.map((o) => (

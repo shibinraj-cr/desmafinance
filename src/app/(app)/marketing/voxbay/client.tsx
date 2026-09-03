@@ -1,6 +1,7 @@
 "use client";
 
 import { useMemo, useRef, useState, useTransition } from "react";
+import { MultiSelect } from "@/components/MultiSelect";
 import { useRouter } from "next/navigation";
 
 type Range = { from: string; to: string };
@@ -84,8 +85,8 @@ export function VoxbayClient({
   const [error, setError] = useState<string | null>(null);
   const [toast, setToast] = useState<string | null>(null);
   const [search, setSearch] = useState("");
-  const [statusFilter, setStatusFilter] = useState<string>("all");
-  const [agentFilter, setAgentFilter] = useState<string>("all");
+  const [statusFilter, setStatusFilter] = useState<string[]>([]);
+  const [agentFilter, setAgentFilter] = useState<string[]>([]);
   const [fromInput, setFromInput] = useState(range.from);
   const [toInput, setToInput] = useState(range.to);
   const [, startNav] = useTransition();
@@ -299,8 +300,8 @@ export function VoxbayClient({
   const filteredCalls = useMemo(() => {
     const q = search.trim().toLowerCase();
     return calls.filter((c) => {
-      if (statusFilter !== "all" && (c.userStatus ?? "").toUpperCase() !== statusFilter) return false;
-      if (agentFilter !== "all" && (c.agentName ?? c.lastTriedName ?? "").trim() !== agentFilter)
+      if (statusFilter.length && !statusFilter.includes((c.userStatus ?? "").toUpperCase())) return false;
+      if (agentFilter.length && !agentFilter.includes((c.agentName ?? c.lastTriedName ?? "").trim()))
         return false;
       if (q) {
         const hay =
@@ -721,30 +722,18 @@ export function VoxbayClient({
                 placeholder="Search number / agent / disposition"
                 className="h-[32px] rounded-[6px] px-[10px] text-[12px] min-w-[220px] flex-1"
               />
-              <select
-                value={statusFilter}
-                onChange={(e) => setStatusFilter(e.target.value)}
-                className="h-[32px] rounded-[6px] px-[8px] text-[12px]"
-              >
-                <option value="all">All statuses</option>
-                {statusBreakdown.map((s) => (
-                  <option key={s.name} value={s.name}>
-                    {s.name}
-                  </option>
-                ))}
-              </select>
-              <select
-                value={agentFilter}
-                onChange={(e) => setAgentFilter(e.target.value)}
-                className="h-[32px] rounded-[6px] px-[8px] text-[12px]"
-              >
-                <option value="all">All agents</option>
-                {agents.map((a) => (
-                  <option key={a} value={a}>
-                    {a}
-                  </option>
-                ))}
-              </select>
+              <MultiSelect
+                placeholder="All statuses"
+                options={statusBreakdown.map((s) => ({ value: s.name, label: s.name }))}
+                selected={statusFilter}
+                onChange={setStatusFilter}
+              />
+              <MultiSelect
+                placeholder="All agents"
+                options={agents.map((a) => ({ value: a, label: a }))}
+                selected={agentFilter}
+                onChange={setAgentFilter}
+              />
             </div>
             <div className="overflow-x-auto rounded-[8px] border" style={{ borderColor: "var(--lp-outline-variant)" }}>
               <table className="w-full text-[12px] tabular-nums">

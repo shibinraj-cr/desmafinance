@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { listParam, oneOf } from "@/lib/filter-params";
 import { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
 import { withApiHandler } from "@/lib/api";
@@ -28,12 +29,12 @@ export const GET = withApiHandler(async (req: Request, { params }: { params: { i
   const where: Prisma.LeadActivityWhereInput = { leadId: params.id };
 
   if (scope === "history") {
-    const actor = sp.get("actor");
-    const type = sp.get("type");
+    const actor = listParam(sp.getAll("actor"));
+    const type = listParam(sp.getAll("type"));
     const from = sp.get("from");
     const to = sp.get("to");
-    if (actor) where.actorId = actor;
-    if (type) where.type = type;
+    if (actor.length) where.actorId = oneOf(actor);
+    if (type.length) where.type = oneOf(type);
     if (from || to) {
       const occurredAt: Prisma.DateTimeFilter = {};
       if (from) occurredAt.gte = new Date(from);

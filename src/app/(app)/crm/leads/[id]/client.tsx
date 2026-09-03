@@ -9,6 +9,7 @@ import { isActionOnlyStatus } from "@/lib/crm-leads";
 import { buildLeadMergeVars, fillTemplate, LEAD_TEMPERATURES, type MessageTemplateDTO } from "@/lib/crm";
 import { ageFromDob } from "@/lib/age";
 import { COUNTRIES, countryCodeFor } from "@/lib/countries";
+import { MultiSelect } from "@/components/MultiSelect";
 import { StatusPill, TemperaturePill, type StatusOpt, type Opt, type BdeOpt } from "../client";
 import { EnrollCelebration } from "@/components/EnrollCelebration";
 import { NextStepDialog, type NextStepPayload } from "@/components/crm/NextStepDialog";
@@ -2138,8 +2139,8 @@ const HISTORY_TYPES = [
 function HistoryPanel({ leadId, bdes }: { leadId: string; bdes: BdeOpt[] }) {
   const [rows, setRows] = useState<ActivityRow[] | null>(null);
   const [loading, setLoading] = useState(false);
-  const [actor, setActor] = useState("");
-  const [type, setType] = useState("");
+  const [actor, setActor] = useState<string[]>([]);
+  const [type, setType] = useState<string[]>([]);
   const [from, setFrom] = useState("");
   const [to, setTo] = useState("");
   const [expanded, setExpanded] = useState<string | null>(null);
@@ -2150,8 +2151,8 @@ function HistoryPanel({ leadId, bdes }: { leadId: string; bdes: BdeOpt[] }) {
   async function load() {
     setLoading(true);
     const qs = new URLSearchParams({ scope: "history" });
-    if (actor) qs.set("actor", actor);
-    if (type) qs.set("type", type);
+    for (const a of actor) qs.append("actor", a);
+    for (const t of type) qs.append("type", t);
     if (from) qs.set("from", from);
     if (to) qs.set("to", to);
     const res = await fetch(`/api/crm/leads/${leadId}/activities?${qs.toString()}`);
@@ -2174,30 +2175,26 @@ function HistoryPanel({ leadId, bdes }: { leadId: string; bdes: BdeOpt[] }) {
         <span className="text-label-sm text-on-surface-variant">Full audit log (admin only)</span>
       </div>
       <div className="flex flex-wrap items-center gap-base">
-        <select className={inputSm} value={actor} onChange={(e) => setActor(e.target.value)}>
-          <option value="">All actors</option>
-          {bdes.map((b) => (
-            <option key={b.userId} value={b.userId}>
-              {b.displayName}
-            </option>
-          ))}
-        </select>
-        <select className={inputSm} value={type} onChange={(e) => setType(e.target.value)}>
-          <option value="">All event types</option>
-          {HISTORY_TYPES.map((t) => (
-            <option key={t} value={t}>
-              {t}
-            </option>
-          ))}
-        </select>
+        <MultiSelect
+          placeholder="All actors"
+          options={bdes.map((b) => ({ value: b.userId, label: b.displayName }))}
+          selected={actor}
+          onChange={setActor}
+        />
+        <MultiSelect
+          placeholder="All event types"
+          options={HISTORY_TYPES.map((t) => ({ value: t, label: t }))}
+          selected={type}
+          onChange={setType}
+        />
         <input type="date" className={inputSm} value={from} onChange={(e) => setFrom(e.target.value)} />
         <input type="date" className={inputSm} value={to} onChange={(e) => setTo(e.target.value)} />
-        {(actor || type || from || to) && (
+        {(actor.length > 0 || type.length > 0 || from || to) && (
           <button
             type="button"
             onClick={() => {
-              setActor("");
-              setType("");
+              setActor([]);
+              setType([]);
               setFrom("");
               setTo("");
             }}

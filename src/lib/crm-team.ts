@@ -899,14 +899,14 @@ export type AttentionQueue = {
  */
 export async function getAttentionQueue(opts: {
   scope: TeamScope;
-  /** Restrict to one consultant (userId). Ignored under a self-scoped BDE (already restricted to self). */
-  consultantId?: string | null;
+  /** Restrict to these consultants (userIds). Ignored under a self-scoped BDE (already restricted to self). */
+  consultantIds?: string[];
   now: Date;
 }): Promise<AttentionQueue> {
   const { scope, now } = opts;
   const self = scope.restrictToUserId;
-  // Self-view forces self; a team-view may narrow to a single consultant.
-  const ownerId = self ?? (opts.consultantId || null);
+  // Self-view forces self; a team-view may narrow to one or several consultants.
+  const ownerIds = self ? [self] : opts.consultantIds ?? [];
 
   const roster = (await getAssignableBdes()).filter((b) => !self || b.userId === self);
   const nameById = new Map(roster.map((b) => [b.userId, b.displayName]));
@@ -914,7 +914,7 @@ export async function getAttentionQueue(opts: {
   // Owned, active leads — the population, carryover-excluded below so the
   // unassigned/imported backlog never shows up as someone's attention item.
   const activeAssignedRaw = await prisma.lead.findMany({
-    where: { status: { kind: "active" }, assignedToId: ownerId ? ownerId : { not: null } },
+    where: { status: { kind: "active" }, assignedToId: assignedToIn(ownerIds) },
     select: {
       id: true,
       candidateName: true,
@@ -1027,27 +1027,37 @@ export type QueueRow = {
   nextTaskDueAt: Date | null;
 };
 
-/** Resolve which BDE(s) a drill-down query is scoped to, mirroring getAttentionQueue's ownerId rule. */
+/**
+ * Prisma `assignedToId` match for a consultant selection: an empty selection
+ * means "anyone with an owner", one userId is an `=`, several an `IN`.
+ */
+function assignedToIn(ownerIds: string[]): Prisma.StringNullableFilter | string {
+  if (ownerIds.length === 0) return { not: null };
+  if (ownerIds.length === 1) return ownerIds[0];
+  return { in: ownerIds };
+}
+
+/** Resolve which BDE(s) a drill-down query is scoped to, mirroring getAttentionQueue's owner rule. */
 async function resolveQueueOwner(
   scope: TeamScope,
-  consultantId: string | null | undefined,
-): Promise<{ ownerId: string | null; roster: Array<{ userId: string; displayName: string }> }> {
+  consultantIds: string[] | undefined,
+): Promise<{ ownerIds: string[]; roster: Array<{ userId: string; displayName: string }> }> {
   const self = scope.restrictToUserId;
   const roster = (await getAssignableBdes()).filter((b) => !self || b.userId === self);
-  return { ownerId: self ?? (consultantId || null), roster };
+  return { ownerIds: self ? [self] : consultantIds ?? [], roster };
 }
 
 /** One row per lead with a matching open CrmTask, keyed off the earliest matching task. */
 async function taskLeadQueue(opts: {
   scope: TeamScope;
-  consultantId?: string | null;
+  consultantIds?: string[];
   now: Date;
   taskWhere: Prisma.CrmTaskWhereInput;
   ageLabel: string;
   /** When true, age = days since the task's due date (overdue); else days since the task was created. */
   ageFromDue: boolean;
 }): Promise<QueueRow[]> {
-  const { ownerId, roster } = await resolveQueueOwner(opts.scope, opts.consultantId);
+  const { ownerIds, roster } = await resolveQueueOwner(opts.scope, opts.consultantIds);
   const ids = roster.map((b) => b.userId);
   if (!ids.length) return [];
   const nameById = new Map(roster.map((b) => [b.userId, b.displayName]));
@@ -1055,7 +1065,7 @@ async function taskLeadQueue(opts: {
   const tasks = await prisma.crmTask.findMany({
     where: {
       ...opts.taskWhere,
-      assignedToId: ownerId ? ownerId : { in: ids },
+      assignedToId: ownerIds.length ? assignedToIn(ownerIds) : { in: ids },
       // A task on an enrolled/lost lead, or a deliberately-parked re-marketing
       // lead, isn't a follow-up gap — same "never nags" rule as attentionFlags.
       lead: { status: { kind: "active", code: { notIn: [...PARKED_STATUS_CODES] } } },
@@ -1095,7 +1105,7 @@ async function taskLeadQueue(opts: {
 }
 
 /** Leads with an open task whose due date has passed. */
-export async function getOverdueTaskQueue(opts: { scope: TeamScope; consultantId?: string | null; now: Date }): Promise<QueueRow[]> {
+export async function getOverdueTaskQueue(opts: { scope: TeamScope; consultantIds?: string[]; now: Date }): Promise<QueueRow[]> {
   return taskLeadQueue({
     ...opts,
     taskWhere: { status: "open", dueAt: { lt: startOfLocalDay(opts.now) } },
@@ -1105,7 +1115,7 @@ export async function getOverdueTaskQueue(opts: { scope: TeamScope; consultantId
 }
 
 /** Leads with an open re-inquiry follow-up task (subject match, same rule as the Tasks board). */
-export async function getReinquiryQueue(opts: { scope: TeamScope; consultantId?: string | null; now: Date }): Promise<QueueRow[]> {
+export async function getReinquiryQueue(opts: { scope: TeamScope; consultantIds?: string[]; now: Date }): Promise<QueueRow[]> {
   return taskLeadQueue({
     ...opts,
     taskWhere: { status: "open", subject: { contains: REINQUIRY_TASK_SUBJECT_NEEDLE, mode: "insensitive" } },
@@ -1124,10 +1134,10 @@ export async function getReinquiryQueue(opts: { scope: TeamScope; consultantId?:
  */
 export async function getFirstResponseGapQueue(opts: {
   scope: TeamScope;
-  consultantId?: string | null;
+  consultantIds?: string[];
   now: Date;
 }): Promise<QueueRow[]> {
-  const { ownerId, roster } = await resolveQueueOwner(opts.scope, opts.consultantId);
+  const { ownerIds, roster } = await resolveQueueOwner(opts.scope, opts.consultantIds);
   const ids = roster.map((b) => b.userId);
   if (!ids.length) return [];
   const nameById = new Map(roster.map((b) => [b.userId, b.displayName]));
@@ -1137,7 +1147,7 @@ export async function getFirstResponseGapQueue(opts: {
       // Same "never nags" rule as attentionFlags: a parked (re-marketing) lead
       // is a deliberate resting state, not a first-response gap.
       status: { kind: "active", code: { notIn: [...PARKED_STATUS_CODES] } },
-      assignedToId: ownerId ? ownerId : { in: ids },
+      assignedToId: ownerIds.length ? assignedToIn(ownerIds) : { in: ids },
     },
     select: {
       id: true,

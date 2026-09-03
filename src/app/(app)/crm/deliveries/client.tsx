@@ -2,6 +2,7 @@
 
 import { useMemo, useState } from "react";
 import Link from "next/link";
+import { MultiSelect } from "@/components/MultiSelect";
 
 export type DeliveryRow = {
   id: string;
@@ -80,8 +81,8 @@ export function DeliveriesClient({
   sendSummary: SendSummary;
 }) {
   const [q, setQ] = useState("");
-  const [codeFilter, setCodeFilter] = useState<string>("all");
-  const [ownerFilter, setOwnerFilter] = useState<string>("all");
+  const [codeFilter, setCodeFilter] = useState<string[]>([]);
+  const [ownerFilter, setOwnerFilter] = useState<string[]>([]);
 
   const [importTouch, setImportTouch] = useState(1);
   const [importBusy, setImportBusy] = useState(false);
@@ -146,10 +147,9 @@ export function DeliveriesClient({
   const filtered = useMemo(() => {
     const term = q.trim().toLowerCase();
     return rows.filter((r) => {
-      if (codeFilter !== "all") {
-        if (codeFilter === "none" ? r.errorCode != null : r.errorCode !== codeFilter) return false;
-      }
-      if (ownerFilter !== "all" && (r.owner ?? UNASSIGNED) !== ownerFilter) return false;
+      // "none" is the no-error-code bucket, so it unions with any real codes.
+      if (codeFilter.length && !codeFilter.includes(r.errorCode ?? "none")) return false;
+      if (ownerFilter.length && !ownerFilter.includes(r.owner ?? UNASSIGNED)) return false;
       if (!term) return true;
       return (
         (r.candidateName ?? "").toLowerCase().includes(term) ||
@@ -309,32 +309,20 @@ export function DeliveriesClient({
           value={q}
           onChange={(e) => setQ(e.target.value)}
         />
-        <select
-          className="h-9 px-md rounded-lg border border-outline-variant bg-surface-container-lowest text-body-md outline-none focus:border-primary"
-          value={codeFilter}
-          onChange={(e) => setCodeFilter(e.target.value)}
-          aria-label="Filter by error code"
-        >
-          <option value="all">All error codes</option>
-          {codes.map(([c, n]) => (
-            <option key={c} value={c}>
-              {c === "none" ? "No code" : c} ({n})
-            </option>
-          ))}
-        </select>
-        <select
-          className="h-9 px-md rounded-lg border border-outline-variant bg-surface-container-lowest text-body-md outline-none focus:border-primary max-w-[220px]"
-          value={ownerFilter}
-          onChange={(e) => setOwnerFilter(e.target.value)}
-          aria-label="Filter by agent / owner"
-        >
-          <option value="all">All agents</option>
-          {owners.map(([o, n]) => (
-            <option key={o} value={o}>
-              {o === UNASSIGNED ? "Unassigned" : o} ({n})
-            </option>
-          ))}
-        </select>
+        <MultiSelect
+          title="Filter by error code"
+          placeholder="All error codes"
+          options={codes.map(([c, n]) => ({ value: c, label: c === "none" ? "No code" : c, hint: String(n) }))}
+          selected={codeFilter}
+          onChange={setCodeFilter}
+        />
+        <MultiSelect
+          title="Filter by agent / owner"
+          placeholder="All agents"
+          options={owners.map(([o, n]) => ({ value: o, label: o === UNASSIGNED ? "Unassigned" : o, hint: String(n) }))}
+          selected={ownerFilter}
+          onChange={setOwnerFilter}
+        />
         <div className="grow" />
         <button
           className="h-9 px-md rounded-lg text-label-sm font-semibold border border-outline-variant text-on-surface-variant hover:bg-surface-container-low disabled:opacity-60"
@@ -362,7 +350,7 @@ export function DeliveriesClient({
             {filtered.length === 0 && (
               <tr>
                 <td colSpan={6} className="px-md py-lg text-center text-on-surface-variant">
-                  No failed deliveries{q || codeFilter !== "all" ? " match this filter" : " recorded yet"}.
+                  No failed deliveries{q || codeFilter.length || ownerFilter.length ? " match this filter" : " recorded yet"}.
                 </td>
               </tr>
             )}

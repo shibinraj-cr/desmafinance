@@ -7,15 +7,13 @@ import { getCurrentUserAndPermissions } from "@/lib/permissions";
 import { getCrmAccess } from "@/lib/crm-rbac";
 import { leadTemperatureMeta } from "@/lib/crm";
 import { countryCodeFor } from "@/lib/countries";
-import { parseAgeParam } from "@/lib/age";
-import { parsePeriod, rangeFor } from "@/lib/period";
 import {
   buildLeadWhere,
+  leadFilterParamsFromQuery,
+  leadSortFromQuery,
   leadOrderBy,
   leadRowInclude,
   serializeLead,
-  assignedDayRange,
-  resolveAssigneeFilter,
 } from "@/lib/crm-leads";
 
 export const dynamic = "force-dynamic";
@@ -33,35 +31,11 @@ export const GET = withApiHandler(async (req: Request) => {
   if (!access.canViewLeads) throw forbidden();
 
   const sp = new URL(req.url).searchParams;
-  const range = rangeFor(
-    parsePeriod({
-      period: sp.get("period") || undefined,
-      from: sp.get("from") || undefined,
-      to: sp.get("to") || undefined,
-    }),
-  );
-  const assigned = assignedDayRange(sp.get("assignedOn") || undefined);
-  const where = buildLeadWhere({
-    status: sp.get("status") || undefined,
-    source: sp.get("source") || undefined,
-    service: sp.get("service") || undefined,
-    assignee: resolveAssigneeFilter(sp.get("assignee") || undefined, { isBde: access.isBde, userId }),
-    campaign: sp.get("campaign") || undefined,
-    temperature: sp.get("temperature") || undefined,
-    country: sp.get("country") || undefined,
-    studyDestination: sp.get("studyDestination") || undefined,
-    ageMin: parseAgeParam(sp.get("ageMin")),
-    ageMax: parseAgeParam(sp.get("ageMax")),
-    q: sp.get("q") || undefined,
-    from: range.from,
-    to: range.to,
-    assignedFrom: assigned?.from,
-    assignedTo: assigned?.to,
-  });
+  const where = buildLeadWhere(leadFilterParamsFromQuery(sp, { isBde: access.isBde, userId }));
 
   const rows = await prisma.lead.findMany({
     where,
-    orderBy: leadOrderBy(sp.get("sort") || undefined),
+    orderBy: leadOrderBy(leadSortFromQuery(sp)),
     take: MAX_ROWS,
     include: leadRowInclude,
   });

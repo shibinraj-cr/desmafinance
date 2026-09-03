@@ -1,17 +1,31 @@
 "use client";
 
 import { useRouter, usePathname, useSearchParams } from "next/navigation";
-
-const selectClass =
-  "h-9 px-md rounded-lg border border-outline-variant bg-surface-container-lowest text-on-surface text-label-sm font-semibold focus:border-primary focus:ring-2 focus:ring-primary/30 outline-none transition";
+import { MultiSelect } from "@/components/MultiSelect";
+import { listParam, applyFilterPatch } from "@/lib/filter-params";
 
 type Consultant = { userId: string; displayName: string };
 
+const ISSUE_OPTIONS = [
+  { value: "sla", label: "SLA breaches" },
+  { value: "no-task", label: "No next step" },
+  { value: "stuck", label: "Stuck in stage" },
+  { value: "abandoned", label: "Abandoned" },
+  { value: "overdue-task", label: "Overdue tasks" },
+  { value: "first-response", label: "First-response gaps" },
+  { value: "reinquiry", label: "Re-inquiry follow-ups" },
+];
+
 /**
- * Consultant + issue dropdowns for the attention drill-down. Mirrors the Leads
- * page filter pattern: mutate a `URLSearchParams` copy and `router.push`, so the
- * server component re-renders the queue for the new filters. The consultant
- * dropdown is omitted for a self-scoped BDE (they only ever see their own).
+ * Consultant + issue filters for the attention drill-down. Mirrors the Leads
+ * page pattern: mutate a `URLSearchParams` copy and `router.push`, so the server
+ * component re-renders the queue for the new filters. The consultant filter is
+ * omitted for a self-scoped BDE (they only ever see their own).
+ *
+ * Both take several values. The four flag buckets (SLA / no next step / stuck /
+ * abandoned) union into one lead list; the three task drill-downs each render
+ * their own table, so the page honours the first task issue picked — see the
+ * `taskIssue` note in page.tsx.
  */
 export function QueueFilters({
   consultants,
@@ -24,50 +38,30 @@ export function QueueFilters({
   const pathname = usePathname();
   const search = useSearchParams();
 
-  const consultant = search.get("consultant") ?? "all";
-  const issue = search.get("issue") ?? "all";
-
-  function update(patch: Record<string, string | null>) {
+  function update(patch: Record<string, string | string[] | null>) {
     const params = new URLSearchParams(search.toString());
-    for (const [k, v] of Object.entries(patch)) {
-      if (v === null || v === "" || v === "all") params.delete(k);
-      else params.set(k, v);
-    }
+    applyFilterPatch(params, patch);
     router.push(params.toString() ? `${pathname}?${params.toString()}` : pathname);
   }
 
   return (
     <div className="flex flex-wrap items-center gap-base">
       {showConsultant && (
-        <select
-          className={selectClass}
-          value={consultant}
-          onChange={(e) => update({ consultant: e.target.value })}
-          aria-label="Filter by consultant"
-        >
-          <option value="all">All consultants</option>
-          {consultants.map((c) => (
-            <option key={c.userId} value={c.userId}>
-              {c.displayName}
-            </option>
-          ))}
-        </select>
+        <MultiSelect
+          placeholder="All consultants"
+          title="Filter by consultant"
+          options={consultants.map((c) => ({ value: c.userId, label: c.displayName }))}
+          selected={listParam(search.getAll("consultant"))}
+          onChange={(next) => update({ consultant: next })}
+        />
       )}
-      <select
-        className={selectClass}
-        value={issue}
-        onChange={(e) => update({ issue: e.target.value })}
-        aria-label="Filter by issue"
-      >
-        <option value="all">All issues</option>
-        <option value="sla">SLA breaches</option>
-        <option value="no-task">No next step</option>
-        <option value="stuck">Stuck in stage</option>
-        <option value="abandoned">Abandoned</option>
-        <option value="overdue-task">Overdue tasks</option>
-        <option value="first-response">First-response gaps</option>
-        <option value="reinquiry">Re-inquiry follow-ups</option>
-      </select>
+      <MultiSelect
+        placeholder="All issues"
+        title="Filter by issue"
+        options={ISSUE_OPTIONS}
+        selected={listParam(search.getAll("issue"))}
+        onChange={(next) => update({ issue: next })}
+      />
     </div>
   );
 }

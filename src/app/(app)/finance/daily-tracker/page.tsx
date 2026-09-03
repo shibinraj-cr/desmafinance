@@ -8,6 +8,7 @@ import { inrFull } from "@/lib/format";
 import { parsePeriod, periodLabel, rangeFor } from "@/lib/period";
 import { DateFilter } from "@/components/DateFilter";
 import { FilterBand } from "@/components/FilterBand";
+import { listParam, oneOf } from "@/lib/filter-params";
 import { DeleteRowButton } from "./delete-button";
 
 export const dynamic = "force-dynamic";
@@ -30,11 +31,13 @@ export default async function DailyTrackerPage({
     from?: string;
     to?: string;
     type?: string;
-    category?: string;
-    sub?: string;
-    party?: string;
-    mode?: string;
-    flow?: string;
+    // Every filter-band dropdown is a multi-select, so these arrive as one
+    // value or several (repeated query keys).
+    category?: string | string[];
+    sub?: string | string[];
+    party?: string | string[];
+    mode?: string | string[];
+    flow?: string | string[];
   };
 }) {
   const perms = await getCurrentUserPermissions();
@@ -43,14 +46,19 @@ export default async function DailyTrackerPage({
 
   const period = parsePeriod(searchParams);
   const range = rangeFor(period);
+  const categories_ = listParam(searchParams.category);
+  const subs = listParam(searchParams.sub);
+  const partyIds = listParam(searchParams.party);
+  const modes = listParam(searchParams.mode);
+  const flows = listParam(searchParams.flow);
   const where = {
     deletedAt: null,
     ...(searchParams.type ? { type: searchParams.type } : {}),
-    ...(searchParams.category ? { category: searchParams.category } : {}),
-    ...(searchParams.sub ? { subItem: searchParams.sub } : {}),
-    ...(searchParams.party ? { partyId: searchParams.party } : {}),
-    ...(searchParams.mode ? { paymentMode: searchParams.mode } : {}),
-    ...(searchParams.flow ? { flow: searchParams.flow } : {}),
+    ...(categories_.length ? { category: oneOf(categories_) } : {}),
+    ...(subs.length ? { subItem: oneOf(subs) } : {}),
+    ...(partyIds.length ? { partyId: oneOf(partyIds) } : {}),
+    ...(modes.length ? { paymentMode: oneOf(modes) } : {}),
+    ...(flows.length ? { flow: oneOf(flows) } : {}),
     ...(range.from || range.to
       ? {
           date: {
@@ -190,12 +198,14 @@ export default async function DailyTrackerPage({
     })
     .filter((r): r is UnifiedRow => r !== null)
     .filter((r) => {
+      // Mirrors `where` above for the pending (not-yet-approved) rows, which
+      // are filtered in memory because they live inside an approval payload.
       if (searchParams.type && r.type !== searchParams.type) return false;
-      if (searchParams.category && r.category !== searchParams.category) return false;
-      if (searchParams.sub && r.subItem !== searchParams.sub) return false;
-      if (searchParams.party && r.partyId !== searchParams.party) return false;
-      if (searchParams.mode && r.paymentMode !== searchParams.mode) return false;
-      if (searchParams.flow && r.flow !== searchParams.flow) return false;
+      if (categories_.length && !categories_.includes(r.category)) return false;
+      if (subs.length && !subs.includes(r.subItem)) return false;
+      if (partyIds.length && (!r.partyId || !partyIds.includes(r.partyId))) return false;
+      if (modes.length && !modes.includes(r.paymentMode)) return false;
+      if (flows.length && !flows.includes(r.flow)) return false;
       if (range.from && r.date < range.from) return false;
       if (range.to && r.date >= range.to) return false;
       return true;
@@ -218,11 +228,11 @@ export default async function DailyTrackerPage({
   const totalNet = totalRevenue - totalExpense;
   const hasActiveFilters =
     !!searchParams.type ||
-    !!searchParams.category ||
-    !!searchParams.sub ||
-    !!searchParams.party ||
-    !!searchParams.mode ||
-    !!searchParams.flow ||
+    categories_.length > 0 ||
+    subs.length > 0 ||
+    partyIds.length > 0 ||
+    modes.length > 0 ||
+    flows.length > 0 ||
     !!searchParams.period ||
     !!searchParams.from ||
     !!searchParams.to;
@@ -235,9 +245,9 @@ export default async function DailyTrackerPage({
     // Preserve party/mode/flow across type-chip clicks; drop
     // category/sub since they're type-scoped and would silently filter
     // to zero rows after a type swap.
-    if (searchParams.party) qs.set("party", searchParams.party);
-    if (searchParams.mode) qs.set("mode", searchParams.mode);
-    if (searchParams.flow) qs.set("flow", searchParams.flow);
+    for (const v of partyIds) qs.append("party", v);
+    for (const v of modes) qs.append("mode", v);
+    for (const v of flows) qs.append("flow", v);
     for (const [k, v] of Object.entries(extra)) {
       if (v) qs.set(k, v);
       else qs.delete(k);

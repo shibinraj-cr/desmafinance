@@ -9,7 +9,8 @@ import {
   crmTaskListOrderBy,
   serializeCrmTaskListRow,
   getAssignableBdes,
-  resolveAssigneeFilter,
+  crmTaskFilterParamsFromQuery,
+  crmTaskAssigneeScope,
   REINQUIRY_TASK_SUBJECT_NEEDLE,
 } from "@/lib/crm-leads";
 import { TasksBoard } from "./client";
@@ -44,29 +45,16 @@ export default async function TasksPage({ searchParams }: { searchParams: SP }) 
   }
 
   const now = new Date();
-  // Default the board to OPEN tasks — the actionable view. Pass status=all to widen.
-  const statusParam = str(searchParams, "status");
-  const status = statusParam === "all" ? undefined : statusParam ?? "open";
-
   // BDEs default to their own queue ("my tasks") until they pick a consultant or
   // explicitly choose "All tasks"; everyone else sees all tasks. Mirrors the
   // leads list default.
-  const assignee = resolveAssigneeFilter(str(searchParams, "assignee"), { isBde: access.isBde, userId });
-  const filters = {
-    status,
-    assignee,
-    priority: str(searchParams, "priority"),
-    due: str(searchParams, "due"),
-    kind: str(searchParams, "kind"),
-    q: str(searchParams, "q"),
-    now,
-  };
+  const filters = crmTaskFilterParamsFromQuery(searchParams, { isBde: access.isBde, userId, now });
   const where = buildCrmTaskWhere(filters);
 
   // Scope the stat chips to the same effective assignee so the counts always
   // match the visible list: a BDE sees their own open/overdue/due-today/
   // re-inquiry counts; "all" / unassigned / non-BDE keep the global figures.
-  const scope = assignee && assignee !== "all" && assignee !== "unassigned" ? { assignedToId: assignee } : {};
+  const scope = crmTaskAssigneeScope(filters.assignee);
   const sort = str(searchParams, "sort");
   const requestedPage = Math.max(1, parseInt(str(searchParams, "page") || "1", 10) || 1);
 

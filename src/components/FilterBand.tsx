@@ -3,6 +3,8 @@
 import { useRouter, useSearchParams, usePathname } from "next/navigation";
 import { useMemo } from "react";
 import { PAYMENT_MODES } from "@/lib/catalog";
+import { MultiSelect } from "@/components/MultiSelect";
+import { listParam, applyFilterPatch } from "@/lib/filter-params";
 
 export type FilterBandCategory = {
   id: string;
@@ -22,15 +24,17 @@ export type FilterBandParty = {
 
 /**
  * Inline filter row for the Daily Tracker. Mirrors `DateFilter`'s
- * router-driven pattern: each select rebuilds the URLSearchParams
+ * router-driven pattern: each control rebuilds the URLSearchParams
  * (preserving every other key) and pushes a new route. The page is a
  * server component that re-renders against the new where clause.
  *
- * Cascading: changing `category` clears `sub` because the previously
- * selected sub-item likely doesn't belong to the new category. Changing
- * the page-level `type` filter (handled by the existing chips outside
- * this component) is what re-narrows the Category and Party lists, so
- * we just consume the active type as a prop.
+ * Every control takes several values, written as repeated query keys
+ * (`?mode=Cash&mode=UPI`), which the page turns into a Prisma `IN`.
+ *
+ * Cascading: changing `category` drops any selected sub-items that no longer
+ * belong to the picked categories. Changing the page-level `type` filter
+ * (handled by the existing chips outside this component) is what re-narrows the
+ * Category and Party lists, so we just consume the active type as a prop.
  */
 export function FilterBand({
   categories,
@@ -45,11 +49,11 @@ export function FilterBand({
   const pathname = usePathname();
   const search = useSearchParams();
 
-  const category = search.get("category") ?? "";
-  const sub = search.get("sub") ?? "";
-  const partyId = search.get("party") ?? "";
-  const mode = search.get("mode") ?? "";
-  const flow = search.get("flow") ?? "";
+  const category = listParam(search.getAll("category"));
+  const sub = listParam(search.getAll("sub"));
+  const partyId = listParam(search.getAll("party"));
+  const mode = listParam(search.getAll("mode"));
+  const flow = listParam(search.getAll("flow"));
 
   const visibleCategories = useMemo(() => {
     if (!type) return categories.filter((c) => c.isActive);
@@ -58,15 +62,16 @@ export function FilterBand({
     );
   }, [categories, type]);
 
-  const currentCategory = useMemo(
-    () => visibleCategories.find((c) => c.name === category) ?? null,
-    [visibleCategories, category],
-  );
-
+  // Sub-items of every picked category, de-duplicated by name (two categories
+  // can share a sub-item name, and the filter matches on name).
   const visibleSubItems = useMemo(() => {
-    if (!currentCategory) return [];
-    return currentCategory.subItems.filter((s) => s.isActive);
-  }, [currentCategory]);
+    const picked = visibleCategories.filter((c) => category.includes(c.name));
+    const names = new Set<string>();
+    for (const c of picked) {
+      for (const s of c.subItems) if (s.isActive) names.add(s.name);
+    }
+    return [...names].sort((a, b) => a.localeCompare(b));
+  }, [visibleCategories, category]);
 
   const visibleParties = useMemo(() => {
     if (!type) return parties.filter((p) => p.isActive);
@@ -75,111 +80,89 @@ export function FilterBand({
     );
   }, [parties, type]);
 
-  // Hide the sub-item selector when there's no category picked yet —
-  // an "All sub-items" select with the union of every category's sub-
-  // items would be a giant and confusing list.
-  const subItemDisabled = !category;
+  // Hide the sub-item selector when there's no category picked yet — an
+  // "All sub-items" list with the union of every category's sub-items would be
+  // a giant and confusing list.
+  const subItemDisabled = category.length === 0;
 
-  function update(patch: Record<string, string | null>) {
+  function update(patch: Record<string, string | string[] | null>) {
     const params = new URLSearchParams(search.toString());
-    for (const [k, v] of Object.entries(patch)) {
-      if (v === null || v === "") params.delete(k);
-      else params.set(k, v);
-    }
-    // Cascading: when category changes, clear sub even if caller didn't.
-    if ("category" in patch && patch.category !== category) {
-      if (!("sub" in patch)) params.delete("sub");
-    }
+    applyFilterPatch(params, patch);
     const qs = params.toString();
     router.push(qs ? `${pathname}?${qs}` : pathname);
   }
 
-  const anyActive = category || sub || partyId || mode || flow;
+  /**
+   * Category change cascades onto sub-items: keep only the sub-items that still
+   * belong to a picked category, so narrowing the category list can't leave an
+   * invisible sub-item filtering the table to nothing.
+   */
+  function updateCategories(next: string[]) {
+    const stillValid = new Set<string>();
+    for (const c of visibleCategories) {
+      if (!next.includes(c.name)) continue;
+      for (const s of c.subItems) if (s.isActive) stillValid.add(s.name);
+    }
+    update({ category: next, sub: sub.filter((s) => stillValid.has(s)) });
+  }
+
+  const anyActive =
+    category.length > 0 || sub.length > 0 || partyId.length > 0 || mode.length > 0 || flow.length > 0;
 
   function clearAll() {
-    const params = new URLSearchParams(search.toString());
-    params.delete("category");
-    params.delete("sub");
-    params.delete("party");
-    params.delete("mode");
-    params.delete("flow");
-    const qs = params.toString();
-    router.push(qs ? `${pathname}?${qs}` : pathname);
+    update({ category: null, sub: null, party: null, mode: null, flow: null });
   }
-
-  const selectClass =
-    "h-9 px-md rounded-lg border border-outline-variant bg-surface-container-lowest text-on-surface text-label-sm focus:border-primary focus:ring-2 focus:ring-primary/30 outline-none transition";
 
   return (
     <div className="flex flex-wrap items-center gap-base">
-      <select
-        aria-label="Filter by category"
-        value={category}
-        onChange={(e) => update({ category: e.target.value || null, sub: null })}
-        className={selectClass}
-      >
-        <option value="">All categories</option>
-        {visibleCategories.map((c) => (
-          <option key={c.id} value={c.name}>
-            {c.name}
-          </option>
-        ))}
-      </select>
+      <MultiSelect
+        title="Filter by category"
+        placeholder="All categories"
+        options={visibleCategories.map((c) => ({ value: c.name, label: c.name }))}
+        selected={category}
+        onChange={updateCategories}
+      />
 
-      <select
-        aria-label="Filter by sub-item"
-        value={sub}
-        onChange={(e) => update({ sub: e.target.value || null })}
+      <MultiSelect
+        title="Filter by sub-item"
+        placeholder="All sub-items"
         disabled={subItemDisabled}
-        className={selectClass + (subItemDisabled ? " opacity-50 cursor-not-allowed" : "")}
-      >
-        <option value="">{subItemDisabled ? "Pick a category first" : "All sub-items"}</option>
-        {visibleSubItems.map((s) => (
-          <option key={s.id} value={s.name}>
-            {s.name}
-          </option>
-        ))}
-      </select>
+        disabledHint="Pick a category first"
+        options={visibleSubItems.map((s) => ({ value: s, label: s }))}
+        selected={sub}
+        onChange={(next) => update({ sub: next })}
+      />
 
-      <select
-        aria-label="Filter by party"
-        value={partyId}
-        onChange={(e) => update({ party: e.target.value || null })}
-        className={selectClass}
-      >
-        <option value="">All parties</option>
-        {visibleParties.map((p) => (
-          <option key={p.id} value={p.id}>
-            {p.name}
-            {p.group === "Candidate" ? " (Candidate)" : " (Vendor)"}
-          </option>
-        ))}
-      </select>
+      <MultiSelect
+        title="Filter by party"
+        placeholder="All parties"
+        options={visibleParties.map((p) => ({
+          value: p.id,
+          label: p.name,
+          hint: p.group === "Candidate" ? "Candidate" : "Vendor",
+        }))}
+        selected={partyId}
+        onChange={(next) => update({ party: next })}
+      />
 
-      <select
-        aria-label="Filter by payment mode"
-        value={mode}
-        onChange={(e) => update({ mode: e.target.value || null })}
-        className={selectClass}
-      >
-        <option value="">All modes</option>
-        {PAYMENT_MODES.map((m) => (
-          <option key={m} value={m}>
-            {m}
-          </option>
-        ))}
-      </select>
+      <MultiSelect
+        title="Filter by payment mode"
+        placeholder="All modes"
+        options={PAYMENT_MODES.map((m) => ({ value: m, label: m }))}
+        selected={mode}
+        onChange={(next) => update({ mode: next })}
+      />
 
-      <select
-        aria-label="Filter by flow"
-        value={flow}
-        onChange={(e) => update({ flow: e.target.value || null })}
-        className={selectClass}
-      >
-        <option value="">All flow</option>
-        <option value="Inflow">Inflow</option>
-        <option value="Outflow">Outflow</option>
-      </select>
+      <MultiSelect
+        title="Filter by flow"
+        placeholder="All flow"
+        options={[
+          { value: "Inflow", label: "Inflow" },
+          { value: "Outflow", label: "Outflow" },
+        ]}
+        selected={flow}
+        onChange={(next) => update({ flow: next })}
+      />
 
       {anyActive && (
         <button

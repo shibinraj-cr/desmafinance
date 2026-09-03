@@ -4,6 +4,7 @@ import { getCurrentUserAndPermissions } from "@/lib/permissions";
 import { isHrUser, canApproveHr } from "@/lib/hr-rbac";
 import { TopBar } from "@/components/TopBar";
 import { Section } from "@/components/Cards";
+import { listParam, oneOf } from "@/lib/filter-params";
 import { ShiftAssignmentsClient } from "./client";
 
 export const dynamic = "force-dynamic";
@@ -11,7 +12,7 @@ export const dynamic = "force-dynamic";
 export default async function ShiftAssignmentsPage({
   searchParams,
 }: {
-  searchParams?: { employeeId?: string; status?: string };
+  searchParams?: { employeeId?: string | string[]; status?: string | string[] };
 }) {
   const { perms } = await getCurrentUserAndPermissions();
   if (!perms) redirect("/login");
@@ -27,6 +28,8 @@ export default async function ShiftAssignmentsPage({
       </>
     );
   }
+  const employeeIds = listParam(searchParams?.employeeId);
+  const statuses = listParam(searchParams?.status);
   const [employees, shifts, assignments] = await Promise.all([
     prisma.employee.findMany({
       where: { active: true },
@@ -40,8 +43,8 @@ export default async function ShiftAssignmentsPage({
     }),
     prisma.hrShiftAssignment.findMany({
       where: {
-        ...(searchParams?.employeeId ? { employeeId: searchParams.employeeId } : {}),
-        ...(searchParams?.status ? { status: searchParams.status } : {}),
+        ...(employeeIds.length ? { employeeId: oneOf(employeeIds) } : {}),
+        ...(statuses.length ? { status: oneOf(statuses) } : {}),
       },
       orderBy: [{ employeeId: "asc" }, { effectiveFrom: "desc" }],
       include: {
@@ -79,7 +82,7 @@ export default async function ShiftAssignmentsPage({
             status: a.status,
             reviewNote: a.reviewNote,
           }))}
-          filter={{ employeeId: searchParams?.employeeId ?? null, status: searchParams?.status ?? null }}
+          filter={{ employeeId: employeeIds, status: statuses }}
         />
       </div>
     </>

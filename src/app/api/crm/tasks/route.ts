@@ -9,7 +9,7 @@ import {
   crmTaskListInclude,
   crmTaskListOrderBy,
   serializeCrmTaskListRow,
-  resolveAssigneeFilter,
+  crmTaskFilterParamsFromQuery,
 } from "@/lib/crm-leads";
 
 export const dynamic = "force-dynamic";
@@ -28,21 +28,9 @@ export const GET = withApiHandler(async (req: Request) => {
   if (!access.canViewLeads) throw forbidden();
 
   const sp = new URL(req.url).searchParams;
-  const statusParam = sp.get("status") || undefined;
-  const status = statusParam === "all" ? undefined : statusParam ?? "open";
-
-  const where = buildCrmTaskWhere({
-    status,
-    assignee: resolveAssigneeFilter(sp.get("assignee") || undefined, {
-      isBde: access.isBde,
-      userId,
-    }),
-    priority: sp.get("priority") || undefined,
-    due: sp.get("due") || undefined,
-    kind: sp.get("kind") || undefined,
-    q: sp.get("q") || undefined,
-    now: new Date(),
-  });
+  const where = buildCrmTaskWhere(
+    crmTaskFilterParamsFromQuery(sp, { isBde: access.isBde, userId, now: new Date() }),
+  );
 
   const rows = await prisma.crmTask.findMany({
     where,

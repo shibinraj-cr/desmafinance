@@ -5,14 +5,15 @@ import { getLeadPulseAccess } from "@/lib/lead-pulse-rbac";
 import { prisma } from "@/lib/prisma";
 import { getPipelineForecast } from "@/lib/lead-pulse-metrics";
 import { todayIst } from "@/lib/lead-pulse-dates";
-import { PipelineClient } from "./client";
+import { listParam, oneOf } from "@/lib/filter-params";
+import { PipelineClient, type StatusFilter } from "./client";
 
 export const dynamic = "force-dynamic";
 
 export default async function PipelinePage({
   searchParams,
 }: {
-  searchParams: { tab?: string; userId?: string; year?: string; month?: string; status?: string };
+  searchParams: { tab?: string; userId?: string | string[]; year?: string; month?: string; status?: string | string[] };
 }) {
   const { userId, perms } = await getCurrentUserAndPermissions();
   if (!userId || !perms) redirect("/login");
@@ -50,15 +51,13 @@ export default async function PipelinePage({
   const year = monthFiltered ? rawYear : Number(today.slice(0, 4));
   const month = monthFiltered ? rawMonth : Number(today.slice(5, 7));
 
-  const status =
-    searchParams.status === "open" || searchParams.status === "closed_won" || searchParams.status === "lost"
-      ? searchParams.status
-      : null;
+  const status = listParam(searchParams.status).filter(
+    (v): v is StatusFilter => v === "open" || v === "closed_won" || v === "lost",
+  );
 
-  // Pick whose pipeline to load.
-  const scopedUserId = access.canSupervise
-    ? searchParams.userId || null
-    : userId;
+  // Pick whose pipeline to load. An L2 is always scoped to themselves; only a
+  // supervisor may pick BDEs, and they may pick several.
+  const scopedUserIds = access.canSupervise ? listParam(searchParams.userId) : [userId];
 
   // A deal belongs to a month if it is either expected to close in it or was
   // actually closed in it — same rule the forecast uses, so both tabs agree on
@@ -66,8 +65,8 @@ export default async function PipelinePage({
   const monthStart = new Date(Date.UTC(year, month - 1, 1));
   const monthEnd = new Date(Date.UTC(year, month, 0, 23, 59, 59, 999));
   const where: Prisma.LeadPulsePipelineWhereInput = {
-    ...(scopedUserId ? { userId: scopedUserId } : {}),
-    ...(status ? { status } : {}),
+    ...(scopedUserIds.length ? { userId: oneOf(scopedUserIds) } : {}),
+    ...(status.length ? { status: oneOf(status) } : {}),
     ...(monthFiltered
       ? {
           OR: [
@@ -110,7 +109,7 @@ export default async function PipelinePage({
       select: { id: true, code: true, label: true },
     }),
     tab === "forecast"
-      ? getPipelineForecast(year, month, scopedUserId ? { userId: scopedUserId } : undefined)
+      ? getPipelineForecast(year, month, scopedUserIds.length ? { userId: scopedUserIds } : undefined)
       : Promise.resolve(null),
   ]);
 
@@ -123,7 +122,7 @@ export default async function PipelinePage({
     <PipelineClient
       currentUserId={userId}
       canSupervise={access.canSupervise}
-      ownerFilter={scopedUserId}
+      ownerFilter={scopedUserIds}
       l2Bdes={l2Bdes}
       services={services}
       sources={sources}

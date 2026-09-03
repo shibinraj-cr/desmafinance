@@ -114,6 +114,16 @@ describe("buildInboxWhere", () => {
       AND: [OPEN, { assignedToId: null }],
     });
   });
+  it("turns several picked consultants into an IN", () => {
+    expect(buildInboxWhere("all", { ...scope, owner: ["u2", "u3"] })).toEqual({
+      AND: [OPEN, { assignedToId: { in: ["u2", "u3"] } }],
+    });
+  });
+  it("ORs the unassigned pile together with picked consultants", () => {
+    expect(buildInboxWhere("all", { ...scope, owner: ["unassigned", "u2"] })).toEqual({
+      AND: [OPEN, { OR: [{ assignedToId: null }, { assignedToId: "u2" }] }],
+    });
+  });
 });
 
 describe("isAwaitingReply", () => {

@@ -1,6 +1,8 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
+import { MultiSelect } from "@/components/MultiSelect";
+import { listParam } from "@/lib/filter-params";
 
 type TemplateOpt = { name: string; language: string; category: string | null; status: string };
 type Opt = { id: string; label?: string; name?: string };
@@ -25,9 +27,9 @@ type BroadcastRow = {
 type FormInitial = {
   name: string;
   templateName: string;
-  status: string;
-  service: string;
-  source: string;
+  status: string[];
+  service: string[];
+  source: string[];
   variableMap: Record<string, string>;
 };
 
@@ -99,9 +101,11 @@ export function BroadcastsClient({
       initial: {
         name: d.broadcast.name,
         templateName: d.broadcast.templateName,
-        status: typeof seg.status === "string" ? seg.status : "",
-        service: typeof seg.service === "string" ? seg.service : "",
-        source: typeof seg.source === "string" ? seg.source : "",
+        // listParam reads both shapes: the scalars saved before filters went
+        // multi-value, and the arrays saved since.
+        status: listParam(seg.status as string | string[] | undefined),
+        service: listParam(seg.service as string | string[] | undefined),
+        source: listParam(seg.source as string | string[] | undefined),
         variableMap: d.broadcast.variableMap ?? {},
       },
     });
@@ -371,9 +375,9 @@ function BroadcastForm({
   const effectiveId = broadcastId ?? createdId;
   const [name, setName] = useState(initial?.name ?? "");
   const [templateName, setTemplateName] = useState(initial?.templateName ?? "");
-  const [status, setStatus] = useState(initial?.status ?? "");
-  const [service, setService] = useState(initial?.service ?? "");
-  const [source, setSource] = useState(initial?.source ?? "");
+  const [status, setStatus] = useState<string[]>(initial?.status ?? []);
+  const [service, setService] = useState<string[]>(initial?.service ?? []);
+  const [source, setSource] = useState<string[]>(initial?.source ?? []);
   const [variableMap, setVariableMap] = useState<Record<string, string>>(initial?.variableMap ?? {});
   const [estimate, setEstimate] = useState<number | null>(null);
   const [busy, setBusy] = useState(false);
@@ -381,10 +385,12 @@ function BroadcastForm({
   const [note, setNote] = useState<string | null>(null);
 
   const approved = templates.filter((t) => t.status === "APPROVED");
-  const segment: Record<string, string> = {};
-  if (status) segment.status = status;
-  if (service) segment.service = service;
-  if (source) segment.source = source;
+  // Stored as JSON and read back as LeadFilterParams, which takes one value or
+  // several per key — so a segment can be "Study Abroad OR Nursing".
+  const segment: Record<string, string[]> = {};
+  if (status.length) segment.status = status;
+  if (service.length) segment.service = service;
+  if (source.length) segment.source = source;
 
   async function save(queue: boolean) {
     setBusy(true);
@@ -487,30 +493,24 @@ function BroadcastForm({
       <div>
         <span className="block text-label-sm text-on-surface-variant mb-xs">Audience</span>
         <div className="flex flex-wrap gap-base">
-          <select value={status} onChange={(e) => setStatus(e.target.value)} className={inputCls}>
-            <option value="">Any stage</option>
-            {statuses.map((s) => (
-              <option key={s.id} value={s.id}>
-                {s.label}
-              </option>
-            ))}
-          </select>
-          <select value={service} onChange={(e) => setService(e.target.value)} className={inputCls}>
-            <option value="">Any service</option>
-            {services.map((s) => (
-              <option key={s.id} value={s.id}>
-                {s.name}
-              </option>
-            ))}
-          </select>
-          <select value={source} onChange={(e) => setSource(e.target.value)} className={inputCls}>
-            <option value="">Any source</option>
-            {sources.map((s) => (
-              <option key={s.id} value={s.id}>
-                {s.label}
-              </option>
-            ))}
-          </select>
+          <MultiSelect
+            placeholder="Any stage"
+            options={statuses.map((s) => ({ value: s.id, label: s.label ?? s.name ?? s.id }))}
+            selected={status}
+            onChange={setStatus}
+          />
+          <MultiSelect
+            placeholder="Any service"
+            options={services.map((s) => ({ value: s.id, label: s.name ?? s.label ?? s.id }))}
+            selected={service}
+            onChange={setService}
+          />
+          <MultiSelect
+            placeholder="Any source"
+            options={sources.map((s) => ({ value: s.id, label: s.label ?? s.name ?? s.id }))}
+            selected={source}
+            onChange={setSource}
+          />
         </div>
         <p className="text-label-sm text-on-surface-variant mt-xs">
           Opted-out and undeliverable numbers are excluded automatically and reported as skipped.

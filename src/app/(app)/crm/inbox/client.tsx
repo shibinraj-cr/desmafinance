@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { MultiSelect } from "@/components/MultiSelect";
 import Link from "next/link";
 import { WaComposer, type WaTemplateOpt } from "@/components/crm/WaComposer";
 import { WaAttachment } from "@/components/crm/WaAttachment";
@@ -174,8 +175,8 @@ export function InboxClient({
     FILTERS.some((f) => f.key === initialFilter) ? (initialFilter as string) : "needs_reply",
   );
   const [search, setSearch] = useState("");
-  // "" = no consultant narrowing; a userId, or the "unassigned" sentinel.
-  const [owner, setOwner] = useState("");
+  // Empty = no consultant narrowing; userIds and/or the "unassigned" sentinel.
+  const [owner, setOwner] = useState<string[]>([]);
   const [rows, setRows] = useState<InboxRow[]>([]);
   const [counts, setCounts] = useState({ needsReply: 0, unread: 0, unassigned: 0 });
   const [listLoading, setListLoading] = useState(true);
@@ -185,7 +186,7 @@ export function InboxClient({
     setListLoading(true);
     const qs = new URLSearchParams({ filter });
     if (search.trim()) qs.set("q", search.trim());
-    if (owner) qs.set("owner", owner);
+    for (const o of owner) qs.append("owner", o);
     const res = await fetch(`/api/crm/wa/conversations?${qs}`).catch(() => null);
     setListLoading(false);
     if (!res?.ok) return;
@@ -267,8 +268,8 @@ function ConversationList({
   onSelect: (id: string) => void;
   canFilterByOwner: boolean;
   bdes: BdeOpt[];
-  owner: string;
-  onOwner: (o: string) => void;
+  owner: string[];
+  onOwner: (o: string[]) => void;
 }) {
   return (
     <div className="flex flex-col rounded-xl border border-outline-variant bg-surface-container-lowest overflow-hidden">
@@ -285,19 +286,16 @@ function ConversationList({
             it ANDs on top, so "Needs reply" + a consultant answers "what does
             this one BDE still owe a reply on". */}
         {canFilterByOwner && (
-          <select
-            value={owner}
-            onChange={(e) => onOwner(e.target.value)}
-            className="w-full h-9 px-md rounded-lg border border-outline-variant bg-surface-container-lowest text-label-sm focus:border-primary outline-none"
-          >
-            <option value="">All consultants</option>
-            <option value="unassigned">Unassigned</option>
-            {bdes.map((b) => (
-              <option key={b.userId} value={b.userId}>
-                {b.displayName}
-              </option>
-            ))}
-          </select>
+          <MultiSelect
+            className="w-full"
+            placeholder="All consultants"
+            options={[
+              { value: "unassigned", label: "Unassigned" },
+              ...bdes.map((b) => ({ value: b.userId, label: b.displayName })),
+            ]}
+            selected={owner}
+            onChange={onOwner}
+          />
         )}
         <div className="flex flex-wrap gap-xs">
           {FILTERS.map((f) => {
