@@ -213,6 +213,18 @@ export async function submitApplication(input: ApplyInput): Promise<ApplyResult>
     return { candidate, applicationId: app.id };
   });
 
+  // Same dynamic import, same reason as in pipeline.ts: the engine reaches back
+  // into the hiring modules, and a failing recipe must never fail an intake.
+  try {
+    const { fireFor } = await import("./automations");
+    await fireFor({ event: "application_created", applicationId: result.applicationId });
+  } catch (e) {
+    logger.error("hiring_automation_fire_failed", {
+      applicationId: result.applicationId,
+      message: e instanceof Error ? e.message : String(e),
+    });
+  }
+
   logger.info("hiring_application_created", {
     jobId: input.jobId,
     source: input.source,

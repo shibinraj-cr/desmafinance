@@ -379,6 +379,10 @@ export const MODULES: AppModule[] = [
       { href: "/hiring/follow-ups", label: "Follow-ups", icon: "notifications_active", group: "HIRING" },
       { href: "/hiring/interviews", label: "Interviews", icon: "event_available", group: "HIRING" },
       { href: "/hiring/offers", label: "Offers & e-sign", icon: "draw", group: "HIRING" },
+      { href: "/hiring/referrals", label: "Referrals", icon: "handshake", group: "GROWTH" },
+      { href: "/hiring/talent-pool", label: "Talent pool", icon: "diversity_3", group: "GROWTH" },
+      { href: "/hiring/partners", label: "Sourcing partners", icon: "storefront", group: "GROWTH" },
+      { href: "/hiring/automations", label: "Automations", icon: "bolt", group: "GROWTH" },
       {
         // Granting a role this page promotes it to the hiring HR-manager tier
         // (see HIRING_SETTINGS_PAGE in src/lib/hiring/rbac.ts) — the same trick

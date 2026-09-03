@@ -1,6 +1,11 @@
 import type { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
 import { badRequest, notFound, conflict } from "@/lib/http-error";
+// The pure stage maths lives in ./stage-math so that the Candidates rail —
+// a client component — can compute "days in stage" without dragging this
+// module, and through it prisma, nodemailer and the WhatsApp provider, into
+// the browser bundle.
+import { statusForStageKind, isSlaBreached, daysInStage } from "./stage-math";
 import { emitHireCompleted, buildHireCompletedPayload } from "./events";
 
 /**
@@ -15,6 +20,8 @@ import { emitHireCompleted, buildHireCompletedPayload } from "./events";
  * "hired" cannot drift from the column the card is actually sitting in.
  */
 
+export { statusForStageKind, isSlaBreached, daysInStage };
+
 export type MoveResult = {
   applicationId: string;
   fromStage: string | null;
@@ -22,20 +29,11 @@ export type MoveResult = {
   status: string;
 };
 
-/** The application status implied by a stage's kind. */
-export function statusForStageKind(kind: string, current: string): string {
-  if (kind === "won") return "hired";
-  if (kind === "lost") return "rejected";
-  if (kind === "hold") return "on_hold";
-  // Moving back into an open stage reactivates a rejected/held application —
-  // that IS what dragging the card back means.
-  return current === "withdrawn" ? "withdrawn" : "active";
-}
-
 export async function moveApplication(opts: {
   applicationId: string;
   toStageId: string;
-  actorId: string;
+  /** Null when the move came from a recipe rather than a person. */
+  actorId: string | null;
   /** Required when moving into a `lost` stage. */
   reason?: string | null;
   /** Set when the move came from a recipe rather than a person. */
@@ -107,6 +105,22 @@ export async function moveApplication(opts: {
     if (payload) await emitHireCompleted(payload);
   }
 
+  // Automations run AFTER the move is committed, so a recipe always sees the
+  // state the person actually put the candidate in. Imported dynamically
+  // because the engine imports this function back to perform `move_stage` — a
+  // static import either way would be a module cycle. A recipe's own move does
+  // not re-trigger the engine, which is what stops two recipes ping-ponging.
+  if (!opts.automationId) {
+    const { fireFor } = await import("./automations");
+    await fireFor({
+      event: "stage_entered",
+      applicationId: app.id,
+      stageName: toStage.name,
+      stageKind: toStage.kind,
+      aiScore: app.aiScore,
+    }).catch(() => 0);
+  }
+
   return {
     applicationId: result.id,
     fromStage: app.stage?.name ?? null,
@@ -173,19 +187,3 @@ export async function recordContact(opts: {
   ]);
 }
 
-/** SLA breach: longer in the current stage than that stage allows. */
-export function isSlaBreached(
-  app: { stageEnteredAt: Date; status: string },
-  stage: { slaDays: number | null; kind: string } | null,
-  now: Date = new Date(),
-): boolean {
-  if (!stage?.slaDays || stage.kind !== "open") return false;
-  if (app.status !== "active") return false;
-  const days = (now.getTime() - app.stageEnteredAt.getTime()) / 86_400_000;
-  return days > stage.slaDays;
-}
-
-/** Whole days the application has sat in its current stage. */
-export function daysInStage(app: { stageEnteredAt: Date }, now: Date = new Date()): number {
-  return Math.max(0, Math.floor((now.getTime() - app.stageEnteredAt.getTime()) / 86_400_000));
-}

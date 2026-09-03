@@ -1,6 +1,6 @@
 import type { Prisma } from "@prisma/client";
 import { CANDIDATE_SOURCE_LABELS, type CandidateSource } from "./constants";
-import { daysInStage, isSlaBreached } from "./pipeline";
+import { daysInStage, isSlaBreached } from "./stage-math";
 
 /**
  * The Candidates rail and the Pipeline board read the same rows through here,
