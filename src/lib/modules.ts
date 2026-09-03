@@ -365,6 +365,32 @@ export const MODULES: AppModule[] = [
     ],
   },
   {
+    id: "hiring",
+    name: "Hiring",
+    icon: "person_search",
+    basePath: "/hiring",
+    status: "active",
+    pages: [
+      // Rails land phase by phase; only pages that exist are registered, so the
+      // left rail never shows a link to a 404.
+      {
+        // Granting a role this page promotes it to the hiring HR-manager tier
+        // (see HIRING_SETTINGS_PAGE in src/lib/hiring/rbac.ts) — the same trick
+        // as /crm/settings. Not adminOnly: that is the whole point.
+        href: "/hiring/settings",
+        label: "Roles & Access",
+        icon: "shield_person",
+        group: "WORKSPACE",
+      },
+      {
+        href: "/hiring/settings/audit",
+        label: "Audit Log",
+        icon: "history",
+        group: "WORKSPACE",
+      },
+    ],
+  },
+  {
     id: "me",
     name: "My Workspace",
     icon: "person",
