@@ -373,7 +373,9 @@ export const MODULES: AppModule[] = [
     pages: [
       // Rails land phase by phase; only pages that exist are registered, so the
       // left rail never shows a link to a 404.
+      { href: "/hiring/pipeline", label: "Pipeline", icon: "view_kanban", group: "HIRING" },
       { href: "/hiring/jobs", label: "Jobs", icon: "work", group: "HIRING" },
+      { href: "/hiring/candidates", label: "Candidates", icon: "groups", group: "HIRING" },
       {
         // Granting a role this page promotes it to the hiring HR-manager tier
         // (see HIRING_SETTINGS_PAGE in src/lib/hiring/rbac.ts) — the same trick
