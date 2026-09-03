@@ -472,6 +472,11 @@ model CrmWebhookDelivery {
   waStatusAt     DateTime?
   /// When Meta reported the message READ (a stronger signal than delivered).
   readAt         DateTime?
+  /// The provider's message id (Meta `wamid`) for a Cloud-API touch, so an async
+  /// delivery-status callback (which arrives keyed by wamid on the WA webhook) can
+  /// join back to THIS outbox row — updating waStatus and, on a hard failure,
+  /// stopping the drip. Null on the Wabis transport (which matches by phone).
+  providerMessageId String?
   createdAt      DateTime  @default(now())
   updatedAt      DateTime  @updatedAt
 
@@ -481,6 +486,8 @@ model CrmWebhookDelivery {
   // The campaign-delivery report scans failures by event; a partial-ish composite
   // keeps that query off a full table scan.
   @@index([event, waStatus])
+  // The Cloud-API delivery-status callback joins by wamid.
+  @@index([providerMessageId])
 }
 
 model LeadPulseSource {
