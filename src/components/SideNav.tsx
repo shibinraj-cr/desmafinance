@@ -17,7 +17,13 @@ import {
   visibleModules,
 } from "@/lib/modules";
 import { openAppLauncher } from "@/components/AppLauncher";
-import { WhatsAppLiveBox } from "@/components/WhatsAppLiveBox";
+import { useWaLiveCount, type WaLiveCounts } from "@/components/wa-live-count";
+
+/** Hover text for the WhatsApp badge: what the number is, and the desk behind it. */
+function waBadgeTitle(wa: WaLiveCounts | null): string | undefined {
+  if (!wa || wa.waiting === 0) return undefined;
+  return `${wa.waiting} waiting on a reply · ${wa.count} open chats`;
+}
 
 type NavItem = {
   href: string;
@@ -28,6 +34,11 @@ type NavItem = {
   /** Explicit active state. When omitted, NavList derives it from the path. */
   active?: boolean;
   badgeCount?: number | null;
+  /** Green badge instead of the default amber — WhatsApp's unanswered count
+   *  keeps the channel's own colour so it reads as a queue, not a page count. */
+  badgeTone?: "primary" | "whatsapp";
+  /** Hover text for the badge, when the number alone is not self-explanatory. */
+  badgeTitle?: string;
   /** Red-toned secondary badge — used for the signed-in user's
    *  unresolved-rejected approvals queue. */
   warningCount?: number | null;
@@ -41,6 +52,7 @@ function navForModule(
   newLeadsCount: number,
   myOpenTasksCount: number,
   crmNotifCount: number,
+  waWaiting: WaLiveCounts | null,
 ): NavItem[] {
   return mod.pages
     .filter((p) => canSeePage(perms, p.href))
@@ -58,7 +70,11 @@ function navForModule(
               ? myOpenTasksCount
               : p.href === "/crm/notifications"
                 ? crmNotifCount
-                : null,
+                : p.href === "/crm/inbox"
+                  ? (waWaiting?.waiting ?? null)
+                  : null,
+      badgeTone: p.href === "/crm/inbox" ? ("whatsapp" as const) : undefined,
+      badgeTitle: p.href === "/crm/inbox" ? waBadgeTitle(waWaiting) : undefined,
       warningCount:
         p.href === "/finance/approvals" && rejectedCount > 0 ? rejectedCount : null,
     }));
@@ -79,6 +95,7 @@ function groupNavForModule(
   newLeadsCount: number,
   myOpenTasksCount: number,
   crmNotifCount: number,
+  waWaiting: WaLiveCounts | null,
 ): NavItem[] {
   const current = activePage(mod, pathname);
   return moduleGroups(mod)
@@ -96,12 +113,18 @@ function groupNavForModule(
       // The CRM "NOTIFICATIONS" group holds /crm/notifications — badge it with
       // the signed-in user's unread CRM-notification count.
       const hasNotifs = g.pages.some((p) => p.href === "/crm/notifications");
+      // The CRM "WHATSAPP" group leads with the inbox — badge it with the live
+      // count of threads waiting on a reply, in place of the thread-list panel
+      // that used to sit at the bottom of the rail.
+      const hasInbox = g.pages.some((p) => p.href === "/crm/inbox");
       return {
         href: first.href,
         label: g.name,
         icon: first.icon,
         active: !!current && g.pages.some((p) => p.href === current.href),
-        badgeCount: hasApprovals && canApprove(perms) ? pendingCount : hasNewLeads ? newLeadsCount : hasMyTasks ? myOpenTasksCount : hasNotifs ? crmNotifCount : null,
+        badgeCount: hasApprovals && canApprove(perms) ? pendingCount : hasNewLeads ? newLeadsCount : hasMyTasks ? myOpenTasksCount : hasNotifs ? crmNotifCount : hasInbox ? (waWaiting?.waiting ?? null) : null,
+        badgeTone: hasInbox ? ("whatsapp" as const) : undefined,
+        badgeTitle: hasInbox ? waBadgeTitle(waWaiting) : undefined,
         warningCount: hasApprovals && rejectedCount > 0 ? rejectedCount : null,
       };
     });
@@ -146,7 +169,15 @@ function NavList({
               </span>
             ) : null}
             {n.badgeCount && n.badgeCount > 0 ? (
-              <span className="text-[10px] font-bold bg-primary text-on-primary px-xs py-[1px] rounded-full min-w-[18px] text-center">
+              <span
+                title={n.badgeTitle}
+                className={
+                  "text-[10px] font-bold px-xs py-[1px] rounded-full min-w-[18px] text-center tabular-nums " +
+                  (n.badgeTone === "whatsapp"
+                    ? "bg-emerald-500 text-white"
+                    : "bg-primary text-on-primary")
+                }
+              >
                 {n.badgeCount}
               </span>
             ) : null}
@@ -321,6 +352,9 @@ export function SideNav({
 }) {
   const pathname = usePathname();
 
+  // Polled only for users who can open the inbox — everyone else never asks.
+  const waLive = useWaLiveCount(canSeePage(perms, "/crm/inbox"));
+
   const modules = useMemo(() => visibleModules(perms), [perms]);
 
   // Active module is the one that owns the current pathname (System for /users
@@ -341,8 +375,8 @@ export function SideNav({
   // Grouped modules list their groups in the left bar (pages live in the top
   // tab strip); ungrouped modules keep the flat page list.
   const items = moduleHasGroups(activeModule)
-    ? groupNavForModule(activeModule, perms, pathname, pendingCount, rejectedCount, newLeadsCount, myOpenTasksCount, crmNotifCount)
-    : navForModule(activeModule, perms, pendingCount, rejectedCount, newLeadsCount, myOpenTasksCount, crmNotifCount);
+    ? groupNavForModule(activeModule, perms, pathname, pendingCount, rejectedCount, newLeadsCount, myOpenTasksCount, crmNotifCount, waLive)
+    : navForModule(activeModule, perms, pendingCount, rejectedCount, newLeadsCount, myOpenTasksCount, crmNotifCount, waLive);
 
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [mounted, setMounted] = useState(false);
@@ -379,9 +413,6 @@ export function SideNav({
         <BrandHeader />
         <ModuleSwitcher current={activeModule} modules={modules} onPick={pickModule} />
         <NavList items={items} pathname={pathname} />
-        {/* Sits between the nav and the user footer so it is visible without
-            scrolling the nav, and renders nothing at all when no one is waiting. */}
-        {canSeePage(perms, "/crm/inbox") && <WhatsAppLiveBox />}
         <UserFooter user={user} perms={perms} />
       </aside>
 
