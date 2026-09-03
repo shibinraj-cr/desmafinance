@@ -43,8 +43,12 @@ export const config = {
     // a message provider POSTs with a shared `wa_mirror_secret` and has no
     // session; every OTHER route under api/crm/wa stays gated),
     // the public privacy policy page (required to be reachable without login
-    // for Meta app review), Next.js internal asset routes, and any file with
+    // for Meta app review), the public careers site and its apply endpoint
+    // (`careers` + `api/careers` — a job applicant is by definition a stranger
+    // with no Desgro login; that endpoint does its own honeypot, dwell-time and
+    // rate-limit checks, and every OTHER route under api/hiring stays gated),
+    // Next.js internal asset routes, and any file with
     // an extension (/desfin.png, /favicon.ico, fonts).
-    "/((?!login|api/auth|api/health|api/whoami|api/integrations|api/crm/integrations/wabis/inbound|api/crm/integrations/wabis/delivery-status|api/crm/wa/webhook|psych/test|api/psych/test|privacy-policy|_next/static|_next/image|.*\\..*).*)",
+    "/((?!login|api/auth|api/health|api/whoami|api/integrations|api/crm/integrations/wabis/inbound|api/crm/integrations/wabis/delivery-status|api/crm/wa/webhook|psych/test|api/psych/test|privacy-policy|careers|api/careers|_next/static|_next/image|.*\\..*).*)",
   ],
 };
