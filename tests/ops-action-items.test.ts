@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { applyActionItemStatus, bucketMyTask, ACTION_ITEM_ACTIVITY } from "@/lib/ops-action-items";
+import { applyActionItemStatus, bucketMyTask, myTasksWhere, ACTION_ITEM_ACTIVITY } from "@/lib/ops-action-items";
 
 const NOW = new Date("2026-07-14T10:00:00.000Z");
 
@@ -67,5 +67,19 @@ describe("bucketMyTask", () => {
 
   it("open due after today is 'upcoming'", () => {
     expect(bucketMyTask({ status: "open", dueAt: "2026-07-20T00:00:00.000Z" }, today)).toBe("upcoming");
+  });
+});
+
+describe("myTasksWhere", () => {
+  it("covers tasks assigned to the user and their own unassigned ones", () => {
+    expect(myTasksWhere("u1")).toEqual({
+      OR: [{ assignedToId: "u1" }, { assignedToId: null, createdById: "u1" }],
+    });
+  });
+
+  it("never matches an unassigned task somebody else raised", () => {
+    const [mine, ownUnassigned] = myTasksWhere("u1").OR as { assignedToId: string | null; createdById?: string }[];
+    expect(mine.assignedToId).toBe("u1");
+    expect(ownUnassigned.createdById).toBe("u1");
   });
 });

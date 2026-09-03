@@ -31,8 +31,13 @@ export type OpsAccess = {
 // (assignment, template authoring, settings) — the same trick as `canManageCrm`
 // keyed on `/crm/settings`. No code change needed to mint future ops managers.
 const OPS_MANAGER_ANCHOR = "/operations/settings";
-// Any workspace page marks a role as an operations user (day-to-day worker).
-const OPS_USER_ANCHORS = ["/operations/projects", "/operations/my-work", "/operations/my-tasks"];
+/**
+ * Any workspace page marks a role as an operations user (day-to-day worker).
+ * Exported because it is also the assignee roster: the pages that offer an
+ * "assign to" picker filter `User.roleRef.pages` on exactly this list, so the
+ * dropdown can only ever offer someone `roleIsOpsUser` will accept.
+ */
+export const OPS_USER_ANCHORS = ["/operations/projects", "/operations/my-work", "/operations/my-tasks"];
 
 /**
  * Pure function of (userId, perms) — no DB. Operations access derives entirely
@@ -83,4 +88,27 @@ export function canEditProject(
     access.isOpsManager ||
     (access.isOpsUser && project.assignedToId === userId)
   );
+}
+
+/**
+ * Whether the current user may mutate one ad-hoc task (OpsActionItem).
+ *
+ * A task that hangs off a project inherits that project's rule exactly — the
+ * owner (or a manager) runs the candidate's work, so they run its tasks. A
+ * **standalone** task has no project to inherit from, so ownership is personal:
+ * the person who created it or the person it is assigned to, plus the
+ * manager/admin tier who can see everyone's queue anyway.
+ */
+export function canEditActionItem(
+  access: OpsAccess,
+  item: {
+    project: { assignedToId: string | null } | null;
+    createdById: string | null;
+    assignedToId: string | null;
+  },
+  userId: string,
+): boolean {
+  if (item.project) return canEditProject(access, item.project, userId);
+  if (access.isAdmin || access.isOpsManager) return true;
+  return access.isOpsUser && (item.createdById === userId || item.assignedToId === userId);
 }

@@ -38,6 +38,14 @@ export const opsProjectDetailInclude = Prisma.validator<Prisma.OpsProjectInclude
       },
     },
   },
+  // Project-level ad-hoc tasks: the ones filed against the candidate with no
+  // particular step. Step-level ones already come through `tasks.actionItems`,
+  // so this filter keeps them from being listed twice.
+  actionItems: {
+    where: { taskId: null },
+    orderBy: { createdAt: "asc" },
+    include: opsActionItemInclude,
+  },
   activities: {
     orderBy: { occurredAt: "desc" },
     take: 100,
@@ -148,6 +156,8 @@ export type OpsProjectDetailDTO = OpsProjectRow & {
   candidateEmail: string | null;
   candidatePhone: string | null;
   tasks: OpsTaskDTO[];
+  /** Ad-hoc tasks on the candidate as a whole, attached to no single step. */
+  actionItems: OpsActionItemDTO[];
   activities: OpsActivityDTO[];
 };
 
@@ -178,6 +188,7 @@ export function serializeProjectDetail(p: DetailPayload, today: string = istDate
       actionItems: t.actionItems.map(serializeActionItem),
       documents: t.documents.map(serializeDocument),
     })),
+    actionItems: p.actionItems.map(serializeActionItem),
     activities: p.activities.map((a) => ({
       id: a.id,
       type: a.type,

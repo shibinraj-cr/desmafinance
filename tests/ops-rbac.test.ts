@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 import type { Permissions } from "@/lib/rbac";
-import { getOpsAccess, canEditProject, type OpsAccess } from "@/lib/ops-rbac";
+import { getOpsAccess, canEditProject, canEditActionItem, type OpsAccess } from "@/lib/ops-rbac";
 
 function perms(partial: Partial<Permissions>): Permissions {
   return {
@@ -88,5 +88,36 @@ describe("canEditProject", () => {
 
   it("blocks users with no ops rights", () => {
     expect(canEditProject(access({}), { assignedToId: "u1" }, "u1")).toBe(false);
+  });
+});
+
+describe("canEditActionItem", () => {
+  const nobody = { project: null, createdById: null, assignedToId: null };
+
+  it("inherits the project rule when the task hangs off a project", () => {
+    const item = { project: { assignedToId: "u2" }, createdById: "u1", assignedToId: "u1" };
+    // Creator + assignee count for nothing here: the project owner runs its tasks.
+    expect(canEditActionItem(access({ isOpsUser: true }), item, "u1")).toBe(false);
+    expect(canEditActionItem(access({ isOpsUser: true }), { ...item, project: { assignedToId: "u1" } }, "u1")).toBe(true);
+  });
+
+  it("lets managers and admins edit a standalone task they have no part in", () => {
+    expect(canEditActionItem(access({ isAdmin: true }), nobody, "u1")).toBe(true);
+    expect(canEditActionItem(access({ isOpsManager: true }), nobody, "u1")).toBe(true);
+  });
+
+  it("lets an ops user edit a standalone task they raised or own", () => {
+    const a = access({ isOpsUser: true });
+    expect(canEditActionItem(a, { ...nobody, createdById: "u1" }, "u1")).toBe(true);
+    expect(canEditActionItem(a, { ...nobody, assignedToId: "u1" }, "u1")).toBe(true);
+  });
+
+  it("blocks an ops user from another user's standalone task", () => {
+    const item = { project: null, createdById: "u2", assignedToId: "u3" };
+    expect(canEditActionItem(access({ isOpsUser: true }), item, "u1")).toBe(false);
+  });
+
+  it("blocks a non-ops user outright, even on a task naming them", () => {
+    expect(canEditActionItem(access({}), { ...nobody, createdById: "u1", assignedToId: "u1" }, "u1")).toBe(false);
   });
 });
