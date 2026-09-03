@@ -17,6 +17,7 @@ Every WhatsApp automation ends at one call — `WhatsAppProvider` in
 | Returns a message id | ✓ from the send API, ✗ from a workflow | ✓ `wamid` |
 | Fetch media | no endpoint; public storage URLs instead | ✓ |
 | List approved templates | ✓ but Wabis's own ids, not Meta names | ✓ |
+| Create / edit / delete a template | ✗ their panel only, no API for us | ✓ |
 
 `wa_provider` selects between them. That one setting is the whole cutover.
 
@@ -93,8 +94,13 @@ this can be done **in parallel, with Wabis untouched** — no switchover moment.
 
 2. **Subscribe the app to the WABA** (`POST /<WABA_ID>/subscribed_apps`), with
    the webhook pointed at `https://<host>/api/crm/wa/webhook`, the `messages`
-   field selected, and `hub.verify_token` set to `wa_mirror_secret`. Our endpoint
-   already answers Meta's verification handshake.
+   **and `message_template_status_update`** fields selected, and
+   `hub.verify_token` set to `wa_mirror_secret`. Our endpoint already answers
+   Meta's verification handshake.
+   *The second field is what makes a template approval appear in the CRM by
+   itself. Without it everything still works — the Templates page has a Sync
+   button that reads the catalogue — but nobody is told; they have to go and
+   look.*
    *Verify this step first — it is the one assumption in this plan: that Meta
    delivers to every subscribed app, so we receive alongside Wabis rather than
    displacing them.*
@@ -111,6 +117,79 @@ window; delivery ticks turn to read.
 If `wa_provider` is `cloud` but credentials are missing, the registry falls back
 to Wabis and logs `wa_cloud_not_configured` — so a half-finished setup degrades
 instead of breaking every send.
+
+## Templates
+
+A message to a candidate who has not written to us first can only be an
+**approved template**. That is not a policy we chose; it is the whole basis of
+WhatsApp Business messaging, and it is why "I wrote the template in DesGro and it
+never went out" was a real and confusing failure for a long time.
+
+Two different things now live under CRM → Templates → WhatsApp, and they are
+labelled as such because conflating them is what caused that confusion:
+
+| | Approved templates (Meta) | Quick replies |
+|---|---|---|
+| Stored in | `WaTemplate`, mirrored from the WABA | `CrmMessageTemplate` |
+| Variables | positional `{{1}}`, `{{2}}` | named `{name}`, `{service}` |
+| Needs Meta's approval | **yes** | no |
+| Can be sent | any time, once approved | only within 24h of the candidate's last message |
+
+### Submitting one
+
+Write it in the builder and press Submit. It goes to
+`POST /<WABA_ID>/message_templates` and comes back **PENDING** — accepted for
+review, not approved. A human at Meta decides, usually within minutes and
+occasionally over days.
+
+The builder refuses to submit anything Meta's API will reject outright (a name
+that is not snake_case, a gap in the variable numbering, a variable with no
+sample value) and *warns* about the things Meta's reviewers reject but the API
+accepts (a body that ends with a variable, two variables side by side). The split
+is deliberate: blocking on review habits would make legitimate templates
+unsubmittable, and staying silent about them burns a review cycle.
+
+Existing quick replies carry over — **Submit to Meta…** on a quick reply opens
+the builder with its wording converted from `{name}` to `{{1}}` and the sample
+values filled in.
+
+### How the status gets back here
+
+Three paths, in descending order of trust:
+
+1. **Sync from Meta** — reads the whole catalogue and reconciles. Authoritative,
+   and the button is on the page because Vercel's Hobby plan only runs crons
+   daily, which is no use for "is it approved yet?".
+2. **The status webhook** — updates one template within seconds of the decision,
+   but only while the app is subscribed to `message_template_status_update`
+   (step 2 above). Fast, not guaranteed.
+3. **The submit response** — `PENDING`, and nothing more.
+
+A template Meta no longer holds is marked DELETED here rather than removed:
+deleting a template in Business Manager should not destroy the CRM's only copy of
+wording that took a review cycle to get approved.
+
+### What this deliberately does not do
+
+- **AUTHENTICATION templates.** They are a fixed one-time-password shape with
+  their own fields and no free body text; offering them in a body/header/footer
+  builder would only ever produce rejections. We do not send OTPs.
+- **Media headers.** Text headers only. An image or document header needs an
+  uploaded sample handle at submit time, which is a second upload flow for a
+  header nobody has asked for.
+- **Editing templates written in Business Manager.** They are listed with their
+  status, but the catalogue does not return enough to reconstruct what was
+  authored — button targets, sample values, header format — and an edit that
+  silently dropped what it could not read would be worse than no edit.
+
+### Who may do it
+
+`canManageTemplates` — full CRM admins, plus any role granted the Message
+Templates page. The same capability that already governs the CRM's own
+templates, because submitting one is an authoring act and what it risks is a
+rejected review, not candidate data. Note this is separate from **who may SEND a
+template**, which is the grant table further down the same page and defaults to
+deny.
 
 ### Retiring Wabis
 

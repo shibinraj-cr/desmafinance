@@ -5,6 +5,8 @@ import { createPortal } from "react-dom";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
 import { WhatsAppTemplateAccessCard } from "./whatsapp-access";
+import { WhatsAppMetaTemplates } from "./whatsapp-meta";
+import { specFromMergeBody } from "@/lib/wa/template-spec";
 import {
   CRM_TEMPLATE_MERGE_FIELDS,
   CRM_TEMPLATE_SAMPLE_VARS,
@@ -57,6 +59,9 @@ const CHANNELS: { key: MessageChannel; label: string; icon: string }[] = [
 export function MessageTemplatesClient({ templates }: { templates: MessageTemplateDTO[] }) {
   const [channel, setChannel] = useState<MessageChannel>("email");
   const [editor, setEditor] = useState<{ template: MessageTemplateDTO | null } | null>(null);
+  // A quick reply being carried over into the Meta builder — see the note on the
+  // "Submit to Meta" button below.
+  const [seed, setSeed] = useState<{ name: string; body: string; bodyExamples: string[] } | null>(null);
 
   const list = useMemo(() => templates.filter((t) => t.channel === channel), [templates, channel]);
 
@@ -70,13 +75,15 @@ export function MessageTemplatesClient({ templates }: { templates: MessageTempla
             support <span className="font-mono">{"{merge}"}</span> fields that fill in per lead when sent.
           </p>
         </div>
-        <button
-          type="button"
-          onClick={() => setEditor({ template: null })}
-          className={primaryBtn + " inline-flex items-center gap-xs"}
-        >
-          <Icon name="add" /> New {channel === "email" ? "email" : "WhatsApp"} template
-        </button>
+        {channel === "email" && (
+          <button
+            type="button"
+            onClick={() => setEditor({ template: null })}
+            className={primaryBtn + " inline-flex items-center gap-xs"}
+          >
+            <Icon name="add" /> New email template
+          </button>
+        )}
       </div>
 
       {/* Consultant phone lives on the BDE roster — link out so it's findable from CRM. */}
@@ -117,25 +124,74 @@ export function MessageTemplatesClient({ templates }: { templates: MessageTempla
         })}
       </div>
 
-      {/* Approved WhatsApp templates live at Meta, not in this table — they are
-          authored and approved there, so what is managed here is who may SEND
-          each one. Same page because "which message can this person send" is one
-          question however the message is stored. */}
-      <div className="pt-lg border-t border-outline-variant">
-        <WhatsAppTemplateAccessCard />
-      </div>
+      {/* Two genuinely different things live under the WhatsApp tab, and
+          conflating them is what made "my template isn't working" so hard to
+          answer. A Meta template is pre-cleared by Meta and is the ONLY way to
+          message someone who hasn't written to us. A quick reply is free text,
+          needs no approval, and is legal only inside the 24-hour window after
+          the candidate's last message. Both are shown, each labelled for what it
+          is. */}
+      {channel === "whatsapp" && (
+        <>
+          <WhatsAppMetaTemplates seed={seed} onSeedUsed={() => setSeed(null)} />
 
-      {list.length === 0 ? (
-        <div className="rounded-xl border border-dashed border-outline-variant bg-surface-container-lowest p-xl text-center text-on-surface-variant">
-          No {channel === "email" ? "email" : "WhatsApp"} templates yet. Create one to give the team a ready-made message.
-        </div>
-      ) : (
-        <div className="space-y-md">
-          {list.map((t) => (
-            <TemplateCard key={t.id} template={t} onEdit={() => setEditor({ template: t })} />
-          ))}
-        </div>
+          <div className="pt-lg border-t border-outline-variant">
+            <WhatsAppTemplateAccessCard />
+          </div>
+        </>
       )}
+
+      <div className={channel === "whatsapp" ? "pt-lg border-t border-outline-variant space-y-md" : "space-y-md"}>
+        {channel === "whatsapp" && (
+          <div className="flex flex-wrap items-start justify-between gap-md">
+            <div className="min-w-0">
+              <h3 className="text-h3 text-on-surface">Quick replies</h3>
+              <p className="text-body-sm text-on-surface-variant max-w-3xl">
+                Free text the team can drop into the inbox — no Meta approval needed, but only sendable within{" "}
+                <span className="font-semibold text-on-surface">24 hours</span> of the candidate&apos;s last message.
+                Outside that window WhatsApp only carries an approved template.
+              </p>
+            </div>
+            <button
+              type="button"
+              onClick={() => setEditor({ template: null })}
+              className={primaryBtn + " inline-flex items-center gap-xs shrink-0"}
+            >
+              <Icon name="add" /> New quick reply
+            </button>
+          </div>
+        )}
+
+        {list.length === 0 ? (
+          <div className="rounded-xl border border-dashed border-outline-variant bg-surface-container-lowest p-xl text-center text-on-surface-variant">
+            No {channel === "email" ? "email templates" : "quick replies"} yet. Create one to give the team a ready-made
+            message.
+          </div>
+        ) : (
+          <div className="space-y-md">
+            {list.map((t) => (
+              <TemplateCard
+                key={t.id}
+                template={t}
+                onEdit={() => setEditor({ template: t })}
+                onSubmitToMeta={
+                  t.channel === "whatsapp"
+                    ? () => {
+                        // The wording is the valuable part and it is already
+                        // written; only the dialect differs. Carrying it across
+                        // with the merge fields converted to {{1}}, {{2}} means
+                        // nobody retypes an approved message by hand.
+                        const { body, bodyExamples } = specFromMergeBody(t.body, CRM_TEMPLATE_SAMPLE_VARS);
+                        setSeed({ name: t.name, body, bodyExamples });
+                        window.scrollTo({ top: 0, behavior: "smooth" });
+                      }
+                    : undefined
+                }
+              />
+            ))}
+          </div>
+        )}
+      </div>
 
       {editor && (
         <TemplateEditorModal channel={channel} template={editor.template} onClose={() => setEditor(null)} />
@@ -144,7 +200,16 @@ export function MessageTemplatesClient({ templates }: { templates: MessageTempla
   );
 }
 
-function TemplateCard({ template, onEdit }: { template: MessageTemplateDTO; onEdit: () => void }) {
+function TemplateCard({
+  template,
+  onEdit,
+  onSubmitToMeta,
+}: {
+  template: MessageTemplateDTO;
+  onEdit: () => void;
+  /** Present only for WhatsApp quick replies — see the note at the call site. */
+  onSubmitToMeta?: () => void;
+}) {
   const router = useRouter();
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
@@ -182,6 +247,16 @@ function TemplateCard({ template, onEdit }: { template: MessageTemplateDTO; onEd
             <p className="text-body-sm text-on-surface-variant mt-xs whitespace-pre-wrap line-clamp-3">{template.body}</p>
           </div>
           <div className="flex items-center gap-xs shrink-0">
+            {onSubmitToMeta && (
+              <button
+                type="button"
+                onClick={onSubmitToMeta}
+                title="Open this wording in the Meta template builder"
+                className={secondaryBtn + " h-9 text-label-sm"}
+              >
+                Submit to Meta…
+              </button>
+            )}
             <button
               type="button"
               disabled={busy}

@@ -41,7 +41,17 @@ export type WaCapability =
   | "fetchMedia"
   | "listTemplates"
   | "uploadMedia"
-  | "sendAudio";
+  | "sendAudio"
+  /**
+   * Author a template and submit it to Meta for approval, then edit or delete
+   * it. Separate from `listTemplates` because reading the catalogue and writing
+   * to it are different permissions on Meta's side — a token with only
+   * `whatsapp_business_messaging` can send an approved template and can list
+   * nothing; management needs `whatsapp_business_management`. A CRM that offered
+   * a builder against a read-only token would fail at submit, after the author
+   * had written the whole thing.
+   */
+  | "manageTemplates";
 
 /**
  * The outcome of one send attempt.
@@ -107,6 +117,12 @@ export type WaMedia = {
 };
 
 export type WaTemplateSummary = {
+  /**
+   * Meta's own template id. Needed to EDIT a template (the edit is POSTed to the
+   * template's id, not to the WABA) and to delete one language of a name without
+   * taking the others with it. Null only when a transport cannot supply one.
+   */
+  id: string | null;
   name: string;
   language: string;
   /** 'MARKETING' | 'UTILITY' | 'AUTHENTICATION' — drives the frequency cap. */
@@ -130,6 +146,25 @@ export type WaTemplateSummary = {
    * is what lets the composer collect the values instead of failing at the API.
    */
   variableCount: number;
+  /**
+   * Why Meta refused it — `INCORRECT_CATEGORY`, `INVALID_FORMAT`, and so on.
+   * The only explanation an author ever gets, so it is carried rather than
+   * flattened into the status.
+   */
+  rejectedReason: string | null;
+};
+
+/** The outcome of creating, editing or deleting a template at Meta. */
+export type WaTemplateMutationResult =
+  | { ok: true; metaId: string | null; status: string | null; category: string | null }
+  | { ok: false; detail: string; code: string | null; unsupported?: boolean };
+
+/** The fields a transport needs to submit a template. Mirrors `WaTemplateSpec`. */
+export type WaTemplateSubmission = {
+  name: string;
+  language: string;
+  category: string;
+  components: unknown[];
 };
 
 export interface WhatsAppProvider {
@@ -176,6 +211,27 @@ export interface WhatsAppProvider {
    */
   sendAudio(input: WaSendAudioInput): Promise<WaSendResult>;
   listTemplates(): Promise<WaTemplateSummary[]>;
+  /**
+   * Submit a new template for Meta's review.
+   *
+   * Returns as soon as Meta ACCEPTS the submission, which is not approval — the
+   * status comes back `PENDING` and a human decides later. Callers must store
+   * the returned id and wait for the status webhook or a sync; treating a
+   * successful create as "the template can now be sent" is the mistake this
+   * return shape exists to prevent.
+   */
+  createTemplate(input: WaTemplateSubmission): Promise<WaTemplateMutationResult>;
+  /**
+   * Edit an existing template, addressed by Meta's id. Name and language are
+   * immutable at Meta, so changing either means creating a new template.
+   */
+  updateTemplate(metaId: string, input: Omit<WaTemplateSubmission, "name" | "language">): Promise<WaTemplateMutationResult>;
+  /**
+   * Delete a template. `metaId` narrows the delete to ONE language; without it
+   * Meta removes every language sharing the name, which is rarely what someone
+   * clicking delete on a single row means.
+   */
+  deleteTemplate(name: string, metaId?: string | null): Promise<WaTemplateMutationResult>;
 }
 
 export type WaUploadInput = {
@@ -211,4 +267,9 @@ export type WaMediaStream = {
 /** The stock answer for a capability a transport genuinely cannot do. */
 export function unsupportedResult(what: string): WaSendResult {
   return { ok: false, providerMessageId: null, status: null, body: what, unsupported: true };
+}
+
+/** The same, for the template-management calls. */
+export function unsupportedMutation(what: string): WaTemplateMutationResult {
+  return { ok: false, detail: what, code: null, unsupported: true };
 }

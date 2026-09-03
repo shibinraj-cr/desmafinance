@@ -96,6 +96,7 @@ model User {
   waBroadcasts           WaBroadcast[]        @relation("WaBroadcastCreatedBy")
   waTemplateGrants       WaTemplateGrant[]    @relation("WaTemplateGrantUser")
   waTemplateGrantsMade   WaTemplateGrant[]    @relation("WaTemplateGrantCreatedBy")
+  waTemplatesAuthored    WaTemplate[]         @relation("WaTemplateCreatedBy")
 
   // Operations relations
   opsTemplatesCreated    ProcessTemplate[]    @relation("OpsTemplateCreatedBy")
@@ -2825,6 +2826,68 @@ model WaTemplateGrant {
   @@index([templateKey])
   @@index([userId])
   @@index([leadPulseRole])
+}
+
+/// A WhatsApp template AUTHORED HERE and submitted to Meta for approval.
+///
+/// Not to be confused with `CrmMessageTemplate`, which is a free-text message
+/// with `{name}` merge fields for the composer inside the 24-hour session window
+/// and never goes near Meta. This one is a real WhatsApp template: it exists on
+/// the WABA, it carries `{{1}}` positional variables, and it cannot be sent to a
+/// candidate until a human at Meta has approved it.
+///
+/// Meta's catalogue is the source of truth for STATUS, so why store anything?
+/// Because the catalogue holds no drafts, no rejection history, no record of who
+/// submitted what, and — most usefully — the moment a template is deleted at
+/// Meta its wording is gone, taking with it the only copy of a message somebody
+/// spent a week getting approved. This table is the authored artefact; the
+/// status columns are a cache of Meta's answer, refreshed by the status webhook
+/// and by an explicit sync.
+model WaTemplate {
+  id       String @id @default(cuid())
+  /// Lowercase snake_case, as Meta requires. Unique per language, not globally:
+  /// one name legitimately exists in several languages and Meta treats each as a
+  /// separate template.
+  name     String
+  /// Meta locale code — `en`, `en_US`, `ml`.
+  language String
+  /// 'MARKETING' | 'UTILITY'. Meta may RECATEGORISE after approval, which is why
+  /// this is refreshed from the catalogue rather than trusted as submitted.
+  category String
+
+  /// Meta's template id. Null while the template is still a draft here; set the
+  /// moment Meta accepts the submission, and the only handle for editing or
+  /// deleting it afterwards.
+  metaId String? @unique
+
+  /// 'DRAFT' | 'PENDING' | 'APPROVED' | 'REJECTED' | 'PAUSED' | … — see
+  /// WaTemplateStatus. DRAFT is ours; every other value is Meta's.
+  status         String  @default("DRAFT")
+  /// Meta's rejection code, e.g. `INCORRECT_CATEGORY`. The only explanation an
+  /// author ever gets for a refusal.
+  rejectedReason String?
+  /// The last submission error from the Graph API — a payload Meta would not
+  /// even accept for review, as distinct from one it reviewed and refused.
+  lastError      String?
+
+  /// The authored spec: header, body, footer, buttons and their sample values.
+  /// Stored whole rather than in columns because it is submitted whole, and a
+  /// schema change per component type would be a migration for every WhatsApp
+  /// feature Meta ships.
+  spec Json
+
+  /// When it was last sent to Meta, and when we last heard back about it.
+  submittedAt DateTime?
+  syncedAt    DateTime?
+
+  createdById String?
+  createdBy   User?    @relation("WaTemplateCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@unique([name, language])
+  @@index([status])
+  @@index([createdById])
 }
 
 // ──────────────────────────────────────────────────────────────────────
