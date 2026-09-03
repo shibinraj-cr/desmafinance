@@ -35,7 +35,7 @@ export const POST = withApiHandler(async (req: Request, { params }: { params: { 
   }
 
   const raw = await createMagicLink(partner.id, clientIp());
-  const url = `${siteBaseUrl(req).replace(/\/$/, "")}/partners/login/${raw}`;
+  const url = `${siteBaseUrl(req).replace(/\/$/, "")}/api/partners/login/${raw}`;
 
   try {
     await sendEmail(cfg, {

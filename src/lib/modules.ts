@@ -383,6 +383,7 @@ export const MODULES: AppModule[] = [
       { href: "/hiring/talent-pool", label: "Talent pool", icon: "diversity_3", group: "GROWTH" },
       { href: "/hiring/partners", label: "Sourcing partners", icon: "storefront", group: "GROWTH" },
       { href: "/hiring/automations", label: "Automations", icon: "bolt", group: "GROWTH" },
+      { href: "/hiring/analytics", label: "Analytics", icon: "insights", group: "INSIGHT" },
       {
         // Granting a role this page promotes it to the hiring HR-manager tier
         // (see HIRING_SETTINGS_PAGE in src/lib/hiring/rbac.ts) — the same trick
