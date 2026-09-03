@@ -9,57 +9,57 @@ datasource db {
 }
 
 model User {
-  id                     String                @id @default(cuid())
-  username               String                @unique
-  email                  String?               @unique
-  passwordHash           String
+  id                      String                @id @default(cuid())
+  username                String                @unique
+  email                   String?               @unique
+  passwordHash            String
   // Soft-disable. An inactive user keeps ALL their data but cannot sign in and
   // loses access on their next request. Toggled from User Management; preferred
   // over deleting a user (delete cascades their Lead Pulse history).
-  isActive               Boolean               @default(true)
+  isActive                Boolean               @default(true)
   // Legacy string role kept for backward compat — capability checks now
   // prefer the `roleRef` relation when present and fall back to this.
-  role                   String                @default("executive")
-  roleId                 String?
-  roleRef                Role?                 @relation(fields: [roleId], references: [id], onDelete: SetNull)
-  createdAt              DateTime              @default(now())
-  updatedAt              DateTime              @updatedAt
-  transactions           Transaction[]
-  auditLogs              AuditLog[]
-  submittedApprovals     PendingApproval[]     @relation("submittedApprovals")
-  reviewedApprovals      PendingApproval[]     @relation("reviewedApprovals")
+  role                    String                @default("executive")
+  roleId                  String?
+  roleRef                 Role?                 @relation(fields: [roleId], references: [id], onDelete: SetNull)
+  createdAt               DateTime              @default(now())
+  updatedAt               DateTime              @updatedAt
+  transactions            Transaction[]
+  auditLogs               AuditLog[]
+  submittedApprovals      PendingApproval[]     @relation("submittedApprovals")
+  reviewedApprovals       PendingApproval[]     @relation("reviewedApprovals")
   // Lead Pulse relations
-  leadPulseRole          LeadPulseRole?
-  leadPulseEntries       LeadPulseDailyEntry[] @relation("LeadPulseEntries")
-  leadPulseMeta          LeadPulseDailyMeta[]  @relation("LeadPulseMeta")
-  leadPulseMetaReviewed  LeadPulseDailyMeta[]  @relation("LeadPulseMetaReviewed")
-  leadPulseAuditLogs     LeadPulseAuditLog[]   @relation("LeadPulseAudit")
-  leadPulseTargets       LeadPulseTarget[]     @relation("LeadPulseTargets")
-  leadPulseTargetsEdited LeadPulseTarget[]     @relation("LeadPulseTargetEditors")
+  leadPulseRole           LeadPulseRole?
+  leadPulseEntries        LeadPulseDailyEntry[] @relation("LeadPulseEntries")
+  leadPulseMeta           LeadPulseDailyMeta[]  @relation("LeadPulseMeta")
+  leadPulseMetaReviewed   LeadPulseDailyMeta[]  @relation("LeadPulseMetaReviewed")
+  leadPulseAuditLogs      LeadPulseAuditLog[]   @relation("LeadPulseAudit")
+  leadPulseTargets        LeadPulseTarget[]     @relation("LeadPulseTargets")
+  leadPulseTargetsEdited  LeadPulseTarget[]     @relation("LeadPulseTargetEditors")
   // Candidates assigned to this user as their L2 BDE (the BDE who
   // closed the deal). Drives the service-conversion matrix.
-  assignedCandidates     Party[]               @relation("PartyAssignedL2Bde")
+  assignedCandidates      Party[]               @relation("PartyAssignedL2Bde")
   // Marketing holiday calendar edits
-  holidaysCreated        Holiday[]             @relation("HolidaysCreated")
-  holidaysUpdated        Holiday[]             @relation("HolidaysUpdated")
+  holidaysCreated         Holiday[]             @relation("HolidaysCreated")
+  holidaysUpdated         Holiday[]             @relation("HolidaysUpdated")
   // Voxbay CSV uploads
-  voxbayUploads          VoxbayUpload[]        @relation("VoxbayUploads")
+  voxbayUploads           VoxbayUpload[]        @relation("VoxbayUploads")
   // Per-user "draft first" workflow flag — when true, new transactions
   // created by this user are stored as TransactionDraft rows for them
   // to review/edit before pushing into the regular approval queue.
   // Used for Ganga's review-before-submit flow.
-  draftFirst             Boolean               @default(false)
-  transactionDrafts      TransactionDraft[]
+  draftFirst              Boolean               @default(false)
+  transactionDrafts       TransactionDraft[]
   // L2 BDE pipeline (in-flight expected closes)
-  leadPulsePipeline      LeadPulsePipeline[]   @relation("LeadPulsePipeline")
+  leadPulsePipeline       LeadPulsePipeline[]   @relation("LeadPulsePipeline")
   // Supervisor-granted unlocks for the daily-entry backdate window
-  leadPulseUnlocks       LeadPulseUnlock[]     @relation("LeadPulseUnlockTarget")
-  leadPulseUnlocksGiven  LeadPulseUnlock[]     @relation("LeadPulseUnlockActor")
+  leadPulseUnlocks        LeadPulseUnlock[]     @relation("LeadPulseUnlockTarget")
+  leadPulseUnlocksGiven   LeadPulseUnlock[]     @relation("LeadPulseUnlockActor")
   // Monthly AI-style insight + Q&A loop on the BDE performance page
-  leadPulseBdeInsights   LeadPulseBdeInsight[] @relation("BdeInsights")
-  collectionPlansCreated CollectionPlan[]      @relation("CollectionPlanCreatedBy")
+  leadPulseBdeInsights    LeadPulseBdeInsight[] @relation("BdeInsights")
+  collectionPlansCreated  CollectionPlan[]      @relation("CollectionPlanCreatedBy")
   // Manual monthly Meta ad-spend entries edited in the Growth Planner
-  leadPulseMetaSpendEdits LeadPulseMetaSpend[] @relation("LeadPulseMetaSpendEditor")
+  leadPulseMetaSpendEdits LeadPulseMetaSpend[]  @relation("LeadPulseMetaSpendEditor")
 
   // HR relations
   employeeProfile        Employee?            @relation("UserEmployee")
@@ -77,41 +77,47 @@ model User {
   psychAssignmentsGiven  PsychAssignment[]    @relation("PsychAssigner")
 
   // CRM relations
-  assignedLeads          Lead[]               @relation("LeadAssignee")
-  createdLeads           Lead[]               @relation("LeadCreatedBy")
-  leadNotes              LeadNote[]           @relation("LeadNoteAuthor")
-  leadActivities         LeadActivity[]       @relation("LeadActivityActor")
-  leadImports            LeadImportBatch[]    @relation("LeadImportUploader")
-  crmTasksAssigned       CrmTask[]            @relation("CrmTaskAssignee")
-  crmTasksCreated        CrmTask[]            @relation("CrmTaskCreatedBy")
-  crmTasksCompleted      CrmTask[]            @relation("CrmTaskCompletedBy")
-  crmMessageTemplates    CrmMessageTemplate[] @relation("CrmMessageTemplateCreatedBy")
-  crmNotifications       CrmNotification[]    @relation("CrmNotifications")
-  crmDailyReports         CrmDailyReport[]     @relation("CrmDailyReportUser")
-  crmDailyReportsReviewed CrmDailyReport[]     @relation("CrmDailyReportReviewer")
-  appSettings            AppSetting[]         @relation("AppSettingEditor")
-  wabisEndpoints         WabisWebhookEndpoint[] @relation("WabisEndpointConsultant")
-  waConversations        WaConversation[]     @relation("WaConversationAssignee")
-  waMessagesSent         WaMessage[]          @relation("WaMessageSender")
-  waBroadcasts           WaBroadcast[]        @relation("WaBroadcastCreatedBy")
-  waTemplateGrants       WaTemplateGrant[]    @relation("WaTemplateGrantUser")
-  waTemplateGrantsMade   WaTemplateGrant[]    @relation("WaTemplateGrantCreatedBy")
-  waTemplatesAuthored    WaTemplate[]         @relation("WaTemplateCreatedBy")
+  assignedLeads           Lead[]                 @relation("LeadAssignee")
+  createdLeads            Lead[]                 @relation("LeadCreatedBy")
+  leadNotes               LeadNote[]             @relation("LeadNoteAuthor")
+  leadActivities          LeadActivity[]         @relation("LeadActivityActor")
+  leadImports             LeadImportBatch[]      @relation("LeadImportUploader")
+  crmTasksAssigned        CrmTask[]              @relation("CrmTaskAssignee")
+  crmTasksCreated         CrmTask[]              @relation("CrmTaskCreatedBy")
+  crmTasksCompleted       CrmTask[]              @relation("CrmTaskCompletedBy")
+  crmMessageTemplates     CrmMessageTemplate[]   @relation("CrmMessageTemplateCreatedBy")
+  crmNotifications        CrmNotification[]      @relation("CrmNotifications")
+  crmDailyReports         CrmDailyReport[]       @relation("CrmDailyReportUser")
+  crmDailyReportsReviewed CrmDailyReport[]       @relation("CrmDailyReportReviewer")
+  appSettings             AppSetting[]           @relation("AppSettingEditor")
+  wabisEndpoints          WabisWebhookEndpoint[] @relation("WabisEndpointConsultant")
+  waConversations         WaConversation[]       @relation("WaConversationAssignee")
+  waMessagesSent          WaMessage[]            @relation("WaMessageSender")
+  waBroadcasts            WaBroadcast[]          @relation("WaBroadcastCreatedBy")
+  waTemplateGrants        WaTemplateGrant[]      @relation("WaTemplateGrantUser")
+  waTemplateGrantsMade    WaTemplateGrant[]      @relation("WaTemplateGrantCreatedBy")
+  waTemplatesAuthored     WaTemplate[]           @relation("WaTemplateCreatedBy")
 
   // Operations relations
-  opsTemplatesCreated    ProcessTemplate[]    @relation("OpsTemplateCreatedBy")
-  opsProjectsAssigned    OpsProject[]         @relation("OpsProjectAssignee")
-  opsProjectsCreated     OpsProject[]         @relation("OpsProjectCreatedBy")
-  opsTasksAssigned       OpsTask[]            @relation("OpsTaskAssignee")
-  opsTasksCompleted      OpsTask[]            @relation("OpsTaskCompletedBy")
-  opsDocumentsUploaded   OpsDocument[]        @relation("OpsDocUploadedBy")
-  opsActivities          OpsTaskActivity[]    @relation("OpsActivityActor")
-  opsActionItemsAssigned  OpsActionItem[]     @relation("OpsActionAssignee")
-  opsActionItemsCreated   OpsActionItem[]     @relation("OpsActionCreatedBy")
-  opsActionItemsCompleted OpsActionItem[]     @relation("OpsActionCompletedBy")
+  opsTemplatesCreated     ProcessTemplate[] @relation("OpsTemplateCreatedBy")
+  opsProjectsAssigned     OpsProject[]      @relation("OpsProjectAssignee")
+  opsProjectsCreated      OpsProject[]      @relation("OpsProjectCreatedBy")
+  opsTasksAssigned        OpsTask[]         @relation("OpsTaskAssignee")
+  opsTasksCompleted       OpsTask[]         @relation("OpsTaskCompletedBy")
+  opsDocumentsUploaded    OpsDocument[]     @relation("OpsDocUploadedBy")
+  opsActivities           OpsTaskActivity[] @relation("OpsActivityActor")
+  opsActionItemsAssigned  OpsActionItem[]   @relation("OpsActionAssignee")
+  opsActionItemsCreated   OpsActionItem[]   @relation("OpsActionCreatedBy")
+  opsActionItemsCompleted OpsActionItem[]   @relation("OpsActionCompletedBy")
 
   // Engagement telemetry (active time per module/page/day)
   moduleUsage ModuleUsageDaily[] @relation("UserModuleUsage")
+
+  // News & Updates relations
+  newsTopicsCreated  NewsTopic[]    @relation("NewsTopicCreatedBy")
+  newsSourcesCreated NewsSource[]   @relation("NewsSourceCreatedBy")
+  newsItemsAuthored  NewsItem[]     @relation("NewsItemCreatedBy")
+  newsReads          NewsItemRead[] @relation("NewsItemReader")
 
   @@index([roleId])
 }
@@ -278,16 +284,16 @@ model ServiceGroup {
 /// specific quoted total for that service. Replaces the legacy Party↔Service
 /// M:M for any flow that needs an amount or per-service notes.
 model PartyService {
-  id          String   @id @default(cuid())
+  id          String      @id @default(cuid())
   partyId     String
-  party       Party    @relation(fields: [partyId], references: [id], onDelete: Cascade)
+  party       Party       @relation(fields: [partyId], references: [id], onDelete: Cascade)
   serviceId   String
-  service     Service  @relation(fields: [serviceId], references: [id], onDelete: Restrict)
+  service     Service     @relation(fields: [serviceId], references: [id], onDelete: Restrict)
   /// Quoted package amount (₹) the candidate owes for this service.
-  totalAmount Decimal  @default(0) @db.Decimal(14, 2)
+  totalAmount Decimal     @default(0) @db.Decimal(14, 2)
   notes       String?
-  createdAt   DateTime @default(now())
-  updatedAt   DateTime @updatedAt
+  createdAt   DateTime    @default(now())
+  updatedAt   DateTime    @updatedAt
   opsProject  OpsProject?
 
   @@unique([partyId, serviceId])
@@ -305,25 +311,25 @@ model PartyService {
 // ──────────────────────────────────────────────────────────────────────
 
 model LeadPulseRole {
-  id          String   @id @default(cuid())
-  userId      String   @unique
-  user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  id             String   @id @default(cuid())
+  userId         String   @unique
+  user           User     @relation(fields: [userId], references: [id], onDelete: Cascade)
   // 'l1' | 'l2' | 'supervisor'
-  role        String
+  role           String
   // Region codes from LeadPulseRegion.code; empty array = all regions.
-  regionFocus String[] @default([])
-  displayName String
+  regionFocus    String[] @default([])
+  displayName    String
   // Consultant contact number, surfaced as the {consultant_phone} merge field in
   // CRM email/WhatsApp templates. Optional — blank renders as an empty string.
-  phone       String?
-  active      Boolean  @default(true)
+  phone          String?
+  active         Boolean  @default(true)
   // Per-user CRM notification preference: when true (default), the user gets an
   // in-app notification each time a lead is assigned/reassigned to them. This is
   // the "notification setting" surfaced on the personal Notifications page. Lives
   // here because only users with a LeadPulseRole can be assigned leads.
-  notifyOnAssign Boolean @default(true)
-  createdAt   DateTime @default(now())
-  updatedAt   DateTime @updatedAt
+  notifyOnAssign Boolean  @default(true)
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
 
   @@index([role])
   @@index([active])
@@ -377,7 +383,7 @@ model CrmNotification {
 /// active defaults. If that happens, remove the generated DROPs and keep the
 /// indexes.
 model WabisWebhookEndpoint {
-  id           String  @id @default(cuid())
+  id           String   @id @default(cuid())
   /// Which flow this workflow serves. A Wabis workflow is tied to one template,
   /// so a consultant needs a separate endpoint per purpose:
   ///   'lead_assigned' — the intro sent when a lead is assigned to them,
@@ -385,12 +391,12 @@ model WabisWebhookEndpoint {
   /// The active-per-consultant / active-default uniqueness (see the migration's
   /// partial indexes) is scoped BY purpose, so the same consultant can hold one
   /// active endpoint of each kind.
-  purpose      String  @default("lead_assigned")
+  purpose      String   @default("lead_assigned")
   /// Friendly name, e.g. "Priya workflow".
   label        String
   /// Consultant whose leads route here; null on the default/fallback endpoint.
   consultantId String?
-  consultant   User?   @relation("WabisEndpointConsultant", fields: [consultantId], references: [id], onDelete: Cascade)
+  consultant   User?    @relation("WabisEndpointConsultant", fields: [consultantId], references: [id], onDelete: Cascade)
   webhookUrl   String
   /// Overrides the consultant's LeadPulseRole.displayName when Wabis registered
   /// the agent under a different spelling. Blank = use the CRM name.
@@ -398,9 +404,9 @@ model WabisWebhookEndpoint {
   /// Overrides LeadPulseRole.phone. Used verbatim — this is the text that
   /// appears inside the WhatsApp message, so it is never re-normalised.
   agentPhone   String?
-  isActive     Boolean @default(true)
+  isActive     Boolean  @default(true)
   /// The fallback used when a consultant has no endpoint of their own.
-  isDefault    Boolean @default(false)
+  isDefault    Boolean  @default(false)
   createdAt    DateTime @default(now())
   updatedAt    DateTime @updatedAt
 
@@ -427,58 +433,58 @@ model WabisWebhookEndpoint {
 /// `event` is one of `lead_assigned`, `lead_assigned_skipped` (nothing to send —
 /// no usable phone, or no endpoint mapped) or `test`.
 model CrmWebhookDelivery {
-  id             String    @id @default(cuid())
+  id                String    @id @default(cuid())
   /// Event discriminator — see the model note.
-  event          String
+  event             String
   /// Idempotency key — see the model note. Skipped and test rows get a unique
   /// random key so they never collide with (or suppress) a real delivery.
-  dedupeKey      String    @unique
+  dedupeKey         String    @unique
   /// Lead this is about; no FK relation, so the delivery log outlives the lead.
-  leadId         String?
+  leadId            String?
   /// Consultant the payload names. Kept as a column rather than parsed back out
   /// of `dedupeKey` so a retry can tell whether the lead has since moved to
   /// someone else — re-sending would otherwise introduce the candidate to a
   /// consultant who no longer owns them.
-  assigneeUserId String?
+  assigneeUserId    String?
   /// Destination and body captured at enqueue time, so editing the settings
   /// later never rewrites the history of what was actually sent where.
-  url            String
+  url               String
   /// Which endpoint was chosen, denormalised. Kept as text rather than a
   /// relation so the log still reads correctly after an endpoint is renamed or
   /// removed — an audit trail that changes retroactively is worthless.
-  endpointLabel  String?
-  payload        Json
+  endpointLabel     String?
+  payload           Json
   /// 'pending' | 'sent' | 'failed' — 'failed' means attempts were exhausted.
-  status         String    @default("pending")
-  attempts       Int       @default(0)
-  maxAttempts    Int       @default(3)
+  status            String    @default("pending")
+  attempts          Int       @default(0)
+  maxAttempts       Int       @default(3)
   /// When the cron drain may next try this row (exponential backoff).
-  nextAttemptAt  DateTime?
-  lastAttemptAt  DateTime?
-  deliveredAt    DateTime?
-  responseStatus Int?
+  nextAttemptAt     DateTime?
+  lastAttemptAt     DateTime?
+  deliveredAt       DateTime?
+  responseStatus    Int?
   /// Response body or transport error, truncated — shown in the settings log.
-  responseBody   String?
+  responseBody      String?
   /// Async WhatsApp/Meta delivery status ('sent'|'delivered'|'read'|'failed'),
   /// reported by Wabis's delivery-status webhook AFTER our POST was accepted —
   /// distinct from `status`, which is only our transport/enqueue state. Null until
   /// a status callback arrives (or forever, if none is configured in Wabis).
-  waStatus       String?
+  waStatus          String?
   /// Meta error code on a failed delivery, e.g. '131026' (undeliverable) or
   /// '131049' (marketing frequency cap). Drives the campaign-delivery report.
-  waErrorCode    String?
-  waErrorMessage String?
+  waErrorCode       String?
+  waErrorMessage    String?
   /// When the async status above last changed.
-  waStatusAt     DateTime?
+  waStatusAt        DateTime?
   /// When Meta reported the message READ (a stronger signal than delivered).
-  readAt         DateTime?
+  readAt            DateTime?
   /// The provider's message id (Meta `wamid`) for a Cloud-API touch, so an async
   /// delivery-status callback (which arrives keyed by wamid on the WA webhook) can
   /// join back to THIS outbox row — updating waStatus and, on a hard failure,
   /// stopping the drip. Null on the Wabis transport (which matches by phone).
   providerMessageId String?
-  createdAt      DateTime  @default(now())
-  updatedAt      DateTime  @updatedAt
+  createdAt         DateTime  @default(now())
+  updatedAt         DateTime  @updatedAt
 
   @@index([status, nextAttemptAt])
   @@index([leadId])
@@ -491,21 +497,21 @@ model CrmWebhookDelivery {
 }
 
 model LeadPulseSource {
-  id                String                     @id @default(cuid())
-  code              String                     @unique
-  label             String
-  displayOrder      Int                        @default(0)
-  active            Boolean                    @default(true)
-  createdAt         DateTime                   @default(now())
-  updatedAt         DateTime                   @updatedAt
-  entries           LeadPulseDailyEntry[]
-  snapshots         LeadPulseMonthlySnapshot[]
-  parties           Party[]
-  leadPulsePipeline LeadPulsePipeline[]
-  leads             Lead[]                     @relation("LeadSource")
+  id                  String                     @id @default(cuid())
+  code                String                     @unique
+  label               String
+  displayOrder        Int                        @default(0)
+  active              Boolean                    @default(true)
+  createdAt           DateTime                   @default(now())
+  updatedAt           DateTime                   @updatedAt
+  entries             LeadPulseDailyEntry[]
+  snapshots           LeadPulseMonthlySnapshot[]
+  parties             Party[]
+  leadPulsePipeline   LeadPulsePipeline[]
+  leads               Lead[]                     @relation("LeadSource")
   // Leads whose ORIGINAL acquisition source was this, but whose primary source
   // was later re-stamped "Existing Candidate" on a re-enrollment (see Lead.originalSource).
-  originalSourceLeads Lead[]                   @relation("LeadOriginalSource")
+  originalSourceLeads Lead[]                     @relation("LeadOriginalSource")
 
   @@index([active])
   @@index([displayOrder])
@@ -885,9 +891,9 @@ model PendingApproval {
 /// submits them from the My Drafts page — at which point a normal
 /// PendingApproval row is created and the draft is deleted.
 model TransactionDraft {
-  id            String   @id @default(cuid())
+  id            String    @id @default(cuid())
   submittedById String
-  submittedBy   User     @relation(fields: [submittedById], references: [id], onDelete: Cascade)
+  submittedBy   User      @relation(fields: [submittedById], references: [id], onDelete: Cascade)
   // Same fields as the canonical Transaction shape so the My Drafts
   // table can render and edit them in place.
   date          DateTime
@@ -897,18 +903,18 @@ model TransactionDraft {
   subItem       String
   description   String?
   paymentMode   String
-  amount        Decimal  @db.Decimal(14, 2)
+  amount        Decimal   @db.Decimal(14, 2)
   flow          String
   partyId       String?
-  party         Party?   @relation(fields: [partyId], references: [id], onDelete: SetNull)
+  party         Party?    @relation(fields: [partyId], references: [id], onDelete: SetNull)
   /// Mirrors Transaction.employeeId — employee counterparty for
   /// salary / incentive outflow drafts.
   employeeId    String?
   employee      Employee? @relation("EmployeeTransactionDrafts", fields: [employeeId], references: [id], onDelete: SetNull)
   /// Mirrors Transaction.expDom — required on Revenue drafts.
   expDom        String?
-  createdAt     DateTime @default(now())
-  updatedAt     DateTime @updatedAt
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
 
   @@index([submittedById])
   @@index([createdAt])
@@ -1157,31 +1163,31 @@ model Employee {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  salaryStructures     HrSalaryStructure[]
-  attendanceDays       HrAttendanceDay[]
-  leaveBalances        HrLeaveBalance[]
-  leaveRequests        HrLeaveRequest[]
-  salaryLines          HrSalaryRunLine[]
-  salaryAdjustments    HrSalaryAdjustment[]
-  policyAcks           HrPolicyAcknowledgement[]
-  trainingProgress     HrTrainingProgress[]
-  notificationReceipts HrNotificationReceipt[]
-  departments          HrEmployeeDepartment[]
-  roleMemberships      HrEmployeeRole[]
+  salaryStructures       HrSalaryStructure[]
+  attendanceDays         HrAttendanceDay[]
+  leaveBalances          HrLeaveBalance[]
+  leaveRequests          HrLeaveRequest[]
+  salaryLines            HrSalaryRunLine[]
+  salaryAdjustments      HrSalaryAdjustment[]
+  policyAcks             HrPolicyAcknowledgement[]
+  trainingProgress       HrTrainingProgress[]
+  notificationReceipts   HrNotificationReceipt[]
+  departments            HrEmployeeDepartment[]
+  roleMemberships        HrEmployeeRole[]
   /// Departments this employee heads (zero, one, or many).
-  headOfDepartments    HrDepartment[]            @relation("HrDepartmentHead")
-  psychAssignments     PsychAssignment[]
-  psychReports         PsychReport[]
-  shiftAssignments     HrShiftAssignment[]
-  leaveEligibility     HrLeaveEligibility?
-  leaveAccruals        HrLeaveAccrual[]
-  regularizations      HrAttendanceRegularization[] @relation("RegEmployee")
+  headOfDepartments      HrDepartment[]               @relation("HrDepartmentHead")
+  psychAssignments       PsychAssignment[]
+  psychReports           PsychReport[]
+  shiftAssignments       HrShiftAssignment[]
+  leaveEligibility       HrLeaveEligibility?
+  leaveAccruals          HrLeaveAccrual[]
+  regularizations        HrAttendanceRegularization[] @relation("RegEmployee")
   attendanceScoreSignals HrAttendanceScoreSignal[]
-  birthdayWishes       HrBirthdayWish[]          @relation("BirthdayRecipient")
+  birthdayWishes         HrBirthdayWish[]             @relation("BirthdayRecipient")
   /// Finance transactions/drafts where this employee is the counterparty
   /// (salary / incentive outflows).
-  transactions         Transaction[]             @relation("EmployeeTransactions")
-  transactionDrafts    TransactionDraft[]        @relation("EmployeeTransactionDrafts")
+  transactions           Transaction[]                @relation("EmployeeTransactions")
+  transactionDrafts      TransactionDraft[]           @relation("EmployeeTransactionDrafts")
 
   @@index([active])
   @@index([shiftId])
@@ -1212,16 +1218,16 @@ model HrDesignation {
 /// Documentation). Each can have a head; employees join via the
 /// HrEmployeeDepartment M:M with one flagged primary.
 model HrDepartment {
-  id              String                 @id @default(cuid())
-  name            String                 @unique
-  description     String?
-  headEmployeeId  String?
-  headEmployee    Employee?              @relation("HrDepartmentHead", fields: [headEmployeeId], references: [id], onDelete: SetNull)
-  active          Boolean                @default(true)
-  createdAt       DateTime               @default(now())
-  updatedAt       DateTime               @updatedAt
-  members         HrEmployeeDepartment[]
-  sandwichPolicy  HrSandwichPolicy[]
+  id             String                 @id @default(cuid())
+  name           String                 @unique
+  description    String?
+  headEmployeeId String?
+  headEmployee   Employee?              @relation("HrDepartmentHead", fields: [headEmployeeId], references: [id], onDelete: SetNull)
+  active         Boolean                @default(true)
+  createdAt      DateTime               @default(now())
+  updatedAt      DateTime               @updatedAt
+  members        HrEmployeeDepartment[]
+  sandwichPolicy HrSandwichPolicy[]
 
   @@index([active])
 }
@@ -1455,20 +1461,20 @@ model HrAttendanceScoreSignal {
 }
 
 model HrSalaryRun {
-  id              String            @id @default(cuid())
-  monthKey        String            @unique
-  workingDaysBase Int               @default(30)
-  status          String            @default("draft")
-  totalNet        Decimal           @default(0) @db.Decimal(14, 2)
+  id              String               @id @default(cuid())
+  monthKey        String               @unique
+  workingDaysBase Int                  @default(30)
+  status          String               @default("draft")
+  totalNet        Decimal              @default(0) @db.Decimal(14, 2)
   createdById     String?
-  createdBy       User?             @relation("HrSalaryRunCreator", fields: [createdById], references: [id], onDelete: SetNull)
+  createdBy       User?                @relation("HrSalaryRunCreator", fields: [createdById], references: [id], onDelete: SetNull)
   approvedById    String?
-  approvedBy      User?             @relation("HrSalaryRunApprover", fields: [approvedById], references: [id], onDelete: SetNull)
+  approvedBy      User?                @relation("HrSalaryRunApprover", fields: [approvedById], references: [id], onDelete: SetNull)
   approvedAt      DateTime?
   axisExportName  String?
   axisExportedAt  DateTime?
-  createdAt       DateTime          @default(now())
-  updatedAt       DateTime          @updatedAt
+  createdAt       DateTime             @default(now())
+  updatedAt       DateTime             @updatedAt
   lines           HrSalaryRunLine[]
   adjustments     HrSalaryAdjustment[]
 
@@ -1724,27 +1730,27 @@ model HrShiftAssignment {
 // ──────────────────────────────────────────────────────────────────────
 
 model HrLeaveEligibility {
-  id              String    @id @default(cuid())
-  employeeId      String    @unique
-  employee        Employee  @relation(fields: [employeeId], references: [id], onDelete: Cascade)
-  enabled         Boolean   @default(false)
+  id              String   @id @default(cuid())
+  employeeId      String   @unique
+  employee        Employee @relation(fields: [employeeId], references: [id], onDelete: Cascade)
+  enabled         Boolean  @default(false)
   /// 'monthly' is the only supported value today; reserved for future
   /// quarterly / annual schedules.
-  frequency       String    @default("monthly")
+  frequency       String   @default("monthly")
   /// Date from which accrual kicks in.
-  effectiveFrom   DateTime  @db.Date
-  leavesPerPeriod Decimal   @default(1) @db.Decimal(4, 2)
+  effectiveFrom   DateTime @db.Date
+  leavesPerPeriod Decimal  @default(1) @db.Decimal(4, 2)
   /// Default leave type credited (CL / SL / PL).
-  leaveType       String    @default("CL")
+  leaveType       String   @default("CL")
   /// When true, any unused balance carries forward to next year up
   /// to `carryForwardCap`. When false, year-end balance resets to 0.
-  carryForward    Boolean   @default(true)
-  carryForwardCap Decimal   @default(0) @db.Decimal(5, 2)
+  carryForward    Boolean  @default(true)
+  carryForwardCap Decimal  @default(0) @db.Decimal(5, 2)
   /// Optional months after which credited but unused leaves expire.
   expiryMonths    Int?
   notes           String?
-  createdAt       DateTime  @default(now())
-  updatedAt       DateTime  @updatedAt
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
 
   @@index([enabled])
 }
@@ -1788,20 +1794,20 @@ model HrLeaveAccrual {
 // ──────────────────────────────────────────────────────────────────────
 
 model HrAttendanceRegularization {
-  id              String           @id @default(cuid())
+  id              String    @id @default(cuid())
   employeeId      String
-  employee        Employee         @relation("RegEmployee", fields: [employeeId], references: [id], onDelete: Cascade)
+  employee        Employee  @relation("RegEmployee", fields: [employeeId], references: [id], onDelete: Cascade)
   /// Optional FK to the attendance row this request corrects. Null if
   /// no attendance row was uploaded yet for this date.
   attendanceDayId String?
-  date            DateTime         @db.Date
+  date            DateTime  @db.Date
   /// What the employee is asking for:
   ///   'punch' → correct a missing/wrong punch (approval → P/HD)
   ///   'leave' → mark an absence as paid leave (approval → LV)
   ///   'note'  → put an explanation on record for a half-day / late-coming
   ///             day; approval acknowledges it but changes NOTHING on the day
   ///             (HD status + late penalty retained)
-  requestType     String           @default("punch")
+  requestType     String    @default("punch")
   /// For punch requests: 'missing_punch' | 'wrong_in_time' | 'wrong_out_time'
   /// | 'biometric_sync' | 'forgot_punch' | 'other'. For leave requests: 'leave'.
   /// For note requests: 'explain'.
@@ -1811,12 +1817,12 @@ model HrAttendanceRegularization {
   proposedOut     String?
   /// Optional uploaded artefact (e.g. screenshot URL).
   attachmentUrl   String?
-  status          String           @default("pending")
+  status          String    @default("pending")
   reviewedById    String?
   reviewedAt      DateTime?
   reviewNote      String?
-  createdAt       DateTime         @default(now())
-  updatedAt       DateTime         @updatedAt
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
 
   @@index([employeeId, date])
   @@index([status, createdAt])
@@ -1831,21 +1837,21 @@ model HrAttendanceRegularization {
 // ──────────────────────────────────────────────────────────────────────
 
 model HrSandwichPolicy {
-  id           String        @id @default(cuid())
+  id              String        @id @default(cuid())
   /// Null = company-wide. Set to scope to a single department.
-  departmentId String?
-  department   HrDepartment? @relation(fields: [departmentId], references: [id], onDelete: Cascade)
-  enabled      Boolean       @default(true)
+  departmentId    String?
+  department      HrDepartment? @relation(fields: [departmentId], references: [id], onDelete: Cascade)
+  enabled         Boolean       @default(true)
   /// Treat intermediate holidays as leave when bracketed by leave.
-  includeHolidays Boolean    @default(true)
+  includeHolidays Boolean       @default(true)
   /// Treat intermediate week-offs as leave when bracketed by leave.
-  includeWeekOffs Boolean    @default(true)
+  includeWeekOffs Boolean       @default(true)
   /// Maximum gap (days) between the two bracketing leave days for
   /// the sandwich rule to apply. 7 covers a typical week.
-  maxGapDays   Int           @default(7)
-  notes        String?
-  createdAt    DateTime      @default(now())
-  updatedAt    DateTime      @updatedAt
+  maxGapDays      Int           @default(7)
+  notes           String?
+  createdAt       DateTime      @default(now())
+  updatedAt       DateTime      @updatedAt
 
   @@unique([departmentId])
   @@index([enabled])
@@ -1873,14 +1879,14 @@ model HrBirthdaySettings {
 /// One row per (employee, year) when the system sends a birthday
 /// wish. Prevents duplicate sends and lets HR review the send log.
 model HrBirthdayWish {
-  id          String   @id @default(cuid())
-  employeeId  String
-  employee    Employee @relation("BirthdayRecipient", fields: [employeeId], references: [id], onDelete: Cascade)
-  year        Int
-  channel     String
-  status      String   @default("sent")
-  payload     Json?
-  sentAt      DateTime @default(now())
+  id         String   @id @default(cuid())
+  employeeId String
+  employee   Employee @relation("BirthdayRecipient", fields: [employeeId], references: [id], onDelete: Cascade)
+  year       Int
+  channel    String
+  status     String   @default("sent")
+  payload    Json?
+  sentAt     DateTime @default(now())
 
   @@unique([employeeId, year])
   @@index([year])
@@ -1893,18 +1899,18 @@ model HrBirthdayWish {
 // ──────────────────────────────────────────────────────────────────────
 
 model HrEssCredentialEvent {
-  id          String   @id @default(cuid())
-  employeeId  String
+  id               String   @id @default(cuid())
+  employeeId       String
   /// 'create' | 'reset' | 'disable'
-  action      String
-  username    String
-  channel     String?
+  action           String
+  username         String
+  channel          String?
   /// Hash of the temporary password sent — for audit only, never the
   /// raw password.
   tempPasswordHash String?
-  actorUserId String?
-  notes       String?
-  createdAt   DateTime @default(now())
+  actorUserId      String?
+  notes            String?
+  createdAt        DateTime @default(now())
 
   @@index([employeeId, createdAt])
 }
@@ -2130,8 +2136,8 @@ model Lead {
   altPhoneE164  String?
 
   // Classification (FKs to reusable masters)
-  sourceId        String?
-  source          LeadPulseSource?  @relation("LeadSource", fields: [sourceId], references: [id], onDelete: SetNull)
+  sourceId         String?
+  source           LeadPulseSource?  @relation("LeadSource", fields: [sourceId], references: [id], onDelete: SetNull)
   // Preserved original acquisition source on a RE-ENROLLMENT lead. When an
   // existing candidate enrolls in a second service, the lead's primary `source`
   // is set to "Existing Candidate" (so repeat business shows as its own bucket
@@ -2139,11 +2145,11 @@ model Lead {
   // candidate first came in through — so their original attribution is never
   // lost. Null on ordinary (first-time) leads.
   originalSourceId String?
-  originalSource   LeadPulseSource? @relation("LeadOriginalSource", fields: [originalSourceId], references: [id], onDelete: SetNull)
-  serviceId       String?
-  service         Service?          @relation(fields: [serviceId], references: [id], onDelete: SetNull)
-  qualificationId String?
-  qualification   CrmQualification? @relation(fields: [qualificationId], references: [id], onDelete: SetNull)
+  originalSource   LeadPulseSource?  @relation("LeadOriginalSource", fields: [originalSourceId], references: [id], onDelete: SetNull)
+  serviceId        String?
+  service          Service?          @relation(fields: [serviceId], references: [id], onDelete: SetNull)
+  qualificationId  String?
+  qualification    CrmQualification? @relation(fields: [qualificationId], references: [id], onDelete: SetNull)
 
   // Pipeline stage / disposition (admin-editable master)
   statusId String
@@ -2151,7 +2157,7 @@ model Lead {
 
   // Assignment — the consultant (BDE) who owns this lead.
   assignedToId String?
-  assignedTo   User?   @relation("LeadAssignee", fields: [assignedToId], references: [id], onDelete: SetNull)
+  assignedTo   User?     @relation("LeadAssignee", fields: [assignedToId], references: [id], onDelete: SetNull)
   // When the lead was assigned to its current consultant. Set on every
   // assign/reassign; cleared (null) on unassign. Drives the "Assigned" column
   // and the "assigned on <date>" filter.
@@ -2199,18 +2205,18 @@ model Lead {
 
   // Campaign / spreadsheet tab the lead came from (e.g. a Meta campaign tab).
   // Promoted from extra.campaign so the leads list can filter & segment by it.
-  campaign      String?
+  campaign String?
 
   // Candidate's official date of birth (date-only, no time). Age is NOT stored —
   // it's derived from `dob` at read time (see ageFromDob) so it's always current.
   // Backs the leads-list Age column and the age-range filter (translated to a dob
   // range in buildLeadWhere), and is shown/edited on the lead detail.
-  dob           DateTime? @db.Date
+  dob DateTime? @db.Date
 
   // Candidate's country (free-form name picked from the full country dropdown,
   // e.g. "India", "Australia"). Optional — drives the leads list country
   // column/filter and is shown/edited on the lead detail.
-  country       String?
+  country String?
 
   // Preferred study-abroad DESTINATION (the country the candidate wants to study
   // in — e.g. "Australia", "United Kingdom"). Distinct from `country` (their home
@@ -2244,12 +2250,12 @@ model Lead {
   // Drives "stale lead" sorting; bumped on every meaningful activity.
   lastActivityAt DateTime @default(now())
 
-  notes      LeadNote[]
-  activities LeadActivity[]
-  tasks      CrmTask[]
-  remarketingCampaigns CrmRemarketingCampaign[]
-  opsProjects OpsProject[] @relation("OpsProjectLead")
-  waConversations WaConversation[]
+  notes                 LeadNote[]
+  activities            LeadActivity[]
+  tasks                 CrmTask[]
+  remarketingCampaigns  CrmRemarketingCampaign[]
+  opsProjects           OpsProject[]             @relation("OpsProjectLead")
+  waConversations       WaConversation[]
   waBroadcastRecipients WaBroadcastRecipient[]
 
   /// When the candidate asked to stop receiving marketing WhatsApp ("STOP",
@@ -2401,27 +2407,27 @@ model CrmTask {
 /// re-submittable while `status = 'submitted'`; once a manager marks it
 /// 'reviewed' it is locked. Managers never submit on a BDE's behalf.
 model CrmDailyReport {
-  id           String    @id @default(cuid())
+  id     String   @id @default(cuid())
   // The BDE the report is ABOUT and authored by (never a manager).
-  userId       String
-  user         User      @relation("CrmDailyReportUser", fields: [userId], references: [id], onDelete: Cascade)
+  userId String
+  user   User     @relation("CrmDailyReportUser", fields: [userId], references: [id], onDelete: Cascade)
   // IST calendar day at UTC midnight — SAME convention as ModuleUsageDaily.day
   // (toPrismaDate(istDay)), so a report joins cleanly to that day's active-time.
-  day          DateTime  @db.Date
+  day    DateTime @db.Date
   // 'submitted' | 'reviewed'
-  status       String    @default("submitted")
+  status String   @default("submitted")
 
   // BDE narrative.
-  summary      String
-  blockers     String?
-  planNext     String?
+  summary  String
+  blockers String?
+  planNext String?
 
   // Frozen snapshot computed server-side at (re)submit — never trusted from the
   // client. See DailyReportMetrics / DailyReportDetails in src/lib/crm-daily-report.ts.
-  metrics      Json
-  details      Json
+  metrics Json
+  details Json
 
-  submittedAt  DateTime  @default(now())
+  submittedAt DateTime @default(now())
 
   // Review.
   reviewedById String?
@@ -2429,8 +2435,8 @@ model CrmDailyReport {
   reviewedAt   DateTime?
   reviewerNote String?
 
-  createdAt    DateTime  @default(now())
-  updatedAt    DateTime  @updatedAt
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 
   @@unique([userId, day]) // one report per BDE per day
   @@index([day, status]) // team roll-up: all reports for a day, submitted vs reviewed
@@ -2459,16 +2465,16 @@ model CrmDailyReport {
 ///     later) reads this state to move it to Centralised Re-marketing.
 ///   - `stopped` — the lead left the Re-marketing stage by some other path.
 model CrmRemarketingCampaign {
-  id           String   @id @default(cuid())
+  id           String    @id @default(cuid())
   leadId       String
-  lead         Lead     @relation(fields: [leadId], references: [id], onDelete: Cascade)
+  lead         Lead      @relation(fields: [leadId], references: [id], onDelete: Cascade)
   /// Consultant who owned the lead when the campaign opened. A plain column (no
   /// relation) like CrmWebhookDelivery.assigneeUserId — kept for reporting even
   /// if the user is later removed.
   ownerUserId  String?
-  startedAt    DateTime @default(now())
+  startedAt    DateTime  @default(now())
   /// 'running' | 'responded' | 'completed' | 'stopped'
-  status       String   @default("running")
+  status       String    @default("running")
   /// Touch-point send timestamps (null = not yet enqueued). Which touch is due is
   /// derived from `startedAt` + the configured offsets, never stored.
   touch1SentAt DateTime?
@@ -2478,8 +2484,8 @@ model CrmRemarketingCampaign {
   /// Why the campaign ended: 'responded_in_wabis' | 'no_response' | 'left_stage'.
   endedReason  String?
   endedAt      DateTime?
-  createdAt    DateTime @default(now())
-  updatedAt    DateTime @updatedAt
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
 
   @@index([status])
   @@index([leadId, status])
@@ -2566,7 +2572,7 @@ model CrmMessageTemplate {
 /// lead for them, but a lead that is later deleted must not take the
 /// conversation history with it (hence SetNull, not Cascade).
 model WaConversation {
-  id String @id @default(cuid())
+  id        String  @id @default(cuid())
   /// Normalised candidate number — the thread's identity. Unique: one thread
   /// per number, no matter how many leads share it.
   phoneE164 String  @unique
@@ -2583,11 +2589,11 @@ model WaConversation {
   /// own status remains the single source of truth for where the deal is.
   status String @default("open")
 
-  lastMessageAt DateTime?
+  lastMessageAt    DateTime?
   /// When the candidate last messaged US. This is the one that matters: WhatsApp
   /// only permits free-text replies within 24 hours of it, so it — not
   /// `lastMessageAt` — is what the composer gates on.
-  lastInboundAt DateTime?
+  lastInboundAt    DateTime?
   /// `lastInboundAt + 24h`, denormalised so "which threads can I still reply to"
   /// is an indexed range scan rather than a computed filter over every row.
   sessionExpiresAt DateTime?
@@ -2641,10 +2647,10 @@ model WaMessage {
   /// Provider-side media handle and a resolved URL, when the message carries an
   /// attachment. Cloud API media URLs are short-lived, so `mediaUrl` is a cache
   /// to be re-fetched from `mediaId`, never the durable reference.
-  mediaId   String?
-  mediaUrl  String?
-  mediaMime String?
-  fileName  String?
+  mediaId        String?
+  mediaUrl       String?
+  mediaMime      String?
+  fileName       String?
   /// OUR copy, in blob storage — the only durable reference of the three above.
   ///
   /// Meta deletes inbound media SEVEN DAYS after delivery, so `mediaId` stops
@@ -2735,7 +2741,7 @@ model WaBroadcast {
   skippedCount    Int @default(0)
 
   createdById String?
-  createdBy   User?   @relation("WaBroadcastCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
+  createdBy   User?    @relation("WaBroadcastCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
 
@@ -2758,8 +2764,8 @@ model WaBroadcastRecipient {
 
   /// The lead this was built from. Non-null in practice — a segment is a lead
   /// query — but SetNull so a deleted lead does not erase the send record.
-  leadId String?
-  lead   Lead?   @relation(fields: [leadId], references: [id], onDelete: SetNull)
+  leadId    String?
+  lead      Lead?   @relation(fields: [leadId], references: [id], onDelete: SetNull)
   /// Captured at materialisation, so the record survives the lead's number
   /// being corrected afterwards.
   phoneE164 String
@@ -2814,7 +2820,7 @@ model WaBroadcastRecipient {
 /// per-tier is what makes it maintainable, since "all L2s may send the follow-up
 /// template" is one row rather than twenty that drift as people join and leave.
 model WaTemplateGrant {
-  id          String  @id @default(cuid())
+  id          String @id @default(cuid())
   /// `name:language`, e.g. `desgro:en_US`.
   templateKey String
 
@@ -2971,28 +2977,28 @@ model OpsProject {
   lead           Lead?            @relation("OpsProjectLead", fields: [leadId], references: [id], onDelete: SetNull)
 
   // Assignment — the operations user who owns this project.
-  assignedToId   String?
-  assignedTo     User?            @relation("OpsProjectAssignee", fields: [assignedToId], references: [id], onDelete: SetNull)
-  assignedAt     DateTime?
+  assignedToId String?
+  assignedTo   User?     @relation("OpsProjectAssignee", fields: [assignedToId], references: [id], onDelete: SetNull)
+  assignedAt   DateTime?
 
   // 'active' | 'on_hold' | 'completed' | 'cancelled'
-  status         String           @default("active")
-  startedAt      DateTime         @default(now())
+  status         String    @default("active")
+  startedAt      DateTime  @default(now())
   dueAt          DateTime?
   completedAt    DateTime?
   createdById    String?
-  createdBy      User?            @relation("OpsProjectCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
-  lastActivityAt DateTime         @default(now())
+  createdBy      User?     @relation("OpsProjectCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
+  lastActivityAt DateTime  @default(now())
 
   // Provenance for one-time Odoo import; null for enroll-created projects.
   externalSource String?
   externalId     String?
 
-  tasks          OpsTask[]
-  activities     OpsTaskActivity[]
-  actionItems    OpsActionItem[]
-  createdAt      DateTime         @default(now())
-  updatedAt      DateTime         @updatedAt
+  tasks       OpsTask[]
+  activities  OpsTaskActivity[]
+  actionItems OpsActionItem[]
+  createdAt   DateTime          @default(now())
+  updatedAt   DateTime          @updatedAt
 
   @@unique([externalSource, externalId])
   @@index([assignedToId, status])
@@ -3013,32 +3019,32 @@ model OpsTask {
   templateStepId String?
   templateStep   ProcessTemplateStep? @relation(fields: [templateStepId], references: [id], onDelete: SetNull)
 
-  seq            Int
-  name           String
-  description    String?
-  phase          String?
-  isRequired     Boolean              @default(true)
-  slaDays        Int?
+  seq         Int
+  name        String
+  description String?
+  phase       String?
+  isRequired  Boolean @default(true)
+  slaDays     Int?
 
   // 'pending' | 'in_progress' | 'completed' | 'blocked' | 'skipped'
-  status         String               @default("pending")
-  assignedToId   String?
-  assignedTo     User?                @relation("OpsTaskAssignee", fields: [assignedToId], references: [id], onDelete: SetNull)
-  dueAt          DateTime?
-  startedAt      DateTime?
-  completedAt    DateTime?
-  completedById  String?
-  completedBy    User?                @relation("OpsTaskCompletedBy", fields: [completedById], references: [id], onDelete: SetNull)
-  blockedReason  String?
-  notes          String?
+  status        String    @default("pending")
+  assignedToId  String?
+  assignedTo    User?     @relation("OpsTaskAssignee", fields: [assignedToId], references: [id], onDelete: SetNull)
+  dueAt         DateTime?
+  startedAt     DateTime?
+  completedAt   DateTime?
+  completedById String?
+  completedBy   User?     @relation("OpsTaskCompletedBy", fields: [completedById], references: [id], onDelete: SetNull)
+  blockedReason String?
+  notes         String?
   // Odoo task id for one-time import idempotency; null for enroll-created tasks.
-  externalId     String?
+  externalId    String?
 
-  documents      OpsDocument[]
-  activities     OpsTaskActivity[]
-  actionItems    OpsActionItem[]
-  createdAt      DateTime             @default(now())
-  updatedAt      DateTime             @updatedAt
+  documents   OpsDocument[]
+  activities  OpsTaskActivity[]
+  actionItems OpsActionItem[]
+  createdAt   DateTime          @default(now())
+  updatedAt   DateTime          @updatedAt
 
   @@unique([projectId, seq])
   @@unique([externalId])
@@ -3064,29 +3070,29 @@ model OpsTask {
 /// context as optional, and project-timeline activity is only recorded for the
 /// rows that actually have a project.
 model OpsActionItem {
-  id            String      @id @default(cuid())
-  projectId     String?
-  project       OpsProject? @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  id        String      @id @default(cuid())
+  projectId String?
+  project   OpsProject? @relation(fields: [projectId], references: [id], onDelete: Cascade)
   // The step this task hangs off, when it hangs off one.
-  taskId        String?
-  task          OpsTask?    @relation(fields: [taskId], references: [id], onDelete: Cascade)
+  taskId    String?
+  task      OpsTask?    @relation(fields: [taskId], references: [id], onDelete: Cascade)
 
-  title         String
-  description   String?
+  title        String
+  description  String?
   // 'open' | 'done' | 'cancelled'
-  status        String      @default("open")
-  assignedToId  String?
-  assignedTo    User?       @relation("OpsActionAssignee", fields: [assignedToId], references: [id], onDelete: SetNull)
-  dueAt         DateTime?
+  status       String    @default("open")
+  assignedToId String?
+  assignedTo   User?     @relation("OpsActionAssignee", fields: [assignedToId], references: [id], onDelete: SetNull)
+  dueAt        DateTime?
 
   createdById   String?
-  createdBy     User?       @relation("OpsActionCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
+  createdBy     User?     @relation("OpsActionCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
   completedById String?
-  completedBy   User?       @relation("OpsActionCompletedBy", fields: [completedById], references: [id], onDelete: SetNull)
+  completedBy   User?     @relation("OpsActionCompletedBy", fields: [completedById], references: [id], onDelete: SetNull)
   completedAt   DateTime?
 
-  createdAt     DateTime    @default(now())
-  updatedAt     DateTime    @updatedAt
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 
   @@index([assignedToId, status, dueAt])
   @@index([taskId])
@@ -3178,4 +3184,123 @@ model ModuleUsageDaily {
   @@index([day, moduleId])
   @@index([userId, day])
   @@index([moduleId, day])
+}
+
+// ---------------------------------------------------------------------------
+// News & Updates
+//
+// A read-only broadcast feed every signed-in user can see: one topic per
+// subject area (e.g. "Australia Immigration", "AHPRA"), one or more source
+// links per topic, and a daily cron that pulls each source and files whatever
+// is new as NewsItem rows. Read state is per user per item, which is what
+// drives the unread badge on the nav.
+// ---------------------------------------------------------------------------
+
+/// A subject area in the news feed. Users filter the feed by topic; each source
+/// link is attached to exactly one topic, so "topic-wise updates" is just the
+/// source's topic carried onto every item it produces.
+model NewsTopic {
+  id          String  @id @default(cuid())
+  /// URL-safe key used in the ?topic= filter. Stable across renames.
+  slug        String  @unique
+  name        String
+  description String?
+  /// Material Symbols icon name, shown on the topic chip.
+  icon        String  @default("newspaper")
+  /// Tailwind-ish accent key ("blue", "green", …) resolved to classes in the UI.
+  color       String  @default("blue")
+  sortOrder   Int     @default(0)
+  /// Inactive topics stop being fetched and drop out of the feed filter, but
+  /// keep their items (deactivating is not deleting).
+  isActive    Boolean @default(true)
+
+  createdById String?
+  createdBy   User?        @relation("NewsTopicCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
+  createdAt   DateTime     @default(now())
+  updatedAt   DateTime     @updatedAt
+  sources     NewsSource[]
+  items       NewsItem[]
+
+  @@index([isActive, sortOrder])
+}
+
+/// One link the daily cron polls. `kind` decides how it is read:
+///  - "rss"  — an RSS 2.0 / Atom feed; every entry becomes a NewsItem.
+///  - "page" — a plain HTML page with no feed; we hash its main text and file a
+///             single "page updated" item when that hash changes.
+model NewsSource {
+  id       String    @id @default(cuid())
+  topicId  String
+  topic    NewsTopic @relation(fields: [topicId], references: [id], onDelete: Cascade)
+  name     String
+  url      String    @unique
+  kind     String    @default("rss")
+  isActive Boolean   @default(true)
+
+  // --- last-run bookkeeping, surfaced on the admin Sources page ---
+  lastFetchedAt DateTime?
+  /// "ok" | "error" | "empty" — never null after the first run.
+  lastStatus    String?
+  lastError     String?
+  lastItemCount Int       @default(0)
+  /// Content hash of the last successful read. For "page" sources this is the
+  /// change detector; for "rss" it short-circuits reparsing an unchanged feed.
+  contentHash   String?
+
+  createdById String?
+  createdBy   User?      @relation("NewsSourceCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
+  createdAt   DateTime   @default(now())
+  updatedAt   DateTime   @updatedAt
+  items       NewsItem[]
+
+  @@index([topicId, isActive])
+}
+
+/// One update in the feed. Either pulled from a source or written by hand by an
+/// admin (sourceId null).
+model NewsItem {
+  id       String      @id @default(cuid())
+  topicId  String
+  topic    NewsTopic   @relation(fields: [topicId], references: [id], onDelete: Cascade)
+  sourceId String?
+  source   NewsSource? @relation(fields: [sourceId], references: [id], onDelete: SetNull)
+
+  title       String
+  /// Plain-text summary. Feed HTML is stripped before it is stored — nothing in
+  /// the feed is ever rendered as markup.
+  summary     String?
+  /// Absolute link to the original article. Null for hand-written posts.
+  url         String?
+  publishedAt DateTime
+
+  /// Stable per-source identity used to avoid re-filing the same entry on every
+  /// run: the feed's <guid>/<id>, else the entry link, else a hash of the title.
+  /// Hand-written items get a generated value so the unique index still holds.
+  guid     String
+  /// Pinned items sort above everything else in their topic.
+  isPinned Boolean @default(false)
+
+  createdById String?
+  createdBy   User?          @relation("NewsItemCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
+  createdAt   DateTime       @default(now())
+  reads       NewsItemRead[]
+
+  /// Two sources may legitimately carry the same article; dedupe is per source.
+  @@unique([sourceId, guid])
+  @@index([topicId, publishedAt])
+  @@index([publishedAt])
+}
+
+/// Per-user read receipt. A row exists only once the user has read the item, so
+/// "unread" is the absence of a row — which is what the nav badge counts.
+model NewsItemRead {
+  id     String   @id @default(cuid())
+  itemId String
+  item   NewsItem @relation(fields: [itemId], references: [id], onDelete: Cascade)
+  userId String
+  user   User     @relation("NewsItemReader", fields: [userId], references: [id], onDelete: Cascade)
+  readAt DateTime @default(now())
+
+  @@unique([itemId, userId])
+  @@index([userId])
 }

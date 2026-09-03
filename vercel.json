@@ -8,6 +8,7 @@
     { "path": "/api/cron/crm-broadcasts", "schedule": "0 5 * * *" },
     { "path": "/api/cron/crm-broadcasts", "schedule": "0 11 * * *" },
     { "path": "/api/cron/crm-broadcasts", "schedule": "0 16 * * *" },
-    { "path": "/api/cron/wa-media-archive", "schedule": "45 1 * * *" }
+    { "path": "/api/cron/wa-media-archive", "schedule": "45 1 * * *" },
+    { "path": "/api/cron/news-sync", "schedule": "0 2 * * *" }
   ]
 }

@@ -4,6 +4,7 @@ import { getCurrentUserAndPermissions } from "@/lib/permissions";
 import { countNewLeadsAssignedTo } from "@/lib/crm-leads";
 import { countUnreadCrmNotifications } from "@/lib/crm-notify";
 import { myTasksWhere } from "@/lib/ops-action-items";
+import { countUnreadNews } from "@/lib/news/read";
 import { SideNav } from "@/components/SideNav";
 import { GroupTabs } from "@/components/GroupTabs";
 import { RouteProgress } from "@/components/RouteProgress";
@@ -24,15 +25,19 @@ export default async function AppLayout({ children }: { children: React.ReactNod
   // the page itself uses, so the badge and the folder always agree.
   // Unread CRM notifications for the signed-in user, for the CRM
   // "Notifications" nav badge (0 for anyone with none).
-  const [pendingCount, rejectedCount, newLeadsCount, myOpenTasksCount, crmNotifCount] = await Promise.all([
-    prisma.pendingApproval.count({ where: { status: "pending" } }).catch(() => 0),
-    prisma.pendingApproval
-      .count({ where: { status: "rejected", submittedById: userId } })
-      .catch(() => 0),
-    countNewLeadsAssignedTo(userId),
-    prisma.opsActionItem.count({ where: { ...myTasksWhere(userId), status: "open" } }).catch(() => 0),
-    countUnreadCrmNotifications(userId),
-  ]);
+  // Unread News & Updates: company-wide, so this one is badged in the header
+  // rather than the nav list — it has to be visible from every module.
+  const [pendingCount, rejectedCount, newLeadsCount, myOpenTasksCount, crmNotifCount, newsUnreadCount] =
+    await Promise.all([
+      prisma.pendingApproval.count({ where: { status: "pending" } }).catch(() => 0),
+      prisma.pendingApproval
+        .count({ where: { status: "rejected", submittedById: userId } })
+        .catch(() => 0),
+      countNewLeadsAssignedTo(userId),
+      prisma.opsActionItem.count({ where: { ...myTasksWhere(userId), status: "open" } }).catch(() => 0),
+      countUnreadCrmNotifications(userId),
+      countUnreadNews(userId),
+    ]);
 
   return (
     // flex-col on mobile so the mobile top bar stacks above main; flex-row
@@ -40,7 +45,11 @@ export default async function AppLayout({ children }: { children: React.ReactNod
     <div className="flex flex-col md:flex-row min-h-screen bg-surface">
       <RouteProgress />
       <UsageTracker />
-      <AppLauncher perms={perms} userName={session.user.name} />
+      <AppLauncher
+        perms={perms}
+        userName={session.user.name}
+        newsUnreadCount={newsUnreadCount}
+      />
       <SideNav
         user={{ name: session.user.name, email: session.user.email }}
         perms={perms}
@@ -49,6 +58,7 @@ export default async function AppLayout({ children }: { children: React.ReactNod
         newLeadsCount={newLeadsCount}
         myOpenTasksCount={myOpenTasksCount}
         crmNotifCount={crmNotifCount}
+        newsUnreadCount={newsUnreadCount}
       />
       <main className="flex-1 min-w-0 flex flex-col">
         <GroupTabs
@@ -58,6 +68,7 @@ export default async function AppLayout({ children }: { children: React.ReactNod
           newLeadsCount={newLeadsCount}
           myOpenTasksCount={myOpenTasksCount}
           crmNotifCount={crmNotifCount}
+          newsUnreadCount={newsUnreadCount}
         />
         {children}
       </main>
