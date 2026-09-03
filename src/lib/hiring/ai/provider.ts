@@ -50,6 +50,12 @@ export interface HiringAiProvider {
     schema: Record<string, unknown>;
     maxTokens?: number;
     effort?: "low" | "medium" | "high";
+    /**
+     * PDFs to read alongside the prompt (résumé parsing). Kept as a first-class
+     * option rather than "extract the text first" because a PDF's text layer is
+     * exactly where a two-column CV turns into interleaved nonsense.
+     */
+    documents?: { mediaType: "application/pdf"; base64: string }[];
   }): Promise<AiJsonResult>;
 }
 
@@ -85,8 +91,19 @@ class AnthropicProvider implements HiringAiProvider {
     schema: Record<string, unknown>;
     maxTokens?: number;
     effort?: "low" | "medium" | "high";
+    documents?: { mediaType: "application/pdf"; base64: string }[];
   }): Promise<AiJsonResult> {
     const client = getAnthropic();
+    // Documents go before the text block, which is what the API expects.
+    const content: Anthropic.ContentBlockParam[] = [
+      ...(opts.documents ?? []).map(
+        (d): Anthropic.ContentBlockParam => ({
+          type: "document",
+          source: { type: "base64", media_type: d.mediaType, data: d.base64 },
+        }),
+      ),
+      { type: "text", text: opts.user },
+    ];
     const res = await client.messages.create({
       model: HIRING_AI_MODEL,
       max_tokens: opts.maxTokens ?? 4000,
@@ -95,7 +112,7 @@ class AnthropicProvider implements HiringAiProvider {
         effort: opts.effort ?? "medium",
         format: { type: "json_schema", schema: opts.schema },
       },
-      messages: [{ role: "user", content: opts.user }],
+      messages: [{ role: "user", content }],
     });
     const raw = textOf(res);
     let data: unknown;

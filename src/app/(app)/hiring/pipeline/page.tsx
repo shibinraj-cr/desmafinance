@@ -5,6 +5,7 @@ import { getHiringAccess } from "@/lib/hiring/access";
 import { can } from "@/lib/hiring/rbac";
 import { applicationListInclude, serializeApplicationRow } from "@/lib/hiring/candidates";
 import { buildBoardColumns } from "@/lib/hiring/board";
+import { isAiEnabled } from "@/lib/anthropic";
 import { PipelineClient } from "./client";
 
 export const dynamic = "force-dynamic";
@@ -93,6 +94,7 @@ export default async function HiringPipelinePage({
           }}
           canMove={can(access, "candidate:move")}
           canWrite={can(access, "candidate:write")}
+          aiEnabled={isAiEnabled()}
           loadedAt={new Date().toISOString()}
         />
       </div>

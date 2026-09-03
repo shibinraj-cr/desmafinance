@@ -42,6 +42,7 @@ export function CandidatesClient({
   filters,
   canWrite,
   canMove,
+  aiEnabled,
   loadedAt,
 }: {
   applications: ApplicationRowDTO[];
@@ -51,6 +52,7 @@ export function CandidatesClient({
   filters: Filters;
   canWrite: boolean;
   canMove: boolean;
+  aiEnabled: boolean;
   loadedAt: string;
 }) {
   const router = useRouter();
@@ -247,6 +249,7 @@ export function CandidatesClient({
           applicationId={openId}
           canMove={canMove}
           canWrite={canWrite}
+          aiEnabled={aiEnabled}
           onClose={() => setOpenId(null)}
           onChanged={() => {
             setError(null);

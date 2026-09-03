@@ -4,6 +4,8 @@ import { TopBar } from "@/components/TopBar";
 import { prisma } from "@/lib/prisma";
 import { getHiringAccess } from "@/lib/hiring/access";
 import { can } from "@/lib/hiring/rbac";
+import { CreditsMeter } from "@/components/hiring/CreditsMeter";
+import { getCreditsState, FEATURE_COSTS, FEATURE_LABELS } from "@/lib/hiring/ai/credits";
 import { SettingsClient } from "./client";
 
 export const dynamic = "force-dynamic";
@@ -26,7 +28,7 @@ export default async function HiringSettingsPage() {
     );
   }
 
-  const [members, users, lastActive] = await Promise.all([
+  const [members, users, lastActive, credits, aiByFeature] = await Promise.all([
     prisma.hiringMember.findMany({
       include: { user: { select: { id: true, username: true, email: true, isActive: true } } },
       orderBy: [{ isActive: "desc" }, { createdAt: "asc" }],
@@ -42,6 +44,13 @@ export default async function HiringSettingsPage() {
       by: ["userId"],
       where: { moduleId: "hiring" },
       _max: { day: true },
+    }),
+    getCreditsState(),
+    prisma.hiringAiCall.groupBy({
+      by: ["feature"],
+      where: { status: "ok" },
+      _sum: { credits: true },
+      _count: { _all: true },
     }),
   ]);
 
@@ -69,6 +78,20 @@ export default async function HiringSettingsPage() {
           }))}
           allUsers={users}
           currentUserId={userId}
+        />
+
+        <CreditsMeter
+          budget={credits.budget}
+          spent={credits.spent}
+          remaining={credits.remaining}
+          byFeature={aiByFeature.map((f) => ({
+            feature: f.feature,
+            credits: f._sum.credits ?? 0,
+            calls: f._count._all,
+          }))}
+          labels={FEATURE_LABELS}
+          costs={FEATURE_COSTS}
+          canEdit
         />
 
         <section className="rounded-xl border border-outline-variant bg-surface-container-lowest p-lg">

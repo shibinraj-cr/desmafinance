@@ -47,8 +47,11 @@ export const config = {
     // (`careers` + `api/careers` — a job applicant is by definition a stranger
     // with no Desgro login; that endpoint does its own honeypot, dwell-time and
     // rate-limit checks, and every OTHER route under api/hiring stays gated),
+    // the per-user interview calendar feed (`api/hiring/calendar` — a calendar
+    // client subscribes with a URL and cannot carry a session; the URL's HMAC
+    // token IS the credential and is checked in constant time),
     // Next.js internal asset routes, and any file with
     // an extension (/desfin.png, /favicon.ico, fonts).
-    "/((?!login|api/auth|api/health|api/whoami|api/integrations|api/crm/integrations/wabis/inbound|api/crm/integrations/wabis/delivery-status|api/crm/wa/webhook|psych/test|api/psych/test|privacy-policy|careers|api/careers|_next/static|_next/image|.*\\..*).*)",
+    "/((?!login|api/auth|api/health|api/whoami|api/integrations|api/crm/integrations/wabis/inbound|api/crm/integrations/wabis/delivery-status|api/crm/wa/webhook|psych/test|api/psych/test|privacy-policy|careers|api/careers|api/hiring/calendar|_next/static|_next/image|.*\\..*).*)",
   ],
 };

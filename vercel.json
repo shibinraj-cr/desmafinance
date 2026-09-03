@@ -1,13 +1,53 @@
 {
   "$schema": "https://openapi.vercel.sh/vercel.json",
   "crons": [
-    { "path": "/api/cron/etime-sync", "schedule": "30 4 * * *" },
-    { "path": "/api/cron/etime-sync", "schedule": "30 8 * * *" },
-    { "path": "/api/cron/etime-sync", "schedule": "30 13 * * *" },
-    { "path": "/api/cron/crm-webhooks", "schedule": "15 3 * * *" },
-    { "path": "/api/cron/crm-broadcasts", "schedule": "0 5 * * *" },
-    { "path": "/api/cron/crm-broadcasts", "schedule": "0 11 * * *" },
-    { "path": "/api/cron/crm-broadcasts", "schedule": "0 16 * * *" },
-    { "path": "/api/cron/wa-media-archive", "schedule": "45 1 * * *" }
+    {
+      "path": "/api/cron/etime-sync",
+      "schedule": "30 4 * * *"
+    },
+    {
+      "path": "/api/cron/etime-sync",
+      "schedule": "30 8 * * *"
+    },
+    {
+      "path": "/api/cron/etime-sync",
+      "schedule": "30 13 * * *"
+    },
+    {
+      "path": "/api/cron/crm-webhooks",
+      "schedule": "15 3 * * *"
+    },
+    {
+      "path": "/api/cron/crm-broadcasts",
+      "schedule": "0 5 * * *"
+    },
+    {
+      "path": "/api/cron/crm-broadcasts",
+      "schedule": "0 11 * * *"
+    },
+    {
+      "path": "/api/cron/crm-broadcasts",
+      "schedule": "0 16 * * *"
+    },
+    {
+      "path": "/api/cron/wa-media-archive",
+      "schedule": "45 1 * * *"
+    },
+    {
+      "path": "/api/cron/hiring-nudges",
+      "schedule": "0 6 * * *"
+    },
+    {
+      "path": "/api/cron/hiring-nudges",
+      "schedule": "0 9 * * *"
+    },
+    {
+      "path": "/api/cron/hiring-nudges",
+      "schedule": "0 12 * * *"
+    },
+    {
+      "path": "/api/cron/hiring-nudges",
+      "schedule": "0 15 * * *"
+    }
   ]
 }

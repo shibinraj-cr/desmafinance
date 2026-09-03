@@ -27,6 +27,7 @@ export function PipelineClient({
   filters,
   canMove,
   canWrite,
+  aiEnabled,
   loadedAt,
 }: {
   columns: BoardColumn[];
@@ -38,6 +39,7 @@ export function PipelineClient({
   filters: Filters;
   canMove: boolean;
   canWrite: boolean;
+  aiEnabled: boolean;
   loadedAt: string;
 }) {
   const router = useRouter();
@@ -328,6 +330,7 @@ export function PipelineClient({
           applicationId={openId}
           canMove={canMove}
           canWrite={canWrite}
+          aiEnabled={aiEnabled}
           onClose={() => setOpenId(null)}
           onChanged={() => router.refresh()}
         />

@@ -67,12 +67,16 @@ export function CandidateDrawer({
   onChanged,
   canMove,
   canWrite,
+  aiEnabled = false,
 }: {
   applicationId: string;
   onClose: () => void;
   onChanged: () => void;
   canMove: boolean;
   canWrite: boolean;
+  /** Hides the AI actions entirely when no key is configured — a button that
+   *  can only ever fail is worse than no button. */
+  aiEnabled?: boolean;
 }) {
   const [detail, setDetail] = useState<Detail | null>(null);
   const [tab, setTab] = useState<Tab>("Profile");
@@ -178,6 +182,20 @@ export function CandidateDrawer({
                   act(`/api/hiring/applications/${detail.application.id}/move`, { toStageId, reason })
                 }
               />
+
+              {canWrite && aiEnabled && (
+                <AiActions
+                  applicationId={detail.application.id}
+                  candidateId={detail.candidate.id}
+                  hasResume={!!detail.candidate.resumeUrl}
+                  scored={detail.application.aiScore != null}
+                  busy={busy}
+                  onRun={async (url) => {
+                    const ok = await act(url, {});
+                    return ok;
+                  }}
+                />
+              )}
 
               <nav className="mt-md flex flex-wrap gap-xs" aria-label="Candidate sections">
                 {TABS.map((t) => (
@@ -709,5 +727,63 @@ function FilesTab({ detail }: { detail: Detail }) {
         </ul>
       )}
     </section>
+  );
+}
+
+/**
+ * The two AI actions that belong on a person: score this application against
+ * the req's rubric, and read the résumé into the blank fields.
+ *
+ * Both say what they will and will not do. Re-scoring is offered explicitly
+ * because the supported way to see a rubric change take effect is to re-run it.
+ */
+function AiActions({
+  applicationId,
+  candidateId,
+  hasResume,
+  scored,
+  busy,
+  onRun,
+}: {
+  applicationId: string;
+  candidateId: string;
+  hasResume: boolean;
+  scored: boolean;
+  busy: boolean;
+  onRun: (url: string) => Promise<boolean>;
+}) {
+  const [note, setNote] = useState<string | null>(null);
+
+  return (
+    <div className="mt-sm flex flex-wrap items-center gap-xs">
+      <button
+        type="button"
+        className={btn}
+        disabled={busy}
+        onClick={async () => {
+          setNote(null);
+          const ok = await onRun(`/api/hiring/applications/${applicationId}/score`);
+          if (ok) setNote("Scored. The breakdown is behind the score chip.");
+        }}
+      >
+        {scored ? "Re-score" : "Score against the rubric"}
+      </button>
+
+      <button
+        type="button"
+        className={btn}
+        disabled={busy || !hasResume}
+        title={hasResume ? undefined : "There is no résumé on file."}
+        onClick={async () => {
+          setNote(null);
+          const ok = await onRun(`/api/hiring/candidates/${candidateId}/parse-resume`);
+          if (ok) setNote("Résumé read. Blank fields were filled; anything edited by hand was left alone.");
+        }}
+      >
+        Read the résumé
+      </button>
+
+      {note && <span className="text-caption text-on-surface-variant">{note}</span>}
+    </div>
   );
 }

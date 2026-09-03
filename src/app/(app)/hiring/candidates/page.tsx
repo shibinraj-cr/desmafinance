@@ -10,6 +10,7 @@ import {
   serializeApplicationRow,
   sortRows,
 } from "@/lib/hiring/candidates";
+import { isAiEnabled } from "@/lib/anthropic";
 import { CandidatesClient } from "./client";
 
 export const dynamic = "force-dynamic";
@@ -108,6 +109,7 @@ export default async function HiringCandidatesPage({
           }}
           canWrite={can(access, "candidate:write")}
           canMove={can(access, "candidate:move")}
+          aiEnabled={isAiEnabled()}
           loadedAt={new Date().toISOString()}
         />
       </div>
