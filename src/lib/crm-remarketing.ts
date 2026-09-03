@@ -63,6 +63,7 @@ import {
 } from "./crm-remarketing-templates";
 import { cloudProvider } from "./wa/cloud-provider";
 import { findOrCreateConversationForLead } from "./wa/mirror";
+import { RANK, type WaDeliveryUpdate } from "./wa/delivery-status";
 
 /** The Follow-Up stage a responding lead advances to. */
 export const FOLLOW_UP_STATUS_CODE = "follow_up";
@@ -727,6 +728,7 @@ async function sendCloudTouch(opts: {
         // flag a number that is simply not on WhatsApp so nothing tries it again.
         await applyHardDeliveryFailure({
           leadId: lead.id,
+          campaignId: opts.campaignId,
           // META's code, not the HTTP status. PERMANENT_UNDELIVERABLE_CODES
           // holds values like 131026, so an HTTP 400 would match nothing.
           errorCode: result.errorCode ?? null,
@@ -857,8 +859,10 @@ async function settleTouch(input: {
       where: { dedupeKey: input.dedupeKey },
       data: {
         status: input.status,
-        // Kept so a delivery callback can be joined back to the touch later —
-        // without it the outbox row and the WaMessage share no key at all.
+        // The wamid, stored in its own column so the async delivery-status
+        // callback can join back to this row by it (and kept in responseBody too,
+        // where the delivery log shows it as text).
+        providerMessageId: input.providerMessageId,
         responseBody: `${input.providerMessageId ? `${input.providerMessageId} — ` : ""}${input.detail}`.slice(0, 500),
         lastAttemptAt: input.now,
         deliveredAt: input.status === "sent" ? input.now : null,
@@ -1559,9 +1563,12 @@ export async function handleWabisDeliveryStatus(input: {
       return { ok: true, action: "recorded", leadId, waStatus };
     }
 
-    // FAILED → stop any running campaign for this lead (any-hard-failure policy).
+    // FAILED → stop the campaign for this lead (any-hard-failure policy). Scope to
+    // the echoed campaign when Wabis sent one; the phone-match fallback (no
+    // campaign known) stays lead-scoped.
     const permanent = await applyHardDeliveryFailure({
       leadId,
+      campaignId: input.campaignId ?? null,
       errorCode,
       errorMessage,
       touch: input.touch ?? null,
@@ -1589,6 +1596,13 @@ export async function handleWabisDeliveryStatus(input: {
  */
 async function applyHardDeliveryFailure(input: {
   leadId: string;
+  /**
+   * The campaign whose touch failed. Scopes the stop to THAT campaign, so a late
+   * async failure for an old touch can't stop a newer, re-enrolled campaign for
+   * the same lead. Falls back to lead-scoped (all running) only when unknown —
+   * the Wabis phone-match path that never resolved a specific campaign.
+   */
+  campaignId?: string | null;
   errorCode: string | null;
   errorMessage: string | null;
   touch: number | null;
@@ -1598,7 +1612,10 @@ async function applyHardDeliveryFailure(input: {
 
   await prisma.crmRemarketingCampaign
     .updateMany({
-      where: { leadId: input.leadId, status: "running" },
+      where: {
+        ...(input.campaignId ? { id: input.campaignId } : { leadId: input.leadId }),
+        status: "running",
+      },
       data: {
         status: "stopped",
         endedReason: `delivery_failed${input.errorCode ? `_${input.errorCode}` : ""}`,
@@ -1631,6 +1648,75 @@ async function applyHardDeliveryFailure(input: {
   });
 
   return permanent;
+}
+
+/**
+ * Mirror Meta delivery-status callbacks onto re-marketing touch OUTBOX rows on the
+ * CLOUD transport, and enforce the same hard-failure policy the Wabis path has.
+ *
+ * Called (dynamically, best-effort) from `applyDeliveryStatuses` after it updates
+ * the thread's WaMessage. The join is exact: a Cloud touch stored its wamid on
+ * `CrmWebhookDelivery.providerMessageId`, so a callback names one outbox row.
+ *
+ * The write is forward-only in the WHERE (same RANK as the WaMessage write), so a
+ * late `delivered` can't walk back a `read`, and a `failed` can only overwrite
+ * `sent` — never a touch that actually reached the phone. `applyHardDeliveryFailure`
+ * runs ONLY when the failed write actually took (`count > 0`), so a delivered-then-
+ * failed race never stops a campaign whose touch did land, and a re-sent `failed`
+ * callback never stops it twice.
+ */
+export async function handleCloudDeliveryStatuses(updates: readonly WaDeliveryUpdate[]): Promise<void> {
+  try {
+    const ids = [...new Set(updates.map((u) => u.providerMessageId).filter((x): x is string => !!x))];
+    if (ids.length === 0) return;
+
+    const rows = await prisma.crmWebhookDelivery.findMany({
+      where: { providerMessageId: { in: ids }, event: REMARKETING_TOUCH_EVENT },
+      select: { id: true, leadId: true, providerMessageId: true, payload: true },
+    });
+    if (rows.length === 0) return;
+    const byWamid = new Map(rows.map((r) => [r.providerMessageId as string, r]));
+
+    for (const u of updates) {
+      const row = byWamid.get(u.providerMessageId);
+      if (!row) continue;
+      const now = u.occurredAt ?? new Date();
+      const supersedes = (Object.keys(RANK) as (keyof typeof RANK)[]).filter((s) => RANK[s] < RANK[u.status]);
+
+      const res = await prisma.crmWebhookDelivery
+        .updateMany({
+          where: { id: row.id, OR: [{ waStatus: null }, { waStatus: { in: supersedes } }] },
+          data: {
+            waStatus: u.status,
+            waStatusAt: now,
+            waErrorCode: u.status === "failed" ? u.errorCode : null,
+            waErrorMessage: u.status === "failed" ? u.errorMessage : null,
+            ...(u.status === "read" ? { readAt: now } : {}),
+          },
+        })
+        .catch(() => null);
+
+      // Stop the drip + flag the number ONLY when the failure actually applied —
+      // i.e. the touch wasn't already delivered/read (or failed once already).
+      if (u.status === "failed" && res && res.count > 0 && row.leadId) {
+        const payload = (row.payload as { touch?: unknown; campaign_id?: unknown } | null) ?? null;
+        const payloadTouch = payload?.touch;
+        const payloadCampaign = payload?.campaign_id;
+        await applyHardDeliveryFailure({
+          leadId: row.leadId,
+          // Scope the stop to THIS touch's campaign, so a delayed failure for an
+          // old touch never stops a lead's newer, re-enrolled campaign.
+          campaignId: typeof payloadCampaign === "string" ? payloadCampaign : null,
+          errorCode: u.errorCode,
+          errorMessage: u.errorMessage,
+          touch: typeof payloadTouch === "number" ? payloadTouch : null,
+          now,
+        }).catch(() => undefined);
+      }
+    }
+  } catch (e) {
+    console.error("[crm-remarketing] handleCloudDeliveryStatuses failed:", e);
+  }
 }
 
 // ── Wabis delivery-report backfill (one-time CSV import) ────────────────────

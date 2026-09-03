@@ -45,7 +45,7 @@ export type WaDeliveryState = "sent" | "delivered" | "read" | "failed";
  * new information — but never `delivered` or `read`, because a message that
  * reached the phone did reach the phone whatever arrives afterwards.
  */
-const RANK: Record<WaDeliveryState, number> = {
+export const RANK: Record<WaDeliveryState, number> = {
   sent: 1,
   delivered: 2,
   failed: 2,
@@ -209,6 +209,20 @@ export async function applyDeliveryStatuses(updates: readonly WaDeliveryUpdate[]
       });
       summary.unmatched++;
     }
+  }
+
+  // A re-marketing touch on the Cloud transport also has an outbox row keyed by
+  // this wamid: mirror the status onto it (so Campaign Delivery reflects the true
+  // outcome) and, on a hard failure, stop the drip. Dynamically imported to break
+  // the wa/ ↔ crm-remarketing cycle (crm-remarketing imports wa/*), and best-effort
+  // so a re-marketing hiccup never disturbs the inbox's own status write above.
+  try {
+    const { handleCloudDeliveryStatuses } = await import("../crm-remarketing");
+    await handleCloudDeliveryStatuses(updates);
+  } catch (e) {
+    logger.warn("wa_delivery_remarketing_hook_failed", {
+      message: e instanceof Error ? e.message : String(e),
+    });
   }
 
   return summary;
