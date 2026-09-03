@@ -8,6 +8,8 @@ import { type LeadRow, isActionOnlyStatus } from "@/lib/crm-leads";
 import { DEFAULT_STATUS_COLOR, BULK_EMAIL_MERGE_FIELDS, fillTemplate, LEAD_TEMPERATURES, leadTemperatureMeta, type MessageTemplateDTO } from "@/lib/crm";
 import { ageFromDob } from "@/lib/age";
 import { COUNTRIES, countryCodeFor } from "@/lib/countries";
+import { MultiSelect } from "@/components/MultiSelect";
+import { listParam, applyFilterPatch } from "@/lib/filter-params";
 
 // ── Shared prop shapes ──────────────────────────────────────────────────────
 export type StatusOpt = { id: string; code: string; label: string; kind: string; color: string | null };
@@ -603,15 +605,19 @@ export function LeadsTable({
     setQ(search.get("q") ?? "");
   }, [search]);
 
-  function update(patch: Record<string, string | null>, keepPage = false) {
+  // A patch value may be a list (every categorical filter is a multi-select, so
+  // it round-trips as repeated query keys) or a scalar (sort, a date, the page).
+  function update(patch: Record<string, string | string[] | null>, keepPage = false) {
     const params = new URLSearchParams(search.toString());
-    for (const [k, v] of Object.entries(patch)) {
-      if (v === null || v === "") params.delete(k);
-      else params.set(k, v);
-    }
+    applyFilterPatch(params, patch);
     if (!keepPage && !("page" in patch)) params.delete("page");
     const qs = params.toString();
     router.push(qs ? `${pathname}?${qs}` : pathname);
+  }
+
+  /** Current selection for a multi-select filter, straight off the query string. */
+  function picked(key: string): string[] {
+    return listParam(search.getAll(key));
   }
 
   // ── Bulk selection (admins only) ────────────────────────────────────────────
@@ -710,17 +716,17 @@ export function LeadsTable({
   const totalPages = Math.max(1, Math.ceil(total / pageSize));
   // "all" is the BDE "All leads" opt-out, not a narrowing filter, so it doesn't
   // count toward anyFilter (which gates the "Clear filters" affordance).
-  const rawAssignee = search.get("assignee");
-  const assigneeIsFilter = !!rawAssignee && rawAssignee !== "all";
+  const rawAssignee = picked("assignee");
+  const assigneeIsFilter = rawAssignee.length > 0 && !rawAssignee.includes("all");
   const anyFilter =
-    !!search.get("status") ||
-    !!search.get("source") ||
-    !!search.get("service") ||
+    picked("status").length > 0 ||
+    picked("source").length > 0 ||
+    picked("service").length > 0 ||
     assigneeIsFilter ||
-    !!search.get("campaign") ||
-    !!search.get("temperature") ||
-    !!search.get("country") ||
-    !!search.get("studyDestination") ||
+    picked("campaign").length > 0 ||
+    picked("temperature").length > 0 ||
+    picked("country").length > 0 ||
+    picked("studyDestination").length > 0 ||
     !!search.get("ageMin") ||
     !!search.get("ageMax") ||
     !!search.get("assignedOn") ||
@@ -753,11 +759,16 @@ export function LeadsTable({
   // Effective assignee mirrors the server default: a BDE with no explicit
   // assignee lands on their own queue, so the list opens on "my leads". Non-BDEs
   // (and the explicit "All leads" / "all" choice) see everyone.
-  const effectiveAssignee = rawAssignee ?? (access.isBde ? access.userId : "all");
+  const effectiveAssignee = rawAssignee.length > 0 ? rawAssignee : [access.isBde ? access.userId : "all"];
   const newStatusId = masters.statuses.find((s) => s.code === "not_yet_started")?.id ?? null;
-  const mineAssignee = effectiveAssignee === access.userId;
-  const isAllLeads = effectiveAssignee === "all";
-  const isMyNew = mineAssignee && !!newStatusId && search.get("status") === newStatusId;
+  // The quick-filter chips describe one exact selection each, so they only light
+  // up when that's the *whole* selection — not when it's one of several picks.
+  const onlyAssignee = effectiveAssignee.length === 1 ? effectiveAssignee[0] : null;
+  const mineAssignee = onlyAssignee === access.userId;
+  const isAllLeads = onlyAssignee === "all";
+  const pickedStatuses = picked("status");
+  const isMyNew =
+    mineAssignee && !!newStatusId && pickedStatuses.length === 1 && pickedStatuses[0] === newStatusId;
   const isMyLeads = mineAssignee && !isMyNew;
   const showMine = access.isBde;
 
@@ -929,42 +940,40 @@ export function LeadsTable({
           </div>
         </form>
 
-        <select className={selectClass} value={search.get("status") ?? ""} onChange={(e) => update({ status: e.target.value || null })}>
-          <option value="">All statuses</option>
-          {masters.statuses.map((s) => (
-            <option key={s.id} value={s.id}>
-              {s.label}
-            </option>
-          ))}
-        </select>
+        <MultiSelect
+          placeholder="All statuses"
+          options={masters.statuses.map((s) => ({ value: s.id, label: s.label }))}
+          selected={pickedStatuses}
+          onChange={(next) => update({ status: next })}
+        />
 
-        <select className={selectClass} value={search.get("source") ?? ""} onChange={(e) => update({ source: e.target.value || null })}>
-          <option value="">All sources</option>
-          {masters.sources.map((s) => (
-            <option key={s.id} value={s.id}>
-              {s.label}
-            </option>
-          ))}
-        </select>
+        <MultiSelect
+          placeholder="All sources"
+          options={masters.sources.map((s) => ({ value: s.id, label: s.label }))}
+          selected={picked("source")}
+          onChange={(next) => update({ source: next })}
+        />
 
-        <select className={selectClass} value={search.get("service") ?? ""} onChange={(e) => update({ service: e.target.value || null })}>
-          <option value="">All services</option>
-          {masters.services.map((s) => (
-            <option key={s.id} value={s.id}>
-              {s.label}
-            </option>
-          ))}
-        </select>
+        <MultiSelect
+          placeholder="All services"
+          options={masters.services.map((s) => ({ value: s.id, label: s.label }))}
+          selected={picked("service")}
+          onChange={(next) => update({ service: next })}
+        />
 
-        <select className={selectClass} value={effectiveAssignee} onChange={(e) => update({ assignee: e.target.value })}>
-          <option value="all">All consultants</option>
-          <option value="unassigned">Unassigned</option>
-          {masters.bdes.map((b) => (
-            <option key={b.userId} value={b.userId}>
-              {b.displayName}
-            </option>
-          ))}
-        </select>
+        {/* "All consultants" is a real option rather than the empty state: a BDE
+            with nothing picked defaults to their own queue, so clearing the
+            selection would bounce them back to "my leads" instead of everyone. */}
+        <MultiSelect
+          placeholder="All consultants"
+          options={[
+            { value: "all", label: "All consultants" },
+            { value: "unassigned", label: "Unassigned" },
+            ...masters.bdes.map((b) => ({ value: b.userId, label: b.displayName })),
+          ]}
+          selected={effectiveAssignee}
+          onChange={(next) => update({ assignee: next.length ? next : "all" })}
+        />
 
         <label
           className={selectClass + " inline-flex items-center gap-xs text-on-surface-variant"}
@@ -1006,45 +1015,37 @@ export function LeadsTable({
         </label>
 
         {masters.campaigns.length > 0 && (
-          <select className={selectClass} value={search.get("campaign") ?? ""} onChange={(e) => update({ campaign: e.target.value || null })}>
-            <option value="">All campaigns</option>
-            {masters.campaigns.map((c) => (
-              <option key={c} value={c}>
-                {c}
-              </option>
-            ))}
-          </select>
+          <MultiSelect
+            placeholder="All campaigns"
+            options={masters.campaigns.map((c) => ({ value: c, label: c }))}
+            selected={picked("campaign")}
+            onChange={(next) => update({ campaign: next })}
+          />
         )}
 
-        <select className={selectClass} value={search.get("temperature") ?? ""} onChange={(e) => update({ temperature: e.target.value || null })}>
-          <option value="">All temperatures</option>
-          {LEAD_TEMPERATURES.map((t) => (
-            <option key={t.value} value={t.value}>
-              {t.label}
-            </option>
-          ))}
-        </select>
+        <MultiSelect
+          placeholder="All temperatures"
+          options={LEAD_TEMPERATURES.map((t) => ({ value: t.value, label: t.label }))}
+          selected={picked("temperature")}
+          onChange={(next) => update({ temperature: next })}
+        />
 
         {masters.countries.length > 0 && (
-          <select className={selectClass} value={search.get("country") ?? ""} onChange={(e) => update({ country: e.target.value || null })}>
-            <option value="">All countries</option>
-            {masters.countries.map((c) => (
-              <option key={c} value={c}>
-                {c}
-              </option>
-            ))}
-          </select>
+          <MultiSelect
+            placeholder="All countries"
+            options={masters.countries.map((c) => ({ value: c, label: c }))}
+            selected={picked("country")}
+            onChange={(next) => update({ country: next })}
+          />
         )}
 
         {masters.studyDestinations.length > 0 && (
-          <select className={selectClass} value={search.get("studyDestination") ?? ""} onChange={(e) => update({ studyDestination: e.target.value || null })}>
-            <option value="">All destinations</option>
-            {masters.studyDestinations.map((c) => (
-              <option key={c} value={c}>
-                {c}
-              </option>
-            ))}
-          </select>
+          <MultiSelect
+            placeholder="All destinations"
+            options={masters.studyDestinations.map((c) => ({ value: c, label: c }))}
+            selected={picked("studyDestination")}
+            onChange={(next) => update({ studyDestination: next })}
+          />
         )}
 
         <label

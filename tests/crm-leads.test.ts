@@ -8,6 +8,7 @@ import {
   resolveAssigneeFilter,
   buildLeadWhere,
   buildCrmTaskWhere,
+  crmTaskAssigneeScope,
   requiresNextStepOnComplete,
   crmTaskFollowAssignmentWhere,
 } from "@/lib/crm-leads";
@@ -219,5 +220,118 @@ describe("crmTaskFollowAssignmentWhere — tasks that follow a lead (re)assignme
     const where = crmTaskFollowAssignmentWhere("bde-A");
     const owners = "OR" in where ? where.OR : [where];
     expect(owners).not.toContainEqual({});
+  });
+});
+
+describe("buildLeadWhere — multi-select filters", () => {
+  it("keeps a single pick as an equality", () => {
+    expect(buildLeadWhere({ status: ["s1"] }).statusId).toBe("s1");
+    expect(buildLeadWhere({ country: "Australia" }).country).toBe("Australia");
+  });
+
+  it("turns several picks into an IN", () => {
+    expect(buildLeadWhere({ status: ["s1", "s2"] }).statusId).toEqual({ in: ["s1", "s2"] });
+    expect(buildLeadWhere({ country: ["India", "Nepal"] }).country).toEqual({ in: ["India", "Nepal"] });
+  });
+
+  it("drops unrecognised temperature codes but keeps the valid ones", () => {
+    expect(buildLeadWhere({ temperature: ["hot", "nonsense", "cold"] }).temperature).toEqual({
+      in: ["hot", "cold"],
+    });
+    expect(buildLeadWhere({ temperature: ["nonsense"] }).temperature).toBeUndefined();
+  });
+
+  it("ORs unassigned together with picked consultants", () => {
+    const where = buildLeadWhere({ assignee: ["unassigned", "u1", "u2"] });
+    expect(where.assignedToId).toBeUndefined();
+    expect(where.AND).toEqual([
+      { OR: [{ assignedToId: null }, { assignedToId: { in: ["u1", "u2"] } }] },
+    ]);
+  });
+
+  it("lets an unassigned-only pick stay a plain null match", () => {
+    expect(buildLeadWhere({ assignee: ["unassigned"] }).assignedToId).toBeNull();
+  });
+
+  it("treats 'all' anywhere in the selection as the no-filter opt-out", () => {
+    const where = buildLeadWhere({ assignee: ["u1", "all"] });
+    expect(where.assignedToId).toBeUndefined();
+    expect(where.AND).toBeUndefined();
+  });
+
+  it("keeps the assignee OR out of `where.OR`, which the q search owns", () => {
+    const where = buildLeadWhere({ assignee: ["unassigned", "u1"], q: "priya" });
+    expect(Array.isArray(where.OR)).toBe(true);
+    // q's OR must survive intact — the two filters intersect, not union.
+    expect((where.OR as unknown[]).length).toBeGreaterThan(1);
+    expect(where.AND).toEqual([
+      { OR: [{ assignedToId: null }, { assignedToId: "u1" }] },
+    ]);
+  });
+});
+
+describe("resolveAssigneeFilter — multi", () => {
+  it("passes several picks straight through", () => {
+    expect(resolveAssigneeFilter(["u1", "u2"], { isBde: true, userId: "u9" })).toEqual(["u1", "u2"]);
+  });
+
+  it("returns a lone pick as a bare string", () => {
+    expect(resolveAssigneeFilter(["u1"], { isBde: true, userId: "u9" })).toBe("u1");
+  });
+
+  it("still defaults a BDE with no pick to their own queue", () => {
+    expect(resolveAssigneeFilter([], { isBde: true, userId: "u9" })).toBe("u9");
+  });
+});
+
+describe("buildCrmTaskWhere — multi-select filters", () => {
+  const now = new Date("2026-09-03T10:00:00");
+
+  it("keeps the status filter for one pick and drops it when both are picked", () => {
+    expect(buildCrmTaskWhere({ status: ["open"] }).status).toBe("open");
+    // open + done narrows nothing, so no status restriction is emitted.
+    expect(buildCrmTaskWhere({ status: ["open", "done"] }).status).toBeUndefined();
+  });
+
+  it("turns several priorities into an IN", () => {
+    expect(buildCrmTaskWhere({ priority: ["high", "low"] }).priority).toEqual({ in: ["high", "low"] });
+    expect(buildCrmTaskWhere({ priority: ["bogus"] }).priority).toBeUndefined();
+  });
+
+  it("unions due buckets rather than narrowing them", () => {
+    const where = buildCrmTaskWhere({ due: ["overdue", "no_date"], now });
+    const and = where.AND as Array<{ OR: Array<Record<string, unknown>> }>;
+    expect(and).toHaveLength(1);
+    expect(and[0].OR).toHaveLength(2);
+    expect(and[0].OR[1]).toEqual({ dueAt: null });
+  });
+
+  it("scopes 'overdue' to open tasks inside its own branch, not by overwriting status", () => {
+    const where = buildCrmTaskWhere({ status: ["done"], due: ["overdue"], now });
+    expect(where.status).toBe("done"); // the user's status pick survives
+    const and = where.AND as Array<{ OR: Array<Record<string, unknown>> }>;
+    expect(and[0].OR[0]).toMatchObject({ status: "open" });
+  });
+
+  it("ORs unassigned together with picked consultants", () => {
+    const where = buildCrmTaskWhere({ assignee: ["unassigned", "u1"] });
+    expect(where.assignedToId).toBeUndefined();
+    expect(where.AND).toEqual([{ OR: [{ assignedToId: null }, { assignedToId: "u1" }] }]);
+  });
+});
+
+describe("crmTaskAssigneeScope", () => {
+  it("is global for an empty pick or the 'all' opt-out", () => {
+    expect(crmTaskAssigneeScope([])).toEqual({});
+    expect(crmTaskAssigneeScope(["u1", "all"])).toEqual({});
+  });
+
+  it("is global for an unassigned-only pick — that pile has no owner to scope to", () => {
+    expect(crmTaskAssigneeScope(["unassigned"])).toEqual({});
+  });
+
+  it("narrows to the picked consultants", () => {
+    expect(crmTaskAssigneeScope(["u1"])).toEqual({ assignedToId: "u1" });
+    expect(crmTaskAssigneeScope(["u1", "u2"])).toEqual({ assignedToId: { in: ["u1", "u2"] } });
   });
 });

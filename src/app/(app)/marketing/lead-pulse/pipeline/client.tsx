@@ -1,13 +1,14 @@
 "use client";
 
 import { useEffect, useMemo, useState, useTransition } from "react";
+import { MultiSelect } from "@/components/MultiSelect";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 
 type ServiceOpt = { id: string; name: string };
 type SourceOpt = { id: string; code: string; label: string };
 type BdeOpt = { userId: string; displayName: string; active: boolean };
-type StatusFilter = "open" | "closed_won" | "lost";
+export type StatusFilter = "open" | "closed_won" | "lost";
 
 export type PipelineRow = {
   id: string;
@@ -81,7 +82,7 @@ function fmtCount(n: number): string {
 export function PipelineClient(props: {
   currentUserId: string;
   canSupervise: boolean;
-  ownerFilter: string | null;
+  ownerFilter: string[];
   l2Bdes: BdeOpt[];
   services: ServiceOpt[];
   sources: SourceOpt[];
@@ -91,7 +92,7 @@ export function PipelineClient(props: {
   month: number;
   monthFiltered: boolean;
   monthLabel: string;
-  status: StatusFilter | null;
+  status: StatusFilter[];
   rows: PipelineRow[];
   forecast: ForecastData | null;
 }) {
@@ -130,7 +131,9 @@ export function PipelineClient(props: {
   };
   // An L2's own scoping isn't a filter they chose — only a supervisor's is.
   const filtered =
-    Boolean(props.status) || props.monthFiltered || (props.canSupervise && Boolean(props.ownerFilter));
+    props.status.length > 0 ||
+    props.monthFiltered ||
+    (props.canSupervise && props.ownerFilter.length > 0);
 
   function go(patch: Partial<PipelineQuery>) {
     router.push(hrefFor({ ...query, ...patch }));
@@ -381,33 +384,31 @@ export function PipelineClient(props: {
       >
         {props.canSupervise && (
           <FilterField label="BDE">
-            <select
-              value={props.ownerFilter ?? ""}
-              onChange={(e) => go({ userId: e.target.value || null })}
-              className="h-[32px] px-[8px] rounded-[6px] text-[13px]"
-            >
-              <option value="">All BDEs</option>
-              {props.l2Bdes.map((b) => (
-                <option key={b.userId} value={b.userId}>
-                  {b.displayName} {b.active ? "" : "(inactive)"}
-                </option>
-              ))}
-            </select>
+            <MultiSelect
+              placeholder="All BDEs"
+              options={props.l2Bdes.map((b) => ({
+                value: b.userId,
+                label: b.displayName,
+                hint: b.active ? undefined : "inactive",
+              }))}
+              selected={props.ownerFilter}
+              onChange={(next) => go({ userId: next })}
+            />
           </FilterField>
         )}
 
         {props.tab === "list" && (
           <FilterField label="Status">
-            <select
-              value={props.status ?? ""}
-              onChange={(e) => go({ status: (e.target.value || null) as StatusFilter | null })}
-              className="h-[32px] px-[8px] rounded-[6px] text-[13px]"
-            >
-              <option value="">All statuses</option>
-              <option value="open">Open</option>
-              <option value="closed_won">Won</option>
-              <option value="lost">Lost</option>
-            </select>
+            <MultiSelect
+              placeholder="All statuses"
+              options={[
+                { value: "open", label: "Open" },
+                { value: "closed_won", label: "Won" },
+                { value: "lost", label: "Lost" },
+              ]}
+              selected={props.status}
+              onChange={(next) => go({ status: next as StatusFilter[] })}
+            />
           </FilterField>
         )}
 
@@ -612,8 +613,8 @@ export function PipelineClient(props: {
 
 type PipelineQuery = {
   tab: "list" | "forecast";
-  userId: string | null;
-  status: StatusFilter | null;
+  userId: string[];
+  status: StatusFilter[];
   /** "YYYY-MM", or null for every month. */
   month: string | null;
 };
@@ -621,8 +622,8 @@ type PipelineQuery = {
 function hrefFor(q: PipelineQuery): string {
   const params = new URLSearchParams();
   if (q.tab !== "list") params.set("tab", q.tab);
-  if (q.userId) params.set("userId", q.userId);
-  if (q.status) params.set("status", q.status);
+  for (const u of q.userId) params.append("userId", u);
+  for (const st of q.status) params.append("status", st);
   if (q.month) {
     params.set("year", q.month.slice(0, 4));
     params.set("month", String(Number(q.month.slice(5, 7))));

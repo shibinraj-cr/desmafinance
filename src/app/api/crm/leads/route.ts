@@ -9,17 +9,16 @@ import { getCrmAccess } from "@/lib/crm-rbac";
 import { recordLeadActivity } from "@/lib/crm-activity";
 import { notifyLeadAssigned } from "@/lib/crm-notify";
 import { normalizePhone, computeDedupeKey, emailKeyOf, phoneMatchKeys, LEAD_TEMPERATURE_VALUES } from "@/lib/crm";
-import { parseDobInput, parseAgeParam } from "@/lib/age";
-import { parsePeriod, rangeFor } from "@/lib/period";
+import { parseDobInput } from "@/lib/age";
 import {
   leadRowInclude,
   serializeLead,
   resolveDefaultStatus,
   buildLeadWhere,
+  leadFilterParamsFromQuery,
+  leadSortFromQuery,
   leadOrderBy,
   isActiveBde,
-  assignedDayRange,
-  resolveAssigneeFilter,
   isActionOnlyStatus,
 } from "@/lib/crm-leads";
 import { recordReInquiry, resolveReInquiryContext, notifySupervisorOfReInquiries } from "@/lib/crm-reinquiry";
@@ -38,32 +37,8 @@ export const GET = withApiHandler(async (req: Request) => {
   const page = Math.max(1, parseInt(sp.get("page") || "1", 10) || 1);
   const pageSize = Math.min(200, Math.max(1, parseInt(sp.get("pageSize") || "50", 10) || 50));
 
-  const range = rangeFor(
-    parsePeriod({
-      period: sp.get("period") || undefined,
-      from: sp.get("from") || undefined,
-      to: sp.get("to") || undefined,
-    }),
-  );
-  const assigned = assignedDayRange(sp.get("assignedOn") || undefined);
-  const where = buildLeadWhere({
-    status: sp.get("status") || undefined,
-    source: sp.get("source") || undefined,
-    service: sp.get("service") || undefined,
-    assignee: resolveAssigneeFilter(sp.get("assignee") || undefined, { isBde: access.isBde, userId }),
-    campaign: sp.get("campaign") || undefined,
-    temperature: sp.get("temperature") || undefined,
-    country: sp.get("country") || undefined,
-    studyDestination: sp.get("studyDestination") || undefined,
-    ageMin: parseAgeParam(sp.get("ageMin")),
-    ageMax: parseAgeParam(sp.get("ageMax")),
-    q: sp.get("q") || undefined,
-    from: range.from,
-    to: range.to,
-    assignedFrom: assigned?.from,
-    assignedTo: assigned?.to,
-  });
-  const orderBy = leadOrderBy(sp.get("sort") || undefined);
+  const where = buildLeadWhere(leadFilterParamsFromQuery(sp, { isBde: access.isBde, userId }));
+  const orderBy = leadOrderBy(leadSortFromQuery(sp));
 
   const [rows, total] = await Promise.all([
     prisma.lead.findMany({

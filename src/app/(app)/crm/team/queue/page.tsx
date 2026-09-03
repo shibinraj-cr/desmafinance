@@ -20,6 +20,7 @@ import {
   type AttentionQueueRow,
   type QueueRow,
 } from "@/lib/crm-team";
+import { listParam } from "@/lib/filter-params";
 import { QueueFilters } from "./filters";
 import { QueueAssignCell } from "./assign-cell";
 
@@ -49,14 +50,14 @@ const TASK_ISSUE_VALUES = ["overdue-task", "reinquiry", "first-response"] as con
 type TaskIssue = (typeof TASK_ISSUE_VALUES)[number];
 type PageIssue = AttentionIssue | TaskIssue;
 
-function parseIssue(v: string | undefined): PageIssue | null {
-  if (v && (ISSUE_VALUES as string[]).includes(v)) return v as AttentionIssue;
-  if (v && (TASK_ISSUE_VALUES as readonly string[]).includes(v)) return v as TaskIssue;
-  return null;
+function parseIssues(values: string[]): PageIssue[] {
+  return values.filter((v): v is PageIssue =>
+    (ISSUE_VALUES as string[]).includes(v) || (TASK_ISSUE_VALUES as readonly string[]).includes(v),
+  );
 }
 
-function isTaskIssue(issue: PageIssue | null): issue is TaskIssue {
-  return issue !== null && (TASK_ISSUE_VALUES as readonly string[]).includes(issue);
+function isTaskIssue(issue: PageIssue): issue is TaskIssue {
+  return (TASK_ISSUE_VALUES as readonly string[]).includes(issue);
 }
 
 function rowHasIssue(r: AttentionQueueRow, issue: AttentionIssue): boolean {
@@ -149,36 +150,49 @@ export default async function AttentionQueuePage({ searchParams }: { searchParam
   const rosterIds = new Set(roster.map((b) => b.userId));
   const bdeOptions = roster.map((b) => ({ userId: b.userId, displayName: b.displayName }));
 
-  const requestedConsultant = str(searchParams, "consultant");
-  const consultantId = requestedConsultant && rosterIds.has(requestedConsultant) ? requestedConsultant : null;
-  const issue = parseIssue(str(searchParams, "issue"));
+  const consultantIds = listParam(searchParams.consultant).filter((id) => rosterIds.has(id));
+  const issues = parseIssues(listParam(searchParams.issue));
+  // The three task drill-downs render their own table (task rows, not lead
+  // attention rows), so they can't union with the flag buckets — the first one
+  // picked takes the page. The four flag buckets union freely with each other.
+  const taskIssue = issues.find(isTaskIssue) ?? null;
+  const flagIssues = issues.filter((i): i is AttentionIssue => !isTaskIssue(i));
 
   const now = new Date();
   const [{ rows: allRows, counts }, overdueTaskRows, reinquiryRows, firstResponseRows] = await Promise.all([
-    getAttentionQueue({ scope, consultantId, now }),
-    getOverdueTaskQueue({ scope, consultantId, now }),
-    getReinquiryQueue({ scope, consultantId, now }),
-    getFirstResponseGapQueue({ scope, consultantId, now }),
+    getAttentionQueue({ scope, consultantIds, now }),
+    getOverdueTaskQueue({ scope, consultantIds, now }),
+    getReinquiryQueue({ scope, consultantIds, now }),
+    getFirstResponseGapQueue({ scope, consultantIds, now }),
   ]);
-  const rows = issue && !isTaskIssue(issue) ? allRows.filter((r) => rowHasIssue(r, issue)) : allRows;
+  const rows =
+    !taskIssue && flagIssues.length > 0
+      ? allRows.filter((r) => flagIssues.some((i) => rowHasIssue(r, i)))
+      : allRows;
   const taskRowsByIssue: Record<TaskIssue, QueueRow[]> = {
     "overdue-task": overdueTaskRows,
     reinquiry: reinquiryRows,
     "first-response": firstResponseRows,
   };
-  const activeTaskRows = isTaskIssue(issue) ? taskRowsByIssue[issue] : [];
+  const activeTaskRows = taskIssue ? taskRowsByIssue[taskIssue] : [];
 
-  const consultantName = consultantId ? roster.find((b) => b.userId === consultantId)?.displayName ?? null : null;
+  const consultantNames = consultantIds
+    .map((id) => roster.find((b) => b.userId === id)?.displayName)
+    .filter((n): n is string => !!n);
+  const consultantName = consultantNames.length > 0 ? consultantNames.join(", ") : null;
   const todayStart = startOfLocalDay(now).getTime();
 
   // Build a queue href preserving the consultant filter but setting the issue.
+  // A chip is a single-issue jump; the dropdown is where several are combined.
   const issueHref = (v: PageIssue | null) => {
     const params = new URLSearchParams();
-    if (consultantId) params.set("consultant", consultantId);
+    for (const id of consultantIds) params.append("consultant", id);
     if (v) params.set("issue", v);
     const qs = params.toString();
     return qs ? `/crm/team/queue?${qs}` : "/crm/team/queue";
   };
+  // A chip lights up when it IS the whole selection, not merely part of one.
+  const onlyIssue = issues.length === 1 ? issues[0] : null;
 
   const subtitle = showConsultant
     ? consultantName
@@ -199,24 +213,24 @@ export default async function AttentionQueuePage({ searchParams }: { searchParam
 
         {/* Bucket summary — click a chip to filter to that issue. */}
         <div className="flex flex-wrap gap-gutter">
-          <CountChip label="Total flagged" value={counts.total} href={issueHref(null)} active={issue === null} tone="neutral" />
-          <CountChip label="SLA breaches" value={counts.sla} href={issueHref("sla")} active={issue === "sla"} tone="danger" />
-          <CountChip label="No next step" value={counts.noTask} href={issueHref("no-task")} active={issue === "no-task"} tone="info" />
-          <CountChip label="Stuck in stage" value={counts.stuck} href={issueHref("stuck")} active={issue === "stuck"} tone="warning" />
-          <CountChip label="Abandoned" value={counts.abandoned} href={issueHref("abandoned")} active={issue === "abandoned"} tone="danger" />
-          <CountChip label="Overdue tasks" value={overdueTaskRows.length} href={issueHref("overdue-task")} active={issue === "overdue-task"} tone="danger" />
-          <CountChip label="First-response gaps" value={firstResponseRows.length} href={issueHref("first-response")} active={issue === "first-response"} tone="danger" />
-          <CountChip label="Re-inquiry follow-ups" value={reinquiryRows.length} href={issueHref("reinquiry")} active={issue === "reinquiry"} tone="info" />
+          <CountChip label="Total flagged" value={counts.total} href={issueHref(null)} active={issues.length === 0} tone="neutral" />
+          <CountChip label="SLA breaches" value={counts.sla} href={issueHref("sla")} active={onlyIssue === "sla"} tone="danger" />
+          <CountChip label="No next step" value={counts.noTask} href={issueHref("no-task")} active={onlyIssue === "no-task"} tone="info" />
+          <CountChip label="Stuck in stage" value={counts.stuck} href={issueHref("stuck")} active={onlyIssue === "stuck"} tone="warning" />
+          <CountChip label="Abandoned" value={counts.abandoned} href={issueHref("abandoned")} active={onlyIssue === "abandoned"} tone="danger" />
+          <CountChip label="Overdue tasks" value={overdueTaskRows.length} href={issueHref("overdue-task")} active={onlyIssue === "overdue-task"} tone="danger" />
+          <CountChip label="First-response gaps" value={firstResponseRows.length} href={issueHref("first-response")} active={onlyIssue === "first-response"} tone="danger" />
+          <CountChip label="Re-inquiry follow-ups" value={reinquiryRows.length} href={issueHref("reinquiry")} active={onlyIssue === "reinquiry"} tone="info" />
         </div>
 
-        {isTaskIssue(issue) ? (
+        {taskIssue ? (
           <Section
             title={`${activeTaskRows.length} shown`}
             action={
               <span className="text-caption text-on-surface-variant">
-                {issue === "overdue-task" && "Open tasks whose due date has passed"}
-                {issue === "reinquiry" && "Open re-inquiry follow-up tasks"}
-                {issue === "first-response" && `Assigned, never contacted, past ${FIRST_RESPONSE_SLA_HOURS}h`}
+                {taskIssue === "overdue-task" && "Open tasks whose due date has passed"}
+                {taskIssue === "reinquiry" && "Open re-inquiry follow-up tasks"}
+                {taskIssue === "first-response" && `Assigned, never contacted, past ${FIRST_RESPONSE_SLA_HOURS}h`}
               </span>
             }
           >
@@ -270,7 +284,7 @@ export default async function AttentionQueuePage({ searchParams }: { searchParam
           </Section>
         ) : (
           <Section
-            title={issue ? `${rows.length} shown` : `${rows.length} lead${rows.length === 1 ? "" : "s"} need attention`}
+            title={flagIssues.length > 0 ? `${rows.length} shown` : `${rows.length} lead${rows.length === 1 ? "" : "s"} need attention`}
             action={
               <span className="text-caption text-on-surface-variant">
                 SLA {Object.values(SLA_THRESHOLD_DAYS).filter((d, i, a) => a.indexOf(d) === i).sort((a, b) => a - b).join("/")}d by

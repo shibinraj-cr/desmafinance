@@ -12,6 +12,7 @@
  * and gated per-conversation by canEditLead at the route.
  */
 import type { Prisma } from "@prisma/client";
+import { listParam, oneOf } from "../filter-params";
 import { isSessionOpen } from "./mirror";
 
 /** Which slice of the inbox to show. */
@@ -48,12 +49,32 @@ export type InboxScope = {
    * owner lets admin/Suhaina check what one BDE still owes a reply on) so it
    * ANDs on top rather than replacing the chip.
    */
-  owner?: string | null;
+  owner?: string | string[] | null;
 };
 
 /** The `status` constraint a filter implies — exported so the chip counts agree with the list. */
 export function inboxStatusWhere(filter: WaInboxFilter): Prisma.WaConversationWhereInput {
   return filter === "closed" ? { status: "closed" } : { status: { not: "closed" } };
+}
+
+/**
+ * The consultant ("owner") narrowing, shared by the conversation list and the
+ * unread/needs-reply badge counts so a badge can never promise threads the list
+ * won't show. Several owners union; "unassigned" is a sentinel that ORs in the
+ * no-owner pile alongside any explicitly picked consultants. Returns null when
+ * nothing is picked.
+ */
+export function inboxOwnerWhere(
+  owner: string | string[] | null | undefined,
+): Prisma.WaConversationWhereInput | null {
+  const owners = listParam(owner);
+  if (owners.length === 0) return null;
+  const unassigned = owners.includes("unassigned");
+  const userIds = owners.filter((o) => o !== "unassigned");
+  if (unassigned && userIds.length > 0) {
+    return { OR: [{ assignedToId: null }, { assignedToId: oneOf(userIds) }] };
+  }
+  return { assignedToId: unassigned ? null : oneOf(userIds) };
 }
 
 /**
@@ -82,9 +103,8 @@ export function buildInboxWhere(filter: WaInboxFilter, scope: InboxScope, search
   // dropdown.
   if (scope.visibility && Object.keys(scope.visibility).length > 0) and.push(scope.visibility);
 
-  if (scope.owner) {
-    and.push(scope.owner === "unassigned" ? { assignedToId: null } : { assignedToId: scope.owner });
-  }
+  const ownerWhere = inboxOwnerWhere(scope.owner);
+  if (ownerWhere) and.push(ownerWhere);
 
   switch (filter) {
     case "mine":

@@ -20,9 +20,9 @@ export function Tabs({
     type?: string;
     from?: string;
     to?: string;
-    party?: string;
-    category?: string;
-    payment?: string;
+    party?: string[];
+    category?: string[];
+    payment?: string[];
   };
 }) {
   const preservedQs = (() => {
@@ -31,9 +31,9 @@ export function Tabs({
     if (preserve.type && preserve.type !== "all") qs.set("type", preserve.type);
     if (preserve.from) qs.set("from", preserve.from);
     if (preserve.to) qs.set("to", preserve.to);
-    if (preserve.party) qs.set("party", preserve.party);
-    if (preserve.category) qs.set("category", preserve.category);
-    if (preserve.payment) qs.set("payment", preserve.payment);
+    for (const v of preserve.party ?? []) qs.append("party", v);
+    for (const v of preserve.category ?? []) qs.append("category", v);
+    for (const v of preserve.payment ?? []) qs.append("payment", v);
     const q = qs.toString();
     return q ? `?${q}` : "";
   })();

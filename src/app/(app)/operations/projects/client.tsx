@@ -1,6 +1,7 @@
 "use client";
 
 import { useMemo, useState } from "react";
+import { MultiSelect } from "@/components/MultiSelect";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 
@@ -54,49 +55,62 @@ export function ProjectsClient({
   canAssign: boolean;
   currentUserId: string;
 }) {
-  const [status, setStatus] = useState("");
-  const [serviceId, setServiceId] = useState("");
-  const [assignee, setAssignee] = useState("");
+  const [status, setStatus] = useState<string[]>([]);
+  const [serviceIds, setServiceIds] = useState<string[]>([]);
+  const [assignee, setAssignee] = useState<string[]>([]);
 
-  const filtered = useMemo(
-    () =>
-      projects.filter((p) => {
-        if (status && p.status !== status) return false;
-        if (serviceId && p.serviceName !== services.find((s) => s.id === serviceId)?.name) return false;
-        if (assignee === "me" && p.assigneeId !== currentUserId) return false;
-        if (assignee === "unassigned" && p.assigneeId) return false;
-        if (assignee && assignee !== "me" && assignee !== "unassigned" && p.assigneeId !== assignee) return false;
-        return true;
-      }),
-    [projects, status, serviceId, assignee, services, currentUserId],
-  );
+  const filtered = useMemo(() => {
+    const serviceNames = serviceIds
+      .map((id) => services.find((s) => s.id === id)?.name)
+      .filter((n): n is string => !!n);
+    // "Me" and "Unassigned" are people-shaped sentinels, so a selection unions
+    // them with any explicitly picked owners.
+    const ownerIds = assignee.map((a) => (a === "me" ? currentUserId : a)).filter((a) => a !== "unassigned");
+    const wantsUnassigned = assignee.includes("unassigned");
+    return projects.filter((p) => {
+      if (status.length && !status.includes(p.status)) return false;
+      if (serviceNames.length && !serviceNames.includes(p.serviceName)) return false;
+      if (assignee.length) {
+        const matches =
+          (wantsUnassigned && !p.assigneeId) || (!!p.assigneeId && ownerIds.includes(p.assigneeId));
+        if (!matches) return false;
+      }
+      return true;
+    });
+  }, [projects, status, serviceIds, assignee, services, currentUserId]);
 
   const unassignedCount = projects.filter((p) => !p.assigneeId).length;
 
   return (
     <div className="space-y-md">
       <div className="flex flex-wrap items-center gap-sm">
-        <select className={selCls} value={status} onChange={(e) => setStatus(e.target.value)}>
-          <option value="">All statuses</option>
-          <option value="active">Active</option>
-          <option value="on_hold">On hold</option>
-          <option value="completed">Completed</option>
-          <option value="cancelled">Cancelled</option>
-        </select>
-        <select className={selCls} value={serviceId} onChange={(e) => setServiceId(e.target.value)}>
-          <option value="">All services</option>
-          {services.map((s) => (
-            <option key={s.id} value={s.id}>{s.name}</option>
-          ))}
-        </select>
-        <select className={selCls} value={assignee} onChange={(e) => setAssignee(e.target.value)}>
-          <option value="">Anyone</option>
-          <option value="me">Assigned to me</option>
-          <option value="unassigned">Unassigned{unassignedCount ? ` (${unassignedCount})` : ""}</option>
-          {opsUsers.map((u) => (
-            <option key={u.id} value={u.id}>{u.username}</option>
-          ))}
-        </select>
+        <MultiSelect
+          placeholder="All statuses"
+          options={[
+            { value: "active", label: "Active" },
+            { value: "on_hold", label: "On hold" },
+            { value: "completed", label: "Completed" },
+            { value: "cancelled", label: "Cancelled" },
+          ]}
+          selected={status}
+          onChange={setStatus}
+        />
+        <MultiSelect
+          placeholder="All services"
+          options={services.map((s) => ({ value: s.id, label: s.name }))}
+          selected={serviceIds}
+          onChange={setServiceIds}
+        />
+        <MultiSelect
+          placeholder="Anyone"
+          options={[
+            { value: "me", label: "Assigned to me" },
+            { value: "unassigned", label: "Unassigned", hint: unassignedCount ? String(unassignedCount) : undefined },
+            ...opsUsers.map((u) => ({ value: u.id, label: u.username })),
+          ]}
+          selected={assignee}
+          onChange={setAssignee}
+        />
         <span className="text-label-sm text-on-surface-variant ml-auto">{filtered.length} of {projects.length}</span>
       </div>
 

@@ -1,6 +1,7 @@
 "use client";
 
 import { useMemo, useState } from "react";
+import { MultiSelect } from "@/components/MultiSelect";
 import { useRouter } from "next/navigation";
 import { Section } from "@/components/Cards";
 
@@ -40,11 +41,12 @@ export function ShiftAssignmentsClient({
   employees: Employee[];
   shifts: Shift[];
   assignments: Assignment[];
-  filter: { employeeId: string | null; status: string | null };
+  filter: { employeeId: string[]; status: string[] };
 }) {
   const router = useRouter();
   const [form, setForm] = useState({
-    employeeId: filter.employeeId ?? employees[0]?.id ?? "",
+    // Pre-fill from the filter when it names exactly one employee.
+    employeeId: filter.employeeId[0] ?? employees[0]?.id ?? "",
     shiftId: shifts[0]?.id ?? "",
     effectiveFrom: new Date().toISOString().slice(0, 10),
     effectiveTo: "",
@@ -213,8 +215,8 @@ export function ShiftAssignmentsClient({
             employees={employees}
             onChange={(next) => {
               const params = new URLSearchParams();
-              if (next.employeeId) params.set("employeeId", next.employeeId);
-              if (next.status) params.set("status", next.status);
+              for (const id of next.employeeId) params.append("employeeId", id);
+              for (const st of next.status) params.append("status", st);
               router.push(`/hr/shift-assignments${params.toString() ? "?" + params.toString() : ""}`);
             }}
           />
@@ -339,34 +341,28 @@ function FilterBar({
   employees,
   onChange,
 }: {
-  filter: { employeeId: string | null; status: string | null };
+  filter: { employeeId: string[]; status: string[] };
   employees: Employee[];
-  onChange: (next: { employeeId: string | null; status: string | null }) => void;
+  onChange: (next: { employeeId: string[]; status: string[] }) => void;
 }) {
   return (
     <div className="flex items-center gap-sm">
-      <select
-        value={filter.employeeId ?? ""}
-        onChange={(e) => onChange({ ...filter, employeeId: e.target.value || null })}
-        className="bg-surface-container border border-outline-variant rounded-lg px-sm py-xs text-label-sm"
-      >
-        <option value="">All employees</option>
-        {employees.map((e) => (
-          <option key={e.id} value={e.id}>
-            {e.empCode} · {e.name}
-          </option>
-        ))}
-      </select>
-      <select
-        value={filter.status ?? ""}
-        onChange={(e) => onChange({ ...filter, status: e.target.value || null })}
-        className="bg-surface-container border border-outline-variant rounded-lg px-sm py-xs text-label-sm"
-      >
-        <option value="">All statuses</option>
-        <option value="approved">Approved</option>
-        <option value="pending">Pending</option>
-        <option value="rejected">Rejected</option>
-      </select>
+      <MultiSelect
+        placeholder="All employees"
+        options={employees.map((e) => ({ value: e.id, label: `${e.empCode} · ${e.name}` }))}
+        selected={filter.employeeId}
+        onChange={(next) => onChange({ ...filter, employeeId: next })}
+      />
+      <MultiSelect
+        placeholder="All statuses"
+        options={[
+          { value: "approved", label: "Approved" },
+          { value: "pending", label: "Pending" },
+          { value: "rejected", label: "Rejected" },
+        ]}
+        selected={filter.status}
+        onChange={(next) => onChange({ ...filter, status: next })}
+      />
     </div>
   );
 }

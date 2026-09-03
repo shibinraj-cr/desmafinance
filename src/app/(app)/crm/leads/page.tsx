@@ -4,7 +4,6 @@ import { DateFilter } from "@/components/DateFilter";
 import { prisma } from "@/lib/prisma";
 import { getCurrentUserAndPermissions } from "@/lib/permissions";
 import { getCrmAccess } from "@/lib/crm-rbac";
-import { parsePeriod, rangeFor } from "@/lib/period";
 import {
   buildLeadWhere,
   leadOrderBy,
@@ -12,10 +11,9 @@ import {
   serializeLead,
   getAssignableBdes,
   countNewLeadsAssignedTo,
-  assignedDayRange,
-  resolveAssigneeFilter,
+  leadFilterParamsFromQuery,
+  leadSortFromQuery,
 } from "@/lib/crm-leads";
-import { parseAgeParam } from "@/lib/age";
 import { isEmailConfigured } from "@/lib/mailer";
 import { listMessageTemplates } from "@/lib/crm-message-templates";
 import { LeadsToolbar, LeadsTable } from "./client";
@@ -50,35 +48,9 @@ export default async function LeadsPage({ searchParams }: { searchParams: SP }) 
   }
 
   const requestedPage = Math.max(1, parseInt(str(searchParams, "page") || "1", 10) || 1);
-  const sort = str(searchParams, "sort");
-  const range = rangeFor(
-    parsePeriod({
-      period: str(searchParams, "period"),
-      from: str(searchParams, "from"),
-      to: str(searchParams, "to"),
-    }),
-  );
-  const assignedOn = str(searchParams, "assignedOn");
-  const assigned = assignedDayRange(assignedOn);
-  const where = buildLeadWhere({
-    status: str(searchParams, "status"),
-    source: str(searchParams, "source"),
-    service: str(searchParams, "service"),
-    // BDEs default to their own queue ("my leads") until they pick a consultant
-    // or explicitly choose "All leads"; everyone else sees all leads.
-    assignee: resolveAssigneeFilter(str(searchParams, "assignee"), { isBde: access.isBde, userId }),
-    campaign: str(searchParams, "campaign"),
-    temperature: str(searchParams, "temperature"),
-    country: str(searchParams, "country"),
-    studyDestination: str(searchParams, "studyDestination"),
-    ageMin: parseAgeParam(str(searchParams, "ageMin")),
-    ageMax: parseAgeParam(str(searchParams, "ageMax")),
-    q: str(searchParams, "q"),
-    from: range.from,
-    to: range.to,
-    assignedFrom: assigned?.from,
-    assignedTo: assigned?.to,
-  });
+  const sort = leadSortFromQuery(searchParams);
+  const filters = leadFilterParamsFromQuery(searchParams, { isBde: access.isBde, userId });
+  const where = buildLeadWhere(filters);
 
   // Clamp the page against the result size so a stale `page` (e.g. left over
   // after narrowing the date range) never renders an empty out-of-range page.
@@ -165,8 +137,8 @@ export default async function LeadsPage({ searchParams }: { searchParams: SP }) 
       <TopBar
         title="Leads"
         subtitle={
-          assigned
-            ? `${total} lead${total === 1 ? "" : "s"} assigned on ${assigned.from.toLocaleDateString("en-GB", { day: "2-digit", month: "short", year: "numeric" })}`
+          filters.assignedFrom
+            ? `${total} lead${total === 1 ? "" : "s"} assigned on ${filters.assignedFrom.toLocaleDateString("en-GB", { day: "2-digit", month: "short", year: "numeric" })}`
             : `${total} lead${total === 1 ? "" : "s"}`
         }
         action={

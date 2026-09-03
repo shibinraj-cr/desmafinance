@@ -1,10 +1,11 @@
 import { NextResponse } from "next/server";
+import type { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
 import { withApiHandler } from "@/lib/api";
 import { unauthorized, forbidden } from "@/lib/http-error";
 import { getCurrentUserAndPermissions } from "@/lib/permissions";
 import { getCrmAccess } from "@/lib/crm-rbac";
-import { buildInboxWhere, normalizeInboxFilter, serializeInboxRow } from "@/lib/wa/inbox";
+import { buildInboxWhere, inboxOwnerWhere, normalizeInboxFilter, serializeInboxRow } from "@/lib/wa/inbox";
 import { conversationVisibilityWhere } from "@/lib/wa/access";
 
 export const dynamic = "force-dynamic";
@@ -39,7 +40,7 @@ export const GET = withApiHandler(async (req: Request) => {
   // canViewAllConversations). Harmless to read for anyone else too: a
   // consultant's `visibility` already hard-scopes them to their own threads, so
   // this can only narrow further, never widen.
-  const owner = sp.get("owner");
+  const owner = sp.getAll("owner");
   // Floored and floored-at-1: Prisma requires an Int, and a negative `take`
   // means "page backwards", which the hasMore/slice arithmetic below cannot
   // express — an unvalidated `?limit=-5` would silently return the wrong page.
@@ -88,10 +89,11 @@ export const GET = withApiHandler(async (req: Request) => {
   // that clicking through cannot show is worse than no badge. They also obey
   // the owner filter, so picking a consultant re-scopes the badges to their
   // threads rather than leaving them showing the whole desk's numbers.
-  const open = {
+  const ownerScope = inboxOwnerWhere(owner);
+  const open: Prisma.WaConversationWhereInput = {
     status: { not: "closed" },
     ...visibility,
-    ...(owner ? { assignedToId: owner === "unassigned" ? null : owner } : {}),
+    ...(ownerScope ?? {}),
   };
   const [needsReply, unread, unassigned] = await Promise.all([
     prisma.waConversation.count({ where: { ...open, awaitingReply: true } }),
