@@ -3225,9 +3225,12 @@ model NewsTopic {
 }
 
 /// One link the daily cron polls. `kind` decides how it is read:
-///  - "rss"  — an RSS 2.0 / Atom feed; every entry becomes a NewsItem.
-///  - "page" — a plain HTML page with no feed; we hash its main text and file a
-///             single "page updated" item when that hash changes.
+///  - "rss"     — an RSS 2.0 / Atom feed; every entry becomes a NewsItem.
+///  - "page"    — a plain HTML page with no feed; we hash its main text and file
+///                a single "page updated" item when that hash changes.
+///  - "chatgpt" — a public ChatGPT share link; the assistant's answer is split
+///                into one NewsItem per update. Read via the share page's JSON
+///                endpoint, since the page itself renders client-side.
 model NewsSource {
   id       String    @id @default(cuid())
   topicId  String

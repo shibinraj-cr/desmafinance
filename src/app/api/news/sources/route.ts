@@ -9,7 +9,7 @@ const Schema = z.object({
   topicId: z.string().min(1),
   name: z.string().trim().min(1).max(120),
   url: z.string().trim().url().max(2000),
-  kind: z.enum(["rss", "page"]).default("rss"),
+  kind: z.enum(["rss", "page", "chatgpt"]).default("rss"),
 });
 
 /**

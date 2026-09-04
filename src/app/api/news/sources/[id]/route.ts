@@ -6,7 +6,7 @@ import { getCurrentUserAndPermissions } from "@/lib/permissions";
 const Schema = z.object({
   name: z.string().trim().min(1).max(120).optional(),
   topicId: z.string().min(1).optional(),
-  kind: z.enum(["rss", "page"]).optional(),
+  kind: z.enum(["rss", "page", "chatgpt"]).optional(),
   isActive: z.boolean().optional(),
 });
 

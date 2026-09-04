@@ -8,6 +8,14 @@ import {
   type ParsedFeedItem,
 } from "@/lib/news/parse";
 import { NEWS_WINDOW_DAYS } from "@/lib/news/constants";
+import { newsWindowStart } from "@/lib/news/read";
+import {
+  shareIdFrom,
+  shareApiUrl,
+  assistantMessages,
+  conversationTitle,
+  splitIntoItems,
+} from "@/lib/news/chatgpt";
 
 /** How long a single source gets before we give up and move to the next one. */
 const FETCH_TIMEOUT_MS = 15_000;
@@ -133,6 +141,21 @@ async function fetchText(url: string): Promise<string> {
   }
 }
 
+/**
+ * The assistant's answers in a shared conversation, concatenated — the part of
+ * the payload that is actually the news. Returns "" when the payload cannot be
+ * read at all, which the caller reports as an unusable source.
+ */
+function chatGptContentFor(body: string): string {
+  try {
+    return assistantMessages(JSON.parse(body))
+      .map((m) => m.text)
+      .join("\n\n");
+  } catch {
+    return "";
+  }
+}
+
 /** Items a first run should file: newest few, and nothing stale. */
 function firstRunSlice(items: ParsedFeedItem[], now: Date): ParsedFeedItem[] {
   const cutoff = new Date(now.getTime() - FIRST_RUN_MAX_AGE_DAYS * 86_400_000);
@@ -179,14 +202,45 @@ export async function syncSource(source: SourceRow, now = new Date()): Promise<S
 
   if (!isFetchableUrl(source.url)) return fail("not a fetchable public http(s) URL");
 
-  let body: string;
-  try {
-    body = await fetchText(source.url);
-  } catch (e) {
-    return fail(e instanceof Error ? e.message : String(e));
+  // A ChatGPT share page renders client-side, so the URL the admin pasted is not
+  // the URL that holds the conversation. Read its data endpoint instead.
+  let fetchUrl = source.url;
+  if (source.kind === "chatgpt") {
+    const shareId = shareIdFrom(source.url);
+    if (!shareId) {
+      return fail(
+        "That is not a ChatGPT share link. Use the link from ChatGPT\u2019s Share button \u2014 it looks like https://chatgpt.com/share/\u2026",
+      );
+    }
+    fetchUrl = shareApiUrl(shareId);
   }
 
-  const hash = hashString(source.kind === "page" ? pageText(body) : body);
+  let body: string;
+  try {
+    body = await fetchText(fetchUrl);
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e);
+    // The share endpoint answers 404 both for a wrong id and for a conversation
+    // whose sharing was turned off — the second is much likelier here, and the
+    // fix is different, so name it.
+    if (source.kind === "chatgpt" && /HTTP 404/.test(msg)) {
+      return fail(
+        "This shared chat is no longer public. Re-share it in ChatGPT and paste the new link.",
+      );
+    }
+    return fail(msg);
+  }
+
+  // Hash what we actually publish from, not the envelope around it. A share
+  // payload carries view counts and moderation fields that churn between reads;
+  // hashing the raw JSON would report an update every single day.
+  const hash = hashString(
+    source.kind === "page"
+      ? pageText(body)
+      : source.kind === "chatgpt"
+        ? chatGptContentFor(body)
+        : body,
+  );
   // An unchanged body means nothing to file. On a first run we still parse, so
   // a newly added source is populated immediately instead of on the next change.
   if (!isFirstRun && hash === source.contentHash) {
@@ -200,7 +254,64 @@ export async function syncSource(source: SourceRow, now = new Date()): Promise<S
   }
 
   let candidates: ParsedFeedItem[];
-  if (source.kind === "page") {
+  if (source.kind === "chatgpt") {
+    let payload: unknown;
+    try {
+      payload = JSON.parse(body);
+    } catch {
+      return fail("ChatGPT returned something this can\u2019t read. The share link may have expired.");
+    }
+
+    const answers = assistantMessages(payload);
+    if (answers.length === 0) {
+      const why =
+        "This shared chat has no answer in it yet \u2014 share it again once ChatGPT has replied.";
+      await prisma.newsSource
+        .update({
+          where: { id: source.id },
+          data: { lastFetchedAt: now, lastStatus: "empty", lastError: why, lastItemCount: 0, contentHash: hash },
+        })
+        .catch(() => {});
+      return { ...base, status: "empty", created: 0, error: why };
+    }
+
+    const cutoff = newsWindowStart(now);
+    candidates = answers.flatMap((answer) =>
+      splitIntoItems(answer.text).map((item) => ({
+        title: item.title,
+        url: item.url,
+        summary: item.summary,
+        // The chat's own timestamp when it is recent enough for the feed to show
+        // it; otherwise the run time. An admin who pastes an older conversation
+        // means "publish this now" — filing it outside the window would accept
+        // the link and then show nothing, which reads as a broken import.
+        publishedAt: answer.createdAt && answer.createdAt >= cutoff ? answer.createdAt : now,
+        guid: item.guid,
+      })),
+    );
+
+    if (candidates.length === 0) {
+      const why = "Nothing could be pulled out of that chat\u2019s answer.";
+      await prisma.newsSource
+        .update({
+          where: { id: source.id },
+          data: { lastFetchedAt: now, lastStatus: "empty", lastError: why, lastItemCount: 0, contentHash: hash },
+        })
+        .catch(() => {});
+      return { ...base, status: "empty", created: 0, error: why };
+    }
+
+    // No first-run age filter here, unlike a feed: the admin pasted this link
+    // deliberately, so its contents are new to the company whatever their date.
+    candidates = candidates.slice(0, MAX_ITEMS_PER_RUN);
+
+    // Give the source the conversation's title when it was added with a
+    // placeholder name, so the feed credits something meaningful.
+    const convo = conversationTitle(payload);
+    if (convo && isFirstRun && source.name.trim().length === 0) {
+      await prisma.newsSource.update({ where: { id: source.id }, data: { name: convo } }).catch(() => {});
+    }
+  } else if (source.kind === "page") {
     // No feed to read: the change in the page text IS the update. On a first run
     // there is no previous hash to compare against, so we only record the
     // baseline — announcing "updated" the moment a page is added would be a lie.

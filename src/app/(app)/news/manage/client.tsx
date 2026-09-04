@@ -4,6 +4,7 @@ import { useRouter } from "next/navigation";
 import { useState, useTransition } from "react";
 import { Section } from "@/components/Cards";
 import { TOPIC_COLORS, toneFor } from "../client";
+import { isChatGptShareUrl } from "@/lib/news/chatgpt";
 
 export type ManageSource = {
   id: string;
@@ -453,7 +454,11 @@ function SourceRow({
             <p className="font-semibold text-on-surface truncate">{source.name}</p>
             <span className={"text-[11px] rounded-full px-sm py-[1px] " + chip.cls}>{chip.text}</span>
             <span className="text-[11px] rounded-full px-sm py-[1px] bg-surface-container text-on-surface-variant">
-              {source.kind === "page" ? "watches the page" : "RSS/Atom feed"}
+              {source.kind === "page"
+                ? "watches the page"
+                : source.kind === "chatgpt"
+                  ? "shared ChatGPT chat"
+                  : "RSS/Atom feed"}
             </span>
           </div>
           <a
@@ -494,6 +499,7 @@ function SourceRow({
           >
             <option value="rss">RSS/Atom feed</option>
             <option value="page">Watch the page</option>
+            <option value="chatgpt">Shared ChatGPT chat</option>
           </select>
           <select
             value={source.topicId}
@@ -550,6 +556,8 @@ function NewSourceForm({ topicId, onDone }: { topicId: string; onDone: () => voi
   const [name, setName] = useState("");
   const [url, setUrl] = useState("");
   const [kind, setKind] = useState("rss");
+  /** Once the admin picks a mode themselves, stop auto-detecting over them. */
+  const [kindTouched, setKindTouched] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [result, setResult] = useState<string | null>(null);
@@ -587,6 +595,7 @@ function NewSourceForm({ topicId, onDone }: { topicId: string; onDone: () => voi
       }
       setName("");
       setUrl("");
+      setKindTouched(false);
       onDone();
     } finally {
       setBusy(false);
@@ -621,18 +630,36 @@ function NewSourceForm({ topicId, onDone }: { topicId: string; onDone: () => voi
             className={inputCls}
           />
         </Field>
-        <Field label="Link" hint="The feed URL if the site has one, otherwise the page itself.">
+        <Field
+          label="Link"
+          hint="Paste a ChatGPT share link, a site's feed URL, or the page itself."
+        >
           <input
             type="url"
             value={url}
-            onChange={(e) => setUrl(e.target.value)}
+            onChange={(e) => {
+              const next = e.target.value;
+              setUrl(next);
+              // A ChatGPT share link is unmistakable and is read a different way
+              // from everything else, so pick the mode rather than making the
+              // admin know it — and leave a hand-picked mode alone.
+              if (!kindTouched && isChatGptShareUrl(next)) setKind("chatgpt");
+            }}
             required
-            placeholder="https://example.gov.au/news/rss"
+            placeholder="https://chatgpt.com/share/…"
             className={inputCls}
           />
         </Field>
         <Field label="How to read it">
-          <select value={kind} onChange={(e) => setKind(e.target.value)} className={inputCls}>
+          <select
+            value={kind}
+            onChange={(e) => {
+              setKindTouched(true);
+              setKind(e.target.value);
+            }}
+            className={inputCls}
+          >
+            <option value="chatgpt">Shared ChatGPT chat — one update per point</option>
             <option value="rss">RSS/Atom feed — one update per entry</option>
             <option value="page">Watch the page — post when it changes</option>
           </select>
