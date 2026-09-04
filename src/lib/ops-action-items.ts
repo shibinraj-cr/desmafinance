@@ -3,10 +3,15 @@ import type { OpsActivityType } from "./ops-activity";
 
 /**
  * Logic + read-side helpers for Operations **action items** ("Task" in the UI):
- * the ad-hoc, assignable to-dos a team member attaches to a process step. Pure
+ * the ad-hoc, assignable to-dos an ops user creates and schedules. Pure
  * transition/bucketing functions (unit-tested) plus Prisma includes and DTO
  * serializers for the in-step list and the personal task folder
  * (/operations/my-tasks). Mirrors the shape of `ops-tasks.ts` + `ops-queries.ts`.
+ *
+ * A task attaches at one of three levels (see the OpsActionItem doc comment):
+ * step, project, or nothing at all (a standalone personal to-do). Both links
+ * are nullable, so every serializer here reports the project/step context as
+ * optional.
  */
 
 export type ActionItemAction = "complete" | "reopen" | "cancel";
@@ -60,6 +65,17 @@ export function bucketMyTask(row: { status: string; dueAt: string | null }, toda
   return "upcoming";
 }
 
+/**
+ * The rows that make up one user's task folder: everything assigned to them,
+ * plus anything they raised and left unassigned — without the second arm a task
+ * created with no assignee would vanish the moment it was saved. Shared by the
+ * /operations/my-tasks page and the sidebar's open-task badge, so the two can
+ * never disagree about what "my tasks" means.
+ */
+export function myTasksWhere(userId: string): Prisma.OpsActionItemWhereInput {
+  return { OR: [{ assignedToId: userId }, { assignedToId: null, createdById: userId }] };
+}
+
 // ---- read-side (includes + serializers) ----
 
 export const opsActionItemInclude = Prisma.validator<Prisma.OpsActionItemInclude>()({
@@ -71,6 +87,7 @@ type ActionItemPayload = Prisma.OpsActionItemGetPayload<{ include: typeof opsAct
 
 export type OpsActionItemDTO = {
   id: string;
+  projectId: string | null;
   taskId: string | null;
   title: string;
   description: string | null;
@@ -87,6 +104,7 @@ export type OpsActionItemDTO = {
 export function serializeActionItem(a: ActionItemPayload): OpsActionItemDTO {
   return {
     id: a.id,
+    projectId: a.projectId,
     taskId: a.taskId,
     title: a.title,
     description: a.description,
@@ -111,9 +129,10 @@ export const opsMyTaskInclude = Prisma.validator<Prisma.OpsActionItemInclude>()(
 type MyTaskPayload = Prisma.OpsActionItemGetPayload<{ include: typeof opsMyTaskInclude }>;
 
 export type OpsMyTaskRow = OpsActionItemDTO & {
-  projectId: string;
-  candidateName: string;
-  serviceName: string;
+  /** Null for a standalone task — one created with no candidate project. */
+  projectId: string | null;
+  candidateName: string | null;
+  serviceName: string | null;
   stepSeq: number | null;
   stepName: string | null;
 };
@@ -122,8 +141,8 @@ export function serializeMyTaskRow(a: MyTaskPayload): OpsMyTaskRow {
   return {
     ...serializeActionItem(a as unknown as ActionItemPayload),
     projectId: a.projectId,
-    candidateName: a.project.party.name,
-    serviceName: a.project.service.name,
+    candidateName: a.project?.party.name ?? null,
+    serviceName: a.project?.service.name ?? null,
     stepSeq: a.task?.seq ?? null,
     stepName: a.task?.name ?? null,
   };

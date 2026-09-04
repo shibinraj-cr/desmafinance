@@ -3047,43 +3047,52 @@ model OpsTask {
   @@index([projectId])
 }
 
-/// An ad-hoc task ("Task" in the UI) a team member attaches to a step (OpsTask)
-/// — the granular, assignable to-dos that live under the fixed process steps.
-/// Distinct from OpsTask (the template-snapshotted "Step"): action items are
-/// free-form, created on the fly, and assignable to a specific ops user so they
-/// surface in that user's personal task folder (/operations/my-tasks). They are
-/// advisory — an open action item never blocks its step or the project from
-/// completing. `completedById` is stamped at completion, so attribution
-/// survives project re-assignment (same pattern as OpsTask.completedBy).
+/// An ad-hoc task ("Task" in the UI): the granular, assignable to-dos an ops
+/// user creates on the fly and schedules with a due date. Distinct from OpsTask
+/// (the template-snapshotted "Step"): action items are free-form and assignable
+/// to a specific ops user, so they surface in that user's personal task folder
+/// (/operations/my-tasks). They are advisory — an open action item never blocks
+/// its step or the project from completing. `completedById` is stamped at
+/// completion, so attribution survives project re-assignment (same pattern as
+/// OpsTask.completedBy).
+///
+/// Attachment is a three-level ladder, both links nullable:
+///   step-level    — projectId + taskId, added from inside a step;
+///   project-level — projectId only, candidate work with no single step;
+///   standalone    — neither, a personal ops to-do (created from My Tasks).
+/// Everything that reads these rows must therefore treat the project/step
+/// context as optional, and project-timeline activity is only recorded for the
+/// rows that actually have a project.
 model OpsActionItem {
-  id            String     @id @default(cuid())
-  projectId     String
-  project       OpsProject @relation(fields: [projectId], references: [id], onDelete: Cascade)
-  // The step this task hangs off. Nullable so a project-level task is possible,
-  // though v1 UI always attaches to a step.
+  id            String      @id @default(cuid())
+  projectId     String?
+  project       OpsProject? @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  // The step this task hangs off, when it hangs off one.
   taskId        String?
-  task          OpsTask?   @relation(fields: [taskId], references: [id], onDelete: Cascade)
+  task          OpsTask?    @relation(fields: [taskId], references: [id], onDelete: Cascade)
 
   title         String
   description   String?
   // 'open' | 'done' | 'cancelled'
-  status        String     @default("open")
+  status        String      @default("open")
   assignedToId  String?
-  assignedTo    User?      @relation("OpsActionAssignee", fields: [assignedToId], references: [id], onDelete: SetNull)
+  assignedTo    User?       @relation("OpsActionAssignee", fields: [assignedToId], references: [id], onDelete: SetNull)
   dueAt         DateTime?
 
   createdById   String?
-  createdBy     User?      @relation("OpsActionCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
+  createdBy     User?       @relation("OpsActionCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
   completedById String?
-  completedBy   User?      @relation("OpsActionCompletedBy", fields: [completedById], references: [id], onDelete: SetNull)
+  completedBy   User?       @relation("OpsActionCompletedBy", fields: [completedById], references: [id], onDelete: SetNull)
   completedAt   DateTime?
 
-  createdAt     DateTime   @default(now())
-  updatedAt     DateTime   @updatedAt
+  createdAt     DateTime    @default(now())
+  updatedAt     DateTime    @updatedAt
 
   @@index([assignedToId, status, dueAt])
   @@index([taskId])
   @@index([projectId])
+  // The standalone-task folder: "my open personal to-dos, soonest first".
+  @@index([createdById, status, dueAt])
 }
 
 /// Proof-of-completion evidence attached to a step (OpsTask). `fileUrl` is the

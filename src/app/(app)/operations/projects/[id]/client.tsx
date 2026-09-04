@@ -68,6 +68,8 @@ type ProjectDetail = {
   candidateEmail: string | null;
   candidatePhone: string | null;
   tasks: TaskDTO[];
+  /** Ad-hoc tasks on the candidate as a whole, attached to no single step. */
+  actionItems: ActionItemDTO[];
   activities: ActivityDTO[];
 };
 type UserLite = { id: string; username: string };
@@ -198,8 +200,9 @@ export function ProjectDetailClient({
     const body: Record<string, unknown> = { assignedToId: newOwnerId };
     const oldOwnerId = project.assigneeId;
     if (newOwnerId && oldOwnerId && newOwnerId !== oldOwnerId) {
-      const openForOld = project.tasks
-        .flatMap((t) => t.actionItems)
+      // Every task on the project, step-level and project-level alike — the
+      // server carries both, so the count in the prompt must match.
+      const openForOld = [...project.tasks.flatMap((t) => t.actionItems), ...project.actionItems]
         .filter((a) => a.status === "open" && a.assigneeId === oldOwnerId).length;
       if (openForOld > 0) {
         const newName = opsUsers.find((u) => u.id === newOwnerId)?.username ?? "the new owner";
@@ -353,6 +356,18 @@ export function ProjectDetailClient({
 
       {tab === "checklist" ? (
         <div className="space-y-lg">
+          {/* Tasks filed against the candidate rather than one step — e.g. raised
+              from the My Tasks composer with no step chosen. */}
+          <AdHocTasks
+            items={project.actionItems}
+            anchor={{ projectId: project.id }}
+            label="Project tasks"
+            className="rounded-xl border border-outline-variant bg-surface-container-lowest p-md space-y-xs"
+            canEdit={canEdit}
+            opsUsers={opsUsers}
+            busyId={busyId}
+            onMutate={mutateActionItem}
+          />
           {phases.map(({ phase, tasks }) => (
             <div key={phase ?? "_"}>
               {phase && <h3 className="text-label-sm uppercase tracking-wider text-on-surface-variant mb-sm">{phase}</h3>}
@@ -382,8 +397,9 @@ export function ProjectDetailClient({
                         ) : null}
                         {t.blockedReason && <span className="text-error"> · blocked: {t.blockedReason}</span>}
                       </div>
-                      <StepTasks
-                        step={t}
+                      <AdHocTasks
+                        items={t.actionItems}
+                        anchor={{ taskId: t.id }}
                         canEdit={canEdit}
                         opsUsers={opsUsers}
                         busyId={busyId}
@@ -441,15 +457,25 @@ type MutateFn = (
   req: { url: string; method: string; body?: Record<string, unknown> },
 ) => Promise<boolean>;
 
-/** Ad-hoc tasks attached to one step: the list + an inline "+ Task" form. */
-function StepTasks({
-  step,
+/**
+ * Ad-hoc tasks hanging off one anchor — a step, or the candidate project itself
+ * — as a list plus an inline "+ Task" form. `anchor` is spread straight into the
+ * create call, so it alone decides which level a new task lands at.
+ */
+function AdHocTasks({
+  items,
+  anchor,
+  label = "Tasks",
+  className = "mt-sm pl-md border-l-2 border-outline-variant/50 space-y-xs",
   canEdit,
   opsUsers,
   busyId,
   onMutate,
 }: {
-  step: TaskDTO;
+  items: ActionItemDTO[];
+  anchor: { taskId: string } | { projectId: string };
+  label?: string;
+  className?: string;
   canEdit: boolean;
   opsUsers: UserLite[];
   busyId: string | null;
@@ -460,9 +486,8 @@ function StepTasks({
   const [assigneeId, setAssigneeId] = useState("");
   const [dueAt, setDueAt] = useState("");
 
-  const items = step.actionItems;
   const openCount = items.filter((i) => i.status === "open").length;
-  const newKey = `new:${step.id}`;
+  const newKey = `new:${"taskId" in anchor ? anchor.taskId : anchor.projectId}`;
   const inCls = "h-8 px-sm rounded-md border border-outline-variant bg-surface-container-lowest text-body-sm outline-none focus:border-primary";
 
   async function submit() {
@@ -471,7 +496,7 @@ function StepTasks({
     const ok = await onMutate(newKey, {
       url: "/api/operations/action-items",
       method: "POST",
-      body: { taskId: step.id, title: t, assignedToId: assigneeId || null, dueAt: dueAt || null },
+      body: { ...anchor, title: t, assignedToId: assigneeId || null, dueAt: dueAt || null },
     });
     if (ok) {
       setTitle("");
@@ -484,10 +509,10 @@ function StepTasks({
   if (items.length === 0 && !canEdit) return null;
 
   return (
-    <div className="mt-sm pl-md border-l-2 border-outline-variant/50 space-y-xs">
+    <div className={className}>
       {items.length > 0 && (
         <div className="text-label-sm uppercase tracking-wider text-on-surface-variant">
-          Tasks{openCount > 0 ? ` · ${openCount} open` : ""}
+          {label}{openCount > 0 ? ` · ${openCount} open` : ""}
         </div>
       )}
       {items.map((i) => (
