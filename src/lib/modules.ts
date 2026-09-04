@@ -383,6 +383,20 @@ export const MODULES: AppModule[] = [
     ],
   },
   {
+    // Read-only broadcast feed. Visible to everyone (see ALWAYS_VISIBLE_PAGES in
+    // rbac.ts) — an update nobody is told about is not an update — while the
+    // links behind it are admin-managed (see ADMIN_RESTRICTED_PAGES).
+    id: "news",
+    name: "News & Updates",
+    icon: "newspaper",
+    basePath: "/news",
+    status: "active",
+    pages: [
+      { href: "/news", label: "Latest", icon: "newspaper", group: "UPDATES" },
+      { href: "/news/manage", label: "Topics & Sources", icon: "rss_feed", group: "UPDATES", adminOnly: true },
+    ],
+  },
+  {
     id: "master-data",
     name: "Master Data",
     icon: "category",
