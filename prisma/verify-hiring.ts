@@ -52,10 +52,13 @@ async function main() {
     descriptionMd: null,
   });
   const blocked = await publishJob(bare.id);
+  // Narrow before reading `blockers`: the not-published branch is a union of
+  // "draft, with reasons" and "waiting for approval, with none".
+  const asDraft = !blocked.published && blocked.status === "draft" ? blocked : null;
   check(
     "an incomplete req saves as a draft and says why",
-    !blocked.published && blocked.status === "draft" && (blocked.blockers?.length ?? 0) > 0,
-    blocked.published ? "it published anyway" : `${blocked.blockers?.length} blockers`,
+    !!asDraft && asDraft.blockers.length > 0,
+    asDraft ? `${asDraft.blockers.length} blockers` : `status=${blocked.status}`,
   );
 
   await prisma.hiringJob.update({
