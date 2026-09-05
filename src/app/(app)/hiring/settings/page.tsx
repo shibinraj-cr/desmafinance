@@ -5,6 +5,8 @@ import { prisma } from "@/lib/prisma";
 import { getHiringAccess } from "@/lib/hiring/access";
 import { can } from "@/lib/hiring/rbac";
 import { CreditsMeter } from "@/components/hiring/CreditsMeter";
+import { CareersVisibility } from "@/components/hiring/CareersVisibility";
+import { isCareersPublic } from "@/lib/hiring/careers";
 import { getCreditsState, FEATURE_COSTS, FEATURE_LABELS } from "@/lib/hiring/ai/credits";
 import { SettingsClient } from "./client";
 
@@ -28,7 +30,7 @@ export default async function HiringSettingsPage() {
     );
   }
 
-  const [members, users, lastActive, credits, aiByFeature] = await Promise.all([
+  const [members, users, lastActive, credits, aiByFeature, careersPublic, liveJobs] = await Promise.all([
     prisma.hiringMember.findMany({
       include: { user: { select: { id: true, username: true, email: true, isActive: true } } },
       orderBy: [{ isActive: "desc" }, { createdAt: "asc" }],
@@ -52,6 +54,8 @@ export default async function HiringSettingsPage() {
       _sum: { credits: true },
       _count: { _all: true },
     }),
+    isCareersPublic(),
+    prisma.hiringJob.count({ where: { status: "live", deletedAt: null } }),
   ]);
 
   const lastActiveByUser = new Map(
@@ -79,6 +83,8 @@ export default async function HiringSettingsPage() {
           allUsers={users}
           currentUserId={userId}
         />
+
+        <CareersVisibility isPublic={careersPublic} liveJobCount={liveJobs} />
 
         <CreditsMeter
           budget={credits.budget}

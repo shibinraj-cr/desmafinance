@@ -18,6 +18,7 @@ import { bucketFollowUps, countAll } from "../src/lib/hiring/follow-ups";
 import { partnerJobWhere, partnerApplicationWhere, grantedJobIds } from "../src/lib/hiring/partner-scope";
 import { applicationListInclude, serializeApplicationRow } from "../src/lib/hiring/candidates";
 import { HIRE_COMPLETED } from "../src/lib/hiring/events";
+import { isCareersPublic, setCareersPublic, listPublicJobs } from "../src/lib/hiring/careers";
 
 const PROD_HOST_FRAGMENT = "ep-orange-brook-aqmaow18";
 const TAG = "ZZ_VERIFY";
@@ -242,12 +243,51 @@ async function main() {
     check("a partner with no grants sees NOTHING (not everything)", noneVisible.length === 0);
   }
 
+  // ── 7. The careers site is off until somebody publishes it ───────────────
+  console.log("\nPublic careers page");
+  const wasPublic = await isCareersPublic();
+  await setCareersPublic(false);
+  check("it is off by default", (await isCareersPublic()) === false);
+
+  // A requisition that was never published is the case that matters: the
+  // public list must be driven by status, not merely by existing.
+  const neverPublished = await createJob({
+    title: `ZZ Verify Role Draft ${Date.now()}`,
+    department: "Verification",
+    createdById: admin.id,
+    descriptionMd: "Never published.",
+    mustHaves: ["Attention to detail"],
+  });
+
+  await setCareersPublic(true);
+  const publicJobs = await listPublicJobs();
+  check("switching it on exposes the live reqs", publicJobs.length > 0, `${publicJobs.length} public`);
+  check(
+    "…and never one that was left as a draft",
+    !publicJobs.some((j) => j.slug === neverPublished.slug),
+  );
+
+  // Closing a live req takes it off the public page too.
+  const secondSlug = (await prisma.hiringJob.findUnique({
+    where: { id: second.id },
+    select: { slug: true },
+  }))!.slug;
+  check("a live req is on the page before it closes", publicJobs.some((j) => j.slug === secondSlug));
+
+  await prisma.hiringJob.update({ where: { id: second.id }, data: { status: "closed" } });
+  const afterClose = await listPublicJobs();
+  check("closing it takes it off", !afterClose.some((j) => j.slug === secondSlug));
+
+  // Leave the switch exactly as it was found.
+  await setCareersPublic(wasPublic);
+  check("the switch is restored", (await isCareersPublic()) === wasPublic);
+
   // ── Clean up everything this script made ─────────────────────────────────
   console.log("\nCleanup");
   await prisma.hiringDomainEvent.deleteMany({ where: { subjectId: { in: [first.applicationId, again.applicationId] } } });
   const jobs = await prisma.hiringJob.deleteMany({ where: { title: { startsWith: "ZZ Verify Role" } } });
   const cands = await prisma.hiringCandidate.deleteMany({ where: { tags: { has: TAG } } });
-  check("removed what it created", jobs.count === 2 && cands.count === 1, `${jobs.count} jobs, ${cands.count} candidates`);
+  check("removed what it created", jobs.count === 3 && cands.count === 1, `${jobs.count} jobs, ${cands.count} candidates`);
 
   console.log(`\n${fail === 0 ? "✓" : "✗"} ${pass} passed, ${fail} failed\n`);
   if (fail > 0) process.exitCode = 1;

@@ -8,6 +8,7 @@ import { siteBaseUrl } from "@/lib/site-url";
 import { getEmailConfig, sendEmail } from "@/lib/mailer";
 import { uploadProof, isBlobConfigured } from "@/lib/ops-blob";
 import { submitApplication } from "@/lib/hiring/apply";
+import { isCareersPublic } from "@/lib/hiring/careers";
 import { rateLimit } from "@/lib/hiring/rate-limit";
 import { clientIp } from "@/lib/hiring/audit";
 
@@ -60,6 +61,12 @@ export const POST = withApiHandler(async (req: Request) => {
       { error: "rate_limited", message: "Too many applications from here. Try again shortly." },
       { status: 429, headers: { "retry-after": String(limited.retryAfterSeconds) } },
     );
+  }
+
+  // The page 404ing does not protect this; the endpoint is addressable on its
+  // own, so it checks the same switch.
+  if (!(await isCareersPublic())) {
+    throw unprocessable("Applications are not open.", "careers_closed");
   }
 
   const form = await req.formData();

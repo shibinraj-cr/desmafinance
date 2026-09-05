@@ -2,7 +2,7 @@ import type { Metadata } from "next";
 import Link from "next/link";
 import { notFound } from "next/navigation";
 import { headers } from "next/headers";
-import { getPublicJob, getApplyForm, jobPostingJsonLd } from "@/lib/hiring/careers";
+import { getPublicJob, getApplyForm, jobPostingJsonLd, isCareersPublic } from "@/lib/hiring/careers";
 import { markdownToPlainText } from "@/lib/hiring/markdown";
 import { Markdown } from "@/components/hiring/Markdown";
 import { ApplyForm } from "./apply-form";
@@ -23,6 +23,7 @@ export async function generateMetadata({
 }: {
   params: { slug: string };
 }): Promise<Metadata> {
+  if (!(await isCareersPublic())) return { title: "Not found" };
   const job = await getPublicJob(params.slug);
   if (!job) return { title: "Role not found — DESMA International" };
   const description =
@@ -37,6 +38,8 @@ export async function generateMetadata({
 }
 
 export default async function CareersRolePage({ params }: { params: { slug: string } }) {
+  if (!(await isCareersPublic())) notFound();
+
   const [job, form] = await Promise.all([getPublicJob(params.slug), getApplyForm(params.slug)]);
   if (!job || !form) notFound();
 

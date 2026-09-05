@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 import Link from "next/link";
-import { listPublicJobs, type PublicJob } from "@/lib/hiring/careers";
+import { notFound } from "next/navigation";
+import { listPublicJobs, isCareersPublic, type PublicJob } from "@/lib/hiring/careers";
 import { WORK_TYPES, WORK_TYPE_LABELS, type WorkType } from "@/lib/hiring/constants";
 
 export const dynamic = "force-dynamic";
@@ -22,6 +23,10 @@ export default async function CareersIndexPage({
 }: {
   searchParams: { location?: string; workType?: string };
 }) {
+  // Off by default: the careers site is published deliberately, not as a side
+  // effect of deploying the module.
+  if (!(await isCareersPublic())) notFound();
+
   const all = await listPublicJobs();
 
   const locations = [...new Set(all.map((j) => j.locationName).filter(Boolean))].sort() as string[];

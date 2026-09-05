@@ -1,4 +1,5 @@
 import { prisma } from "@/lib/prisma";
+import { getSetting, setSetting } from "@/lib/app-settings";
 import { compBandLabel } from "./core";
 import { WORK_TYPE_LABELS, EMPLOYMENT_TYPE_LABELS, SENIORITY_LABELS } from "./constants";
 import type { WorkType, EmploymentType, Seniority } from "./constants";
@@ -8,6 +9,29 @@ import type { WorkType, EmploymentType, Seniority } from "./constants";
  * so it exposes only what a job ad may contain — never an owner, a candidate,
  * an internal note or a comp band the recruiter chose to keep private.
  */
+
+/**
+ * Whether the public careers site is switched on.
+ *
+ * Off by default, deliberately. Merging this module makes `/careers/desma` the
+ * first indexable public page on the domain besides the privacy policy, and a
+ * careers page crawled while it says "no open roles" is worse than one that
+ * appears the day there is something to advertise. Flip it on Hiring →
+ * Roles & Access when a requisition is ready.
+ *
+ * While off, both careers routes 404 and the apply endpoint refuses — so the
+ * page cannot be reached, linked, or indexed, and the internal module is
+ * entirely unaffected.
+ */
+export const CAREERS_PUBLIC_KEY = "hiring_careers_public";
+
+export async function isCareersPublic(): Promise<boolean> {
+  return (await getSetting(CAREERS_PUBLIC_KEY)) === "true";
+}
+
+export async function setCareersPublic(on: boolean, userId?: string | null): Promise<void> {
+  await setSetting(CAREERS_PUBLIC_KEY, on ? "true" : "false", userId);
+}
 
 export type PublicJob = {
   slug: string;
