@@ -5,7 +5,7 @@ import { withApiHandler } from "@/lib/api";
 import { unauthorized, forbidden, notFound, badRequest } from "@/lib/http-error";
 import { getCurrentUserAndPermissions } from "@/lib/permissions";
 import { getCrmAccess } from "@/lib/crm-rbac";
-import { drainBroadcasts, materialiseAudience, countSegment } from "@/lib/wa/broadcast";
+import { drainBroadcasts, materialiseAudience, countSegment, headerMediaConsistent } from "@/lib/wa/broadcast";
 import type { LeadFilterParams } from "@/lib/crm-leads";
 
 export const dynamic = "force-dynamic";
@@ -27,6 +27,8 @@ export const GET = withApiHandler(async (_req: Request, { params }: { params: { 
       templateName: true,
       segment: true,
       variableMap: true,
+      headerMediaType: true,
+      headerMediaUrl: true,
       status: true,
       scheduledAt: true,
       startedAt: true,
@@ -72,9 +74,16 @@ const PatchSchema = z.discriminatedUnion("action", [
     templateName: z.string().min(1).max(200),
     segment: z.record(z.string(), z.unknown()).default({}),
     variableMap: z.record(z.string(), z.string()).optional(),
+    headerMediaType: z.enum(["image", "video", "document"]).nullable().optional(),
+    headerMediaUrl: z
+      .string()
+      .url()
+      .refine((u) => u.startsWith("https://"), "Header media URL must be https")
+      .nullable()
+      .optional(),
     scheduledAt: z.string().datetime().nullable().optional(),
   }),
-]);
+]).superRefine(headerMediaConsistent);
 
 /**
  * PATCH — queue a draft, cancel, or drain immediately.
@@ -110,6 +119,10 @@ export const PATCH = withApiHandler(async (req: Request, { params }: { params: {
         templateName: body.templateName,
         segment: body.segment as object,
         variableMap: body.variableMap ?? undefined,
+        // Reflect the form's current header choice (cleared when switching to a
+        // text/header-less template).
+        headerMediaType: body.headerMediaType ?? null,
+        headerMediaUrl: body.headerMediaUrl ?? null,
         // Only touch scheduledAt when the caller actually sent it — an edit that
         // omits it (the UI never sets one) must not silently clear a schedule.
         ...(body.scheduledAt !== undefined

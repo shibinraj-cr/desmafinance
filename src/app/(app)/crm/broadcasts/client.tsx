@@ -4,7 +4,14 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { MultiSelect } from "@/components/MultiSelect";
 import { listParam } from "@/lib/filter-params";
 
-type TemplateOpt = { name: string; language: string; category: string | null; status: string };
+type TemplateOpt = {
+  name: string;
+  language: string;
+  category: string | null;
+  status: string;
+  /** 'TEXT' | 'IMAGE' | 'VIDEO' | 'DOCUMENT' | null — a media header needs a URL. */
+  headerFormat?: string | null;
+};
 type Opt = { id: string; label?: string; name?: string };
 type MergeField = { token: string; label: string };
 
@@ -32,6 +39,8 @@ type FormInitial = {
   source: string[];
   variableMap: Record<string, string>;
   engagedWithinDays: string;
+  headerMediaType: "image" | "video" | "document" | null;
+  headerMediaUrl: string;
 };
 
 /** Human meaning for the Meta/WhatsApp error codes broadcasts hit in practice. */
@@ -113,6 +122,8 @@ export function BroadcastsClient({
         templateName: string;
         segment: Record<string, unknown> | null;
         variableMap: Record<string, string> | null;
+        headerMediaType: string | null;
+        headerMediaUrl: string | null;
       };
     };
     const seg = (d.broadcast.segment ?? {}) as Record<string, unknown>;
@@ -131,6 +142,16 @@ export function BroadcastsClient({
         source: listParam(seg.source as string | string[] | undefined),
         variableMap: d.broadcast.variableMap ?? {},
         engagedWithinDays: Number.isFinite(engaged) && engaged > 0 ? String(engaged) : "",
+        // Round-trip the persisted kind, not just the URL: it is the fallback
+        // that lets an edit preserve the stored media when the template is
+        // momentarily unresolvable (paused at Meta / a transient catalogue read).
+        headerMediaType:
+          d.broadcast.headerMediaType === "image" ||
+          d.broadcast.headerMediaType === "video" ||
+          d.broadcast.headerMediaType === "document"
+            ? d.broadcast.headerMediaType
+            : null,
+        headerMediaUrl: d.broadcast.headerMediaUrl ?? "",
       },
     });
   }, []);
@@ -433,6 +454,7 @@ function BroadcastForm({
   const [service, setService] = useState<string[]>(initial?.service ?? []);
   const [source, setSource] = useState<string[]>(initial?.source ?? []);
   const [engagedDays, setEngagedDays] = useState<string>(initial?.engagedWithinDays ?? "");
+  const [headerMediaUrl, setHeaderMediaUrl] = useState<string>(initial?.headerMediaUrl ?? "");
   const [variableMap, setVariableMap] = useState<Record<string, string>>(initial?.variableMap ?? {});
   const [estimate, setEstimate] = useState<number | null>(null);
   const [busy, setBusy] = useState(false);
@@ -457,10 +479,29 @@ function BroadcastForm({
   const hasColdStage = status.some((id) => coldStageIds.includes(id));
   const showColdWarning = isMarketing && hasColdStage && !engagedDays;
 
+  // A media-header template needs its header media (image/video/document) on every
+  // send — the type is dictated by the template, the URL supplied here.
+  const headerFormat = (selectedTemplate?.headerFormat ?? "").toUpperCase();
+  const templateHeaderKind =
+    headerFormat === "IMAGE" || headerFormat === "VIDEO" || headerFormat === "DOCUMENT"
+      ? (headerFormat.toLowerCase() as "image" | "video" | "document")
+      : null;
+  // When the template resolves, TRUST it (null = a text/header-less template, so
+  // a stale URL is correctly dropped). When it does NOT resolve — paused at Meta,
+  // dropped from the approved list, or a transient catalogue read — fall back to
+  // the kind persisted on the draft, so an ordinary edit does not silently wipe
+  // the stored media and reintroduce 132012.
+  const headerKind = selectedTemplate ? templateHeaderKind : (initial?.headerMediaType ?? null);
+  const headerMissing = !!headerKind && !headerMediaUrl.trim();
+
   async function save(queue: boolean) {
     setBusy(true);
     setError(null);
     setNote(null);
+    // Header media only when the template actually has a media header; cleared
+    // (null) otherwise so switching to a text template drops a stale URL.
+    const headerMediaType = headerKind;
+    const headerMediaUrlValue = headerKind ? headerMediaUrl.trim() || null : null;
     try {
       // First save of a brand-new campaign: POST exactly once. Everything after
       // binds to the returned id and takes the update path below.
@@ -468,7 +509,15 @@ function BroadcastForm({
         const res = await fetch("/api/crm/wa/broadcasts", {
           method: "POST",
           headers: { "content-type": "application/json" },
-          body: JSON.stringify({ name, templateName, segment, variableMap, queue }),
+          body: JSON.stringify({
+            name,
+            templateName,
+            segment,
+            variableMap,
+            headerMediaType,
+            headerMediaUrl: headerMediaUrlValue,
+            queue,
+          }),
         }).catch(() => null);
         const d = res ? ((await res.json().catch(() => ({}))) as { id?: string; estimate?: number; message?: string }) : {};
         if (!res?.ok) {
@@ -492,7 +541,15 @@ function BroadcastForm({
       const res = await fetch(`/api/crm/wa/broadcasts/${effectiveId}`, {
         method: "PATCH",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ action: "update", name, templateName, segment, variableMap }),
+        body: JSON.stringify({
+          action: "update",
+          name,
+          templateName,
+          segment,
+          variableMap,
+          headerMediaType,
+          headerMediaUrl: headerMediaUrlValue,
+        }),
       }).catch(() => null);
       const d = res ? ((await res.json().catch(() => ({}))) as { estimate?: number; message?: string }) : {};
       if (!res?.ok) {
@@ -539,7 +596,18 @@ function BroadcastForm({
         </label>
         <label className="block">
           <span className="block text-label-sm text-on-surface-variant mb-xs">Approved template</span>
-          <select value={templateName} onChange={(e) => setTemplateName(e.target.value)} className={inputCls + " w-full"}>
+          <select
+            value={templateName}
+            onChange={(e) => {
+              setTemplateName(e.target.value);
+              // The header media belongs to the template that was chosen — drop a
+              // carried-over URL so a switch (e.g. image-header → video-header)
+              // can't persist a link of the wrong kind. Edit pre-fill sets both
+              // directly, so the stored URL survives opening the form.
+              setHeaderMediaUrl("");
+            }}
+            className={inputCls + " w-full"}
+          >
             <option value="">Choose…</option>
             {approved.map((t) => (
               <option key={`${t.name}:${t.language}`} value={`${t.name}:${t.language}`}>
@@ -554,6 +622,25 @@ function BroadcastForm({
           )}
         </label>
       </div>
+
+      {headerKind && (
+        <label className="block">
+          <span className="block text-label-sm text-on-surface-variant mb-xs">
+            Header {headerKind} URL <span className="text-error">*</span>
+          </span>
+          <input
+            value={headerMediaUrl}
+            onChange={(e) => setHeaderMediaUrl(e.target.value)}
+            placeholder={`https://… public ${headerKind} link`}
+            className={inputCls + " w-full font-mono"}
+          />
+          <span className="block text-label-sm text-on-surface-variant mt-xs">
+            This template has a {headerKind} header — Meta needs the media on every send. Paste a public{" "}
+            <span className="font-mono">https</span> URL (same {headerKind} for everyone). Without it, sends fail with
+            error 132012.
+          </span>
+        </label>
+      )}
 
       <div>
         <span className="block text-label-sm text-on-surface-variant mb-xs">Audience</span>
@@ -638,7 +725,7 @@ function BroadcastForm({
       <div className="flex items-center gap-base">
         <button
           type="button"
-          disabled={busy || !name.trim() || !templateName}
+          disabled={busy || !name.trim() || !templateName || headerMissing}
           onClick={() => void save(false)}
           className="h-9 px-lg rounded-lg border border-outline-variant text-label-sm font-semibold text-on-surface-variant disabled:opacity-40"
         >
@@ -646,7 +733,7 @@ function BroadcastForm({
         </button>
         <button
           type="button"
-          disabled={busy || !name.trim() || !templateName}
+          disabled={busy || !name.trim() || !templateName || headerMissing}
           onClick={() => void save(true)}
           className="h-9 px-lg rounded-lg bg-primary text-on-primary text-label-sm font-semibold disabled:opacity-40"
         >
