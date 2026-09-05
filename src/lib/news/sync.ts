@@ -7,6 +7,7 @@ import {
   truncate,
   type ParsedFeedItem,
 } from "@/lib/news/parse";
+import { NEWS_WINDOW_DAYS } from "@/lib/news/constants";
 
 /** How long a single source gets before we give up and move to the next one. */
 const FETCH_TIMEOUT_MS = 15_000;
@@ -18,8 +19,15 @@ const MAX_BYTES = 4_000_000;
  * later runs are unbounded, because by then everything they see really is new.
  */
 const FIRST_RUN_MAX_ITEMS = 5;
-/** Entries older than this are ignored on a first run. */
-const FIRST_RUN_MAX_AGE_DAYS = 30;
+/**
+ * Entries older than this are ignored on a first run.
+ *
+ * Deliberately the SAME window the feed renders (NEWS_WINDOW_DAYS): filing an
+ * item older than the window would store something no one can see, and refusing
+ * one inside the window would hide something the feed would happily show. Two
+ * different numbers here is just a way to be wrong in both directions.
+ */
+export const FIRST_RUN_MAX_AGE_DAYS = NEWS_WINDOW_DAYS;
 /** Per-run ceiling, so one misbehaving feed cannot fill the table. */
 const MAX_ITEMS_PER_RUN = 50;
 
@@ -244,6 +252,27 @@ export async function syncSource(source: SourceRow, now = new Date()): Promise<S
       return { ...base, status: "empty", created: 0, error: why };
     }
     candidates = isFirstRun ? firstRunSlice(parsed, now) : parsed.slice(0, MAX_ITEMS_PER_RUN);
+
+    // A working but quiet feed — every entry older than the window — otherwise
+    // reports exactly what a broken one does: "0 updates filed". The admin who
+    // just pasted the link cannot tell those apart, and would reasonably assume
+    // they got the address wrong. Say which it is.
+    if (isFirstRun && candidates.length === 0) {
+      const why = `This feed works (${parsed.length} entr${parsed.length === 1 ? "y" : "ies"} read), but nothing was published in the last ${FIRST_RUN_MAX_AGE_DAYS} days. New updates will appear here as the site publishes them.`;
+      await prisma.newsSource
+        .update({
+          where: { id: source.id },
+          data: {
+            lastFetchedAt: now,
+            lastStatus: "ok",
+            lastError: null,
+            lastItemCount: 0,
+            contentHash: hash,
+          },
+        })
+        .catch(() => {});
+      return { ...base, status: "ok", created: 0, error: why };
+    }
   }
 
   let created = 0;

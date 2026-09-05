@@ -9,7 +9,8 @@ import {
   pageText,
   pageTitle,
 } from "../src/lib/news/parse";
-import { isFetchableUrl } from "../src/lib/news/sync";
+import { isFetchableUrl, FIRST_RUN_MAX_AGE_DAYS } from "../src/lib/news/sync";
+import { NEWS_WINDOW_DAYS } from "../src/lib/news/constants";
 
 const RSS = `<?xml version="1.0" encoding="UTF-8"?>
 <rss version="2.0">
@@ -243,5 +244,13 @@ describe("isFetchableUrl", () => {
 
   it("rejects nonsense", () => {
     expect(isFetchableUrl("not a url")).toBe(false);
+  });
+});
+
+describe("first-run backfill window", () => {
+  it("matches the window the feed renders, so nothing is filed that cannot be seen", () => {
+    // A mismatch would either store items no one can see, or refuse ones the
+    // feed would happily show. Tying them together is the whole point.
+    expect(FIRST_RUN_MAX_AGE_DAYS).toBe(NEWS_WINDOW_DAYS);
   });
 });
