@@ -21,6 +21,7 @@ import { createPortal } from "react-dom";
 import { useRouter } from "next/navigation";
 import { type Permissions } from "@/lib/rbac";
 import { visibleModules, firstAllowedPage, type AppModule } from "@/lib/modules";
+import { newsBadgeLabel } from "@/lib/news/constants";
 
 /** Fired by trigger buttons (sidebar / mobile bar) to open the launcher. */
 export const OPEN_LAUNCHER_EVENT = "dg:open-launcher";
@@ -45,6 +46,7 @@ const MODULE_COLOR: Record<string, string> = {
   operations: "#8B5CF6", // violet
   hr: "#EC4899", // pink
   me: "#14B8A6", // teal
+  news: "#EF4444", // red
   "master-data": "#F97316", // orange
   system: "#64748B", // slate
 };
@@ -66,10 +68,13 @@ function ModuleTile({
   mod,
   color,
   onPick,
+  unreadCount = 0,
 }: {
   mod: AppModule;
   color: string;
   onPick: (m: AppModule) => void;
+  /** Unread items behind this module, shown as a corner count. */
+  unreadCount?: number;
 }) {
   const disabled = mod.status === "coming_soon";
   return (
@@ -105,6 +110,11 @@ function ModuleTile({
           Admin
         </span>
       )}
+      {unreadCount > 0 && (
+        <span className="absolute left-2 top-2 rounded-full bg-red-500 text-white text-[10px] font-bold tabular-nums px-[6px] py-[1px]">
+          {newsBadgeLabel(unreadCount)}
+        </span>
+      )}
     </button>
   );
 }
@@ -112,9 +122,12 @@ function ModuleTile({
 export function AppLauncher({
   perms,
   userName,
+  newsUnreadCount = 0,
 }: {
   perms: Permissions;
   userName?: string | null;
+  /** Unread News & Updates for the signed-in user, badged on the News tile. */
+  newsUnreadCount?: number;
 }) {
   const router = useRouter();
   const [mounted, setMounted] = useState(false);
@@ -204,7 +217,13 @@ export function AppLauncher({
         ) : (
           <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-md">
             {modules.map((m, i) => (
-              <ModuleTile key={m.id} mod={m} color={colorFor(m, i)} onPick={pick} />
+              <ModuleTile
+                key={m.id}
+                mod={m}
+                color={colorFor(m, i)}
+                onPick={pick}
+                unreadCount={m.id === "news" ? newsUnreadCount : 0}
+              />
             ))}
           </div>
         )}

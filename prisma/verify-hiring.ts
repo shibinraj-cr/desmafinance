@@ -213,35 +213,46 @@ async function main() {
 
   // ── 6. The partner boundary holds against real rows ──────────────────────
   console.log("\nPartner isolation (§9.7)");
-  const partner = await prisma.hiringPartner.findFirst({ where: { contactEmail: { endsWith: "@demo.invalid" } } });
-  if (!partner) {
-    check("a seeded partner exists to test with", false);
-  } else {
-    const granted = await grantedJobIds(partner.id);
-    const visibleJobs = await prisma.hiringJob.findMany({ where: partnerJobWhere(granted), select: { id: true } });
-    const allJobs = await prisma.hiringJob.count({ where: { deletedAt: null } });
-    check(
-      "a partner sees only granted reqs, not every req",
-      visibleJobs.length === granted.length && visibleJobs.length < allJobs,
-      `${visibleJobs.length} of ${allJobs}`,
-    );
-    check("…and every visible req is one they were granted", visibleJobs.every((j) => granted.includes(j.id)));
+  // The script creates its own partner rather than borrowing the seed's. This
+  // is the security boundary; a check that silently skips when demo data is
+  // absent is worse than no check, because it still prints a tick.
+  const partner = await prisma.hiringPartner.create({
+    data: {
+      agencyName: "ZZ Verify Agency",
+      contactEmail: `zz.verify.agency.${Date.now()}@demo.invalid`,
+      status: "active",
+      feePercent: 8.33,
+    },
+  });
+  await prisma.hiringPartnerJobAccess.create({ data: { partnerId: partner.id, jobId: bare.id } });
 
-    const visibleApps = await prisma.hiringApplication.findMany({
-      where: partnerApplicationWhere(partner.id, granted),
-      select: { id: true },
-    });
-    const allApps = await prisma.hiringApplication.count({ where: { deletedAt: null } });
-    check(
-      "a partner sees only their own submissions, not the pipeline",
-      visibleApps.length < allApps,
-      `${visibleApps.length} of ${allApps}`,
-    );
+  const granted = await grantedJobIds(partner.id);
+  check("the grant list is exactly what was granted", granted.length === 1 && granted[0] === bare.id);
 
-    // The failing-by-default case: revoke access, see nothing.
-    const noneVisible = await prisma.hiringJob.findMany({ where: partnerJobWhere([]), select: { id: true } });
-    check("a partner with no grants sees NOTHING (not everything)", noneVisible.length === 0);
-  }
+  const visibleJobs = await prisma.hiringJob.findMany({ where: partnerJobWhere(granted), select: { id: true } });
+  const allJobs = await prisma.hiringJob.count({ where: { deletedAt: null, status: { in: ["live", "paused"] } } });
+  check(
+    "a partner sees only granted reqs, not every req",
+    visibleJobs.length === 1 && allJobs > 1,
+    `${visibleJobs.length} of ${allJobs}`,
+  );
+  check("…and it is the one they were granted", visibleJobs[0]?.id === bare.id);
+
+  // Somebody else's application on a req they CAN see must still be invisible.
+  const visibleApps = await prisma.hiringApplication.findMany({
+    where: partnerApplicationWhere(partner.id, granted),
+    select: { id: true },
+  });
+  check(
+    "…and none of the candidates on it, since they submitted none",
+    visibleApps.length === 0,
+    `${visibleApps.length} visible`,
+  );
+
+  const noneVisible = await prisma.hiringJob.findMany({ where: partnerJobWhere([]), select: { id: true } });
+  check("a partner with no grants sees NOTHING (not everything)", noneVisible.length === 0);
+
+  await prisma.hiringPartner.delete({ where: { id: partner.id } });
 
   // ── 7. The careers site is off until somebody publishes it ───────────────
   console.log("\nPublic careers page");

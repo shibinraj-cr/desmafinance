@@ -4,7 +4,7 @@ import { prisma } from "@/lib/prisma";
 import { withApiHandler } from "@/lib/api";
 import { unauthorized, forbidden, notFound, badRequest } from "@/lib/http-error";
 import { getCurrentUserAndPermissions } from "@/lib/permissions";
-import { getOpsAccess, canEditProject, roleIsOpsUser } from "@/lib/ops-rbac";
+import { getOpsAccess, canEditActionItem, roleIsOpsUser } from "@/lib/ops-rbac";
 import {
   applyActionItemStatus,
   ACTION_ITEM_ACTIVITY,
@@ -49,10 +49,18 @@ export const PATCH = withApiHandler(async (req: Request, { params }: Ctx) => {
 
   const item = await prisma.opsActionItem.findUnique({
     where: { id: params.id },
-    select: { id: true, title: true, projectId: true, taskId: true, assignedToId: true, project: { select: { assignedToId: true } } },
+    select: {
+      id: true,
+      title: true,
+      projectId: true,
+      taskId: true,
+      assignedToId: true,
+      createdById: true,
+      project: { select: { assignedToId: true } },
+    },
   });
   if (!item) throw notFound();
-  if (!canEditProject(access, item.project, userId)) throw forbidden();
+  if (!canEditActionItem(access, item, userId)) throw forbidden();
 
   const d = PatchSchema.parse(await req.json().catch(() => null));
 
@@ -78,7 +86,8 @@ export const PATCH = withApiHandler(async (req: Request, { params }: Ctx) => {
     include: opsActionItemInclude,
   });
 
-  if (d.action) {
+  // A standalone task (no project) has no timeline to write to — skip both.
+  if (item.projectId && d.action) {
     await recordOpsActivity({
       projectId: item.projectId,
       taskId: item.taskId,
@@ -88,7 +97,7 @@ export const PATCH = withApiHandler(async (req: Request, { params }: Ctx) => {
       metadata: { actionItemId: item.id, action: d.action },
     });
   }
-  if (assigneeChanging) {
+  if (item.projectId && assigneeChanging) {
     await recordOpsActivity({
       projectId: item.projectId,
       taskId: item.taskId,
@@ -110,20 +119,30 @@ export const DELETE = withApiHandler(async (_req: Request, { params }: Ctx) => {
 
   const item = await prisma.opsActionItem.findUnique({
     where: { id: params.id },
-    select: { id: true, title: true, projectId: true, taskId: true, project: { select: { assignedToId: true } } },
+    select: {
+      id: true,
+      title: true,
+      projectId: true,
+      taskId: true,
+      assignedToId: true,
+      createdById: true,
+      project: { select: { assignedToId: true } },
+    },
   });
   if (!item) throw notFound();
-  if (!canEditProject(access, item.project, userId)) throw forbidden();
+  if (!canEditActionItem(access, item, userId)) throw forbidden();
 
   await prisma.opsActionItem.delete({ where: { id: params.id } });
-  await recordOpsActivity({
-    projectId: item.projectId,
-    taskId: item.taskId,
-    actorId: userId,
-    type: "TASK_CANCELLED",
-    summary: `Task removed: ${item.title}`,
-    metadata: { actionItemId: item.id, deleted: true },
-  });
+  if (item.projectId) {
+    await recordOpsActivity({
+      projectId: item.projectId,
+      taskId: item.taskId,
+      actorId: userId,
+      type: "TASK_CANCELLED",
+      summary: `Task removed: ${item.title}`,
+      metadata: { actionItemId: item.id, deleted: true },
+    });
+  }
 
   return NextResponse.json({ ok: true });
 });

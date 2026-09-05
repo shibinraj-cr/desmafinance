@@ -18,6 +18,7 @@ export function GroupTabs({
   newLeadsCount,
   myOpenTasksCount,
   crmNotifCount,
+  newsUnreadCount,
 }: {
   perms: Permissions;
   pendingCount: number;
@@ -25,6 +26,7 @@ export function GroupTabs({
   newLeadsCount: number;
   myOpenTasksCount: number;
   crmNotifCount: number;
+  newsUnreadCount: number;
 }) {
   const pathname = usePathname();
 
@@ -61,7 +63,9 @@ export function GroupTabs({
                   ? myOpenTasksCount
                   : p.href === "/crm/notifications" && crmNotifCount > 0
                     ? crmNotifCount
-                    : 0;
+                    : p.href === "/news" && newsUnreadCount > 0
+                      ? newsUnreadCount
+                      : 0;
           const showWarning =
             p.href === "/finance/approvals" && rejectedCount > 0;
           return (
@@ -97,7 +101,9 @@ export function GroupTabs({
                         ? `${tabBadge} open task${tabBadge === 1 ? "" : "s"} assigned to you`
                         : p.href === "/crm/notifications"
                           ? `${tabBadge} unread notification${tabBadge === 1 ? "" : "s"}`
-                          : undefined
+                          : p.href === "/news"
+                            ? `${tabBadge} unread update${tabBadge === 1 ? "" : "s"}`
+                            : undefined
                   }
                   className="text-[10px] font-bold bg-primary text-on-primary px-xs py-[1px] rounded-full min-w-[18px] text-center"
                 >

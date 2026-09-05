@@ -17,6 +17,7 @@ import {
   visibleModules,
 } from "@/lib/modules";
 import { openAppLauncher } from "@/components/AppLauncher";
+import { newsBadgeLabel } from "@/lib/news/constants";
 import { useWaLiveCount, type WaLiveCounts } from "@/components/wa-live-count";
 
 /** Hover text for the WhatsApp badge: what the number is, and the desk behind it. */
@@ -53,6 +54,7 @@ function navForModule(
   myOpenTasksCount: number,
   crmNotifCount: number,
   waWaiting: WaLiveCounts | null,
+  newsUnreadCount: number,
 ): NavItem[] {
   return mod.pages
     .filter((p) => canSeePage(perms, p.href))
@@ -72,7 +74,9 @@ function navForModule(
                 ? crmNotifCount
                 : p.href === "/crm/inbox"
                   ? (waWaiting?.waiting ?? null)
-                  : null,
+                  : p.href === "/news"
+                    ? newsUnreadCount
+                    : null,
       badgeTone: p.href === "/crm/inbox" ? ("whatsapp" as const) : undefined,
       badgeTitle: p.href === "/crm/inbox" ? waBadgeTitle(waWaiting) : undefined,
       warningCount:
@@ -96,6 +100,7 @@ function groupNavForModule(
   myOpenTasksCount: number,
   crmNotifCount: number,
   waWaiting: WaLiveCounts | null,
+  newsUnreadCount: number,
 ): NavItem[] {
   const current = activePage(mod, pathname);
   return moduleGroups(mod)
@@ -117,12 +122,15 @@ function groupNavForModule(
       // count of threads waiting on a reply, in place of the thread-list panel
       // that used to sit at the bottom of the rail.
       const hasInbox = g.pages.some((p) => p.href === "/crm/inbox");
+      // The News "UPDATES" group leads with the feed — badge it with the
+      // signed-in user's unread count.
+      const hasNews = g.pages.some((p) => p.href === "/news");
       return {
         href: first.href,
         label: g.name,
         icon: first.icon,
         active: !!current && g.pages.some((p) => p.href === current.href),
-        badgeCount: hasApprovals && canApprove(perms) ? pendingCount : hasNewLeads ? newLeadsCount : hasMyTasks ? myOpenTasksCount : hasNotifs ? crmNotifCount : hasInbox ? (waWaiting?.waiting ?? null) : null,
+        badgeCount: hasApprovals && canApprove(perms) ? pendingCount : hasNewLeads ? newLeadsCount : hasMyTasks ? myOpenTasksCount : hasNotifs ? crmNotifCount : hasInbox ? (waWaiting?.waiting ?? null) : hasNews ? newsUnreadCount : null,
         badgeTone: hasInbox ? ("whatsapp" as const) : undefined,
         badgeTitle: hasInbox ? waBadgeTitle(waWaiting) : undefined,
         warningCount: hasApprovals && rejectedCount > 0 ? rejectedCount : null,
@@ -188,14 +196,62 @@ function NavList({
   );
 }
 
+/**
+ * The unread-updates indicator, and the reason it does not live in the nav list.
+ *
+ * The left bar only ever shows the ACTIVE module's pages, so a badge on the News
+ * nav item is invisible to someone working in CRM or HR — which is everyone,
+ * most of the time. A company announcement nobody is told about is not an
+ * announcement, so this sits in the header instead: always rendered, whichever
+ * module is open.
+ */
+function NewsButton({
+  unread,
+  onNavigate,
+  className,
+}: {
+  unread: number;
+  onNavigate?: () => void;
+  className?: string;
+}) {
+  const has = unread > 0;
+  return (
+    <Link
+      href="/news"
+      onClick={onNavigate}
+      title={has ? `${unread} unread update${unread === 1 ? "" : "s"}` : "News & Updates"}
+      aria-label={has ? `News and Updates, ${unread} unread` : "News and Updates"}
+      className={
+        "relative grid h-9 w-9 place-items-center rounded-lg text-on-brand-variant hover:bg-brand-elevated hover:text-on-brand transition " +
+        (className ?? "")
+      }
+    >
+      <span className="material-symbols-outlined">newspaper</span>
+      {has && (
+        <span
+          className={
+            "absolute -top-1 -right-1 rounded-full bg-red-500 text-white text-[10px] font-bold tabular-nums text-center leading-[16px] h-4 " +
+            // A single digit stays a circle; wider counts grow into a pill.
+            (unread < 10 ? "w-4" : "min-w-[20px] px-[3px]")
+          }
+        >
+          {newsBadgeLabel(unread)}
+        </span>
+      )}
+    </Link>
+  );
+}
+
 function ModuleSwitcher({
   current,
   modules,
   onPick,
+  newsUnreadCount,
 }: {
   current: AppModule;
   modules: AppModule[];
   onPick: (m: AppModule) => void;
+  newsUnreadCount: number;
 }) {
   const [open, setOpen] = useState(false);
   return (
@@ -247,6 +303,11 @@ function ModuleSwitcher({
                     Admin
                   </span>
                 )}
+                {m.id === "news" && newsUnreadCount > 0 && (
+                  <span className="text-[10px] font-bold tabular-nums bg-red-500 text-white px-xs py-[1px] rounded-full min-w-[18px] text-center">
+                    {newsBadgeLabel(newsUnreadCount)}
+                  </span>
+                )}
               </button>
             );
           })}
@@ -256,7 +317,7 @@ function ModuleSwitcher({
   );
 }
 
-function BrandHeader() {
+function BrandHeader({ newsUnreadCount }: { newsUnreadCount: number }) {
   return (
     <div className="px-md pt-md pb-sm flex items-center gap-sm">
       <div className="w-10 h-10 rounded-lg overflow-hidden bg-brand-elevated flex items-center justify-center">
@@ -280,15 +341,18 @@ function BrandHeader() {
         />
         <p className="text-caption text-on-brand-variant mt-[2px]">Desma International</p>
       </div>
-      <button
-        type="button"
-        onClick={openAppLauncher}
-        title="All modules"
-        aria-label="Open the module launcher"
-        className="ml-auto grid h-9 w-9 place-items-center rounded-lg text-on-brand-variant hover:bg-brand-elevated hover:text-on-brand transition"
-      >
-        <span className="material-symbols-outlined">grid_view</span>
-      </button>
+      <div className="ml-auto flex items-center gap-xs">
+        <NewsButton unread={newsUnreadCount} />
+        <button
+          type="button"
+          onClick={openAppLauncher}
+          title="All modules"
+          aria-label="Open the module launcher"
+          className="grid h-9 w-9 place-items-center rounded-lg text-on-brand-variant hover:bg-brand-elevated hover:text-on-brand transition"
+        >
+          <span className="material-symbols-outlined">grid_view</span>
+        </button>
+      </div>
     </div>
   );
 }
@@ -341,6 +405,7 @@ export function SideNav({
   newLeadsCount,
   myOpenTasksCount,
   crmNotifCount,
+  newsUnreadCount,
 }: {
   user: { name?: string | null; email?: string | null };
   perms: Permissions;
@@ -349,6 +414,7 @@ export function SideNav({
   newLeadsCount: number;
   myOpenTasksCount: number;
   crmNotifCount: number;
+  newsUnreadCount: number;
 }) {
   const pathname = usePathname();
 
@@ -375,8 +441,8 @@ export function SideNav({
   // Grouped modules list their groups in the left bar (pages live in the top
   // tab strip); ungrouped modules keep the flat page list.
   const items = moduleHasGroups(activeModule)
-    ? groupNavForModule(activeModule, perms, pathname, pendingCount, rejectedCount, newLeadsCount, myOpenTasksCount, crmNotifCount, waLive)
-    : navForModule(activeModule, perms, pendingCount, rejectedCount, newLeadsCount, myOpenTasksCount, crmNotifCount, waLive);
+    ? groupNavForModule(activeModule, perms, pathname, pendingCount, rejectedCount, newLeadsCount, myOpenTasksCount, crmNotifCount, waLive, newsUnreadCount)
+    : navForModule(activeModule, perms, pendingCount, rejectedCount, newLeadsCount, myOpenTasksCount, crmNotifCount, waLive, newsUnreadCount);
 
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [mounted, setMounted] = useState(false);
@@ -410,8 +476,13 @@ export function SideNav({
   return (
     <>
       <aside className="dg-rail hidden md:flex flex-col w-[260px] h-screen sticky top-0 p-md gap-base bg-brand text-on-brand border-r border-brand-line">
-        <BrandHeader />
-        <ModuleSwitcher current={activeModule} modules={modules} onPick={pickModule} />
+        <BrandHeader newsUnreadCount={newsUnreadCount} />
+        <ModuleSwitcher
+          current={activeModule}
+          modules={modules}
+          onPick={pickModule}
+          newsUnreadCount={newsUnreadCount}
+        />
         <NavList items={items} pathname={pathname} />
         <UserFooter user={user} perms={perms} />
       </aside>
@@ -451,10 +522,11 @@ export function SideNav({
           style={{ width: "auto", height: "20px" }}
         />
         <span className="text-caption text-on-brand-variant ml-xs">· {activeModule.name}</span>
+        <NewsButton unread={newsUnreadCount} className="ml-auto" />
         {canApprove(perms) && pendingCount > 0 && (
           <Link
             href="/finance/approvals"
-            className="ml-auto inline-flex items-center gap-xs h-8 px-sm rounded-full bg-primary text-on-primary text-[11px] font-bold"
+            className="inline-flex items-center gap-xs h-8 px-sm rounded-full bg-primary text-on-primary text-[11px] font-bold"
           >
             <span className="material-symbols-outlined" style={{ fontSize: 14 }}>
               rule
@@ -478,7 +550,7 @@ export function SideNav({
               className="dg-rail flex flex-col w-[280px] max-w-[85vw] h-full bg-brand text-on-brand border-r border-brand-line p-md gap-base shadow-2xl"
             >
               <div className="flex items-center justify-between">
-                <BrandHeader />
+                <BrandHeader newsUnreadCount={newsUnreadCount} />
                 <button
                   type="button"
                   onClick={() => setDrawerOpen(false)}
@@ -488,7 +560,12 @@ export function SideNav({
                   <span className="material-symbols-outlined">close</span>
                 </button>
               </div>
-              <ModuleSwitcher current={activeModule} modules={modules} onPick={pickModule} />
+              <ModuleSwitcher
+                current={activeModule}
+                modules={modules}
+                onPick={pickModule}
+                newsUnreadCount={newsUnreadCount}
+              />
               <NavList
                 items={items}
                 pathname={pathname}

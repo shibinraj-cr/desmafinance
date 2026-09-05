@@ -47,7 +47,11 @@ export default async function CrmBroadcastsPage() {
   const [provider, config, statuses, services, sources] = await Promise.all([
     getWaProvider(),
     getBroadcastConfig(),
-    prisma.crmLeadStatus.findMany({ where: { active: true }, orderBy: { displayOrder: "asc" }, select: { id: true, label: true } }),
+    prisma.crmLeadStatus.findMany({
+      where: { active: true },
+      orderBy: { displayOrder: "asc" },
+      select: { id: true, label: true, code: true, kind: true },
+    }),
     prisma.service.findMany({ orderBy: { name: "asc" }, select: { id: true, name: true } }),
     prisma.leadPulseSource.findMany({ where: { active: true }, orderBy: { displayOrder: "asc" }, select: { id: true, label: true } }),
   ]);
@@ -55,6 +59,11 @@ export default async function CrmBroadcastsPage() {
   // Approved templates from the WABA when the transport can list them; the
   // catalogue lives at Meta, so on Wabis this is legitimately empty.
   const templates = await provider.listTemplates().catch(() => []);
+
+  // Stages that are a COLD audience — the re-marketing pool and any lost stage.
+  // A Marketing-category template to these mostly fails and hurts the number's
+  // quality, so the form warns before you queue one.
+  const coldStageIds = statuses.filter((s) => s.code === "re_marketing" || s.kind === "lost").map((s) => s.id);
 
   return (
     <>
@@ -67,7 +76,8 @@ export default async function CrmBroadcastsPage() {
           batchSize={config.batchSize}
           templates={templates}
           mergeFields={CRM_TEMPLATE_MERGE_FIELDS.map((f) => ({ token: f.token, label: f.label }))}
-          statuses={statuses}
+          statuses={statuses.map((s) => ({ id: s.id, label: s.label }))}
+          coldStageIds={coldStageIds}
           services={services}
           sources={sources}
         />

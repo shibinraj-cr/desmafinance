@@ -34,6 +34,10 @@
       "schedule": "45 1 * * *"
     },
     {
+      "path": "/api/cron/news-sync",
+      "schedule": "0 2 * * *"
+    },
+    {
       "path": "/api/cron/hiring-nudges",
       "schedule": "0 6 * * *"
     },

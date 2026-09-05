@@ -113,6 +113,12 @@ model User {
   // Engagement telemetry (active time per module/page/day)
   moduleUsage ModuleUsageDaily[] @relation("UserModuleUsage")
 
+  // News & Updates relations
+  newsTopicsCreated  NewsTopic[]    @relation("NewsTopicCreatedBy")
+  newsSourcesCreated NewsSource[]   @relation("NewsSourceCreatedBy")
+  newsItemsAuthored  NewsItem[]     @relation("NewsItemCreatedBy")
+  newsReads          NewsItemRead[] @relation("NewsItemReader")
+
   // Hiring (ATS) relations — DESMA's own staff recruitment, separate from CRM.
   hiringMember             HiringMember?             @relation("HiringMember")
   hiringMembersInvited     HiringMember[]            @relation("HiringMemberInvitedBy")
@@ -3074,22 +3080,29 @@ model OpsTask {
   @@index([projectId])
 }
 
-/// An ad-hoc task ("Task" in the UI) a team member attaches to a step (OpsTask)
-/// — the granular, assignable to-dos that live under the fixed process steps.
-/// Distinct from OpsTask (the template-snapshotted "Step"): action items are
-/// free-form, created on the fly, and assignable to a specific ops user so they
-/// surface in that user's personal task folder (/operations/my-tasks). They are
-/// advisory — an open action item never blocks its step or the project from
-/// completing. `completedById` is stamped at completion, so attribution
-/// survives project re-assignment (same pattern as OpsTask.completedBy).
+/// An ad-hoc task ("Task" in the UI): the granular, assignable to-dos an ops
+/// user creates on the fly and schedules with a due date. Distinct from OpsTask
+/// (the template-snapshotted "Step"): action items are free-form and assignable
+/// to a specific ops user, so they surface in that user's personal task folder
+/// (/operations/my-tasks). They are advisory — an open action item never blocks
+/// its step or the project from completing. `completedById` is stamped at
+/// completion, so attribution survives project re-assignment (same pattern as
+/// OpsTask.completedBy).
+///
+/// Attachment is a three-level ladder, both links nullable:
+///   step-level    — projectId + taskId, added from inside a step;
+///   project-level — projectId only, candidate work with no single step;
+///   standalone    — neither, a personal ops to-do (created from My Tasks).
+/// Everything that reads these rows must therefore treat the project/step
+/// context as optional, and project-timeline activity is only recorded for the
+/// rows that actually have a project.
 model OpsActionItem {
-  id        String     @id @default(cuid())
-  projectId String
-  project   OpsProject @relation(fields: [projectId], references: [id], onDelete: Cascade)
-  // The step this task hangs off. Nullable so a project-level task is possible,
-  // though v1 UI always attaches to a step.
+  id        String      @id @default(cuid())
+  projectId String?
+  project   OpsProject? @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  // The step this task hangs off, when it hangs off one.
   taskId    String?
-  task      OpsTask?   @relation(fields: [taskId], references: [id], onDelete: Cascade)
+  task      OpsTask?    @relation(fields: [taskId], references: [id], onDelete: Cascade)
 
   title        String
   description  String?
@@ -3111,6 +3124,8 @@ model OpsActionItem {
   @@index([assignedToId, status, dueAt])
   @@index([taskId])
   @@index([projectId])
+  // The standalone-task folder: "my open personal to-dos, soonest first".
+  @@index([createdById, status, dueAt])
 }
 
 /// Proof-of-completion evidence attached to a step (OpsTask). `fileUrl` is the
@@ -3196,6 +3211,128 @@ model ModuleUsageDaily {
   @@index([day, moduleId])
   @@index([userId, day])
   @@index([moduleId, day])
+}
+
+// ---------------------------------------------------------------------------
+// News & Updates
+//
+// A read-only broadcast feed every signed-in user can see: one topic per
+// subject area (e.g. "Australia Immigration", "AHPRA"), one or more source
+// links per topic, and a daily cron that pulls each source and files whatever
+// is new as NewsItem rows. Read state is per user per item, which is what
+// drives the unread badge on the nav.
+// ---------------------------------------------------------------------------
+
+/// A subject area in the news feed. Users filter the feed by topic; each source
+/// link is attached to exactly one topic, so "topic-wise updates" is just the
+/// source's topic carried onto every item it produces.
+model NewsTopic {
+  id          String  @id @default(cuid())
+  /// URL-safe key used in the ?topic= filter. Stable across renames.
+  slug        String  @unique
+  name        String
+  description String?
+  /// Material Symbols icon name, shown on the topic chip.
+  icon        String  @default("newspaper")
+  /// Tailwind-ish accent key ("blue", "green", …) resolved to classes in the UI.
+  color       String  @default("blue")
+  sortOrder   Int     @default(0)
+  /// Inactive topics stop being fetched and drop out of the feed filter, but
+  /// keep their items (deactivating is not deleting).
+  isActive    Boolean @default(true)
+
+  createdById String?
+  createdBy   User?        @relation("NewsTopicCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
+  createdAt   DateTime     @default(now())
+  updatedAt   DateTime     @updatedAt
+  sources     NewsSource[]
+  items       NewsItem[]
+
+  @@index([isActive, sortOrder])
+}
+
+/// One link the daily cron polls. `kind` decides how it is read:
+///  - "rss"     — an RSS 2.0 / Atom feed; every entry becomes a NewsItem.
+///  - "page"    — a plain HTML page with no feed; we hash its main text and file
+///                a single "page updated" item when that hash changes.
+///  - "chatgpt" — a public ChatGPT share link; the assistant's answer is split
+///                into one NewsItem per update. Read via the share page's JSON
+///                endpoint, since the page itself renders client-side.
+model NewsSource {
+  id       String    @id @default(cuid())
+  topicId  String
+  topic    NewsTopic @relation(fields: [topicId], references: [id], onDelete: Cascade)
+  name     String
+  url      String    @unique
+  kind     String    @default("rss")
+  isActive Boolean   @default(true)
+
+  // --- last-run bookkeeping, surfaced on the admin Sources page ---
+  lastFetchedAt DateTime?
+  /// "ok" | "error" | "empty" — never null after the first run.
+  lastStatus    String?
+  lastError     String?
+  lastItemCount Int       @default(0)
+  /// Content hash of the last successful read. For "page" sources this is the
+  /// change detector; for "rss" it short-circuits reparsing an unchanged feed.
+  contentHash   String?
+
+  createdById String?
+  createdBy   User?      @relation("NewsSourceCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
+  createdAt   DateTime   @default(now())
+  updatedAt   DateTime   @updatedAt
+  items       NewsItem[]
+
+  @@index([topicId, isActive])
+}
+
+/// One update in the feed. Either pulled from a source or written by hand by an
+/// admin (sourceId null).
+model NewsItem {
+  id       String      @id @default(cuid())
+  topicId  String
+  topic    NewsTopic   @relation(fields: [topicId], references: [id], onDelete: Cascade)
+  sourceId String?
+  source   NewsSource? @relation(fields: [sourceId], references: [id], onDelete: SetNull)
+
+  title       String
+  /// Plain-text summary. Feed HTML is stripped before it is stored — nothing in
+  /// the feed is ever rendered as markup.
+  summary     String?
+  /// Absolute link to the original article. Null for hand-written posts.
+  url         String?
+  publishedAt DateTime
+
+  /// Stable per-source identity used to avoid re-filing the same entry on every
+  /// run: the feed's <guid>/<id>, else the entry link, else a hash of the title.
+  /// Hand-written items get a generated value so the unique index still holds.
+  guid     String
+  /// Pinned items sort above everything else in their topic.
+  isPinned Boolean @default(false)
+
+  createdById String?
+  createdBy   User?          @relation("NewsItemCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
+  createdAt   DateTime       @default(now())
+  reads       NewsItemRead[]
+
+  /// Two sources may legitimately carry the same article; dedupe is per source.
+  @@unique([sourceId, guid])
+  @@index([topicId, publishedAt])
+  @@index([publishedAt])
+}
+
+/// Per-user read receipt. A row exists only once the user has read the item, so
+/// "unread" is the absence of a row — which is what the nav badge counts.
+model NewsItemRead {
+  id     String   @id @default(cuid())
+  itemId String
+  item   NewsItem @relation(fields: [itemId], references: [id], onDelete: Cascade)
+  userId String
+  user   User     @relation("NewsItemReader", fields: [userId], references: [id], onDelete: Cascade)
+  readAt DateTime @default(now())
+
+  @@unique([itemId, userId])
+  @@index([userId])
 }
 
 // ===========================================================================

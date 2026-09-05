@@ -2,8 +2,14 @@ import { redirect } from "next/navigation";
 import { TopBar } from "@/components/TopBar";
 import { prisma } from "@/lib/prisma";
 import { getCurrentUserAndPermissions } from "@/lib/permissions";
-import { getOpsAccess } from "@/lib/ops-rbac";
-import { opsMyTaskInclude, serializeMyTaskRow, bucketMyTask, type MyTaskBucket } from "@/lib/ops-action-items";
+import { getOpsAccess, OPS_USER_ANCHORS } from "@/lib/ops-rbac";
+import {
+  opsMyTaskInclude,
+  serializeMyTaskRow,
+  bucketMyTask,
+  myTasksWhere,
+  type MyTaskBucket,
+} from "@/lib/ops-action-items";
 import { istDateString } from "@/lib/lead-pulse-dates";
 import { MyTasksClient } from "./client";
 
@@ -30,14 +36,33 @@ export default async function OperationsMyTasksPage() {
     );
   }
 
-  const rows = (
-    await prisma.opsActionItem.findMany({
-      where: { assignedToId: userId },
+  const [items, projects, opsUsers] = await Promise.all([
+    prisma.opsActionItem.findMany({
+      where: myTasksWhere(userId),
       include: opsMyTaskInclude,
       orderBy: [{ dueAt: "asc" }, { createdAt: "asc" }],
-    })
-  ).map(serializeMyTaskRow);
+    }),
+    // The projects a new task may be filed under: exactly the ones
+    // `canEditProject` lets this user touch, so the picker can never offer a
+    // project the create call would reject. Closed projects are left out — you
+    // do not schedule fresh work on a finished candidate.
+    prisma.opsProject.findMany({
+      where: {
+        status: { in: ["active", "on_hold"] },
+        ...(access.isOpsManager ? {} : { assignedToId: userId }),
+      },
+      select: { id: true, party: { select: { name: true } }, service: { select: { name: true } } },
+      orderBy: [{ party: { name: "asc" } }],
+      take: 500,
+    }),
+    prisma.user.findMany({
+      where: { roleRef: { pages: { hasSome: OPS_USER_ANCHORS } } },
+      select: { id: true, username: true },
+      orderBy: { username: "asc" },
+    }),
+  ]);
 
+  const rows = items.map(serializeMyTaskRow);
   const today = istDateString();
   // Cap the "done" section so the folder stays about open work.
   const groups = ORDER.map((key) => ({
@@ -53,7 +78,12 @@ export default async function OperationsMyTasksPage() {
     <>
       <TopBar title="My Tasks" subtitle={`${openCount} open task${openCount === 1 ? "" : "s"} assigned to you`} />
       <div className="p-margin">
-        <MyTasksClient groups={groups} />
+        <MyTasksClient
+          groups={groups}
+          projects={projects.map((p) => ({ id: p.id, candidateName: p.party.name, serviceName: p.service.name }))}
+          opsUsers={opsUsers}
+          currentUserId={userId}
+        />
       </div>
     </>
   );

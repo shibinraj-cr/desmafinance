@@ -2,7 +2,7 @@ import { redirect } from "next/navigation";
 import { TopBar } from "@/components/TopBar";
 import { prisma } from "@/lib/prisma";
 import { getCurrentUserAndPermissions } from "@/lib/permissions";
-import { getOpsAccess } from "@/lib/ops-rbac";
+import { getOpsAccess, OPS_USER_ANCHORS } from "@/lib/ops-rbac";
 import { opsProjectListInclude, serializeProjectRow } from "@/lib/ops-queries";
 import { ProjectsClient } from "./client";
 
@@ -31,7 +31,7 @@ export default async function OperationsProjectsPage() {
     prisma.service.findMany({ where: { isActive: true }, select: { id: true, name: true }, orderBy: { name: "asc" } }),
     access.canAssign
       ? prisma.user.findMany({
-          where: { roleRef: { pages: { hasSome: ["/operations/projects", "/operations/my-work"] } } },
+          where: { roleRef: { pages: { hasSome: OPS_USER_ANCHORS } } },
           select: { id: true, username: true },
           orderBy: { username: "asc" },
         })

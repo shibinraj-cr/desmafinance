@@ -78,7 +78,15 @@ export function needsApproval(p?: Permissions | null): boolean {
 // they stay visible without having to add them to each (current or future)
 // role's Role.pages. The route-level guards on these pages already handle
 // the "login not linked to an employee" case gracefully.
-export const ALWAYS_VISIBLE_PAGES = ["/me/attendance", "/me/regularization", "/me/account"];
+export const ALWAYS_VISIBLE_PAGES = [
+  "/me/attendance",
+  "/me/regularization",
+  "/me/account",
+  // News & Updates is a company-wide broadcast: gating it behind a per-role
+  // page grant would mean an announcement silently reaching only some staff.
+  // Its admin surface stays out via ADMIN_RESTRICTED_PAGES below.
+  "/news",
+];
 
 // Hard admin-only pages: hidden from EVERY non-admin's nav even when a role
 // still carries the href in Role.pages. Distinct from the cosmetic `adminOnly`
@@ -106,6 +114,9 @@ export const WA_UI_ADMIN_ONLY = false;
 export const ADMIN_RESTRICTED_PAGES = [
   "/marketing/lead-pulse/daily-entry",
   "/marketing/lead-pulse/director-entry",
+  // Managing which links the feed polls is an admin job; /news itself is open to
+  // everyone, and this entry is checked first so the blanket grant cannot leak it.
+  "/news/manage",
   // Removed automatically when WA_UI_ADMIN_ONLY flips — the CRM-user rule below
   // then takes over for the inbox, and /crm/broadcasts falls back to its own
   // canBulkEmail gate.
