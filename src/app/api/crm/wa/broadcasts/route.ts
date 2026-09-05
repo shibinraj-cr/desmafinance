@@ -5,7 +5,7 @@ import { withApiHandler } from "@/lib/api";
 import { unauthorized, forbidden, badRequest } from "@/lib/http-error";
 import { getCurrentUserAndPermissions } from "@/lib/permissions";
 import { getCrmAccess } from "@/lib/crm-rbac";
-import { countSegment, materialiseAudience } from "@/lib/wa/broadcast";
+import { countSegment, materialiseAudience, headerMediaConsistent } from "@/lib/wa/broadcast";
 import { getWaProvider } from "@/lib/wa/registry";
 import type { LeadFilterParams } from "@/lib/crm-leads";
 
@@ -62,10 +62,18 @@ const CreateSchema = z.object({
   /** LeadFilterParams — the same shape the leads list already speaks. */
   segment: z.record(z.string(), z.unknown()).default({}),
   variableMap: z.record(z.string(), z.string()).optional(),
+  /** Header media for an image/video/document-header template (campaign-level). */
+  headerMediaType: z.enum(["image", "video", "document"]).nullable().optional(),
+  headerMediaUrl: z
+    .string()
+    .url()
+    .refine((u) => u.startsWith("https://"), "Header media URL must be https")
+    .nullable()
+    .optional(),
   scheduledAt: z.string().datetime().nullable().optional(),
   /** Materialise + queue immediately. False leaves it as a draft to review. */
   queue: z.boolean().default(false),
-});
+}).superRefine(headerMediaConsistent);
 
 /**
  * POST /api/crm/wa/broadcasts — create a campaign, optionally queuing it.
@@ -106,6 +114,8 @@ export const POST = withApiHandler(async (req: Request) => {
       templateName: data.templateName,
       segment: data.segment as object,
       variableMap: data.variableMap ?? undefined,
+      headerMediaType: data.headerMediaType ?? null,
+      headerMediaUrl: data.headerMediaUrl ?? null,
       scheduledAt: data.scheduledAt ? new Date(data.scheduledAt) : null,
       // Always born a draft — see below.
       status: "draft",

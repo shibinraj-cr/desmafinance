@@ -2727,6 +2727,12 @@ model WaBroadcast {
   /// recipient when the audience is materialised.
   variableMap  Json?
 
+  /// Media for an image/video/document HEADER template. Campaign-level (the same
+  /// media for every recipient) so it lives here, not on the recipient. Meta needs
+  /// the media on every Cloud-API send; null for text/header-less templates.
+  headerMediaType String? // 'image' | 'video' | 'document'
+  headerMediaUrl  String? // public https URL Meta can fetch
+
   /// 'draft' | 'scheduled' | 'sending' | 'sent' | 'cancelled' | 'failed'
   status      String    @default("draft")
   /// When the drain may begin. Null means "as soon as it is queued".

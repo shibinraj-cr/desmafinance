@@ -422,6 +422,7 @@ function mapTemplatePage(rows: RawTemplate[]): WaTemplateSummary[] {
       const partOf = (type: string) =>
         components.find((c) => (c.type ?? "").toUpperCase() === type && typeof c.text === "string")?.text ?? null;
       const body = partOf("BODY");
+      const headerComp = components.find((c) => (c.type ?? "").toUpperCase() === "HEADER");
       const reason = (t.rejected_reason ?? "").trim();
       return {
         id: t.id ?? null,
@@ -431,6 +432,10 @@ function mapTemplatePage(rows: RawTemplate[]): WaTemplateSummary[] {
         status: t.status ?? "UNKNOWN",
         body,
         header: partOf("HEADER"),
+        // A media header has a `format` (IMAGE/VIDEO/DOCUMENT) and no text, so it
+        // drops out of `header` above — surface the format so the composer knows
+        // to ask for the header media.
+        headerFormat: headerComp?.format ? headerComp.format.toUpperCase() : headerComp ? "TEXT" : null,
         variableCount: countTemplateVariables(body),
         // Meta says NONE rather than omitting the field, and a literal
         // "NONE" rendered next to an approved template reads as a rejection.
@@ -465,7 +470,28 @@ export const cloudProvider: WhatsAppProvider = {
     // hold the same template in several languages and Meta treats them as
     // distinct sends.
     const [name, lang] = input.template.split(":");
-    const components = buildTemplateComponents(input.params ?? {});
+    const bodyComponents = buildTemplateComponents(input.params ?? {});
+
+    // A media-header template must carry its header media on EVERY send (the
+    // sample uploaded at approval is not reused). Meta wants header before body.
+    const hm = input.headerMedia;
+    const headerComponent: unknown[] = hm
+      ? [
+          {
+            type: "header",
+            parameters: [
+              {
+                type: hm.kind,
+                [hm.kind]: {
+                  link: hm.link,
+                  ...(hm.kind === "document" && hm.fileName ? { filename: hm.fileName } : {}),
+                },
+              },
+            ],
+          },
+        ]
+      : [];
+    const components = [...headerComponent, ...bodyComponents];
 
     return graphPost(cfg, `${cfg.phoneNumberId}/messages`, {
       messaging_product: "whatsapp",
