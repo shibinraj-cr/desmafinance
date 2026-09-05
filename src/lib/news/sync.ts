@@ -38,6 +38,17 @@ const FIRST_RUN_MAX_ITEMS = 5;
 export const FIRST_RUN_MAX_AGE_DAYS = NEWS_WINDOW_DAYS;
 /** Per-run ceiling, so one misbehaving feed cannot fill the table. */
 const MAX_ITEMS_PER_RUN = 50;
+/**
+ * The same ceiling for a shared ChatGPT chat, set far higher.
+ *
+ * 50 is an anti-runaway guard against a feed we do not control. A shared chat is
+ * the opposite: one document an admin curated and pasted on purpose, often
+ * carrying weeks of accumulated updates they want backfilled. Worse, the low cap
+ * was not merely a trim — the leftovers were unreachable, because the next run
+ * sees an unchanged conversation, short-circuits, and files nothing further. So
+ * anything past the cap was silently lost for good, not deferred.
+ */
+const CHATGPT_MAX_ITEMS_PER_RUN = 500;
 
 export type SyncResult = {
   sourceId: string;
@@ -254,6 +265,8 @@ export async function syncSource(source: SourceRow, now = new Date()): Promise<S
   }
 
   let candidates: ParsedFeedItem[];
+  /** Set when a chat carried more updates than one import can take. */
+  let truncatedFrom = 0;
   if (source.kind === "chatgpt") {
     let payload: unknown;
     try {
@@ -303,7 +316,12 @@ export async function syncSource(source: SourceRow, now = new Date()): Promise<S
 
     // No first-run age filter here, unlike a feed: the admin pasted this link
     // deliberately, so its contents are new to the company whatever their date.
-    candidates = candidates.slice(0, MAX_ITEMS_PER_RUN);
+    if (candidates.length > CHATGPT_MAX_ITEMS_PER_RUN) {
+      // Never truncate in silence. The dropped entries cannot be recovered on a
+      // later run, so the admin has to be told to split the conversation up.
+      truncatedFrom = candidates.length;
+      candidates = candidates.slice(0, CHATGPT_MAX_ITEMS_PER_RUN);
+    }
 
     // Give the source the conversation's title when it was added with a
     // placeholder name, so the feed credits something meaningful.
@@ -417,14 +435,27 @@ export async function syncSource(source: SourceRow, now = new Date()): Promise<S
     }
   }
 
+  const overflow = truncatedFrom
+    ? `That chat held ${truncatedFrom} updates \u2014 the newest ${CHATGPT_MAX_ITEMS_PER_RUN} were imported. Split the rest into a second shared chat to bring them in.`
+    : null;
+
   await prisma.newsSource
     .update({
       where: { id: source.id },
-      data: { lastFetchedAt: now, lastStatus: "ok", lastError: null, lastItemCount: created, contentHash: hash },
+      data: {
+        lastFetchedAt: now,
+        lastStatus: "ok",
+        // Truncation is not a failure, but it is the one "ok" outcome the admin
+        // must act on, so it persists on the row rather than living only in the
+        // response to whoever happened to trigger the import.
+        lastError: overflow,
+        lastItemCount: created,
+        contentHash: hash,
+      },
     })
     .catch(() => {});
 
-  return { ...base, status: "ok", created };
+  return { ...base, status: "ok", created, ...(overflow ? { error: overflow } : {}) };
 }
 
 /**

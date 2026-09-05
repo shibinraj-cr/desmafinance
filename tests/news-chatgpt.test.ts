@@ -226,3 +226,37 @@ Nursing remains on the list.`;
     expect(items[0].url).toBe("https://immi.gov.au/fees");
   });
 });
+
+describe("backfilling an existing chat", () => {
+  it("keeps every point of a long multi-day chat, not just the first few", () => {
+    // The question this answers: "I have weeks of updates in one chat — do I get
+    // the old ones?" Splitting must scale past a feed-sized handful, because a
+    // shared chat is pasted once and never re-read for more.
+    const md = Array.from({ length: 120 }, (_, i) => `## Update ${i + 1}\nBody ${i + 1}.`).join("\n\n");
+    const items = splitIntoItems(md);
+    expect(items).toHaveLength(120);
+    expect(items[0].title).toBe("Update 1");
+    expect(items[119].title).toBe("Update 120");
+  });
+
+  it("gives every point its own identity, so none collapse into one another", () => {
+    const md = Array.from({ length: 40 }, (_, i) => `## Update ${i + 1}\nBody.`).join("\n\n");
+    const guids = new Set(splitIntoItems(md).map((i) => i.guid));
+    expect(guids.size).toBe(40);
+  });
+
+  it("collects answers from every turn of a chat appended to over days", () => {
+    const payload = {
+      linear_conversation: [
+        { message: { author: { role: "user" }, create_time: 1788500000, content: { parts: ["day 1?"] } } },
+        { message: { author: { role: "assistant" }, create_time: 1788500100, content: { parts: ["## Day one item\nx"] } } },
+        { message: { author: { role: "user" }, create_time: 1788600000, content: { parts: ["day 2?"] } } },
+        { message: { author: { role: "assistant" }, create_time: 1788600100, content: { parts: ["## Day two item\ny"] } } },
+      ],
+    };
+    const answers = assistantMessages(payload);
+    expect(answers).toHaveLength(2);
+    const titles = answers.flatMap((a) => splitIntoItems(a.text)).map((i) => i.title);
+    expect(titles).toEqual(["Day one item", "Day two item"]);
+  });
+});

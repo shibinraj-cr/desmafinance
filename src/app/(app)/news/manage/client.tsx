@@ -415,12 +415,13 @@ function SourceRow({
       }
       const data = await res.json();
       const r = data.results?.[0];
+      const count = r?.created ?? 0;
       setResult(
         r?.status === "error"
           ? `Failed: ${r.error}`
-          : r?.created === 0 && r?.error
+          : count === 0 && r?.error
             ? r.error
-            : `${r?.created ?? 0} new update${(r?.created ?? 0) === 1 ? "" : "s"}.`,
+            : `${count} new update${count === 1 ? "" : "s"}.${r?.error ? ` ${r.error}` : ""}`,
       );
       onDone();
     } finally {
@@ -484,6 +485,11 @@ function SourceRow({
             <p className="text-label-sm text-amber-800 mt-xs">
               {source.lastError ?? "Nothing readable at this link."}
             </p>
+          )}
+          {/* A successful import can still need attention — e.g. a chat holding
+              more updates than one import takes. */}
+          {source.lastStatus === "ok" && source.lastError && (
+            <p className="text-label-sm text-amber-800 mt-xs">{source.lastError}</p>
           )}
           {result && <p className="text-label-sm text-on-surface-variant mt-xs">{result}</p>}
           {error && <p className="text-label-sm text-red-700 mt-xs">{error}</p>}
@@ -585,13 +591,16 @@ function NewSourceForm({ topicId, onDone }: { topicId: string; onDone: () => voi
         setError(`Saved, but the link could not be read: ${r.error}`);
       } else if (r?.status === "empty") {
         setError(`Saved, but nothing was published. ${r.error ?? ""}`.trim());
-      } else if (r?.error) {
+      } else if (r?.error && (r?.created ?? 0) === 0) {
         // A successful pull can still file nothing — e.g. a live feed whose
         // newest entry predates the window. The sync explains which; relay it
         // rather than showing a bare "0 filed" that reads as a failure.
         setResult(`Added · ${r.error}`);
       } else {
-        setResult(`Added · ${r?.created ?? 0} update${(r?.created ?? 0) === 1 ? "" : "s"} filed.`);
+        const count = r?.created ?? 0;
+        setResult(
+          `Added · ${count} update${count === 1 ? "" : "s"} filed.${r?.error ? ` ${r.error}` : ""}`,
+        );
       }
       setName("");
       setUrl("");
