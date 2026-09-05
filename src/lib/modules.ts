@@ -365,6 +365,43 @@ export const MODULES: AppModule[] = [
     ],
   },
   {
+    id: "hiring",
+    name: "Hiring",
+    icon: "person_search",
+    basePath: "/hiring",
+    status: "active",
+    pages: [
+      // Rails land phase by phase; only pages that exist are registered, so the
+      // left rail never shows a link to a 404.
+      { href: "/hiring/pipeline", label: "Pipeline", icon: "view_kanban", group: "HIRING" },
+      { href: "/hiring/jobs", label: "Jobs", icon: "work", group: "HIRING" },
+      { href: "/hiring/candidates", label: "Candidates", icon: "groups", group: "HIRING" },
+      { href: "/hiring/follow-ups", label: "Follow-ups", icon: "notifications_active", group: "HIRING" },
+      { href: "/hiring/interviews", label: "Interviews", icon: "event_available", group: "HIRING" },
+      { href: "/hiring/offers", label: "Offers & e-sign", icon: "draw", group: "HIRING" },
+      { href: "/hiring/referrals", label: "Referrals", icon: "handshake", group: "GROWTH" },
+      { href: "/hiring/talent-pool", label: "Talent pool", icon: "diversity_3", group: "GROWTH" },
+      { href: "/hiring/partners", label: "Sourcing partners", icon: "storefront", group: "GROWTH" },
+      { href: "/hiring/automations", label: "Automations", icon: "bolt", group: "GROWTH" },
+      { href: "/hiring/analytics", label: "Analytics", icon: "insights", group: "INSIGHT" },
+      {
+        // Granting a role this page promotes it to the hiring HR-manager tier
+        // (see HIRING_SETTINGS_PAGE in src/lib/hiring/rbac.ts) — the same trick
+        // as /crm/settings. Not adminOnly: that is the whole point.
+        href: "/hiring/settings",
+        label: "Roles & Access",
+        icon: "shield_person",
+        group: "WORKSPACE",
+      },
+      {
+        href: "/hiring/settings/audit",
+        label: "Audit Log",
+        icon: "history",
+        group: "WORKSPACE",
+      },
+    ],
+  },
+  {
     id: "me",
     name: "My Workspace",
     icon: "person",

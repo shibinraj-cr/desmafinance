@@ -119,6 +119,33 @@ model User {
   newsItemsAuthored  NewsItem[]     @relation("NewsItemCreatedBy")
   newsReads          NewsItemRead[] @relation("NewsItemReader")
 
+  // Hiring (ATS) relations — DESMA's own staff recruitment, separate from CRM.
+  hiringMember             HiringMember?             @relation("HiringMember")
+  hiringMembersInvited     HiringMember[]            @relation("HiringMemberInvitedBy")
+  hiringJobsOwned          HiringJob[]               @relation("HiringJobOwner")
+  hiringJobsManaged        HiringJob[]               @relation("HiringJobHiringManager")
+  hiringJobsApproved       HiringJob[]               @relation("HiringJobApprover")
+  hiringJobsCreated        HiringJob[]               @relation("HiringJobCreatedBy")
+  hiringCandidatesOwned    HiringCandidate[]         @relation("HiringCandidateOwner")
+  hiringCandidatesCreated  HiringCandidate[]         @relation("HiringCandidateCreatedBy")
+  hiringEvents             HiringApplicationEvent[]  @relation("HiringEventActor")
+  hiringNotes              HiringNote[]              @relation("HiringNoteAuthor")
+  hiringInterviewTemplates HiringInterviewTemplate[] @relation("HiringInterviewTemplateCreatedBy")
+  hiringInterviewsCreated  HiringInterview[]         @relation("HiringInterviewCreatedBy")
+  hiringScorecards         HiringScorecard[]         @relation("HiringScorecardReviewer")
+  hiringOffersApproved     HiringOffer[]             @relation("HiringOfferApprover")
+  hiringOffersCreated      HiringOffer[]             @relation("HiringOfferCreatedBy")
+  hiringReferrals          HiringReferral[]          @relation("HiringReferrer")
+  hiringTalentPoolOwned    HiringTalentPool[]        @relation("HiringTalentPoolOwner")
+  hiringPartnersInvited    HiringPartner[]           @relation("HiringPartnerInvitedBy")
+  hiringPartnerGrants      HiringPartnerJobAccess[]  @relation("HiringPartnerAccessGrantedBy")
+  hiringAutomationsOwned   HiringAutomation[]        @relation("HiringAutomationOwner")
+  hiringAutomationsCreated HiringAutomation[]        @relation("HiringAutomationCreatedBy")
+  hiringSavedViews         HiringSavedView[]         @relation("HiringSavedViewUser")
+  hiringAuditLogs          HiringAuditLog[]          @relation("HiringAuditActor")
+  hiringCompanyProfiles    HiringCompanyProfile[]    @relation("HiringCompanyProfileEditor")
+  hiringAiCalls            HiringAiCall[]            @relation("HiringAiCallUser")
+
   @@index([roleId])
 }
 
@@ -3306,4 +3333,772 @@ model NewsItemRead {
 
   @@unique([itemId, userId])
   @@index([userId])
+}
+
+// ===========================================================================
+// HIRING (ATS) — DESMA International's OWN staff recruitment.
+//
+// Deliberately separate from the CRM: `Lead`/`Party` are nurse CLIENTS, these
+// tables are job APPLICANTS for DESMA's internal roles. Nothing here reads or
+// writes CRM candidate records, and nothing writes to the HR employee tables —
+// the handoff to People Ops is a one-way `hire.completed` domain event.
+//
+// Two identities that are easy to conflate:
+//   - HiringCandidate  = the PERSON (contact details, resume, one row ever)
+//   - HiringApplication = that person applied to ONE job (stage, score,
+//     rejection). Someone applying to three roles has 1 candidate + 3
+//     applications, and a rejection belongs to the application, never the person.
+//
+// Pipeline history is append-only: stage moves and rejections are rows in
+// HiringApplicationEvent, never overwrites, because every funnel number in
+// /hiring/analytics is computed from that table.
+// ===========================================================================
+
+/// Maps a Desgro user into the hiring workspace with a hiring base role.
+/// Access is resolved by src/lib/hiring/rbac.ts, which layers this on top of
+/// the normal Role.pages grants: a system admin is always an owner, a role
+/// granted /hiring/settings is the HR-manager tier, and this table lets a
+/// specific person be pinned to a narrower/broader hiring role without minting
+/// a whole new Desgro role. `extraPermissions`/`deniedPermissions` are the
+/// custom-role escape hatch (permission keys from HIRING_PERMISSIONS).
+model HiringMember {
+  id                String    @id @default(cuid())
+  userId            String    @unique
+  user              User      @relation("HiringMember", fields: [userId], references: [id], onDelete: Cascade)
+  /// 'owner' | 'hr_manager' | 'recruiter' | 'employee'
+  baseRole          String    @default("employee")
+  /// Optional label for a custom role built on top of the base role.
+  customRoleName    String?
+  /// Permission keys granted on top of the base role.
+  extraPermissions  String[]  @default([])
+  /// Permission keys revoked from the base role (deny wins).
+  deniedPermissions String[]  @default([])
+  isActive          Boolean   @default(true)
+  invitedById       String?
+  invitedBy         User?     @relation("HiringMemberInvitedBy", fields: [invitedById], references: [id], onDelete: SetNull)
+  lastActiveAt      DateTime?
+  createdAt         DateTime  @default(now())
+  updatedAt         DateTime  @updatedAt
+
+  @@index([baseRole, isActive])
+}
+
+/// Where roles are posted. Drives the careers-page location filter.
+model HiringLocation {
+  id        String        @id @default(cuid())
+  name      String        @unique
+  city      String?
+  state     String?
+  country   String        @default("India")
+  timezone  String        @default("Asia/Kolkata")
+  isActive  Boolean       @default(true)
+  jobs      HiringJob[]
+  offers    HiringOffer[]
+  createdAt DateTime      @default(now())
+  updatedAt DateTime      @updatedAt
+
+  @@index([isActive])
+}
+
+/// Canonical titles the company hires for. Every job-title picker reads from
+/// here so "BDE" is spelled the same way on every req and analytics can group
+/// by role without string-matching.
+model HiringJobRole {
+  id               String      @id @default(cuid())
+  title            String      @unique
+  department       String
+  /// 'intern' | 'junior' | 'mid' | 'senior' | 'lead' | 'head'
+  defaultSeniority String      @default("mid")
+  isActive         Boolean     @default(true)
+  jobs             HiringJob[]
+  createdAt        DateTime    @default(now())
+  updatedAt        DateTime    @updatedAt
+
+  @@index([department, isActive])
+}
+
+/// A requisition. `slug` is the public careers-page URL segment.
+model HiringJob {
+  id               String          @id @default(cuid())
+  title            String
+  slug             String          @unique
+  jobRoleId        String?
+  jobRole          HiringJobRole?  @relation(fields: [jobRoleId], references: [id], onDelete: SetNull)
+  department       String
+  locationId       String?
+  location         HiringLocation? @relation(fields: [locationId], references: [id], onDelete: SetNull)
+  /// 'onsite' | 'hybrid' | 'remote' | 'not_stated'
+  workType         String          @default("onsite")
+  /// 'full_time' | 'part_time' | 'contract' | 'internship'
+  employmentType   String          @default("full_time")
+  /// 'intern' | 'junior' | 'mid' | 'senior' | 'lead' | 'head'
+  seniority        String          @default("mid")
+  /// Comp band in LAKH PER YEAR (India convention), not rupees.
+  compMinLakh      Decimal?        @db.Decimal(6, 2)
+  compMaxLakh      Decimal?        @db.Decimal(6, 2)
+  currency         String          @default("INR")
+  /// Whether the band is shown on the public careers page.
+  compVisible      Boolean         @default(false)
+  descriptionMd    String?
+  /// Screen-out criteria — a candidate missing these is FLAGGED for a human,
+  /// never auto-rejected (see src/lib/hiring/ai/score.ts).
+  mustHaves        String[]        @default([])
+  niceToHaves      String[]        @default([])
+  openings         Int             @default(1)
+  /// 'draft' | 'pending_approval' | 'live' | 'paused' | 'closed'
+  status           String          @default("draft")
+  ownerId          String?
+  owner            User?           @relation("HiringJobOwner", fields: [ownerId], references: [id], onDelete: SetNull)
+  /// Whoever is named here can review this req's candidates and submit
+  /// scorecards regardless of their base role (§6 "hiring manager" is derived,
+  /// not a stored role).
+  hiringManagerId  String?
+  hiringManager    User?           @relation("HiringJobHiringManager", fields: [hiringManagerId], references: [id], onDelete: SetNull)
+  approvalRequired Boolean         @default(false)
+  approvedById     String?
+  approvedBy       User?           @relation("HiringJobApprover", fields: [approvedById], references: [id], onDelete: SetNull)
+  approvedAt       DateTime?
+  publishedAt      DateTime?
+  closedAt         DateTime?
+  closeReason      String?
+  /// Application-form config (§3.1 step 3).
+  /// 'required' | 'optional' | 'skip' — "required" means a resume OR a
+  /// portfolio link, one of the two.
+  resumeMode       String          @default("required")
+  askScreeningQs   Boolean         @default(true)
+  createdById      String?
+  createdBy        User?           @relation("HiringJobCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
+  /// Soft delete — jobs are never hard-deleted except by an audited owner action.
+  deletedAt        DateTime?
+  createdAt        DateTime        @default(now())
+  updatedAt        DateTime        @updatedAt
+
+  stages        HiringJobStage[]
+  questions     HiringScreeningQuestion[]
+  rubrics       HiringJobRubric[]
+  applications  HiringApplication[]
+  referrals     HiringReferral[]
+  partnerAccess HiringPartnerJobAccess[]
+  partnerSubs   HiringPartnerSubmission[]
+
+  @@index([status, publishedAt])
+  @@index([department])
+  @@index([ownerId])
+  @@index([hiringManagerId])
+  @@index([deletedAt])
+}
+
+/// Per-job ordered pipeline. Stages are renameable and reorderable per job, so
+/// analytics MUST group by `kind`/`position` and never by the name string.
+model HiringJobStage {
+  id           String              @id @default(cuid())
+  jobId        String
+  job          HiringJob           @relation(fields: [jobId], references: [id], onDelete: Cascade)
+  name         String
+  position     Int
+  /// 'open' | 'won' | 'lost' | 'hold'
+  kind         String              @default("open")
+  slaDays      Int?
+  applications HiringApplication[]
+  createdAt    DateTime            @default(now())
+  updatedAt    DateTime            @updatedAt
+
+  @@unique([jobId, position])
+  @@index([jobId, kind])
+}
+
+model HiringScreeningQuestion {
+  id         String    @id @default(cuid())
+  jobId      String
+  job        HiringJob @relation(fields: [jobId], references: [id], onDelete: Cascade)
+  position   Int
+  prompt     String
+  helperText String?
+  /// 'short_text' | 'detailed_text' | 'single_select' | 'multi_select' |
+  /// 'number' | 'file' | 'yes_no'
+  answerType String    @default("short_text")
+  options    Json?
+  required   Boolean   @default(false)
+  createdAt  DateTime  @default(now())
+  updatedAt  DateTime  @updatedAt
+
+  @@unique([jobId, position])
+}
+
+/// Weighted scoring criteria. Weights must total 100 — publish is blocked
+/// otherwise (src/lib/hiring/jobs.ts:validateJobForPublish).
+model HiringJobRubric {
+  id          String    @id @default(cuid())
+  jobId       String
+  job         HiringJob @relation(fields: [jobId], references: [id], onDelete: Cascade)
+  criterion   String
+  description String?
+  weight      Int
+  position    Int
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  @@unique([jobId, position])
+}
+
+/// The PERSON. Deduped on email and phone (Postgres treats NULLs as distinct,
+/// so the @unique behaves as the spec's partial unique index).
+model HiringCandidate {
+  id                   String    @id @default(cuid())
+  fullName             String
+  /// Always stored lower-cased (no citext in this DB) — see normalizeEmail().
+  email                String?   @unique
+  /// E.164, +91 default — see normalizePhone().
+  phone                String?   @unique
+  whatsappOptIn        Boolean   @default(true)
+  currentTitle         String?
+  currentEmployer      String?
+  locationText         String?
+  totalExperienceYears Decimal?  @db.Decimal(4, 1)
+  noticePeriodDays     Int?
+  currentCtcLakh       Decimal?  @db.Decimal(6, 2)
+  expectedCtcLakh      Decimal?  @db.Decimal(6, 2)
+  resumeUrl            String?
+  portfolioUrl         String?
+  linkedinUrl          String?
+  /// 'careers_page' | 'referral' | 'partner' | 'manual' | 'csv_import' |
+  /// 'talent_pool' | 'whatsapp' | 'walk_in'
+  source               String    @default("manual")
+  sourceDetail         String?
+  /// Id of the referral / partner / import batch that produced this candidate.
+  sourceAttributionId  String?
+  ownerId              String?
+  owner                User?     @relation("HiringCandidateOwner", fields: [ownerId], references: [id], onDelete: SetNull)
+  tags                 String[]  @default([])
+  isActive             Boolean   @default(true)
+  /// Fields a human has edited — resume re-parsing must never silently
+  /// overwrite these (§4.3).
+  humanEditedFields    String[]  @default([])
+  consentAt            DateTime?
+  dataRetentionUntil   DateTime?
+  createdById          String?
+  createdBy            User?     @relation("HiringCandidateCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
+  deletedAt            DateTime?
+  createdAt            DateTime  @default(now())
+  updatedAt            DateTime  @updatedAt
+
+  applications HiringApplication[]
+  notes        HiringNote[]
+  referrals    HiringReferral[]
+  talentPool   HiringTalentPool?
+  partnerSubs  HiringPartnerSubmission[]
+
+  @@index([source])
+  @@index([ownerId])
+  @@index([deletedAt])
+  @@index([fullName])
+}
+
+/// The person APPLIED to one job. Carries the pipeline.
+model HiringApplication {
+  id                String          @id @default(cuid())
+  candidateId       String
+  candidate         HiringCandidate @relation(fields: [candidateId], references: [id], onDelete: Cascade)
+  jobId             String
+  job               HiringJob       @relation(fields: [jobId], references: [id], onDelete: Cascade)
+  stageId           String?
+  stage             HiringJobStage? @relation(fields: [stageId], references: [id], onDelete: SetNull)
+  /// 'active' | 'rejected' | 'on_hold' | 'withdrawn' | 'hired'
+  status            String          @default("active")
+  aiScore           Int?
+  /// Per rubric criterion: { criterion, weight, score, evidence }. A score
+  /// without evidence is a bug (§4.4).
+  aiScoreBreakdown  Json?
+  aiScoredAt        DateTime?
+  aiModel           String?
+  aiPromptVersion   String?
+  /// Screening answers, keyed by question id.
+  answers           Json?
+  /// Set when a must-have looks missing. A FLAG for a human, not a rejection.
+  screenedOutReason String?
+  rejectionReason   String?
+  needsAttention    Boolean         @default(false)
+  lastContactedAt   DateTime?
+  nextFollowUpAt    DateTime?
+  appliedAt         DateTime        @default(now())
+  stageEnteredAt    DateTime        @default(now())
+  hiredAt           DateTime?
+  deletedAt         DateTime?
+  createdAt         DateTime        @default(now())
+  updatedAt         DateTime        @updatedAt
+
+  events     HiringApplicationEvent[]
+  notes      HiringNote[]
+  interviews HiringInterview[]
+  offers     HiringOffer[]
+  partnerSub HiringPartnerSubmission?
+
+  @@unique([candidateId, jobId])
+  @@index([jobId, status])
+  @@index([stageId])
+  @@index([status, nextFollowUpAt])
+  @@index([needsAttention])
+  @@index([deletedAt])
+}
+
+/// Append-only activity log. THE source for every timeline UI and every
+/// analytics number — never update or delete a row here.
+model HiringApplicationEvent {
+  id            String            @id @default(cuid())
+  applicationId String
+  application   HiringApplication @relation(fields: [applicationId], references: [id], onDelete: Cascade)
+  /// 'created' | 'stage_moved' | 'scored' | 'note' | 'email_sent' |
+  /// 'whatsapp_sent' | 'whatsapp_received' | 'interview_scheduled' |
+  /// 'scorecard_submitted' | 'offer_sent' | 'offer_signed' | 'rejected' |
+  /// 'reopened' | 'automation_fired'
+  type          String
+  fromStage     String?
+  toStage       String?
+  /// null actor = system or AI.
+  actorId       String?
+  actor         User?             @relation("HiringEventActor", fields: [actorId], references: [id], onDelete: SetNull)
+  payload       Json?
+  occurredAt    DateTime          @default(now())
+
+  @@index([applicationId, occurredAt])
+  @@index([type, occurredAt])
+  @@index([occurredAt])
+}
+
+model HiringNote {
+  id            String             @id @default(cuid())
+  applicationId String?
+  application   HiringApplication? @relation(fields: [applicationId], references: [id], onDelete: Cascade)
+  candidateId   String?
+  candidate     HiringCandidate?   @relation(fields: [candidateId], references: [id], onDelete: Cascade)
+  bodyMd        String
+  /// 'team' | 'private' | 'partner_hidden' — partners never see any of these.
+  visibility    String             @default("team")
+  mentions      String[]           @default([])
+  authorId      String?
+  author        User?              @relation("HiringNoteAuthor", fields: [authorId], references: [id], onDelete: SetNull)
+  createdAt     DateTime           @default(now())
+  updatedAt     DateTime           @updatedAt
+
+  @@index([applicationId, createdAt])
+  @@index([candidateId, createdAt])
+}
+
+model HiringInterviewTemplate {
+  id                String            @id @default(cuid())
+  name              String
+  /// 'phone_screen' | 'async_video' | 'technical' | 'panel' | 'manager' | 'final'
+  kind              String            @default("phone_screen")
+  durationMin       Int               @default(30)
+  questionSet       Json?
+  rubric            Json?
+  /// Stage `kind` this template is offered for by default.
+  isDefaultForStage String?
+  isActive          Boolean           @default(true)
+  createdById       String?
+  createdBy         User?             @relation("HiringInterviewTemplateCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
+  interviews        HiringInterview[]
+  createdAt         DateTime          @default(now())
+  updatedAt         DateTime          @updatedAt
+
+  @@unique([name])
+}
+
+model HiringInterview {
+  id               String                   @id @default(cuid())
+  applicationId    String
+  application      HiringApplication        @relation(fields: [applicationId], references: [id], onDelete: Cascade)
+  templateId       String?
+  template         HiringInterviewTemplate? @relation(fields: [templateId], references: [id], onDelete: SetNull)
+  /// 'phone_screen' | 'async_video' | 'technical' | 'panel' | 'manager' | 'final'
+  kind             String                   @default("phone_screen")
+  scheduledAt      DateTime
+  durationMin      Int                      @default(30)
+  /// 'in_person' | 'video' | 'phone'
+  mode             String                   @default("video")
+  locationOrLink   String?
+  /// 'scheduled' | 'completed' | 'no_show' | 'cancelled' | 'rescheduled'
+  status           String                   @default("scheduled")
+  /// User ids on the panel. Drives the per-user ICS feed and the
+  /// awaiting-scorecard nudge.
+  panel            String[]                 @default([])
+  prepPacketMd     String?
+  recordingUrl     String?
+  transcriptText   String?
+  transcriptSource String?
+  /// Nudge bookkeeping for the 2h / 24h awaiting-scorecard reminders.
+  nudged2hAt       DateTime?
+  nudged24hAt      DateTime?
+  createdById      String?
+  createdBy        User?                    @relation("HiringInterviewCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
+  scorecards       HiringScorecard[]
+  createdAt        DateTime                 @default(now())
+  updatedAt        DateTime                 @updatedAt
+
+  @@index([applicationId, scheduledAt])
+  @@index([status, scheduledAt])
+  @@index([scheduledAt])
+}
+
+model HiringScorecard {
+  id          String          @id @default(cuid())
+  interviewId String
+  interview   HiringInterview @relation(fields: [interviewId], references: [id], onDelete: Cascade)
+  reviewerId  String
+  reviewer    User            @relation("HiringScorecardReviewer", fields: [reviewerId], references: [id], onDelete: Cascade)
+  /// criterion -> 1..4
+  ratings     Json?
+  /// 'strong_no' | 'no' | 'yes' | 'strong_yes'
+  overall     String
+  notesMd     String?
+  submittedAt DateTime        @default(now())
+  createdAt   DateTime        @default(now())
+  updatedAt   DateTime        @updatedAt
+
+  @@unique([interviewId, reviewerId])
+  @@index([reviewerId])
+}
+
+model HiringOffer {
+  id               String            @id @default(cuid())
+  applicationId    String
+  application      HiringApplication @relation(fields: [applicationId], references: [id], onDelete: Cascade)
+  jobTitle         String
+  department       String?
+  locationId       String?
+  location         HiringLocation?   @relation(fields: [locationId], references: [id], onDelete: SetNull)
+  startDate        DateTime?
+  /// All comp in LAKH PER YEAR.
+  baseLakh         Decimal           @db.Decimal(6, 2)
+  variableLakh     Decimal?          @db.Decimal(6, 2)
+  joiningBonusLakh Decimal?          @db.Decimal(6, 2)
+  otherTermsMd     String?
+  probationMonths  Int?
+  noticePeriodDays Int?
+  expiresAt        DateTime?
+  /// 'draft' | 'pending_approval' | 'sent' | 'viewed' | 'accepted' |
+  /// 'declined' | 'expired' | 'withdrawn'
+  status           String            @default("draft")
+  approvedById     String?
+  approvedBy       User?             @relation("HiringOfferApprover", fields: [approvedById], references: [id], onDelete: SetNull)
+  approvedAt       DateTime?
+  sentAt           DateTime?
+  viewedAt         DateTime?
+  respondedAt      DateTime?
+  /// T-48h expiry nudge bookkeeping.
+  expiryNudgedAt   DateTime?
+  createdById      String?
+  createdBy        User?             @relation("HiringOfferCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
+  deletedAt        DateTime?
+  createdAt        DateTime          @default(now())
+  updatedAt        DateTime          @updatedAt
+
+  envelopes HiringOfferEnvelope[]
+
+  @@index([applicationId, status])
+  @@index([status, expiresAt])
+}
+
+/// The e-sign artefact. `accessTokenHash` is a SHA-256 of a single-use,
+/// expiring token — the raw token exists only in the emailed link.
+model HiringOfferEnvelope {
+  id                String      @id @default(cuid())
+  offerId           String
+  offer             HiringOffer @relation(fields: [offerId], references: [id], onDelete: Cascade)
+  documentHtml      String
+  pdfUrl            String?
+  signerName        String
+  signerEmail       String
+  accessTokenHash   String      @unique
+  tokenExpiresAt    DateTime
+  usedAt            DateTime?
+  signedAt          DateTime?
+  signatureImageUrl String?
+  signerTypedName   String?
+  signerIp          String?
+  signerUserAgent   String?
+  /// Append-only list of { at, event, ip, userAgent } entries.
+  auditTrail        Json?
+  createdAt         DateTime    @default(now())
+  updatedAt         DateTime    @updatedAt
+
+  @@index([offerId])
+}
+
+model HiringReferral {
+  id           String          @id @default(cuid())
+  jobId        String
+  job          HiringJob       @relation(fields: [jobId], references: [id], onDelete: Cascade)
+  referrerId   String
+  referrer     User            @relation("HiringReferrer", fields: [referrerId], references: [id], onDelete: Cascade)
+  candidateId  String
+  candidate    HiringCandidate @relation(fields: [candidateId], references: [id], onDelete: Cascade)
+  relationship String?
+  pitchMd      String?
+  /// 'submitted' | 'reviewing' | 'in_pipeline' | 'hired' | 'rejected'
+  status       String          @default("submitted")
+  bonusAmount  Decimal?        @db.Decimal(10, 2)
+  /// 'pending' | 'approved' | 'paid'
+  bonusStatus  String          @default("pending")
+  bonusPaidAt  DateTime?
+  createdAt    DateTime        @default(now())
+  updatedAt    DateTime        @updatedAt
+
+  @@unique([jobId, candidateId])
+  @@index([referrerId, status])
+}
+
+model HiringTalentPool {
+  id            String          @id @default(cuid())
+  candidateId   String          @unique
+  candidate     HiringCandidate @relation(fields: [candidateId], references: [id], onDelete: Cascade)
+  /// 'new' | 'nurturing' | 're_engage' | 'placed' | 'cold'
+  state         String          @default("new")
+  interestAreas String[]        @default([])
+  lastTouchAt   DateTime?
+  nextTouchAt   DateTime?
+  ownerId       String?
+  owner         User?           @relation("HiringTalentPoolOwner", fields: [ownerId], references: [id], onDelete: SetNull)
+  notesMd       String?
+  createdAt     DateTime        @default(now())
+  updatedAt     DateTime        @updatedAt
+
+  @@index([state, nextTouchAt])
+}
+
+/// External recruiting agency. Signs in by magic link (no Desgro password) —
+/// see HiringPartnerSession. A partner sees ONLY the jobs granted in
+/// HiringPartnerJobAccess and ONLY their own submissions.
+model HiringPartner {
+  id                 String    @id @default(cuid())
+  agencyName         String
+  primaryContactName String?
+  contactEmail       String    @unique
+  contactPhone       String?
+  focusAreas         String[]  @default([])
+  feePercent         Decimal?  @db.Decimal(5, 2)
+  /// 'invited' | 'trial' | 'active' | 'paused'
+  status             String    @default("invited")
+  invitedById        String?
+  invitedBy          User?     @relation("HiringPartnerInvitedBy", fields: [invitedById], references: [id], onDelete: SetNull)
+  invitedAt          DateTime?
+  activatedAt        DateTime?
+  createdAt          DateTime  @default(now())
+  updatedAt          DateTime  @updatedAt
+
+  jobAccess   HiringPartnerJobAccess[]
+  submissions HiringPartnerSubmission[]
+  sessions    HiringPartnerSession[]
+
+  @@index([status])
+}
+
+/// The security boundary: a partner may only ever see jobs listed here.
+model HiringPartnerJobAccess {
+  id          String        @id @default(cuid())
+  partnerId   String
+  partner     HiringPartner @relation(fields: [partnerId], references: [id], onDelete: Cascade)
+  jobId       String
+  job         HiringJob     @relation(fields: [jobId], references: [id], onDelete: Cascade)
+  grantedById String?
+  grantedBy   User?         @relation("HiringPartnerAccessGrantedBy", fields: [grantedById], references: [id], onDelete: SetNull)
+  grantedAt   DateTime      @default(now())
+
+  @@unique([partnerId, jobId])
+  @@index([jobId])
+}
+
+/// Magic-link session for the partner portal. Hashed, single-use, expiring —
+/// the raw token only ever exists in the emailed link.
+model HiringPartnerSession {
+  id               String        @id @default(cuid())
+  partnerId        String
+  partner          HiringPartner @relation(fields: [partnerId], references: [id], onDelete: Cascade)
+  tokenHash        String        @unique
+  expiresAt        DateTime
+  consumedAt       DateTime?
+  /// Set when the magic link is exchanged for a longer-lived portal session.
+  sessionExpiresAt DateTime?
+  createdIp        String?
+  createdAt        DateTime      @default(now())
+
+  @@index([partnerId, expiresAt])
+}
+
+model HiringPartnerSubmission {
+  id                     String             @id @default(cuid())
+  partnerId              String
+  partner                HiringPartner      @relation(fields: [partnerId], references: [id], onDelete: Cascade)
+  jobId                  String
+  job                    HiringJob          @relation(fields: [jobId], references: [id], onDelete: Cascade)
+  candidateId            String
+  candidate              HiringCandidate    @relation(fields: [candidateId], references: [id], onDelete: Cascade)
+  applicationId          String?            @unique
+  application            HiringApplication? @relation(fields: [applicationId], references: [id], onDelete: SetNull)
+  submittedAt            DateTime           @default(now())
+  /// Fee snapshotted at submission so a later rate change can't rewrite history.
+  feePercentAtSubmission Decimal?           @db.Decimal(5, 2)
+  /// 'submitted' | 'in_pipeline' | 'placed' | 'rejected'
+  placementStatus        String             @default("submitted")
+  /// 'none' | 'due' | 'invoiced' | 'paid' — fee triggers on offer acceptance.
+  invoiceStatus          String             @default("none")
+  createdAt              DateTime           @default(now())
+  updatedAt              DateTime           @updatedAt
+
+  @@unique([partnerId, jobId, candidateId])
+  @@index([partnerId, placementStatus])
+}
+
+model HiringAutomation {
+  id          String                @id @default(cuid())
+  name        String
+  description String?
+  isActive    Boolean               @default(false)
+  /// { type: 'stage_entered'|'score_threshold'|'time_in_stage'|'offer_sent'|
+  ///   'no_activity'|'application_created', params: {...} }
+  trigger     Json
+  /// Array of { field, op, value }.
+  conditions  Json?
+  /// Array of { type: 'move_stage'|'assign_owner'|'send_whatsapp_template'|
+  ///   'send_email_template'|'create_task'|'notify_user'|'add_tag'|
+  ///   'schedule_followup'|'add_to_talent_pool', params: {...} }
+  actions     Json
+  lastFiredAt DateTime?
+  fireCount   Int                   @default(0)
+  /// Consecutive failures; at 3 the recipe auto-pauses and notifies its owner.
+  errorStreak Int                   @default(0)
+  pausedAt    DateTime?
+  pauseReason String?
+  ownerId     String?
+  owner       User?                 @relation("HiringAutomationOwner", fields: [ownerId], references: [id], onDelete: SetNull)
+  createdById String?
+  createdBy   User?                 @relation("HiringAutomationCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
+  runs        HiringAutomationRun[]
+  createdAt   DateTime              @default(now())
+  updatedAt   DateTime              @updatedAt
+
+  @@index([isActive])
+}
+
+/// Every firing, including failures — never silently swallowed.
+model HiringAutomationRun {
+  id            String           @id @default(cuid())
+  automationId  String
+  automation    HiringAutomation @relation(fields: [automationId], references: [id], onDelete: Cascade)
+  applicationId String?
+  /// 'success' | 'error' | 'skipped'
+  status        String
+  input         Json?
+  output        Json?
+  error         String?
+  durationMs    Int?
+  ranAt         DateTime         @default(now())
+
+  @@index([automationId, ranAt])
+  @@index([status, ranAt])
+}
+
+model HiringSavedView {
+  id        String   @id @default(cuid())
+  userId    String?
+  user      User?    @relation("HiringSavedViewUser", fields: [userId], references: [id], onDelete: Cascade)
+  /// Which rail this view belongs to, e.g. "candidates", "jobs".
+  rail      String
+  name      String
+  filters   Json
+  sort      String?
+  isShared  Boolean  @default(false)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([rail, userId])
+  @@index([rail, isShared])
+}
+
+/// Write audit for jobs, offers, partners, roles and API keys (§6).
+model HiringAuditLog {
+  id         String   @id @default(cuid())
+  actorId    String?
+  actor      User?    @relation("HiringAuditActor", fields: [actorId], references: [id], onDelete: SetNull)
+  action     String
+  entityType String
+  entityId   String
+  before     Json?
+  after      Json?
+  ip         String?
+  createdAt  DateTime @default(now())
+
+  @@index([entityType, entityId, createdAt])
+  @@index([createdAt])
+}
+
+/// Singleton-ish company profile used to condition every AI draft and score so
+/// output speaks in DESMA's language (§4.1). One active row.
+model HiringCompanyProfile {
+  id          String   @id @default(cuid())
+  sourceUrl   String?
+  summaryMd   String
+  tone        String?
+  values      String[] @default([])
+  isActive    Boolean  @default(true)
+  updatedById String?
+  updatedBy   User?    @relation("HiringCompanyProfileEditor", fields: [updatedById], references: [id], onDelete: SetNull)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@index([isActive])
+}
+
+/// Per-call AI ledger behind the credits meter (§4.8). Every call is metered
+/// before it runs, so an exhausted budget hard-stops with a clear message.
+model HiringAiCall {
+  id            String   @id @default(cuid())
+  /// 'job_description' | 'resume_parse' | 'rubric_score' | 'prep_packet' |
+  /// 'scorecard_summary' | 'outreach' | 'prescreen' | 'company_profile'
+  feature       String
+  credits       Int
+  model         String?
+  promptVersion String?
+  entityType    String?
+  entityId      String?
+  userId        String?
+  user          User?    @relation("HiringAiCallUser", fields: [userId], references: [id], onDelete: SetNull)
+  inputTokens   Int?
+  outputTokens  Int?
+  /// 'ok' | 'error' | 'blocked_no_credits'
+  status        String   @default("ok")
+  error         String?
+  createdAt     DateTime @default(now())
+
+  @@index([feature, createdAt])
+  @@index([createdAt])
+}
+
+/// Durable domain events the hiring module publishes for OTHER modules to
+/// consume. Today there is exactly one producer (`hire.completed`) and no
+/// consumer — People Ops is explicitly out of scope — which is the whole point:
+/// the handoff is a row somebody else can read later, not a write into employee
+/// tables that this module has no business making.
+///
+/// An outbox rather than an in-process callback, so a consumer built next year
+/// can replay everything it missed instead of needing to have been listening.
+model HiringDomainEvent {
+  id          String    @id @default(cuid())
+  /// 'hire.completed'
+  type        String
+  /// Payload shape is per `type` and versioned by `version`.
+  payload     Json
+  version     Int       @default(1)
+  /// Set by a consumer when it has handled the event; null means unconsumed.
+  consumedAt  DateTime?
+  consumedBy  String?
+  /// Idempotency: one event per (type, subject) — re-hiring the same person for
+  /// the same job does not emit twice.
+  subjectType String
+  subjectId   String
+  occurredAt  DateTime  @default(now())
+
+  @@unique([type, subjectType, subjectId])
+  @@index([type, consumedAt])
+  @@index([occurredAt])
 }

@@ -4,6 +4,8 @@ out
 dist
 .env
 .env.local
+# Disposable-branch connection string for scripts/with-branch-db.mjs.
+.env.branch
 .env*.local
 *.log
 .DS_Store

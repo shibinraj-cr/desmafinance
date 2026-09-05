@@ -43,8 +43,22 @@ export const config = {
     // a message provider POSTs with a shared `wa_mirror_secret` and has no
     // session; every OTHER route under api/crm/wa stays gated),
     // the public privacy policy page (required to be reachable without login
-    // for Meta app review), Next.js internal asset routes, and any file with
+    // for Meta app review), the public careers site and its apply endpoint
+    // (`careers` + `api/careers` — a job applicant is by definition a stranger
+    // with no Desgro login; that endpoint does its own honeypot, dwell-time and
+    // rate-limit checks, and every OTHER route under api/hiring stays gated),
+    // the offer signing page and its endpoint (`offer` + `api/offer` — the
+    // candidate signing has no Desgro login; the single-use, expiring token in
+    // the URL is the credential, and it is rate-limited and audited),
+    // the external sourcing-partner portal (`partners` + `api/partners` — an
+    // agency is not a Desgro user; it authenticates with its own magic-link
+    // session cookie, and every query it can reach is scoped by
+    // src/lib/hiring/partner-scope.ts),
+    // the per-user interview calendar feed (`api/hiring/calendar` — a calendar
+    // client subscribes with a URL and cannot carry a session; the URL's HMAC
+    // token IS the credential and is checked in constant time),
+    // Next.js internal asset routes, and any file with
     // an extension (/desfin.png, /favicon.ico, fonts).
-    "/((?!login|api/auth|api/health|api/whoami|api/integrations|api/crm/integrations/wabis/inbound|api/crm/integrations/wabis/delivery-status|api/crm/wa/webhook|psych/test|api/psych/test|privacy-policy|_next/static|_next/image|.*\\..*).*)",
+    "/((?!login|api/auth|api/health|api/whoami|api/integrations|api/crm/integrations/wabis/inbound|api/crm/integrations/wabis/delivery-status|api/crm/wa/webhook|psych/test|api/psych/test|privacy-policy|careers|api/careers|offer|api/offer|partners|api/partners|api/hiring/calendar|_next/static|_next/image|.*\\..*).*)",
   ],
 };
