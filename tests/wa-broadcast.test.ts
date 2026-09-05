@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { renderRecipientParams, skipReasonFor } from "@/lib/wa/broadcast";
+import { renderRecipientParams, skipReasonFor, broadcastLeadWhere } from "@/lib/wa/broadcast";
 import { isOptOutMessage } from "@/lib/wa/inbound";
 import {
   buildTemplateComponents,
@@ -27,6 +27,24 @@ describe("isOptOutMessage", () => {
   it("ignores empty input", () => {
     expect(isOptOutMessage(null)).toBe(false);
     expect(isOptOutMessage("   ")).toBe(false);
+  });
+});
+
+describe("broadcastLeadWhere", () => {
+  // The engaged path (engagedWithinDays > 0) reads WaConversation from the DB, so
+  // it is covered by integration/review rather than here; these cover the pure,
+  // no-DB paths: stage/service/source pass-through and the phone gate staying off.
+  it("passes stage/service/source through to buildLeadWhere and adds no phone gate", async () => {
+    const w = await broadcastLeadWhere({ status: "st1", service: "sv1" } as never);
+    expect(w.statusId).toBe("st1");
+    expect(w.serviceId).toBe("sv1");
+    expect(w.phoneE164).toBeUndefined();
+  });
+
+  it("adds no phone gate for a missing, zero, or non-numeric engagedWithinDays", async () => {
+    expect((await broadcastLeadWhere({} as never)).phoneE164).toBeUndefined();
+    expect((await broadcastLeadWhere({ engagedWithinDays: 0 } as never)).phoneE164).toBeUndefined();
+    expect((await broadcastLeadWhere({ engagedWithinDays: "abc" } as never)).phoneE164).toBeUndefined();
   });
 });
 
