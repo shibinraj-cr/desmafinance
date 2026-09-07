@@ -7,7 +7,7 @@ import { requireHiring, getHiringAccess } from "@/lib/hiring/access";
 import { can } from "@/lib/hiring/rbac";
 import { recordHiringAudit } from "@/lib/hiring/audit";
 import { patchJobSchema } from "@/lib/hiring/job-schemas";
-import { jobListInclude, serializeJobRow } from "@/lib/hiring/jobs";
+import { jobListInclude, serializeJobRow, allocateSlug } from "@/lib/hiring/jobs";
 
 export const dynamic = "force-dynamic";
 
@@ -48,6 +48,12 @@ export const PATCH = withApiHandler(async (req: Request, { params }: Ctx) => {
   if (min != null && max != null && min > max) {
     throw badRequest("The minimum of the comp band is above its maximum.", "bad_comp_band");
   }
+
+  // The public link only changes when asked for, and it is rebuilt from the
+  // title being saved rather than the one already stored.
+  const nextSlug = body.regenerateSlug
+    ? await allocateSlug(body.title ?? before.title)
+    : undefined;
 
   // Stage edits are a replace, not a merge: reordering and renaming is the
   // point, and analytics survive it because they read kind + position. Stages
@@ -131,6 +137,7 @@ export const PATCH = withApiHandler(async (req: Request, { params }: Ctx) => {
         resumeMode: body.resumeMode,
         askScreeningQs: body.askScreeningQs,
         status: body.status,
+        slug: nextSlug,
       },
       include: jobListInclude,
     });
@@ -141,8 +148,8 @@ export const PATCH = withApiHandler(async (req: Request, { params }: Ctx) => {
     action: "job.update",
     entityType: "HiringJob",
     entityId: job.id,
-    before: { title: before.title, status: before.status },
-    after: { title: job.title, status: job.status },
+    before: { title: before.title, status: before.status, slug: before.slug },
+    after: { title: job.title, status: job.status, slug: job.slug },
   });
 
   return NextResponse.json({ job: serializeJobRow(job) });

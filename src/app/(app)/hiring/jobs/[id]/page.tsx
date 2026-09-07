@@ -109,7 +109,17 @@ export default async function JobDetailPage({
               </Link>
             ))}
           </nav>
-          <RefreshBar loadedAt={loadedAt} label={`${row.applicantCount} applicants`} />
+          <div className="flex items-center gap-xs">
+            {can(access, "job:write") && (
+              <Link
+                href={`/hiring/jobs/${job.id}/edit`}
+                className="h-9 px-md inline-flex items-center rounded-lg border border-outline-variant text-label-sm text-on-surface-variant hover:bg-surface-container-low transition"
+              >
+                Edit
+              </Link>
+            )}
+            <RefreshBar loadedAt={loadedAt} label={`${row.applicantCount} applicants`} />
+          </div>
         </div>
 
         <JobActions
