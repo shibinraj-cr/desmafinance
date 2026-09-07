@@ -67,4 +67,13 @@ export const patchJobSchema = jobCoreSchema.partial().extend({
   rubrics: z.array(rubricSchema).max(10).optional(),
   stages: z.array(stageSchema).min(1).max(20).optional(),
   status: z.enum(["draft", "live", "paused"]).optional(),
+  /**
+   * Rebuild the careers-page URL from the (new) title.
+   *
+   * Off by default and always an explicit choice, because the slug IS the
+   * public link: anyone who has shared it, and any search engine that has
+   * indexed it, is pointing at the old one. Only worth doing when the old slug
+   * says something the title no longer does.
+   */
+  regenerateSlug: z.boolean().optional(),
 });
