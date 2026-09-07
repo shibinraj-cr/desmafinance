@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 import { useState, useTransition } from "react";
 import { Section } from "@/components/Cards";
 import type { FeedItem } from "@/lib/news/read";
+import { groupByDay } from "@/lib/news/group";
 
 export type TopicChip = {
   id: string;
@@ -195,100 +196,134 @@ export function NewsFeedClient({
         </div>
       </div>
 
-      <Section title="">
-        {items.length === 0 ? (
+      {items.length === 0 ? (
+        <Section title="">
           <EmptyState hasTopics={hasTopics} unreadOnly={unreadOnly} isAdmin={isAdmin} />
-        ) : (
-          <ul className="space-y-sm">
-            {items.map((n) => {
-              const read = n.isRead || readNow.has(n.id);
-              const tone = toneFor(n.topicColor);
-              return (
-                <li
-                  key={n.id}
-                  className={
-                    "relative border rounded-lg p-md transition " +
-                    (read ? "border-outline-variant bg-surface" : "border-primary bg-yellow-50/30")
-                  }
-                >
-                  {!read && (
-                    <span
-                      aria-hidden
-                      className="absolute left-[-5px] top-md h-2.5 w-2.5 rounded-full bg-red-500"
-                    />
-                  )}
-                  <div className="flex items-start justify-between gap-sm">
-                    <div className="flex-1 min-w-0">
-                      <div className="flex flex-wrap items-center gap-xs mb-xs">
-                        <Link
-                          href={href({ topic: n.topicSlug })}
-                          scroll={false}
-                          className={"inline-flex items-center gap-xs rounded-full border px-sm py-[1px] text-[11px] " + tone.chip}
-                        >
-                          <span className="material-symbols-outlined" style={{ fontSize: 13 }}>
-                            {n.topicIcon}
-                          </span>
-                          {n.topicName}
-                        </Link>
-                        {n.isPinned && (
-                          <span className="inline-flex items-center gap-xs text-[11px] text-amber-700">
-                            <span className="material-symbols-outlined" style={{ fontSize: 13 }}>
-                              push_pin
+        </Section>
+      ) : (
+        <div className="space-y-lg">
+          {groupByDay(items).map((section) => (
+            <section key={section.key}>
+              {/* The date is a heading over the day's updates rather than a line
+                  of metadata under each one — these arrive as a dated daily
+                  briefing, and that is how they are read. */}
+              <h3 className="flex items-center gap-sm mb-sm">
+                <span className="text-label-sm font-bold uppercase tracking-widest text-on-surface-variant">
+                  {section.heading}
+                </span>
+                <span className="flex-1 h-px bg-outline-variant" />
+                <span className="text-caption text-on-surface-variant">
+                  {section.items.length} update{section.items.length === 1 ? "" : "s"}
+                </span>
+              </h3>
+
+              <div className="space-y-md">
+                {section.items.map((n) => {
+                  const read = n.isRead || readNow.has(n.id);
+                  const tone = toneFor(n.topicColor);
+                  return (
+                    <article
+                      key={n.id}
+                      className={
+                        "relative rounded-xl border p-lg transition " +
+                        (read
+                          ? "border-outline-variant bg-surface-container-lowest"
+                          : "border-primary bg-yellow-50/30")
+                      }
+                    >
+                      <div className="flex items-start justify-between gap-md">
+                        <div className="min-w-0 flex-1">
+                          <div className="flex flex-wrap items-center gap-xs mb-sm">
+                            {!read && (
+                              <span className="inline-flex items-center gap-xs rounded-full bg-red-500 text-white text-[10px] font-bold px-sm py-[1px]">
+                                NEW
+                              </span>
+                            )}
+                            <Link
+                              href={href({ topic: n.topicSlug })}
+                              scroll={false}
+                              className={
+                                "inline-flex items-center gap-xs rounded-full border px-sm py-[1px] text-[11px] " +
+                                tone.chip
+                              }
+                            >
+                              <span className="material-symbols-outlined" style={{ fontSize: 13 }}>
+                                {n.topicIcon}
+                              </span>
+                              {n.topicName}
+                            </Link>
+                            {n.isPinned && (
+                              <span className="inline-flex items-center gap-xs text-[11px] text-amber-700">
+                                <span className="material-symbols-outlined" style={{ fontSize: 13 }}>
+                                  push_pin
+                                </span>
+                                Pinned
+                              </span>
+                            )}
+                          </div>
+
+                          <h4 className="text-h3 font-bold text-on-surface leading-snug">{n.title}</h4>
+
+                          {n.summary && (
+                            /* The whole update, at reading size. For a briefing
+                               this text IS the article — there is no "full
+                               version" elsewhere to link to — so it is set as
+                               body copy, line length capped for readability and
+                               the writer's own line breaks preserved. */
+                            <div className="mt-md text-body-md text-on-surface whitespace-pre-wrap leading-relaxed max-w-[72ch]">
+                              {n.summary}
+                            </div>
+                          )}
+
+                          <div className="flex flex-wrap items-center gap-sm mt-md pt-sm border-t border-outline-variant">
+                            <span
+                              className="text-caption text-on-surface-variant"
+                              title={new Date(n.publishedAt).toLocaleString()}
+                            >
+                              {new Date(n.publishedAt).toLocaleTimeString(undefined, {
+                                hour: "numeric",
+                                minute: "2-digit",
+                              })}
+                              {n.sourceName ? ` · ${n.sourceName}` : ""}
                             </span>
-                            Pinned
-                          </span>
+                            {/* Only when there is somewhere to go: a feed entry
+                                is a teaser for an article elsewhere, while a
+                                briefing is complete in itself. */}
+                            {n.url && (
+                              <a
+                                href={n.url}
+                                target="_blank"
+                                rel="noopener noreferrer nofollow"
+                                onClick={() => markRead(n.id)}
+                                className="text-blue-700 underline text-label-sm"
+                              >
+                                Open the original ↗
+                              </a>
+                            )}
+                            {!read && (
+                              <button
+                                type="button"
+                                onClick={() => markRead(n.id)}
+                                className="ml-auto text-blue-700 underline text-label-sm"
+                              >
+                                Mark read
+                              </button>
+                            )}
+                          </div>
+                        </div>
+
+                        {isAdmin && (
+                          <AdminItemControls item={n} onDone={() => start(() => router.refresh())} />
                         )}
                       </div>
-
-                      <p className={"text-body-md " + (read ? "font-semibold" : "font-bold")}>{n.title}</p>
-
-                      {n.summary && (
-                        <p className="text-on-surface-variant text-label-sm mt-xs whitespace-pre-wrap">
-                          {n.summary}
-                        </p>
-                      )}
-
-                      <div className="flex flex-wrap items-center gap-sm mt-sm">
-                        {n.url && (
-                          <a
-                            href={n.url}
-                            target="_blank"
-                            rel="noopener noreferrer nofollow"
-                            onClick={() => markRead(n.id)}
-                            className="text-blue-700 underline text-label-sm"
-                          >
-                            Read the full update ↗
-                          </a>
-                        )}
-                        <span
-                          className="text-caption text-on-surface-variant"
-                          title={new Date(n.publishedAt).toLocaleString()}
-                        >
-                          {relativeTime(n.publishedAt)}
-                          {n.sourceName ? ` · ${n.sourceName}` : ""}
-                        </span>
-                      </div>
-                    </div>
-
-                    <div className="flex flex-col items-end gap-xs flex-shrink-0">
-                      {!read && (
-                        <button
-                          type="button"
-                          onClick={() => markRead(n.id)}
-                          className="text-blue-700 underline text-label-sm"
-                        >
-                          Mark read
-                        </button>
-                      )}
-                      {isAdmin && <AdminItemControls item={n} onDone={() => start(() => router.refresh())} />}
-                    </div>
-                  </div>
-                </li>
-              );
-            })}
-          </ul>
-        )}
-      </Section>
+                    </article>
+                  );
+                })}
+              </div>
+            </section>
+          ))}
+        </div>
+      )}
     </div>
   );
 }
