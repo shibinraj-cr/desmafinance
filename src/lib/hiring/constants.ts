@@ -205,15 +205,53 @@ export const OFFER_STATUSES = [
 ] as const;
 export type OfferStatus = (typeof OFFER_STATUSES)[number];
 
-export const TALENT_POOL_STATES = ["new", "nurturing", "re_engage", "placed", "cold"] as const;
+/**
+ * The stages a pooled candidate moves through.
+ *
+ * These are working stages, not nurture states: the pool is where a candidate
+ * with no application to a specific requisition is actually run, so it needs
+ * the same vocabulary a pipeline has. Order is the order of the journey, which
+ * is also the order the filter chips appear in.
+ */
+export const TALENT_POOL_STATES = [
+  "shortlisted",
+  "contacted",
+  "interview_scheduled",
+  "interview_attended",
+  "rejected",
+  "placed",
+  "joined",
+  "not_interested",
+] as const;
 export type TalentPoolState = (typeof TALENT_POOL_STATES)[number];
 export const TALENT_POOL_STATE_LABELS: Record<TalentPoolState, string> = {
-  new: "New",
-  nurturing: "Nurturing",
-  re_engage: "Re-engage",
+  shortlisted: "Shortlisted",
+  contacted: "Contacted",
+  interview_scheduled: "Interview scheduled",
+  interview_attended: "Interview attended",
+  rejected: "Rejected",
   placed: "Placed",
-  cold: "Cold",
+  joined: "Joined",
+  not_interested: "Not interested",
 };
+
+/** Stages after which nobody is still being worked — no follow-up is due. */
+export const TALENT_POOL_CLOSED_STATES: readonly TalentPoolState[] = [
+  "rejected",
+  "joined",
+  "not_interested",
+];
+
+/** Types recorded on a pooled candidate's activity history. */
+export const TALENT_POOL_EVENT_TYPES = [
+  "added",
+  "stage_changed",
+  "note",
+  "touched",
+  "owner_changed",
+  "removed",
+] as const;
+export type TalentPoolEventType = (typeof TALENT_POOL_EVENT_TYPES)[number];
 
 export const PARTNER_STATUSES = ["invited", "trial", "active", "paused"] as const;
 export type PartnerStatus = (typeof PARTNER_STATUSES)[number];

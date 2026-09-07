@@ -1,5 +1,6 @@
 import type { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
+import { recordPoolEvent } from "./talent-pool";
 import { logger } from "@/lib/logger";
 import { getEmailConfig, sendEmail } from "@/lib/mailer";
 import { getWaProvider } from "@/lib/wa/registry";
@@ -39,6 +40,7 @@ async function runAction(
   action: Action,
   applicationId: string,
   automationId: string,
+  automationName: string,
 ): Promise<ActionOutcome> {
   const params = action.params ?? {};
 
@@ -129,15 +131,30 @@ async function runAction(
     }
 
     case "add_to_talent_pool": {
+      const state = String(params.state ?? "contacted");
+      const before = await prisma.hiringTalentPool.findUnique({
+        where: { candidateId: app.candidate.id },
+        select: { state: true },
+      });
       await prisma.hiringTalentPool.upsert({
         where: { candidateId: app.candidate.id },
         create: {
           candidateId: app.candidate.id,
-          state: String(params.state ?? "nurturing"),
+          state,
           interestAreas: Array.isArray(params.interestAreas) ? (params.interestAreas as string[]) : [],
           lastTouchAt: new Date(),
         },
-        update: { state: String(params.state ?? "nurturing") },
+        update: { state },
+      });
+      // A null actor is how the timeline shows "an automation did this", so an
+      // automated move reads differently from a recruiter's.
+      await recordPoolEvent({
+        candidateId: app.candidate.id,
+        type: before ? "stage_changed" : "added",
+        fromState: before?.state ?? null,
+        toState: state,
+        actorId: null,
+        note: `Automation: ${automationName}`,
       });
       return { action: action.type, ok: true, detail: "Added to the talent pool." };
     }
@@ -236,7 +253,7 @@ export async function runAutomation(
 
   try {
     for (const action of actions) {
-      outcomes.push(await runAction(action, applicationId, automation.id));
+      outcomes.push(await runAction(action, applicationId, automation.id, automation.name));
     }
   } catch (e) {
     threw = e instanceof Error ? e.message : String(e);

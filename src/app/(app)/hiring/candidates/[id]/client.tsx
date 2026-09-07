@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { useState } from "react";
-import { formatHiringDate } from "@/lib/hiring/core";
+import { formatHiringDate, formatHiringDateTime } from "@/lib/hiring/core";
 import { TALENT_POOL_STATE_LABELS, type TalentPoolState } from "@/lib/hiring/constants";
 
 type CandidateDTO = {
@@ -54,6 +54,16 @@ type MatchDTO = {
 
 type NoteDTO = { id: string; bodyMd: string; authorName: string | null; createdAt: string };
 
+type ActivityDTO = {
+  id: string;
+  type: string;
+  fromLabel: string | null;
+  toLabel: string | null;
+  note: string | null;
+  actorName: string | null;
+  occurredAt: string;
+};
+
 const card = "rounded-xl border border-outline-variant bg-surface-container-lowest";
 
 export function CandidateProfileClient({
@@ -61,12 +71,14 @@ export function CandidateProfileClient({
   applications,
   matches,
   notes,
+  activity,
   hasOpenJobs,
 }: {
   candidate: CandidateDTO;
   applications: ApplicationDTO[];
   matches: MatchDTO[];
   notes: NoteDTO[];
+  activity: ActivityDTO[];
   hasOpenJobs: boolean;
 }) {
   return (
@@ -80,6 +92,7 @@ export function CandidateProfileClient({
           <Details candidate={c} />
           <Matches matches={matches} hasOpenJobs={hasOpenJobs} />
           <Applications applications={applications} />
+          <Activity activity={activity} />
           <Notes notes={notes} />
         </div>
         <Resume url={c.resumeUrl} name={c.fullName} />
@@ -272,6 +285,54 @@ function Applications({ applications }: { applications: ApplicationDTO[] }) {
             </li>
           ))}
         </ul>
+      )}
+    </section>
+  );
+}
+
+const ACTIVITY_VERB: Record<string, string> = {
+  added: "Added to the talent pool",
+  stage_changed: "Stage changed",
+  note: "Note",
+  touched: "Reached out",
+  owner_changed: "Owner changed",
+  removed: "Removed from the talent pool",
+};
+
+function Activity({ activity }: { activity: ActivityDTO[] }) {
+  return (
+    <section className={`${card} p-lg space-y-sm`}>
+      <h3 className="text-title-sm text-on-surface">Activity</h3>
+      {activity.length === 0 ? (
+        <p className="text-body-sm text-on-surface-variant">
+          Nothing recorded yet. Moving a stage or logging a touch writes here.
+        </p>
+      ) : (
+        <ol className="space-y-sm">
+          {activity.map((e) => (
+            <li key={e.id} className="border-l-2 border-outline-variant pl-md relative">
+              <span className="absolute -left-[5px] top-1.5 h-2 w-2 rounded-full bg-primary" />
+              <div className="text-body-sm text-on-surface">
+                {ACTIVITY_VERB[e.type] ?? e.type}
+                {e.type === "stage_changed" && e.toLabel && (
+                  <>
+                    {": "}
+                    {e.fromLabel ? `${e.fromLabel} → ` : ""}
+                    <span className="font-medium">{e.toLabel}</span>
+                  </>
+                )}
+                {e.type === "added" && e.toLabel ? `: ${e.toLabel}` : ""}
+              </div>
+              {e.note && (
+                <p className="text-body-sm text-on-surface-variant whitespace-pre-wrap">{e.note}</p>
+              )}
+              <div className="text-caption text-on-surface-variant">
+                {/* A null actor is an automation, and saying so beats a blank. */}
+                {e.actorName ?? "Automation"} · {formatHiringDateTime(e.occurredAt)}
+              </div>
+            </li>
+          ))}
+        </ol>
       )}
     </section>
   );

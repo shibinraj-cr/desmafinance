@@ -38,6 +38,8 @@ export function TalentPoolClient({
   const router = useRouter();
   const [adding, setAdding] = useState(false);
   const [busy, setBusy] = useState<string | null>(null);
+  /** Which card is asking for a note, and what has been typed into it. */
+  const [noting, setNoting] = useState<{ id: string; state: string; text: string } | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   const [fullName, setFullName] = useState("");
@@ -240,9 +242,12 @@ export function TalentPoolClient({
                   <select
                     id={`state-${p.id}`}
                     className="h-9 px-sm rounded-lg border border-outline-variant bg-surface-container-lowest text-body-sm"
-                    value={p.state}
+                    value={noting?.id === p.id ? noting.state : p.state}
                     disabled={busy !== null}
-                    onChange={(e) => patch(p.id, { state: e.target.value })}
+                    // Moving a stage asks for the reason before saving. Typing it
+                    // afterwards is the step everyone skips, and then a timeline
+                    // is a list of moves nobody can explain.
+                    onChange={(e) => setNoting({ id: p.id, state: e.target.value, text: "" })}
                   >
                     {TALENT_POOL_STATES.map((s) => (
                       <option key={s} value={s}>
@@ -263,6 +268,40 @@ export function TalentPoolClient({
                   >
                     Touched today
                   </button>
+                </div>
+              )}
+
+              {canWrite && noting?.id === p.id && (
+                <div className="relative space-y-xs rounded-lg border border-outline-variant p-sm">
+                  <label className="text-label-sm text-on-surface-variant" htmlFor={`note-${p.id}`}>
+                    Moving to {TALENT_POOL_STATE_LABELS[noting.state as TalentPoolState] ?? noting.state} — why?
+                  </label>
+                  <textarea
+                    id={`note-${p.id}`}
+                    rows={2}
+                    autoFocus
+                    className="w-full rounded-lg border border-outline-variant bg-surface-container-lowest p-sm text-body-sm"
+                    placeholder="Optional"
+                    value={noting.text}
+                    onChange={(e) => setNoting({ ...noting, text: e.target.value })}
+                  />
+                  <div className="flex items-center gap-xs">
+                    <button
+                      type="button"
+                      className={primaryBtn}
+                      disabled={busy !== null}
+                      onClick={async () => {
+                        const { state, text } = noting;
+                        setNoting(null);
+                        await patch(p.id, { state, note: text.trim() || undefined });
+                      }}
+                    >
+                      Save
+                    </button>
+                    <button type="button" className={btn} onClick={() => setNoting(null)}>
+                      Cancel
+                    </button>
+                  </div>
                 </div>
               )}
             </li>

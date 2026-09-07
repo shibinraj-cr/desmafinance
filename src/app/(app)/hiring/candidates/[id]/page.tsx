@@ -4,6 +4,7 @@ import { prisma } from "@/lib/prisma";
 import { getHiringAccess } from "@/lib/hiring/access";
 import { can } from "@/lib/hiring/rbac";
 import { rankJobs, type MatchableJob } from "@/lib/hiring/ingest/match";
+import { TALENT_POOL_STATE_LABELS, type TalentPoolState } from "@/lib/hiring/constants";
 import { CandidateProfileClient } from "./client";
 
 export const dynamic = "force-dynamic";
@@ -53,6 +54,14 @@ export default async function CandidateProfilePage({ params }: { params: { id: s
         orderBy: { createdAt: "desc" },
         take: 50,
         select: { id: true, bodyMd: true, createdAt: true, author: { select: { username: true } } },
+      },
+      talentPoolEvents: {
+        orderBy: { occurredAt: "desc" },
+        take: 200,
+        select: {
+          id: true, type: true, fromState: true, toState: true, note: true,
+          occurredAt: true, actor: { select: { username: true } },
+        },
       },
     },
   });
@@ -130,6 +139,19 @@ export default async function CandidateProfilePage({ params }: { params: { id: s
             bodyMd: n.bodyMd,
             authorName: n.author?.username ?? null,
             createdAt: n.createdAt.toISOString(),
+          }))}
+          activity={candidate.talentPoolEvents.map((e) => ({
+            id: e.id,
+            type: e.type,
+            fromLabel: e.fromState
+              ? (TALENT_POOL_STATE_LABELS[e.fromState as TalentPoolState] ?? e.fromState)
+              : null,
+            toLabel: e.toState
+              ? (TALENT_POOL_STATE_LABELS[e.toState as TalentPoolState] ?? e.toState)
+              : null,
+            note: e.note,
+            actorName: e.actor?.username ?? null,
+            occurredAt: e.occurredAt.toISOString(),
           }))}
           hasOpenJobs={openJobs.length > 0}
         />

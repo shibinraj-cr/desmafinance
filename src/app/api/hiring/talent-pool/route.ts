@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { z } from "zod";
 import { prisma } from "@/lib/prisma";
+import { recordPoolEvent } from "@/lib/hiring/talent-pool";
 import { withApiHandler } from "@/lib/api";
 import { requireHiring } from "@/lib/hiring/access";
 import { TALENT_POOL_STATES } from "@/lib/hiring/constants";
@@ -33,7 +34,7 @@ const schema = z.object({
   currentTitle: z.string().trim().max(120).optional(),
   interestAreas: z.array(z.string().trim().min(1).max(60)).max(10).default([]),
   notesMd: z.string().trim().max(4000).optional(),
-  state: z.enum(TALENT_POOL_STATES).default("new"),
+  state: z.enum(TALENT_POOL_STATES).default("shortlisted"),
 });
 
 /** Add a prospect by hand — someone worth keeping warm who never applied. */
@@ -78,6 +79,14 @@ export const POST = withApiHandler(async (req: Request) => {
       interestAreas: body.interestAreas,
       notesMd: body.notesMd ?? undefined,
     },
+  });
+
+  await recordPoolEvent({
+    candidateId: candidate.id,
+    type: "added",
+    toState: body.state,
+    note: body.notesMd ?? null,
+    actorId: access.userId,
   });
 
   return NextResponse.json({ prospect, matchedExisting: !!existing }, { status: 201 });
