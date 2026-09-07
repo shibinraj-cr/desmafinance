@@ -19,18 +19,30 @@ const PACKET_SCHEMA = {
   additionalProperties: false,
   required: ["highlights", "gaps", "questions", "alreadyCovered"],
   properties: {
-    highlights: { type: "array", items: { type: "string" }, maxItems: 6 },
+    highlights: {
+      type: "array",
+      items: { type: "string" },
+      description: "Up to 6 highlights.",
+    },
     gaps: {
       type: "array",
-      maxItems: 6,
-      items: { type: "string", description: "Something to probe, and why it is worth probing." },
+      items: {
+        type: "string",
+        description: "Something to probe, and why it is worth probing.",
+      },
+      description: "Up to 6 things worth probing.",
     },
-    questions: { type: "array", items: { type: "string" }, minItems: 3, maxItems: 8 },
+    questions: {
+      type: "array",
+      items: { type: "string" },
+      description: "Between 3 and 8 questions.",
+    },
     alreadyCovered: {
       type: "array",
       items: { type: "string" },
-      maxItems: 6,
-      description: "What earlier stages have already established, so this interview does not repeat it.",
+      description:
+        "Up to 6 things earlier stages have already established, so this " +
+        "interview does not repeat them.",
     },
   },
 } as const;
@@ -128,18 +140,23 @@ export async function generatePrepPacket(opts: {
     alreadyCovered?: string[];
   };
 
+  // The lengths used to be schema constraints. The API does not accept those,
+  // so they are guidance in the prompt and enforced here — a model that ignores
+  // them produces a long packet, not a broken one.
+  const cap = (xs: string[] | undefined, n: number) => (xs ?? []).slice(0, n);
+
   const md = [
     "## Highlights",
-    ...(d.highlights ?? []).map((h) => `- ${h}`),
+    ...cap(d.highlights, 6).map((h) => `- ${h}`),
     "",
     "## Worth probing",
-    ...(d.gaps ?? []).map((g) => `- ${g}`),
+    ...cap(d.gaps, 6).map((g) => `- ${g}`),
     "",
     "## Questions",
-    ...(d.questions ?? []).map((q, i) => `${i + 1}. ${q}`),
+    ...cap(d.questions, 8).map((q, i) => `${i + 1}. ${q}`),
     "",
     "## Already covered — don't ask again",
-    ...(d.alreadyCovered ?? []).map((c) => `- ${c}`),
+    ...cap(d.alreadyCovered, 6).map((c) => `- ${c}`),
   ].join("\n");
 
   await prisma.hiringInterview.update({
@@ -161,7 +178,11 @@ const SUMMARY_SCHEMA = {
       enum: ["unanimous", "leaning_yes", "split", "leaning_no"],
       description: "How much the panel agreed.",
     },
-    openQuestions: { type: "array", items: { type: "string" }, maxItems: 5 },
+    openQuestions: {
+      type: "array",
+      items: { type: "string" },
+      description: "Up to 5 open questions.",
+    },
   },
 } as const;
 
@@ -219,6 +240,6 @@ export async function summariseScorecards(opts: {
   return {
     summaryMd: d.summaryMd?.trim() ?? "",
     agreement: d.agreement ?? "split",
-    openQuestions: d.openQuestions ?? [],
+    openQuestions: (d.openQuestions ?? []).slice(0, 5),
   };
 }

@@ -45,12 +45,18 @@ const SCHEMA = {
     locationText: { type: ["string", "null"], description: "City and state as written." },
     totalExperienceYears: { type: ["number", "null"] },
     noticePeriodDays: { type: ["integer", "null"] },
-    skills: { type: "array", items: { type: "string" }, maxItems: 30 },
-    education: { type: "array", items: { type: "string" }, maxItems: 10 },
+    skills: {
+      type: "array",
+      items: { type: "string" },
+      description: "Up to 30 skills the résumé lists.",
+    },
+    education: {
+      type: "array",
+      items: { type: "string" },
+      description: "Up to 10 qualifications, most recent first.",
+    },
     confidence: {
       type: "number",
-      minimum: 0,
-      maximum: 1,
       description: "How legible this document was. Low when it is a scan, or mostly images.",
     },
   },
