@@ -55,14 +55,14 @@ export default async function CareersRolePage({ params }: { params: { slug: stri
       />
 
       <nav>
-        <Link href="/careers/desma" className="text-label-sm text-on-surface-variant hover:text-on-surface">
+        <Link href="/careers/desma" className="text-label-sm">
           ← All open roles
         </Link>
       </nav>
 
       <header className="space-y-sm">
-        <h1 className="text-h1 text-on-surface">{job.title}</h1>
-        <div className="flex flex-wrap items-center gap-x-sm gap-y-xs text-body-md text-on-surface-variant">
+        <h1 className="text-h1 careers-ink">{job.title}</h1>
+        <div className="flex flex-wrap items-center gap-x-sm gap-y-xs text-body-md careers-muted">
           <span>{job.department}</span>
           {job.locationName && (
             <>
@@ -78,7 +78,7 @@ export default async function CareersRolePage({ params }: { params: { slug: stri
           <span>{job.seniorityLabel}</span>
         </div>
         {job.compLabel && (
-          <p className="text-body-md text-accent font-semibold">{job.compLabel}</p>
+          <p className="careers-chip">{job.compLabel}</p>
         )}
       </header>
 
@@ -89,19 +89,19 @@ export default async function CareersRolePage({ params }: { params: { slug: stri
       )}
 
       {job.mustHaves.length > 0 && (
-        <section className="rounded-xl border border-outline-variant bg-surface-container-lowest p-lg">
-          <h2 className="text-h3 text-on-surface mb-sm">What you need to have</h2>
-          <ul className="list-disc pl-lg space-y-xs text-body-md text-on-surface-variant">
+        <section className="careers-card p-lg">
+          <h2 className="text-h3 careers-ink mb-sm">What you need to have</h2>
+          <ul className="list-disc pl-lg space-y-xs text-body-md careers-muted">
             {job.mustHaves.map((m) => (
               <li key={m}>{m}</li>
             ))}
           </ul>
           {job.niceToHaves.length > 0 && (
             <>
-              <h3 className="text-body-lg font-semibold text-on-surface mt-md mb-sm">
+              <h3 className="text-body-lg font-semibold careers-ink mt-md mb-sm">
                 Nice to have, not required
               </h3>
-              <ul className="list-disc pl-lg space-y-xs text-body-md text-on-surface-variant">
+              <ul className="list-disc pl-lg space-y-xs text-body-md careers-muted">
                 {job.niceToHaves.map((m) => (
                   <li key={m}>{m}</li>
                 ))}
@@ -112,7 +112,7 @@ export default async function CareersRolePage({ params }: { params: { slug: stri
       )}
 
       <section id="apply" className="scroll-mt-lg">
-        <h2 className="text-h2 text-on-surface mb-md">Apply</h2>
+        <h2 className="text-h2 careers-ink mb-md">Apply</h2>
         <ApplyForm
           jobId={form.jobId}
           jobTitle={form.title}
