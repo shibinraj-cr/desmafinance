@@ -30,6 +30,8 @@ export type IngestOutcome = {
   parsed: number;
   duplicates: number;
   unreadable: number;
+  /** Skipped for free because an earlier request in this batch read them. */
+  alreadyRead: number;
 };
 
 /**
@@ -82,12 +84,26 @@ export async function runIngest(opts: {
   let parsed = 0;
   let duplicates = 0;
   let unreadable = 0;
+  /** Files this request skipped because a previous one already read them. */
+  let skippedAlreadyRead = 0;
 
   for (const file of opts.files) {
     const fileHash = hashFile(file.bytes);
 
     try {
-      // The cheapest rung first: a file already on somebody's record costs
+      // Already read in this batch? Then this is a retry of an interrupted run,
+      // and re-parsing would charge again for work already paid for. Checked
+      // FIRST, because a resumed import is the common case after a timeout.
+      const alreadyRead = await prisma.hiringIngestItem.findUnique({
+        where: { batchId_fileHash: { batchId: batch.id, fileHash } },
+        select: { id: true, status: true },
+      });
+      if (alreadyRead) {
+        skippedAlreadyRead++;
+        continue;
+      }
+
+      // The cheapest rung next: a file already on somebody's record costs
       // nothing to recognise, and must not cost a parse.
       const byHash = await prisma.hiringCandidate.findFirst({
         where: { resumeHash: fileHash, deletedAt: null },
@@ -187,15 +203,18 @@ export async function runIngest(opts: {
     where: { id: batch.id },
     data: {
       status: "review",
-      fileCount: { increment: opts.files.length },
+      // Re-sent files are not new files; counting them would inflate the batch.
+      fileCount: { increment: opts.files.length - skippedAlreadyRead },
       parsedCount: { increment: parsed },
       skippedCount: { increment: duplicates },
       failedCount: { increment: unreadable },
     },
   });
 
-  logger.info("hiring_ingest_batch", { batchId: batch.id, parsed, duplicates, unreadable });
-  return { batchId: batch.id, parsed, duplicates, unreadable };
+  logger.info("hiring_ingest_batch", {
+    batchId: batch.id, parsed, duplicates, unreadable, skippedAlreadyRead,
+  });
+  return { batchId: batch.id, parsed, duplicates, unreadable, alreadyRead: skippedAlreadyRead };
 }
 
 /**

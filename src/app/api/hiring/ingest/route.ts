@@ -10,12 +10,20 @@ export const maxDuration = 60;
 
 const MAX_FILE_BYTES = 8 * 1024 * 1024;
 /**
- * Per request, not per batch. A serverless function has 60 seconds and each
- * résumé costs a model round-trip, so the browser sends them in chunks and the
- * batch accumulates. Better a visible "12 of 300" than a request that dies at
- * 60 seconds having written half of nothing.
+ * Per request, not per batch.
+ *
+ * This was 12, and 12 does not fit. A serverless function gets 60 seconds and
+ * each résumé is a model call reading a whole PDF — comfortably 5-15 seconds
+ * apiece. Four chunks into a 93-file import, one request ran past the limit and
+ * the browser sat waiting on a response that was never coming.
+ *
+ * Three, not four: at a pessimistic 15 seconds a file, four fills the entire
+ * budget and leaves nothing for the request itself. Three lands at 45 seconds
+ * with headroom. The cost is more requests, which is the right trade — a chunk
+ * that dies loses three files' progress instead of twelve, and re-sending them
+ * is free (see runIngest's already-read check).
  */
-const MAX_FILES_PER_REQUEST = 12;
+const MAX_FILES_PER_REQUEST = 3;
 
 // GET /api/hiring/ingest — recent batches.
 export const GET = withApiHandler(async () => {
