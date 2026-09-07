@@ -32,14 +32,19 @@ const SCHEMA = {
     },
     mustHaves: {
       type: "array",
-      minItems: 2,
-      maxItems: 6,
-      items: { type: "string", description: "A short screen-out criterion, 2-5 words." },
+      items: {
+        type: "string",
+        description: "A short screen-out criterion, 2-5 words.",
+      },
+      description: "Between 2 and 6 screen-out criteria.",
     },
     niceToHaves: {
       type: "array",
-      maxItems: 6,
-      items: { type: "string", description: "A short bonus criterion, 2-5 words." },
+      items: {
+        type: "string",
+        description: "A short bonus criterion, 2-5 words.",
+      },
+      description: "Up to 6 bonus criteria.",
     },
   },
 } as const;

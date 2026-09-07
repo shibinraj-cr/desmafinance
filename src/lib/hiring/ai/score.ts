@@ -50,9 +50,8 @@ const SCHEMA = {
           criterion: { type: "string" },
           score: {
             type: "integer",
-            minimum: 1,
-            maximum: 4,
-            description: "1 = no evidence, 2 = weak, 3 = solid, 4 = strong.",
+            description:
+              "1 to 4, where 1 = no evidence, 2 = weak, 3 = solid, 4 = strong.",
           },
           evidence: {
             type: "string",

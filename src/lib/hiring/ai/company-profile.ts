@@ -41,7 +41,11 @@ const SCHEMA = {
       description: "150-250 words on what the company does, who it serves, and how it works.",
     },
     tone: { type: "string", description: "One short phrase describing how the company writes." },
-    values: { type: "array", items: { type: "string" }, maxItems: 6 },
+    values: {
+      type: "array",
+      items: { type: "string" },
+      description: "Up to 6 values the page states.",
+    },
   },
 } as const;
 
