@@ -87,7 +87,7 @@ export default async function CareersIndexPage({
       {all.length === 0 ? (
         <EmptyState
           title="No open roles right now"
-          body="We are not hiring at the moment. Check back — or write to us at hello@desma.in and tell us what you do; we keep good people in mind."
+          body="We are not hiring at the moment. Check back — or write to us at hr@desma.in and tell us what you do; we keep good people in mind."
         />
       ) : jobs.length === 0 ? (
         <EmptyState

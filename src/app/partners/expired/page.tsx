@@ -14,8 +14,8 @@ export default function PartnerLinkExpiredPage() {
             will send a fresh one.
           </p>
           <p className="text-body-sm text-on-surface-variant">
-            <a className="underline" href="mailto:hello@desma.in">
-              hello@desma.in
+            <a className="underline" href="mailto:hr@desma.in">
+              hr@desma.in
             </a>
           </p>
         </div>

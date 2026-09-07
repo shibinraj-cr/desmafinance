@@ -32,8 +32,8 @@ export default function CareersLayout({ children }: { children: React.ReactNode 
         <div className="mx-auto max-w-4xl px-md sm:px-lg py-lg text-caption text-on-surface-variant space-y-xs">
           <p>
             DESMA International Private Limited · Aroor, Kerala, India ·{" "}
-            <a className="underline hover:text-on-surface" href="mailto:hello@desma.in">
-              hello@desma.in
+            <a className="underline hover:text-on-surface" href="mailto:hr@desma.in">
+              hr@desma.in
             </a>
           </p>
           <p>

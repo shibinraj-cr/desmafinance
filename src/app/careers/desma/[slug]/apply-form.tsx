@@ -196,8 +196,8 @@ export function ApplyForm({
             I agree that DESMA International may store and use the details above to consider me for
             this role and for similar roles. We keep applications for 24 months, and you can ask us
             to delete yours at any time by writing to{" "}
-            <a className="underline" href="mailto:hello@desma.in">
-              hello@desma.in
+            <a className="underline" href="mailto:hr@desma.in">
+              hr@desma.in
             </a>
             .
           </span>
