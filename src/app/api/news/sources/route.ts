@@ -4,7 +4,7 @@ import { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
 import { getCurrentUserAndPermissions } from "@/lib/permissions";
 import { isFetchableUrl, syncSource } from "@/lib/news/sync";
-import { isSharedTaskUrl, SHARED_TASK_GUIDANCE } from "@/lib/news/chatgpt";
+import { isSharedTaskUrl, isChatGptShareUrl, SHARED_TASK_GUIDANCE } from "@/lib/news/chatgpt";
 
 const Schema = z.object({
   topicId: z.string().min(1),
@@ -48,10 +48,16 @@ export async function POST(req: Request) {
   const topic = await prisma.newsTopic.findUnique({ where: { id: d.topicId }, select: { id: true } });
   if (!topic) return NextResponse.json({ error: "topic not found" }, { status: 404 });
 
+  // The URL settles how a link is read; the dropdown only breaks ties. A share
+  // link left on "watch the page" fetches a client-rendered shell with no text
+  // in it and publishes nothing, silently — so don't store a mode that cannot
+  // work, whatever was selected.
+  const kind = isChatGptShareUrl(d.url) ? "chatgpt" : d.kind;
+
   let source;
   try {
     source = await prisma.newsSource.create({
-      data: { topicId: d.topicId, name: d.name, url: d.url, kind: d.kind, createdById: userId },
+      data: { topicId: d.topicId, name: d.name, url: d.url, kind, createdById: userId },
     });
   } catch (e) {
     // The URL is unique across all topics — the same link filed twice would

@@ -221,10 +221,27 @@ export async function syncSource(source: SourceRow, now = new Date()): Promise<S
   // would sit at "working \u00b7 0 updates" forever instead of saying anything.
   if (isSharedTaskUrl(source.url)) return fail(SHARED_TASK_GUIDANCE);
 
+  /**
+   * A ChatGPT share link is a conversation whatever the dropdown says, so the
+   * URL decides the read mode and the stored `kind` only breaks ties.
+   *
+   * Left on "watch the page" — an easy mis-set, and the mode an admin who has
+   * used it before will reach for again — the share URL yields a client-rendered
+   * shell with literally zero characters of text. The source then reports
+   * "working" forever while publishing nothing, the same silent failure that
+   * shared-task links caused. A mode dropdown should not be able to make a link
+   * unreadable.
+   */
+  const kind = shareIdFrom(source.url) ? "chatgpt" : source.kind;
+  if (kind !== source.kind) {
+    // Persist it so the Sources page shows how the link is really being read.
+    await prisma.newsSource.update({ where: { id: source.id }, data: { kind } }).catch(() => {});
+  }
+
   // A ChatGPT share page renders client-side, so the URL the admin pasted is not
   // the URL that holds the conversation. Read its data endpoint instead.
   let fetchUrl = source.url;
-  if (source.kind === "chatgpt") {
+  if (kind === "chatgpt") {
     const shareId = shareIdFrom(source.url);
     if (!shareId) {
       return fail(
@@ -242,7 +259,7 @@ export async function syncSource(source: SourceRow, now = new Date()): Promise<S
     // The share endpoint answers 404 both for a wrong id and for a conversation
     // whose sharing was turned off — the second is much likelier here, and the
     // fix is different, so name it.
-    if (source.kind === "chatgpt" && /HTTP 404/.test(msg)) {
+    if (kind === "chatgpt" && /HTTP 404/.test(msg)) {
       return fail(
         "This shared chat is no longer public. Re-share it in ChatGPT and paste the new link.",
       );
@@ -259,9 +276,9 @@ export async function syncSource(source: SourceRow, now = new Date()): Promise<S
   if (looksLikeSharedAutomation(body)) return fail(SHARED_TASK_GUIDANCE);
 
   const hash = hashString(
-    source.kind === "page"
+    kind === "page"
       ? pageText(body)
-      : source.kind === "chatgpt"
+      : kind === "chatgpt"
         ? chatGptContentFor(body)
         : body,
   );
@@ -280,7 +297,7 @@ export async function syncSource(source: SourceRow, now = new Date()): Promise<S
   let candidates: ParsedFeedItem[];
   /** Set when a chat carried more updates than one import can take. */
   let truncatedFrom = 0;
-  if (source.kind === "chatgpt") {
+  if (kind === "chatgpt") {
     let payload: unknown;
     try {
       payload = JSON.parse(body);
@@ -342,7 +359,23 @@ export async function syncSource(source: SourceRow, now = new Date()): Promise<S
     if (convo && isFirstRun && source.name.trim().length === 0) {
       await prisma.newsSource.update({ where: { id: source.id }, data: { name: convo } }).catch(() => {});
     }
-  } else if (source.kind === "page") {
+  } else if (kind === "page") {
+    // A page with no readable text cannot be watched: there is nothing whose
+    // change could be detected, so this source would report "working" forever
+    // while being incapable of ever publishing. That is almost always a
+    // client-rendered app, where the words arrive by script after the HTML.
+    if (pageText(body).trim().length === 0) {
+      const why =
+        "There is no readable text at this link \u2014 the page builds itself in the browser, so there is nothing to watch. Use the site\u2019s RSS feed if it has one.";
+      await prisma.newsSource
+        .update({
+          where: { id: source.id },
+          data: { lastFetchedAt: now, lastStatus: "empty", lastError: why, lastItemCount: 0, contentHash: hash },
+        })
+        .catch(() => {});
+      return { ...base, status: "empty", created: 0, error: why };
+    }
+
     // No feed to read: the change in the page text IS the update. On a first run
     // there is no previous hash to compare against, so we only record the
     // baseline — announcing "updated" the moment a page is added would be a lie.
