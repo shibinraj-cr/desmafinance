@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { RefreshBar } from "@/components/hiring/RefreshBar";
 import { TALENT_POOL_STATES, TALENT_POOL_STATE_LABELS } from "@/lib/hiring/constants";
@@ -196,9 +197,17 @@ export function TalentPoolClient({
       ) : (
         <ul className="grid gap-md sm:grid-cols-2 lg:grid-cols-3">
           {prospects.map((p) => (
-            <li key={p.id} className="rounded-xl border border-outline-variant bg-surface-container-lowest p-md space-y-sm">
+            <li
+              key={p.id}
+              className="relative rounded-xl border border-outline-variant bg-surface-container-lowest p-md space-y-sm transition hover:border-primary focus-within:border-primary"
+            >
               <div>
-                <div className="text-body-lg font-semibold text-on-surface">{p.fullName}</div>
+                <Link
+                  href={`/hiring/candidates/${p.candidateId}`}
+                  className="text-body-lg font-semibold text-on-surface before:absolute before:inset-0 before:rounded-xl focus:outline-none focus-visible:ring-2 focus-visible:ring-primary"
+                >
+                  {p.fullName}
+                </Link>
                 <div className="text-caption text-on-surface-variant">
                   {p.currentTitle ?? p.email ?? p.phone ?? "—"}
                 </div>
@@ -221,7 +230,7 @@ export function TalentPoolClient({
               </div>
 
               {canWrite && (
-                <div className="flex flex-wrap items-center gap-xs">
+                <div className="relative flex flex-wrap items-center gap-xs">
                   <label className="sr-only" htmlFor={`state-${p.id}`}>
                     State for {p.fullName}
                   </label>
