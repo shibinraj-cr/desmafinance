@@ -8,6 +8,10 @@ export const maxDuration = 300;
 /**
  * Daily News & Updates pull (Vercel Cron → see vercel.json).
  *
+ * Runs 03:00 UTC, which is 08:30 IST — the time the desk expects the day's
+ * briefing to be waiting. Vercel cron expressions are UTC only, so the offset is
+ * baked in here and moves if India ever changes it, which it does not.
+ *
  * Auth mirrors /api/cron/etime-sync: Vercel Cron sends
  * `Authorization: Bearer $CRON_SECRET`, and `?key=$CRON_SECRET` is accepted for
  * manual triggering. With CRON_SECRET unset the endpoint refuses to run, so it

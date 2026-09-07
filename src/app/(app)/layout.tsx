@@ -4,7 +4,8 @@ import { getCurrentUserAndPermissions } from "@/lib/permissions";
 import { countNewLeadsAssignedTo } from "@/lib/crm-leads";
 import { countUnreadCrmNotifications } from "@/lib/crm-notify";
 import { myTasksWhere } from "@/lib/ops-action-items";
-import { countUnreadNews } from "@/lib/news/read";
+import { countUnreadNews, tickerHeadlines } from "@/lib/news/read";
+import { NewsTicker } from "@/components/NewsTicker";
 import { SideNav } from "@/components/SideNav";
 import { GroupTabs } from "@/components/GroupTabs";
 import { RouteProgress } from "@/components/RouteProgress";
@@ -27,17 +28,27 @@ export default async function AppLayout({ children }: { children: React.ReactNod
   // "Notifications" nav badge (0 for anyone with none).
   // Unread News & Updates: company-wide, so this one is badged in the header
   // rather than the nav list — it has to be visible from every module.
-  const [pendingCount, rejectedCount, newLeadsCount, myOpenTasksCount, crmNotifCount, newsUnreadCount] =
-    await Promise.all([
-      prisma.pendingApproval.count({ where: { status: "pending" } }).catch(() => 0),
-      prisma.pendingApproval
-        .count({ where: { status: "rejected", submittedById: userId } })
-        .catch(() => 0),
-      countNewLeadsAssignedTo(userId),
-      prisma.opsActionItem.count({ where: { ...myTasksWhere(userId), status: "open" } }).catch(() => 0),
-      countUnreadCrmNotifications(userId),
-      countUnreadNews(userId),
-    ]);
+  const [
+    pendingCount,
+    rejectedCount,
+    newLeadsCount,
+    myOpenTasksCount,
+    crmNotifCount,
+    newsUnreadCount,
+    tickerItems,
+  ] = await Promise.all([
+    prisma.pendingApproval.count({ where: { status: "pending" } }).catch(() => 0),
+    prisma.pendingApproval
+      .count({ where: { status: "rejected", submittedById: userId } })
+      .catch(() => 0),
+    countNewLeadsAssignedTo(userId),
+    prisma.opsActionItem.count({ where: { ...myTasksWhere(userId), status: "open" } }).catch(() => 0),
+    countUnreadCrmNotifications(userId),
+    countUnreadNews(userId),
+    // Headlines for the band under the header. Runs alongside the counts rather
+    // than in its own round trip, since the shell already waits here.
+    tickerHeadlines(userId),
+  ]);
 
   return (
     // flex-col on mobile so the mobile top bar stacks above main; flex-row
@@ -70,6 +81,10 @@ export default async function AppLayout({ children }: { children: React.ReactNod
           crmNotifCount={crmNotifCount}
           newsUnreadCount={newsUnreadCount}
         />
+        {/* Below the header, on every page: unread updates roll past and the
+            band opens News & Updates. It renders nothing when there is nothing
+            unread, so it costs no space on an ordinary day. */}
+        <NewsTicker items={tickerItems} />
         {children}
       </main>
     </div>

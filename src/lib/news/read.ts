@@ -105,6 +105,37 @@ export async function getFeed(opts: {
   }));
 }
 
+/** One headline for the ticker band. Deliberately tiny — it renders on every page. */
+export type TickerItem = { id: string; title: string; topicName: string };
+
+/**
+ * The signed-in user's unread headlines, newest first, for the band under the
+ * header.
+ *
+ * Capped hard: this query runs on every page render in the app shell, and the
+ * band can only show a handful before it stops being a glance. Best-effort, for
+ * the same reason the badge count is — the shell must render even if this fails.
+ */
+export async function tickerHeadlines(
+  userId: string,
+  limit = 8,
+  now = new Date(),
+): Promise<TickerItem[]> {
+  const rows = await prisma.newsItem
+    .findMany({
+      where: {
+        publishedAt: { gte: newsWindowStart(now) },
+        topic: { isActive: true },
+        reads: { none: { userId } },
+      },
+      orderBy: [{ isPinned: "desc" }, { publishedAt: "desc" }],
+      take: limit,
+      select: { id: true, title: true, topic: { select: { name: true } } },
+    })
+    .catch(() => []);
+  return rows.map((r) => ({ id: r.id, title: r.title, topicName: r.topic.name }));
+}
+
 /** Record that a user has read one item. Idempotent — re-reading is a no-op. */
 export async function markItemRead(userId: string, itemId: string): Promise<void> {
   await prisma.newsItemRead

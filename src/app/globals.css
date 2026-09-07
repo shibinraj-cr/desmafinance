@@ -472,3 +472,33 @@ input.lp-date-input::-webkit-calendar-picker-indicator:hover {
   border-color: var(--careers-yellow-deep);
   box-shadow: 0 0 0 3px rgba(255, 209, 0, 0.28);
 }
+
+/* ── News ticker ──────────────────────────────────────────────────────────
+   The band under the header rolls its headlines right-to-left. The reel holds
+   two copies of the list and travels exactly half its width, so the loop is
+   seamless rather than snapping back at the end.
+
+   Hovering pauses it, because a headline that slides away as you start reading
+   it is worse than no headline. Anyone who has asked for less motion gets the
+   list standing still and scrollable instead — a moving band is exactly what
+   that preference is about. */
+.dg-ticker-reel {
+  animation: dgTickerRoll 40s linear infinite;
+  will-change: transform;
+}
+.dg-ticker:hover .dg-ticker-reel,
+.dg-ticker:focus-within .dg-ticker-reel {
+  animation-play-state: paused;
+}
+@keyframes dgTickerRoll {
+  from { transform: translateX(0); }
+  to { transform: translateX(-50%); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .dg-ticker-reel {
+    animation: none;
+  }
+  .dg-ticker-window {
+    overflow-x: auto;
+  }
+}
