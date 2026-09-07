@@ -39,7 +39,7 @@ const COMPANY = {
   name: "DESMA International Private Limited",
   address: "XVI 195/C, First Floor, Keltron Road, Aroor, Kerala 688534, India",
   cin: "U70200KL2023PTC084811",
-  email: "hello@desma.in",
+  email: "hr@desma.in",
 };
 
 function money(lakh: number): string {
