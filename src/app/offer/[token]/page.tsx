@@ -63,7 +63,7 @@ export default async function OfferPage({ params }: { params: { token: string } 
         </p>
         {envelope.pdfUrl && (
           <p>
-            <a className="underline text-primary" href={envelope.pdfUrl}>
+            <a className="underline text-primary" href={`/api/offer/${params.token}/pdf`}>
               Download your countersigned copy
             </a>
           </p>

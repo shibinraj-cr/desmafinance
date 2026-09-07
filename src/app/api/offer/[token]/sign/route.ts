@@ -42,5 +42,6 @@ export const POST = withApiHandler(async (req: Request, { params }: { params: { 
   });
 
   logger.info("hiring_offer_signed", { offerId: result.offerId });
-  return NextResponse.json({ ok: true, pdfUrl: result.pdfUrl });
+  // The path is internal; the candidate reads it through their own token.
+  return NextResponse.json({ ok: true, pdfUrl: result.pdfUrl ? `/api/offer/${params.token}/pdf` : null });
 });

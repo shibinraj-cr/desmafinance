@@ -1,7 +1,7 @@
 import { prisma } from "@/lib/prisma";
 import { logger } from "@/lib/logger";
 import { badRequest, notFound } from "@/lib/http-error";
-import { uploadProof, isBlobConfigured } from "@/lib/ops-blob";
+import { uploadHiringFile, isBlobConfigured } from "../blob";
 import { parseResumeBytes, type ParsedResume } from "../ai/resume-parse";
 import { hashFile, classify, isCertain, type ExistingCandidate } from "./dedupe";
 import { rankJobs, type JobMatch } from "./match";
@@ -156,13 +156,24 @@ export async function runIngest(opts: {
         await narrowCandidates(fields),
       );
 
-      const blobUrl = isBlobConfigured()
-        ? await uploadProof(
+      // Storing the file is attempted separately from parsing it, because the
+      // parse is the expensive half. If storage fails, the candidate's details
+      // are still worth keeping — losing them would mean paying to read the
+      // same résumé twice.
+      let blobUrl: string | null = null;
+      let storageError: string | null = null;
+      if (isBlobConfigured()) {
+        try {
+          blobUrl = await uploadHiringFile(
             `hiring/ingest/${batch.id}/${safeName(file.name)}`,
             file.bytes,
             file.contentType || "application/pdf",
-          )
-        : null;
+          );
+        } catch (e) {
+          storageError = e instanceof Error ? e.message : String(e);
+          logger.error("hiring_ingest_store_failed", { batchId: batch.id, file: file.name, message: storageError });
+        }
+      }
 
       await recordItem(batch.id, {
         fileName: file.name,
@@ -175,7 +186,11 @@ export async function runIngest(opts: {
         parsed: fields,
         duplicateOfId: dedupe.candidateId,
         duplicateVia: dedupe.kind === "none" ? null : dedupe.kind,
-        error: isCertain(dedupe) ? dedupe.reason : null,
+        error: isCertain(dedupe)
+          ? dedupe.reason
+          : storageError
+            ? `Read fine, but the file itself could not be stored: ${storageError}`
+            : null,
         suggestions: rankJobs(
           { currentTitle: fields.currentTitle, skills: fields.skills, totalExperienceYears: fields.totalExperienceYears },
           openJobs,

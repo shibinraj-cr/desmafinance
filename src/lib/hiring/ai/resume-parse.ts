@@ -4,6 +4,7 @@ import { logger } from "@/lib/logger";
 import { getAiProvider } from "./provider";
 import { meter } from "./credits";
 import { normalizeEmail, normalizeCandidatePhone } from "../core";
+import { isHiringFile, blobPathnameFor, readHiringFile } from "../blob";
 
 /**
  * Résumé parsing (§4.3): PDF → structured fields, written to the candidate
@@ -233,6 +234,17 @@ export async function parseResume(opts: {
 }
 
 async function fetchResume(url: string): Promise<{ base64: string; contentType: string }> {
+  // Our own files live in a PRIVATE blob store — there is no URL to fetch, so
+  // they are read through the storage client instead.
+  if (isHiringFile(url)) {
+    const file = await readHiringFile(blobPathnameFor(url));
+    if (!file) throw unprocessable("That résumé is no longer in storage.", "resume_missing");
+    if (file.bytes.byteLength > MAX_RESUME_BYTES) {
+      throw unprocessable("That résumé is too large to parse.", "resume_too_large");
+    }
+    return { base64: file.bytes.toString("base64"), contentType: file.contentType };
+  }
+
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), 15_000);
   try {

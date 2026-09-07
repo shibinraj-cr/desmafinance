@@ -66,7 +66,7 @@ export function SignClient({
           </p>
           {pdfUrl && (
             <p>
-              <a className="underline text-primary text-body-md" href={pdfUrl}>
+              <a className="underline text-primary text-body-md" href={`/api/offer/${token}/pdf`}>
                 Download your countersigned copy (PDF)
               </a>
             </p>
