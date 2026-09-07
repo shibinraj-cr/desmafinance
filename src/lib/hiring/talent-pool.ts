@@ -36,3 +36,41 @@ export async function recordPoolEvent(input: {
     });
   }
 }
+
+/** How the pool can be ordered. `fit` needs a job to be meaningful. */
+export const POOL_SORTS = ["fit", "due", "recent", "name"] as const;
+export type PoolSort = (typeof POOL_SORTS)[number];
+
+/** The shape `orderPool` needs — a subset of what the page actually loads. */
+export type OrderablePoolRow = {
+  fullName: string;
+  nextTouchAt: Date | null;
+  updatedAt: Date;
+  createdAt: Date;
+  /** Fit against the job being filtered on, or null when none is. */
+  forJob: number | null;
+  /** Best fit across all open roles. */
+  best: number;
+};
+
+/**
+ * Order the pool. Pure, so the tie-breaks are testable — and they matter:
+ * a pool sorted by fit is mostly ties at 0%, and an unstable order there makes
+ * the page look like it reshuffles itself between reads.
+ */
+export function orderPool<T extends OrderablePoolRow>(rows: T[], sort: PoolSort, hasJob: boolean): T[] {
+  return [...rows].sort((a, b) => {
+    if (sort === "fit") {
+      const d = hasJob ? (b.forJob ?? 0) - (a.forJob ?? 0) : b.best - a.best;
+      if (d !== 0) return d;
+      return a.fullName.localeCompare(b.fullName);
+    }
+    if (sort === "name") return a.fullName.localeCompare(b.fullName);
+    if (sort === "recent") return b.createdAt.getTime() - a.createdAt.getTime();
+    // "due": soonest follow-up first, and NEVER-scheduled last rather than
+    // first — a null date is "no follow-up planned", not "overdue since 1970".
+    const an = a.nextTouchAt?.getTime() ?? Infinity;
+    const bn = b.nextTouchAt?.getTime() ?? Infinity;
+    return an - bn || b.updatedAt.getTime() - a.updatedAt.getTime();
+  });
+}

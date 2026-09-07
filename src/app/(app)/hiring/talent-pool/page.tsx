@@ -5,11 +5,16 @@ import { getHiringAccess } from "@/lib/hiring/access";
 import { can } from "@/lib/hiring/rbac";
 import { TALENT_POOL_STATES } from "@/lib/hiring/constants";
 import { rankJobs, type MatchableJob } from "@/lib/hiring/ingest/match";
+import { orderPool, POOL_SORTS, type PoolSort } from "@/lib/hiring/talent-pool";
 import { TalentPoolClient } from "./client";
 
 export const dynamic = "force-dynamic";
 
-export default async function TalentPoolPage({ searchParams }: { searchParams: { state?: string } }) {
+export default async function TalentPoolPage({
+  searchParams,
+}: {
+  searchParams: { state?: string; job?: string; sort?: string; all?: string };
+}) {
   const { userId, access } = await getHiringAccess();
   if (!userId || !access) redirect("/login");
 
@@ -29,6 +34,7 @@ export default async function TalentPoolPage({ searchParams }: { searchParams: {
   const state = (TALENT_POOL_STATES as readonly string[]).includes(searchParams.state ?? "")
     ? searchParams.state!
     : "";
+  const showAll = searchParams.all === "1";
 
   const [rows, counts, openJobs] = await Promise.all([
     prisma.hiringTalentPool.findMany({
@@ -55,12 +61,54 @@ export default async function TalentPoolPage({ searchParams }: { searchParams: {
     }),
   ]);
 
+  // A job filter only means something for a job that exists and is open.
+  const jobId = openJobs.some((j) => j.id === searchParams.job) ? searchParams.job! : "";
+  const sort: PoolSort = (POOL_SORTS as readonly string[]).includes(searchParams.sort ?? "")
+    ? (searchParams.sort as PoolSort)
+    // Picking a job is asking "who fits this?", so fit becomes the default order.
+    : jobId
+      ? "fit"
+      : "due";
+
+  const ranked = rows.map((p) => {
+    const matches = rankJobs(
+      {
+        currentTitle: p.candidate.currentTitle,
+        skills: p.candidate.tags,
+        totalExperienceYears: p.candidate.totalExperienceYears
+          ? Number(p.candidate.totalExperienceYears)
+          : null,
+      },
+      openJobs as MatchableJob[],
+    ).map((m) => ({ jobId: m.jobId, title: m.title, fit: m.fit }));
+    const forJob = jobId ? (matches.find((m) => m.jobId === jobId)?.fit ?? 0) : null;
+    return { p, matches, forJob, best: matches.reduce((n, m) => Math.max(n, m.fit), 0) };
+  });
+
+  // Filtering to a job hides the zeroes — but SAYS how many, because a criterion
+  // phrased so no keyword can evidence it ("Language", "Degree") scores everyone
+  // zero, and silently emptying the page would read as "nobody suits this role".
+  const zeroes = jobId ? ranked.filter((r) => r.forJob === 0).length : 0;
+  const visible = jobId && !showAll ? ranked.filter((r) => r.forJob! > 0) : ranked;
+
+  const sorted = orderPool(
+    visible.map((r) => ({
+      ...r,
+      fullName: r.p.candidate.fullName,
+      nextTouchAt: r.p.nextTouchAt,
+      updatedAt: r.p.updatedAt,
+      createdAt: r.p.createdAt,
+    })),
+    sort,
+    !!jobId,
+  );
+
   return (
     <>
       <TopBar title="Talent pool" subtitle="Silver medallists and passive talent, kept warm" />
       <div className="p-margin">
         <TalentPoolClient
-          prospects={rows.map((p) => ({
+          prospects={sorted.map(({ p, matches, forJob }) => ({
             id: p.id,
             candidateId: p.candidate.id,
             fullName: p.candidate.fullName,
@@ -74,19 +122,15 @@ export default async function TalentPoolPage({ searchParams }: { searchParams: {
             nextTouchAt: p.nextTouchAt?.toISOString() ?? null,
             ownerName: p.owner?.username ?? null,
             notesMd: p.notesMd,
-            matches: rankJobs(
-              {
-                currentTitle: p.candidate.currentTitle,
-                skills: p.candidate.tags,
-                totalExperienceYears: p.candidate.totalExperienceYears
-                  ? Number(p.candidate.totalExperienceYears)
-                  : null,
-              },
-              openJobs as MatchableJob[],
-            ).map((m) => ({ jobId: m.jobId, title: m.title, fit: m.fit })),
+            matches,
           }))}
           counts={Object.fromEntries(counts.map((c) => [c.state, c._count._all]))}
           activeState={state}
+          jobs={openJobs.map((j) => ({ id: j.id, title: j.title }))}
+          activeJobId={jobId}
+          sort={sort}
+          hiddenZeroCount={showAll ? 0 : zeroes}
+          showingAll={showAll}
           canWrite={can(access, "candidate:write")}
           loadedAt={new Date().toISOString()}
         />
