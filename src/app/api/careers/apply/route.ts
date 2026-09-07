@@ -6,7 +6,7 @@ import { badRequest, unprocessable } from "@/lib/http-error";
 import { logger } from "@/lib/logger";
 import { siteBaseUrl } from "@/lib/site-url";
 import { getEmailConfig, sendEmail } from "@/lib/mailer";
-import { uploadProof, isBlobConfigured } from "@/lib/ops-blob";
+import { uploadHiringFile as uploadProof, isBlobConfigured } from "@/lib/hiring/blob";
 import { submitApplication } from "@/lib/hiring/apply";
 import { isCareersPublic } from "@/lib/hiring/careers";
 import { rateLimit } from "@/lib/hiring/rate-limit";

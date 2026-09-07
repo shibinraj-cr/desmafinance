@@ -1,7 +1,7 @@
 import { createHash, randomBytes } from "node:crypto";
 import { prisma } from "@/lib/prisma";
 import { badRequest, notFound, unprocessable } from "@/lib/http-error";
-import { uploadProof, isBlobConfigured } from "@/lib/ops-blob";
+import { uploadHiringFile as uploadProof, isBlobConfigured } from "./blob";
 import { renderPdf } from "./pdf";
 import { letterHtml, letterPdfBlocks, type LetterData, type AuditEntry } from "./letter";
 
