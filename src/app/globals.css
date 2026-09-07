@@ -360,3 +360,111 @@ input.lp-date-input::-webkit-calendar-picker-indicator:hover {
 .offer-letter th { text-align: left; padding: 6px 12px 6px 0; width: 40%; font-weight: 500; color: #424242; vertical-align: top; }
 .offer-letter td { padding: 6px 0; }
 .offer-letter tr { border-bottom: 1px solid #d5d5d5; }
+
+/* ---------------------------------------------------------------------------
+   Public careers site — DESMA International's palette, not Desgro's.
+   Scoped to `.careers-theme` so the ERP shell is untouched (same trick as
+   `.lp-scope`). Taken from desma.in: its declared theme-color is #1bb0ce, with
+   #ffd100 as the accent and #0d2d36 for dark surfaces.
+
+   The brand teal and yellow are DECORATIVE here, deliberately. White text on
+   #1bb0ce is 2.58:1 and on #ffd100 it is 1.46:1 — both far below the 4.5:1 this
+   module holds itself to. So anything carrying meaning uses the darkened teal
+   (#116b7d, 6.1:1) or the dark teal (#0d2d36, 14.5:1), and the bright brand
+   colours do the identifying rather than the informing.
+--------------------------------------------------------------------------- */
+.careers-theme {
+  --careers-brand: #1bb0ce;
+  --careers-brand-deep: #116b7d;
+  --careers-brand-deeper: #0e5a6a;
+  --careers-ink: #0d2d36;
+  --careers-muted: #2c4a52;
+  --careers-accent: #ffd100;
+  --careers-surface: #ffffff;
+  --careers-canvas: #f6f9fa;
+  --careers-line: #d7e3e6;
+
+  background: var(--careers-canvas);
+  color: var(--careers-muted);
+}
+
+.careers-theme h1,
+.careers-theme h2,
+.careers-theme h3 { color: var(--careers-ink); }
+
+.careers-theme a:not(.careers-btn) { color: var(--careers-brand-deep); }
+.careers-theme a:not(.careers-btn):hover { color: var(--careers-ink); }
+
+.careers-surface { background: var(--careers-surface); }
+.careers-canvas { background: var(--careers-canvas); }
+.careers-border { border-color: var(--careers-line); }
+.careers-ink { color: var(--careers-ink); }
+.careers-muted { color: var(--careers-muted); }
+
+/* The brand teal as a top rule — identity without a contrast problem. */
+.careers-rule {
+  background: linear-gradient(90deg, var(--careers-brand) 0%, var(--careers-accent) 100%);
+  height: 3px;
+}
+
+.careers-card {
+  background: var(--careers-surface);
+  border: 1px solid var(--careers-line);
+  border-radius: 12px;
+  transition: border-color 0.15s ease, box-shadow 0.15s ease;
+}
+.careers-card:hover {
+  border-color: var(--careers-brand);
+  box-shadow: 0 1px 3px rgba(13, 45, 54, 0.08);
+}
+
+.careers-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  min-height: 44px;
+  padding: 0 20px;
+  border-radius: 8px;
+  font-weight: 600;
+  background: var(--careers-brand-deep);
+  color: #fff;
+  transition: background 0.15s ease;
+}
+.careers-btn:hover { background: var(--careers-brand-deeper); color: #fff; }
+.careers-btn:focus-visible { outline: 2px solid var(--careers-ink); outline-offset: 2px; }
+.careers-btn[disabled] { opacity: 0.6; }
+
+.careers-btn-quiet {
+  background: transparent;
+  color: var(--careers-brand-deep);
+  border: 1px solid var(--careers-line);
+}
+.careers-btn-quiet:hover { background: var(--careers-canvas); color: var(--careers-ink); }
+
+.careers-chip {
+  display: inline-flex;
+  align-items: center;
+  height: 26px;
+  padding: 0 10px;
+  border-radius: 999px;
+  background: rgba(27, 176, 206, 0.12);
+  color: var(--careers-ink);
+  font-size: 12px;
+  font-weight: 500;
+}
+
+.careers-theme input,
+.careers-theme select,
+.careers-theme textarea {
+  background: var(--careers-surface);
+  border: 1px solid var(--careers-line);
+  color: var(--careers-ink);
+}
+.careers-theme input:focus,
+.careers-theme select:focus,
+.careers-theme textarea:focus {
+  outline: none;
+  border-color: var(--careers-brand-deep);
+  box-shadow: 0 0 0 3px rgba(17, 107, 125, 0.15);
+}

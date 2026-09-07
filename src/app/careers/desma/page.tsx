@@ -45,8 +45,8 @@ export default async function CareersIndexPage({
   return (
     <div className="mx-auto max-w-4xl px-md sm:px-lg py-xl space-y-xl">
       <section className="space-y-md">
-        <h1 className="text-h1 text-on-surface">Work with us</h1>
-        <p className="text-body-lg text-on-surface-variant max-w-prose">
+        <h1 className="text-h1 careers-ink">Work with us</h1>
+        <p className="text-body-lg careers-muted max-w-prose">
           DESMA International helps nurses in India register and build careers abroad — AHPRA, NMC,
           CGFNS and the rest of it. The work is detailed and it matters to the person on the other
           end of it. We hire people who like both of those things.
@@ -98,42 +98,57 @@ export default async function CareersIndexPage({
       ) : (
         <div className="space-y-xl">
           {!filtered && (
-            <p className="text-body-sm text-on-surface-variant">
+            <p className="text-body-sm careers-muted">
               {jobs.length} open {jobs.length === 1 ? "role" : "roles"}.
             </p>
           )}
           {byDepartment.map(([department, list]) => (
             <section key={department} className="space-y-sm">
-              <h2 className="text-label-sm uppercase tracking-wider text-on-surface-variant">
+              <h2 className="text-label-sm uppercase tracking-wider careers-muted">
                 {department}
               </h2>
               <ul className="space-y-sm">
                 {list.map((job) => (
-                  <li key={job.slug}>
-                    <Link
-                      href={`/careers/desma/${job.slug}`}
-                      className="block rounded-xl border border-outline-variant bg-surface-container-lowest p-md hover:border-primary focus:outline-none focus-visible:ring-2 focus-visible:ring-primary transition"
-                    >
-                      <div className="flex flex-wrap items-baseline justify-between gap-sm">
-                        <span className="text-body-lg font-semibold text-on-surface">{job.title}</span>
-                        {job.compLabel && (
-                          <span className="text-label-sm text-accent">{job.compLabel}</span>
-                        )}
+                  <li key={job.slug} className="careers-card p-md">
+                    <div className="flex flex-wrap items-start justify-between gap-md">
+                      <div className="min-w-0">
+                        <Link
+                          href={`/careers/desma/${job.slug}`}
+                          className="text-body-lg font-semibold careers-ink hover:underline focus:outline-none focus-visible:ring-2 focus-visible:ring-[color:var(--careers-brand-deep)] rounded"
+                        >
+                          {job.title}
+                        </Link>
+                        <div className="mt-xs flex flex-wrap items-center gap-x-sm gap-y-xs text-body-sm careers-muted">
+                          {job.locationName && <span>{job.locationName}</span>}
+                          {job.locationName && <span aria-hidden>·</span>}
+                          <span>{job.workTypeLabel}</span>
+                          <span aria-hidden>·</span>
+                          <span>{job.employmentTypeLabel}</span>
+                          {job.openings > 1 && (
+                            <>
+                              <span aria-hidden>·</span>
+                              <span>{job.openings} openings</span>
+                            </>
+                          )}
+                          {job.compLabel && <span className="careers-chip ml-xs">{job.compLabel}</span>}
+                        </div>
                       </div>
-                      <div className="mt-xs flex flex-wrap items-center gap-x-sm gap-y-xs text-body-sm text-on-surface-variant">
-                        {job.locationName && <span>{job.locationName}</span>}
-                        <span aria-hidden>·</span>
-                        <span>{job.workTypeLabel}</span>
-                        <span aria-hidden>·</span>
-                        <span>{job.employmentTypeLabel}</span>
-                        {job.openings > 1 && (
-                          <>
-                            <span aria-hidden>·</span>
-                            <span>{job.openings} openings</span>
-                          </>
-                        )}
+
+                      <div className="flex items-center gap-xs flex-shrink-0">
+                        <Link href={`/careers/desma/${job.slug}`} className="careers-btn careers-btn-quiet">
+                          Details
+                        </Link>
+                        {/* Straight to the form — the commonest thing somebody
+                            wants from a job list is to apply to it. */}
+                        <Link
+                          href={`/careers/desma/${job.slug}#apply`}
+                          className="careers-btn"
+                          aria-label={`Apply for ${job.title}`}
+                        >
+                          Apply
+                        </Link>
                       </div>
-                    </Link>
+                    </div>
                   </li>
                 ))}
               </ul>
@@ -154,17 +169,18 @@ function FilterRow({
 }) {
   return (
     <div className="flex flex-wrap items-center gap-xs">
-      <span className="text-label-sm text-on-surface-variant mr-xs">{label}</span>
+      <span className="text-label-sm careers-muted mr-xs">{label}</span>
       {options.map((o) => (
         <Link
           key={o.href + o.label}
           href={o.href}
           aria-current={o.active ? "true" : undefined}
+          style={o.active ? { background: "var(--careers-brand-deep)" } : undefined}
           className={
             "h-8 inline-flex items-center px-md rounded-full text-label-sm border transition " +
             (o.active
-              ? "bg-primary text-on-primary border-primary"
-              : "border-outline-variant text-on-surface-variant hover:bg-surface-container-low")
+              ? "text-white border-transparent"
+              : "careers-border careers-muted hover:bg-white")
           }
         >
           {o.label}
@@ -184,13 +200,13 @@ function EmptyState({
   action?: { href: string; label: string };
 }) {
   return (
-    <div className="rounded-xl border border-dashed border-outline-variant bg-surface-container-lowest p-xl text-center">
-      <div className="text-body-lg text-on-surface mb-xs">{title}</div>
-      <p className="text-body-sm text-on-surface-variant max-w-prose mx-auto">{body}</p>
+    <div className="careers-card border-dashed p-xl text-center">
+      <div className="text-body-lg careers-ink mb-xs">{title}</div>
+      <p className="text-body-sm careers-muted max-w-prose mx-auto">{body}</p>
       {action && (
         <Link
           href={action.href}
-          className="mt-md inline-flex items-center h-10 px-lg rounded-lg bg-primary text-on-primary font-semibold"
+          className="careers-btn mt-md"
         >
           {action.label}
         </Link>
