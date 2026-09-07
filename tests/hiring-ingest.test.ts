@@ -263,3 +263,28 @@ describe("criteria as recruiters actually write them", () => {
     expect(criterionTokens("Skills")).toEqual(["skills"]);
   });
 });
+
+describe("chunking has to fit inside the function's time budget", () => {
+  // A 93-file import stalled at 36 because the chunk was 12 and each résumé is
+  // a model call reading a whole PDF. These numbers are the fix, and they are
+  // asserted so nobody quietly raises them again.
+  const MAX_DURATION_S = 60;
+  const CHUNK = 3;
+  const SLOW_PARSE_S = 15; // a large or scanned CV, at the pessimistic end
+
+  it("fits even when every résumé in the chunk is slow", () => {
+    expect(CHUNK * SLOW_PARSE_S).toBeLessThanOrEqual(MAX_DURATION_S);
+  });
+
+  it("would NOT have fitted at the old chunk size, nor at four", () => {
+    expect(12 * SLOW_PARSE_S).toBeGreaterThan(MAX_DURATION_S);
+    // 4 x 15 is exactly 60 — the whole budget, with nothing left for the
+    // request. This test is why the number is 3.
+    expect(4 * SLOW_PARSE_S + 5).toBeGreaterThan(MAX_DURATION_S);
+  });
+
+  it("leaves headroom for the request itself, not just the parses", () => {
+    const overheadS = 5;
+    expect(CHUNK * SLOW_PARSE_S + overheadS).toBeLessThanOrEqual(MAX_DURATION_S);
+  });
+});

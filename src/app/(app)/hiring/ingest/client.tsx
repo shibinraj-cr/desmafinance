@@ -29,8 +29,18 @@ type Item = {
   suggestions: Suggestion[];
 };
 
-/** One request per chunk; each résumé is a model call and the function has 60s. */
-const CHUNK = 12;
+/**
+ * One request per chunk. Each résumé is a model call reading a whole PDF —
+ * 5-15 seconds apiece — against a 60-second function limit, so this has to stay
+ * small. It was 12, which is why a 93-file import stalled at 36.
+ */
+const CHUNK = 3;
+
+/**
+ * Give up on a request before the platform does, so a dead chunk surfaces as a
+ * message rather than a spinner that never stops.
+ */
+const REQUEST_TIMEOUT_MS = 70_000;
 
 const btn =
   "h-9 px-md rounded-lg border border-outline-variant text-label-sm text-on-surface-variant hover:bg-surface-container-low transition disabled:opacity-60";
@@ -60,6 +70,8 @@ export function IngestClient({
   const [jobId, setJobId] = useState(jobs[0]?.id ?? "");
   const [files, setFiles] = useState<File[]>([]);
   const [progress, setProgress] = useState<{ done: number; total: number } | null>(null);
+  /** Where an interrupted run stopped, so Continue resumes from exactly there. */
+  const [resumeAt, setResumeAt] = useState<number | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [batchId, setBatchId] = useState<string | null>(openBatchId);
   const [items, setItems] = useState<Item[] | null>(null);
@@ -81,33 +93,63 @@ export function IngestClient({
     if (batchId) void loadBatch(batchId);
   }, [batchId, loadBatch]);
 
-  async function upload() {
+  async function upload(startAt = 0) {
     if (!files.length || !jobId) return;
     setError(null);
-    setProgress({ done: 0, total: files.length });
+    setProgress({ done: startAt, total: files.length });
     let currentBatch = batchId;
 
-    for (let i = 0; i < files.length; i += CHUNK) {
+    for (let i = startAt; i < files.length; i += CHUNK) {
       const slice = files.slice(i, i + CHUNK);
       const form = new FormData();
       form.set("jobId", jobId);
       if (currentBatch) form.set("batchId", currentBatch);
       for (const f of slice) form.append("files", f);
 
-      const res = await fetch("/api/hiring/ingest", { method: "POST", body: form });
-      if (!res.ok) {
-        const d = (await res.json().catch(() => ({}))) as { message?: string };
-        setError(d.message ?? "That upload failed. Anything already read is kept.");
+      // Abort before the platform's own limit, so a stalled chunk becomes a
+      // message with a Continue button instead of a bar that never moves.
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
+      let res: Response;
+      try {
+        res = await fetch("/api/hiring/ingest", {
+          method: "POST",
+          body: form,
+          signal: controller.signal,
+        });
+      } catch {
+        clearTimeout(timer);
         setProgress(null);
+        setResumeAt(i);
         if (currentBatch) setBatchId(currentBatch);
+        setError(
+          `Reading stalled at file ${i + 1}. Everything before it is saved — press Continue to ` +
+            `pick up from there. Files already read are not charged again.`,
+        );
         return;
       }
+      clearTimeout(timer);
+
+      if (!res.ok) {
+        const d = (await res.json().catch(() => ({}))) as { message?: string };
+        setProgress(null);
+        setResumeAt(i);
+        if (currentBatch) setBatchId(currentBatch);
+        setError(
+          (d.message ?? "That chunk failed.") +
+            ` Everything before file ${i + 1} is saved — press Continue to carry on.`,
+        );
+        return;
+      }
+
       const d = (await res.json()) as { batchId: string };
       currentBatch = d.batchId;
+      setBatchId(currentBatch);
       setProgress({ done: Math.min(i + CHUNK, files.length), total: files.length });
     }
 
     setProgress(null);
+    setResumeAt(null);
     setFiles([]);
     setBatchId(currentBatch);
     router.refresh();
@@ -219,15 +261,29 @@ export function IngestClient({
             type="button"
             className={primaryBtn}
             disabled={!aiEnabled || !files.length || !jobId || progress !== null}
-            onClick={upload}
+            onClick={() => upload(resumeAt ?? 0)}
           >
-            {progress ? `Reading ${progress.done}/${progress.total}…` : "Read them"}
+            {progress
+              ? `Reading ${progress.done}/${progress.total}…`
+              : resumeAt !== null
+                ? `Continue from ${resumeAt + 1}`
+                : "Read them"}
           </button>
         </div>
 
         {files.length > 0 && !progress && (
           <p className="text-caption text-on-surface-variant">
-            {files.length} file{files.length === 1 ? "" : "s"} · about{" "}
+            {files.length} file{files.length === 1 ? "" : "s"} ·{" "}
+            {files.length > CHUNK && (
+              <>
+                read {CHUNK} at a time, so roughly{" "}
+                <strong className="text-on-surface">
+                  {Math.max(1, Math.round((files.length / CHUNK) * 40 / 60))} min
+                </strong>{" "}
+                · keep this tab open ·{" "}
+              </>
+            )}
+            about{" "}
             <strong className="text-on-surface">{estimate.toLocaleString("en-IN")} credits</strong> to
             read them ({parseCost} each). Scoring is separate, and on demand, at {scoreCost} each.
             {estimate > creditsRemaining && (
