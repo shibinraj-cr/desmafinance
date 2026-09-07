@@ -86,7 +86,7 @@ export default async function OfferPage({ params }: { params: { token: string } 
   if (state === "withdrawn" || state === "declined") {
     return (
       <Shell title="This offer is no longer open">
-        <p>Please get in touch with us at hello@desma.in if you think that is a mistake.</p>
+        <p>Please get in touch with us at hr@desma.in if you think that is a mistake.</p>
       </Shell>
     );
   }

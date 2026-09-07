@@ -1,25 +1,45 @@
+import Image from "next/image";
 import Link from "next/link";
 
 /**
- * The public careers shell. Deliberately NOT the app shell: there is no
- * session here, no sidebar, and no module switcher — a job applicant is a
- * stranger, and the page should look like a company careers site rather than
- * like the inside of someone's ERP.
+ * The public careers shell.
+ *
+ * Deliberately NOT the Desgro app shell: no session, no sidebar, no module
+ * switcher — a job applicant is a stranger, and this should look like DESMA's
+ * own careers site rather than the inside of somebody's ERP. The palette is
+ * scoped to `.careers-theme` (see globals.css) so nothing here can leak into
+ * the rest of the app.
  */
 export default function CareersLayout({ children }: { children: React.ReactNode }) {
   return (
-    <div className="min-h-screen bg-surface flex flex-col">
-      <header className="border-b border-outline-variant bg-surface-container-lowest">
+    <div className="careers-theme min-h-screen flex flex-col">
+      <div className="careers-rule" aria-hidden />
+
+      <header className="careers-surface border-b careers-border">
         <div className="mx-auto max-w-4xl px-md sm:px-lg py-md flex items-center justify-between gap-md">
-          <Link href="/careers/desma" className="flex items-baseline gap-sm min-w-0">
-            <span className="text-h3 font-extrabold text-on-surface truncate">
-              DESMA International
+          <Link href="/careers/desma" className="flex items-center gap-sm min-w-0 !text-inherit">
+            {/* The logo carries its own dark disc, so it sits on the light
+                header without needing a plate behind it. */}
+            <Image
+              src="/desma-logo.png"
+              alt="DESMA International"
+              width={40}
+              height={40}
+              className="h-10 w-10 flex-shrink-0"
+              priority
+            />
+            <span className="min-w-0">
+              <span className="block text-body-lg font-extrabold careers-ink leading-tight truncate">
+                DESMA International
+              </span>
+              <span className="block text-label-sm careers-muted leading-tight">Careers</span>
             </span>
-            <span className="text-label-sm text-on-surface-variant hidden sm:inline">Careers</span>
           </Link>
           <a
             href="https://www.desma.in"
-            className="text-label-sm text-on-surface-variant hover:text-on-surface transition whitespace-nowrap"
+            className="text-label-sm whitespace-nowrap"
+            target="_blank"
+            rel="noopener noreferrer"
           >
             About us ↗
           </a>
@@ -28,17 +48,17 @@ export default function CareersLayout({ children }: { children: React.ReactNode 
 
       <main className="flex-1">{children}</main>
 
-      <footer className="border-t border-outline-variant bg-surface-container-lowest">
-        <div className="mx-auto max-w-4xl px-md sm:px-lg py-lg text-caption text-on-surface-variant space-y-xs">
+      <footer className="careers-surface border-t careers-border mt-xl">
+        <div className="mx-auto max-w-4xl px-md sm:px-lg py-lg text-caption careers-muted space-y-xs">
           <p>
             DESMA International Private Limited · Aroor, Kerala, India ·{" "}
-            <a className="underline hover:text-on-surface" href="mailto:hello@desma.in">
-              hello@desma.in
+            <a className="underline" href="mailto:hr@desma.in">
+              hr@desma.in
             </a>
           </p>
           <p>
             We hire on experience, skills and what you tell us about your work.{" "}
-            <Link className="underline hover:text-on-surface" href="/privacy-policy">
+            <Link className="underline" href="/privacy-policy">
               How we handle your data
             </Link>
             .

@@ -17,8 +17,9 @@ type Question = {
   options: string[] | null;
 };
 
-const inputCls =
-  "w-full min-h-[44px] px-md py-sm rounded-lg border border-outline-variant bg-surface-container-lowest text-body-md text-on-surface focus:border-primary focus:ring-2 focus:ring-primary/20 outline-none transition";
+// Colours come from the `.careers-theme` scope, so the form matches desma.in
+// rather than the ERP it happens to be served from.
+const inputCls = "w-full min-h-[44px] px-md py-sm rounded-lg text-body-md";
 
 export function ApplyForm({
   jobId,
@@ -72,13 +73,10 @@ export function ApplyForm({
 
   if (state === "sent") {
     return (
-      <div
-        role="status"
-        className="rounded-xl border border-outline-variant bg-surface-container-lowest p-lg"
-      >
-        <h3 className="text-h3 text-on-surface mb-xs">Application received</h3>
-        <p className="text-body-md text-on-surface-variant">
-          Thank you for applying for <strong className="text-on-surface">{jobTitle}</strong>. We read
+      <div role="status" className="careers-card p-lg">
+        <h3 className="text-h3 careers-ink mb-xs">Application received</h3>
+        <p className="text-body-md careers-muted">
+          Thank you for applying for <strong className="careers-ink">{jobTitle}</strong>. We read
           every application. If your experience lines up with what the role needs, someone from the
           team will contact you — usually within a week.
         </p>
@@ -119,7 +117,7 @@ export function ApplyForm({
             <input id="phone" name="phone" type="tel" maxLength={30} autoComplete="tel" className={inputCls} />
           </Field>
         </div>
-        <p className="text-caption text-on-surface-variant -mt-sm">
+        <p className="text-caption careers-muted -mt-sm">
           Give at least one of email or phone so we can reach you.
         </p>
 
@@ -144,10 +142,10 @@ export function ApplyForm({
 
       {resumeMode !== "skip" && (
         <fieldset className="space-y-md" disabled={state === "sending"}>
-          <legend className="text-body-lg font-semibold text-on-surface mb-xs">
+          <legend className="text-body-lg font-semibold careers-ink mb-xs">
             Your work
             {resumeMode === "required" && (
-              <span className="ml-xs text-label-sm font-normal text-on-surface-variant">
+              <span className="ml-xs text-label-sm font-normal careers-muted">
                 — a résumé or a link, one of the two
               </span>
             )}
@@ -158,7 +156,7 @@ export function ApplyForm({
               name="resume"
               type="file"
               accept=".pdf,.doc,.docx,application/pdf,application/msword,application/vnd.openxmlformats-officedocument.wordprocessingml.document"
-              className={inputCls + " file:mr-sm file:rounded file:border-0 file:bg-surface-container file:px-sm file:py-xs file:text-label-sm"}
+              className={inputCls + " file:mr-sm file:rounded file:border-0 file:bg-[color:var(--careers-canvas)] file:px-sm file:py-xs file:text-label-sm"}
             />
           </Field>
           <div className="grid gap-md sm:grid-cols-2">
@@ -174,7 +172,7 @@ export function ApplyForm({
 
       {questions.length > 0 && (
         <fieldset className="space-y-md" disabled={state === "sending"}>
-          <legend className="text-body-lg font-semibold text-on-surface mb-xs">
+          <legend className="text-body-lg font-semibold careers-ink mb-xs">
             A few questions
           </legend>
           {questions.map((q) => (
@@ -184,20 +182,20 @@ export function ApplyForm({
       )}
 
       <div className="space-y-md">
-        <label className="flex items-start gap-sm text-body-sm text-on-surface-variant">
+        <label className="flex items-start gap-sm text-body-sm careers-muted">
           <input
             type="checkbox"
             name="consent"
             value="true"
             required
-            className="mt-xs accent-primary h-4 w-4 flex-shrink-0"
+            className="mt-xs h-4 w-4 flex-shrink-0 accent-[color:var(--careers-grey)]"
           />
           <span>
             I agree that DESMA International may store and use the details above to consider me for
             this role and for similar roles. We keep applications for 24 months, and you can ask us
             to delete yours at any time by writing to{" "}
-            <a className="underline" href="mailto:hello@desma.in">
-              hello@desma.in
+            <a className="underline" href="mailto:hr@desma.in">
+              hr@desma.in
             </a>
             .
           </span>
@@ -206,7 +204,7 @@ export function ApplyForm({
         <button
           type="submit"
           disabled={state === "sending"}
-          className="w-full sm:w-auto min-h-[44px] px-xl rounded-lg bg-primary text-on-primary font-semibold hover:bg-primary-container transition disabled:opacity-60"
+          className="careers-btn w-full sm:w-auto px-xl"
         >
           {state === "sending" ? "Sending…" : "Send application"}
         </button>
@@ -230,12 +228,12 @@ function Field({
 }) {
   return (
     <div>
-      <label htmlFor={htmlFor} className="block text-label-sm text-on-surface mb-xs">
+      <label htmlFor={htmlFor} className="block text-label-sm careers-ink mb-xs">
         {label}
         {required && <span className="text-error"> *</span>}
       </label>
       {children}
-      {hint && <p className="text-caption text-on-surface-variant mt-xs">{hint}</p>}
+      {hint && <p className="text-caption careers-muted mt-xs">{hint}</p>}
     </div>
   );
 }
@@ -268,19 +266,19 @@ function QuestionField({ question: q }: { question: Question }) {
   if (q.answerType === "yes_no") {
     return (
       <fieldset>
-        <legend className="block text-label-sm text-on-surface mb-xs">
+        <legend className="block text-label-sm careers-ink mb-xs">
           {q.prompt}
           {q.required && <span className="text-error"> *</span>}
         </legend>
         <div className="flex gap-md">
           {["Yes", "No"].map((v) => (
-            <label key={v} className="flex items-center gap-xs text-body-md text-on-surface">
-              <input type="radio" name={name} value={v} required={q.required} className="accent-primary" />
+            <label key={v} className="flex items-center gap-xs text-body-md careers-ink">
+              <input type="radio" name={name} value={v} required={q.required} className="accent-[color:var(--careers-grey)]" />
               {v}
             </label>
           ))}
         </div>
-        {q.helperText && <p className="text-caption text-on-surface-variant mt-xs">{q.helperText}</p>}
+        {q.helperText && <p className="text-caption careers-muted mt-xs">{q.helperText}</p>}
       </fieldset>
     );
   }
@@ -301,19 +299,19 @@ function QuestionField({ question: q }: { question: Question }) {
   if (q.answerType === "multi_select" && options.length) {
     return (
       <fieldset>
-        <legend className="block text-label-sm text-on-surface mb-xs">
+        <legend className="block text-label-sm careers-ink mb-xs">
           {q.prompt}
           {q.required && <span className="text-error"> *</span>}
         </legend>
         <div className="space-y-xs">
           {options.map((o) => (
-            <label key={o} className="flex items-center gap-xs text-body-md text-on-surface">
-              <input type="checkbox" name={name} value={o} className="accent-primary" />
+            <label key={o} className="flex items-center gap-xs text-body-md careers-ink">
+              <input type="checkbox" name={name} value={o} className="accent-[color:var(--careers-grey)]" />
               {o}
             </label>
           ))}
         </div>
-        {q.helperText && <p className="text-caption text-on-surface-variant mt-xs">{q.helperText}</p>}
+        {q.helperText && <p className="text-caption careers-muted mt-xs">{q.helperText}</p>}
       </fieldset>
     );
   }

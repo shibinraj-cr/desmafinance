@@ -360,3 +360,115 @@ input.lp-date-input::-webkit-calendar-picker-indicator:hover {
 .offer-letter th { text-align: left; padding: 6px 12px 6px 0; width: 40%; font-weight: 500; color: #424242; vertical-align: top; }
 .offer-letter td { padding: 6px 0; }
 .offer-letter tr { border-bottom: 1px solid #d5d5d5; }
+
+/* ---------------------------------------------------------------------------
+   Public careers site — DESMA International's palette, not Desgro's.
+   Scoped to `.careers-theme` so the ERP shell is untouched (same trick as
+   `.lp-scope`).
+
+   The colours are sampled from the DESMA logo itself rather than guessed: the
+   disc is #404040, the ring and wordmark are #ffd100, and the arrow's shade is
+   #d8ae00. desma.in uses the same yellow-and-grey throughout. (An earlier pass
+   read the site's `theme-color` meta as the brand and produced a teal page —
+   that tag was a leftover theme default, and the logo is the honest source.)
+
+   Every pairing below is at least 4.5:1: dark grey on the yellow button is
+   7.1:1, and the grey on white is 10.4:1. Nothing here trades legibility for
+   brand, because with this palette it does not have to.
+--------------------------------------------------------------------------- */
+.careers-theme {
+  --careers-yellow: #ffd100;
+  --careers-yellow-deep: #d8ae00;
+  --careers-grey: #404040;
+  --careers-grey-deep: #212020;
+  --careers-muted: #5f5f5f;
+  --careers-surface: #ffffff;
+  --careers-canvas: #f5f5f5;
+  --careers-line: #dcdcdc;
+
+  background: var(--careers-canvas);
+  color: var(--careers-muted);
+}
+
+.careers-theme h1,
+.careers-theme h2,
+.careers-theme h3 { color: var(--careers-grey-deep); }
+
+.careers-theme a:not(.careers-btn) { color: var(--careers-grey); text-decoration-color: var(--careers-yellow-deep); }
+.careers-theme a:not(.careers-btn):hover { color: var(--careers-grey-deep); }
+
+.careers-surface { background: var(--careers-surface); }
+.careers-canvas { background: var(--careers-canvas); }
+.careers-border { border-color: var(--careers-line); }
+.careers-ink { color: var(--careers-grey-deep); }
+.careers-muted { color: var(--careers-muted); }
+
+/* The brand yellow as a top rule — the logo's ring, unrolled. */
+.careers-rule {
+  background: var(--careers-yellow);
+  height: 4px;
+}
+
+.careers-card {
+  background: var(--careers-surface);
+  border: 1px solid var(--careers-line);
+  border-radius: 12px;
+  transition: border-color 0.15s ease, box-shadow 0.15s ease;
+}
+.careers-card:hover {
+  border-color: var(--careers-yellow);
+  box-shadow: 0 1px 3px rgba(32, 32, 32, 0.08);
+}
+
+/* Yellow with dark grey on it — 7.1:1, and the way the logo itself is built. */
+.careers-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  min-height: 44px;
+  padding: 0 20px;
+  border-radius: 8px;
+  font-weight: 700;
+  background: var(--careers-yellow);
+  color: var(--careers-grey-deep);
+  transition: background 0.15s ease;
+}
+.careers-btn:hover { background: var(--careers-yellow-deep); color: var(--careers-grey-deep); }
+.careers-btn:focus-visible { outline: 2px solid var(--careers-grey-deep); outline-offset: 2px; }
+.careers-btn[disabled] { opacity: 0.6; }
+
+.careers-btn-quiet {
+  background: transparent;
+  color: var(--careers-grey);
+  border: 1px solid var(--careers-line);
+  font-weight: 600;
+}
+.careers-btn-quiet:hover { background: var(--careers-canvas); color: var(--careers-grey-deep); }
+
+.careers-chip {
+  display: inline-flex;
+  align-items: center;
+  height: 26px;
+  padding: 0 10px;
+  border-radius: 999px;
+  background: rgba(255, 209, 0, 0.22);
+  color: var(--careers-grey-deep);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.careers-theme input,
+.careers-theme select,
+.careers-theme textarea {
+  background: var(--careers-surface);
+  border: 1px solid var(--careers-line);
+  color: var(--careers-grey-deep);
+}
+.careers-theme input:focus,
+.careers-theme select:focus,
+.careers-theme textarea:focus {
+  outline: none;
+  border-color: var(--careers-yellow-deep);
+  box-shadow: 0 0 0 3px rgba(255, 209, 0, 0.28);
+}
