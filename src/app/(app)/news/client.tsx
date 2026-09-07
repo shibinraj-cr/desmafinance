@@ -38,6 +38,27 @@ export function toneFor(color: string) {
   return TOPIC_TONE[color] ?? TOPIC_TONE.blue;
 }
 
+/**
+ * Why a request produced nothing.
+ *
+ * `fetch` rejects — rather than resolving with a bad status — when the
+ * connection drops or the request is aborted, and a resolved-but-failed response
+ * still means the action did not happen. Both were being ignored here, so a
+ * refused delete looked exactly like a successful one.
+ */
+async function failureReason(res: Response | null, thrown?: unknown): Promise<string> {
+  if (thrown) {
+    const detail = thrown instanceof Error ? thrown.message : String(thrown);
+    return `The request didn't reach the server (${detail}). Try again.`;
+  }
+  if (res) {
+    const body = await res.json().catch(() => null);
+    if (body && typeof body.error === "string") return body.error;
+    return `That didn't work (${res.status}).`;
+  }
+  return "That didn't work.";
+}
+
 /** "2 hours ago" for anything recent; a plain date once that stops being useful. */
 function relativeTime(iso: string): string {
   const then = new Date(iso).getTime();
@@ -75,6 +96,7 @@ export function NewsFeedClient({
   // clicked, without waiting for the server round trip and refresh.
   const [readNow, setReadNow] = useState<Set<string>>(new Set());
   const [busy, setBusy] = useState(false);
+  const [actionError, setActionError] = useState<string | null>(null);
 
   function href(next: { topic?: string | null; unread?: boolean }) {
     const params = new URLSearchParams();
@@ -96,14 +118,21 @@ export function NewsFeedClient({
 
   async function markAllRead() {
     setBusy(true);
+    setActionError(null);
     try {
-      await fetch("/api/news/read-all", {
+      const res = await fetch("/api/news/read-all", {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({ topic: activeSlug }),
       });
+      if (!res.ok) {
+        setActionError(await failureReason(res));
+        return;
+      }
       setReadNow(new Set(items.map((i) => i.id)));
       start(() => router.refresh());
+    } catch (e) {
+      setActionError(await failureReason(null, e));
     } finally {
       setBusy(false);
     }
@@ -195,6 +224,10 @@ export function NewsFeedClient({
           )}
         </div>
       </div>
+
+      {actionError && (
+        <p className="rounded-lg bg-red-50 text-red-800 text-label-sm px-md py-sm">{actionError}</p>
+      )}
 
       {items.length === 0 ? (
         <Section title="">
@@ -384,16 +417,26 @@ function EmptyState({
 /** Pin and remove, shown only to admins, inline on each item. */
 function AdminItemControls({ item, onDone }: { item: FeedItem; onDone: () => void }) {
   const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
   async function pin(next: boolean) {
     setBusy(true);
+    setError(null);
     try {
-      await fetch(`/api/news/items/${item.id}`, {
+      const res = await fetch(`/api/news/items/${item.id}`, {
         method: "PATCH",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({ isPinned: next }),
       });
+      // Without this the pin silently reverts on the next render and the admin
+      // is left thinking they mis-clicked.
+      if (!res.ok) {
+        setError(await failureReason(res));
+        return;
+      }
       onDone();
+    } catch (e) {
+      setError(await failureReason(null, e));
     } finally {
       setBusy(false);
     }
@@ -402,16 +445,25 @@ function AdminItemControls({ item, onDone }: { item: FeedItem; onDone: () => voi
   async function remove() {
     if (!confirm(`Remove "${item.title}" from the feed for everyone?`)) return;
     setBusy(true);
+    setError(null);
     try {
-      await fetch(`/api/news/items/${item.id}`, { method: "DELETE" });
+      const res = await fetch(`/api/news/items/${item.id}`, { method: "DELETE" });
+      if (!res.ok) {
+        setError(await failureReason(res));
+        return;
+      }
       onDone();
+    } catch (e) {
+      setError(await failureReason(null, e));
     } finally {
       setBusy(false);
     }
   }
 
   return (
-    <div className="flex items-center gap-xs">
+    <div className="flex flex-col items-end gap-xs">
+      {error && <span className="text-caption text-red-700 max-w-[16rem] text-right">{error}</span>}
+      <div className="flex items-center gap-xs">
       <button
         type="button"
         onClick={() => pin(!item.isPinned)}
@@ -436,6 +488,7 @@ function AdminItemControls({ item, onDone }: { item: FeedItem; onDone: () => voi
           delete
         </span>
       </button>
+      </div>
     </div>
   );
 }
