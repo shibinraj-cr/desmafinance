@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { z } from "zod";
 import { prisma } from "@/lib/prisma";
 import { getCurrentUserAndPermissions } from "@/lib/permissions";
+import { isChatGptShareUrl } from "@/lib/news/chatgpt";
 
 const Schema = z.object({
   name: z.string().trim().min(1).max(120).optional(),
@@ -32,9 +33,22 @@ export async function PATCH(req: Request, { params }: { params: { id: string } }
 
   const source = await prisma.newsSource.findUnique({
     where: { id: params.id },
-    select: { id: true, topicId: true },
+    select: { id: true, topicId: true, url: true },
   });
   if (!source) return NextResponse.json({ error: "not found" }, { status: 404 });
+
+  // Switching a ChatGPT share link to another mode makes it unreadable rather
+  // than differently read, so refuse instead of silently accepting a setting
+  // that stops the source publishing.
+  if (d.kind && d.kind !== "chatgpt" && isChatGptShareUrl(source.url)) {
+    return NextResponse.json(
+      {
+        error:
+          "This is a ChatGPT share link, so it can only be read as a shared chat \u2014 the page itself carries no text.",
+      },
+      { status: 400 },
+    );
+  }
 
   if (d.topicId && d.topicId !== source.topicId) {
     const topic = await prisma.newsTopic.findUnique({ where: { id: d.topicId }, select: { id: true } });

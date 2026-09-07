@@ -423,3 +423,26 @@ describe("stripCitations", () => {
     expect(stripCitations("No citations here.")).toBe("No citations here.");
   });
 });
+
+describe("a share link is read as a chat whatever mode is selected", () => {
+  // The failure this prevents: the admin picks "Watch the page" (the mode they
+  // used for their earlier sources), and the share URL then yields a
+  // client-rendered shell with zero characters of text. The source reports
+  // "working" indefinitely and publishes nothing.
+  const SHARE = "https://chatgpt.com/share/6a9e5149-e73c-83e8-8e57-e72979726f99";
+
+  it("recognises the admin's real share link", () => {
+    expect(isChatGptShareUrl(SHARE)).toBe(true);
+    expect(shareIdFrom(SHARE)).toBe("6a9e5149-e73c-83e8-8e57-e72979726f99");
+  });
+
+  it("accepts a share id that is not a v4 UUID", () => {
+    // The real one is not v4 — reading the version nibble strictly would have
+    // rejected the only link that matters.
+    expect(shareIdFrom("https://chatgpt.com/share/6a9e5149-e73c-83e8-8e57-e72979726f99")).not.toBeNull();
+  });
+
+  it("is not confused into treating a feed URL as a chat", () => {
+    expect(isChatGptShareUrl("https://thepienews.com/feed/")).toBe(false);
+  });
+});
