@@ -188,7 +188,7 @@ export function ApplyForm({
             name="consent"
             value="true"
             required
-            className="mt-xs h-4 w-4 flex-shrink-0 accent-[color:var(--careers-brand-deep)]"
+            className="mt-xs h-4 w-4 flex-shrink-0 accent-[color:var(--careers-grey)]"
           />
           <span>
             I agree that DESMA International may store and use the details above to consider me for
@@ -273,7 +273,7 @@ function QuestionField({ question: q }: { question: Question }) {
         <div className="flex gap-md">
           {["Yes", "No"].map((v) => (
             <label key={v} className="flex items-center gap-xs text-body-md careers-ink">
-              <input type="radio" name={name} value={v} required={q.required} className="accent-[color:var(--careers-brand-deep)]" />
+              <input type="radio" name={name} value={v} required={q.required} className="accent-[color:var(--careers-grey)]" />
               {v}
             </label>
           ))}
@@ -306,7 +306,7 @@ function QuestionField({ question: q }: { question: Question }) {
         <div className="space-y-xs">
           {options.map((o) => (
             <label key={o} className="flex items-center gap-xs text-body-md careers-ink">
-              <input type="checkbox" name={name} value={o} className="accent-[color:var(--careers-brand-deep)]" />
+              <input type="checkbox" name={name} value={o} className="accent-[color:var(--careers-grey)]" />
               {o}
             </label>
           ))}

@@ -114,7 +114,7 @@ export default async function CareersIndexPage({
                       <div className="min-w-0">
                         <Link
                           href={`/careers/desma/${job.slug}`}
-                          className="text-body-lg font-semibold careers-ink hover:underline focus:outline-none focus-visible:ring-2 focus-visible:ring-[color:var(--careers-brand-deep)] rounded"
+                          className="text-body-lg font-semibold careers-ink hover:underline focus:outline-none focus-visible:ring-2 focus-visible:ring-[color:var(--careers-grey)] rounded"
                         >
                           {job.title}
                         </Link>
@@ -175,11 +175,11 @@ function FilterRow({
           key={o.href + o.label}
           href={o.href}
           aria-current={o.active ? "true" : undefined}
-          style={o.active ? { background: "var(--careers-brand-deep)" } : undefined}
+          style={o.active ? { background: "var(--careers-yellow)", color: "var(--careers-grey-deep)" } : undefined}
           className={
             "h-8 inline-flex items-center px-md rounded-full text-label-sm border transition " +
             (o.active
-              ? "text-white border-transparent"
+              ? "border-transparent font-semibold"
               : "careers-border careers-muted hover:bg-white")
           }
         >

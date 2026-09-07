@@ -1,3 +1,4 @@
+import Image from "next/image";
 import Link from "next/link";
 
 /**
@@ -16,9 +17,23 @@ export default function CareersLayout({ children }: { children: React.ReactNode 
 
       <header className="careers-surface border-b careers-border">
         <div className="mx-auto max-w-4xl px-md sm:px-lg py-md flex items-center justify-between gap-md">
-          <Link href="/careers/desma" className="flex items-baseline gap-sm min-w-0 !text-inherit">
-            <span className="text-h3 font-extrabold careers-ink truncate">DESMA International</span>
-            <span className="text-label-sm careers-muted hidden sm:inline">Careers</span>
+          <Link href="/careers/desma" className="flex items-center gap-sm min-w-0 !text-inherit">
+            {/* The logo carries its own dark disc, so it sits on the light
+                header without needing a plate behind it. */}
+            <Image
+              src="/desma-logo.png"
+              alt="DESMA International"
+              width={40}
+              height={40}
+              className="h-10 w-10 flex-shrink-0"
+              priority
+            />
+            <span className="min-w-0">
+              <span className="block text-body-lg font-extrabold careers-ink leading-tight truncate">
+                DESMA International
+              </span>
+              <span className="block text-label-sm careers-muted leading-tight">Careers</span>
+            </span>
           </Link>
           <a
             href="https://www.desma.in"
