@@ -15,6 +15,9 @@ import {
   assistantMessages,
   conversationTitle,
   splitIntoItems,
+  isSharedTaskUrl,
+  looksLikeSharedAutomation,
+  SHARED_TASK_GUIDANCE,
 } from "@/lib/news/chatgpt";
 
 /** How long a single source gets before we give up and move to the next one. */
@@ -213,6 +216,11 @@ export async function syncSource(source: SourceRow, now = new Date()): Promise<S
 
   if (!isFetchableUrl(source.url)) return fail("not a fetchable public http(s) URL");
 
+  // Checked ahead of the mode, not inside the chatgpt branch: a task link is
+  // equally useless read as a page or as a feed, and left on "watch the page" it
+  // would sit at "working \u00b7 0 updates" forever instead of saying anything.
+  if (isSharedTaskUrl(source.url)) return fail(SHARED_TASK_GUIDANCE);
+
   // A ChatGPT share page renders client-side, so the URL the admin pasted is not
   // the URL that holds the conversation. Read its data endpoint instead.
   let fetchUrl = source.url;
@@ -245,6 +253,11 @@ export async function syncSource(source: SourceRow, now = new Date()): Promise<S
   // Hash what we actually publish from, not the envelope around it. A share
   // payload carries view counts and moderation fields that churn between reads;
   // hashing the raw JSON would report an update every single day.
+  // Some shared objects are only identifiable from the page they serve. The
+  // router payload names its own type, so use that rather than guessing from the
+  // URL shape alone.
+  if (looksLikeSharedAutomation(body)) return fail(SHARED_TASK_GUIDANCE);
+
   const hash = hashString(
     source.kind === "page"
       ? pageText(body)

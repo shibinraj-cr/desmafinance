@@ -4,6 +4,7 @@ import { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
 import { getCurrentUserAndPermissions } from "@/lib/permissions";
 import { isFetchableUrl, syncSource } from "@/lib/news/sync";
+import { isSharedTaskUrl, SHARED_TASK_GUIDANCE } from "@/lib/news/chatgpt";
 
 const Schema = z.object({
   topicId: z.string().min(1),
@@ -35,6 +36,13 @@ export async function POST(req: Request) {
       { error: "That URL must be a public http:// or https:// address." },
       { status: 400 },
     );
+  }
+
+  // Refuse a shared-task link outright rather than storing a source that can
+  // never produce anything. The admin finds out here, while they still have the
+  // right link to hand, instead of from a row that reads "working" for a week.
+  if (isSharedTaskUrl(d.url)) {
+    return NextResponse.json({ error: SHARED_TASK_GUIDANCE }, { status: 400 });
   }
 
   const topic = await prisma.newsTopic.findUnique({ where: { id: d.topicId }, select: { id: true } });

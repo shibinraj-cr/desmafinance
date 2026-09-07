@@ -6,6 +6,9 @@ import {
   assistantMessages,
   conversationTitle,
   splitIntoItems,
+  isSharedTaskUrl,
+  looksLikeSharedAutomation,
+  SHARED_TASK_GUIDANCE,
 } from "../src/lib/news/chatgpt";
 
 const ID = "3f2504e0-4f89-41d3-9a0c-0305e82c3301";
@@ -258,5 +261,47 @@ describe("backfilling an existing chat", () => {
     expect(answers).toHaveLength(2);
     const titles = answers.flatMap((a) => splitIntoItems(a.text)).map((i) => i.title);
     expect(titles).toEqual(["Day one item", "Day two item"]);
+  });
+});
+
+describe("shared task links (/s/task_…)", () => {
+  // These are what an admin actually reaches for first, because ChatGPT's own
+  // Share button on a scheduled task hands them one. They publish the task's
+  // recipe and never its output, so they must be refused, not polled.
+  const TASK = "https://chatgpt.com/s/task_636372758dac8191be6a3f871ef59e51";
+
+  it("recognises a shared-task link", () => {
+    expect(isSharedTaskUrl(TASK)).toBe(true);
+    expect(isSharedTaskUrl("https://chatgpt.com/s/task_7aff05a0dd7881919d3074694c2fa799")).toBe(true);
+  });
+
+  it("does not mistake a real conversation share for one", () => {
+    expect(isSharedTaskUrl(`https://chatgpt.com/share/${ID}`)).toBe(false);
+  });
+
+  it("does not treat a task link as an importable share", () => {
+    // Guards the trap that produced "working · 0 updates" forever: the share-id
+    // reader must not half-accept a task link.
+    expect(shareIdFrom(TASK)).toBeNull();
+    expect(isChatGptShareUrl(TASK)).toBe(false);
+  });
+
+  it("ignores other hosts", () => {
+    expect(isSharedTaskUrl("https://evil.test/s/task_abc")).toBe(false);
+  });
+
+  it("recognises a shared automation from the page it serves", () => {
+    // The shape ChatGPT's router payload actually ships, escaped as it appears
+    // in the HTML.
+    const body = String.raw`streamController.enqueue("[{\"kind\",\"shared_automation\",\"title\"...")`;
+    expect(looksLikeSharedAutomation(body)).toBe(true);
+  });
+
+  it("does not flag an ordinary page", () => {
+    expect(looksLikeSharedAutomation("<html><body>news</body></html>")).toBe(false);
+  });
+
+  it("tells the admin what to paste instead", () => {
+    expect(SHARED_TASK_GUIDANCE).toContain("chatgpt.com/share/");
   });
 });

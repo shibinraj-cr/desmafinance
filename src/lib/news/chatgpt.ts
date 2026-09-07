@@ -50,6 +50,42 @@ export function shareIdFrom(rawUrl: string): string | null {
   return null;
 }
 
+/**
+ * True when this is a shared ChatGPT *task* link (`/s/task_…`).
+ *
+ * These look like share links and are not. A task share publishes the
+ * automation's recipe — its title, prompt and RRULE schedule — so that someone
+ * else can import it. What it never publishes is any run's output: those land in
+ * the owner's own account and stay private. So there is no news behind such a
+ * link, in any read mode, ever, and the only useful thing to do with one is
+ * refuse it and say why.
+ */
+export function isSharedTaskUrl(rawUrl: string): boolean {
+  let u: URL;
+  try {
+    u = new URL(rawUrl.trim());
+  } catch {
+    return false;
+  }
+  const host = u.hostname.toLowerCase().replace(/^www\./, "");
+  if (host !== "chatgpt.com" && host !== "chat.openai.com") return false;
+  const parts = u.pathname.split("/").filter(Boolean);
+  return parts[0] === "s" && (parts[1] ?? "").startsWith("task_");
+}
+
+/**
+ * The same thing detected from a fetched page rather than its URL, for the
+ * shared-object forms we have not seen. The share page declares its own type in
+ * the router payload it ships.
+ */
+export function looksLikeSharedAutomation(body: string): boolean {
+  return /\\?"kind\\?",\\?"shared_automation\\?"/.test(body);
+}
+
+/** What to tell an admin who pasted a task link. */
+export const SHARED_TASK_GUIDANCE =
+  "That link shares the task itself \u2014 its prompt and schedule \u2014 not the updates it produces. ChatGPT keeps each run\u2019s output private to the account that runs it. Open the conversation the task produced, use Share on that conversation, and paste the https://chatgpt.com/share/\u2026 link it gives you.";
+
 /** True when this URL is a ChatGPT share link — used to auto-pick the source kind. */
 export function isChatGptShareUrl(rawUrl: string): boolean {
   return shareIdFrom(rawUrl) !== null;
