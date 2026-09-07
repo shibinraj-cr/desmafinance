@@ -145,6 +145,8 @@ model User {
   hiringAuditLogs          HiringAuditLog[]          @relation("HiringAuditActor")
   hiringCompanyProfiles    HiringCompanyProfile[]    @relation("HiringCompanyProfileEditor")
   hiringAiCalls            HiringAiCall[]            @relation("HiringAiCallUser")
+  hiringResumeSources      HiringResumeSource[]      @relation("HiringResumeSourceCreatedBy")
+  hiringIngestBatches      HiringIngestBatch[]       @relation("HiringIngestBatchCreatedBy")
 
   @@index([roleId])
 }
@@ -3473,13 +3475,15 @@ model HiringJob {
   createdAt        DateTime        @default(now())
   updatedAt        DateTime        @updatedAt
 
-  stages        HiringJobStage[]
-  questions     HiringScreeningQuestion[]
-  rubrics       HiringJobRubric[]
-  applications  HiringApplication[]
-  referrals     HiringReferral[]
-  partnerAccess HiringPartnerJobAccess[]
-  partnerSubs   HiringPartnerSubmission[]
+  stages              HiringJobStage[]
+  questions           HiringScreeningQuestion[]
+  rubrics             HiringJobRubric[]
+  applications        HiringApplication[]
+  referrals           HiringReferral[]
+  partnerAccess       HiringPartnerJobAccess[]
+  partnerSubs         HiringPartnerSubmission[]
+  hiringResumeSources HiringResumeSource[]
+  hiringIngestBatches HiringIngestBatch[]
 
   @@index([status, publishedAt])
   @@index([department])
@@ -3559,6 +3563,11 @@ model HiringCandidate {
   currentCtcLakh       Decimal?  @db.Decimal(6, 2)
   expectedCtcLakh      Decimal?  @db.Decimal(6, 2)
   resumeUrl            String?
+  /// SHA-256 of the résumé file. The first and cheapest dedupe check: a file
+  /// already ingested is recognised before a single AI credit is spent. Not
+  /// unique — two people can legitimately share a file (a agency sending one
+  /// combined PDF), so a hit is a strong signal, not an identity.
+  resumeHash           String?
   portfolioUrl         String?
   linkedinUrl          String?
   /// 'careers_page' | 'referral' | 'partner' | 'manual' | 'csv_import' |
@@ -3582,16 +3591,18 @@ model HiringCandidate {
   createdAt            DateTime  @default(now())
   updatedAt            DateTime  @updatedAt
 
-  applications HiringApplication[]
-  notes        HiringNote[]
-  referrals    HiringReferral[]
-  talentPool   HiringTalentPool?
-  partnerSubs  HiringPartnerSubmission[]
+  applications      HiringApplication[]
+  notes             HiringNote[]
+  referrals         HiringReferral[]
+  talentPool        HiringTalentPool?
+  partnerSubs       HiringPartnerSubmission[]
+  hiringIngestItems HiringIngestItem[]
 
   @@index([source])
   @@index([ownerId])
   @@index([deletedAt])
   @@index([fullName])
+  @@index([resumeHash])
 }
 
 /// The person APPLIED to one job. Carries the pipeline.
@@ -4101,4 +4112,104 @@ model HiringDomainEvent {
   @@unique([type, subjectType, subjectId])
   @@index([type, consumedAt])
   @@index([occurredAt])
+}
+
+/// A Google Drive folder mapped to a requisition.
+///
+/// DESMA's HR already files résumés in a folder named for the role, which means
+/// the intended job is KNOWN rather than inferred — no guessing, and one score
+/// per résumé instead of one per (résumé × open req). This table is that
+/// mapping, and the reason the whole feature is affordable.
+model HiringResumeSource {
+  id            String    @id @default(cuid())
+  jobId         String
+  job           HiringJob @relation(fields: [jobId], references: [id], onDelete: Cascade)
+  /// Google Drive folder id, from its URL.
+  driveFolderId String    @unique
+  /// The folder's name, kept for display so the mapping is readable.
+  folderName    String
+  isActive      Boolean   @default(true)
+  lastSyncedAt  DateTime?
+  createdById   String?
+  createdBy     User?     @relation("HiringResumeSourceCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+
+  batches HiringIngestBatch[]
+
+  @@index([jobId, isActive])
+}
+
+/// One run of the ingestion, whether from a Drive sync or an upload.
+model HiringIngestBatch {
+  id           String              @id @default(cuid())
+  /// Null for an upload — those have no folder behind them.
+  sourceId     String?
+  source       HiringResumeSource? @relation(fields: [sourceId], references: [id], onDelete: SetNull)
+  /// The requisition every résumé in this batch is scored against.
+  jobId        String
+  job          HiringJob           @relation(fields: [jobId], references: [id], onDelete: Cascade)
+  /// 'drive' | 'upload'
+  origin       String              @default("upload")
+  /// 'parsing' | 'review' | 'accepted' | 'failed'
+  status       String              @default("parsing")
+  fileCount    Int                 @default(0)
+  parsedCount  Int                 @default(0)
+  skippedCount Int                 @default(0)
+  failedCount  Int                 @default(0)
+  createdById  String?
+  createdBy    User?               @relation("HiringIngestBatchCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
+  createdAt    DateTime            @default(now())
+  updatedAt    DateTime            @updatedAt
+
+  items HiringIngestItem[]
+
+  @@index([jobId, createdAt])
+  @@index([status])
+}
+
+/// One résumé inside a batch, and what became of it.
+///
+/// Every file gets a row even when nothing is created from it — a duplicate, an
+/// unreadable PDF, a parse that found no contact details. An ingestion that
+/// silently drops files is the kind you discover months later when somebody says
+/// "I sent you my CV".
+model HiringIngestItem {
+  id               String            @id @default(cuid())
+  batchId          String
+  batch            HiringIngestBatch @relation(fields: [batchId], references: [id], onDelete: Cascade)
+  fileName         String
+  /// Drive file id, when it came from a folder.
+  externalId       String?
+  fileHash         String
+  /// Where the file itself was stored.
+  blobUrl          String?
+  /// 'pending' | 'parsed' | 'duplicate' | 'unreadable' | 'accepted' | 'rejected'
+  status           String            @default("pending")
+  /// The parsed fields, before a human confirmed anything.
+  parsed           Json?
+  /// Set once accepted.
+  candidateId      String?
+  candidate        HiringCandidate?  @relation(fields: [candidateId], references: [id], onDelete: SetNull)
+  /// Set when the ladder matched an existing person — exactly for a hash or a
+  /// contact detail, or PROPOSED for a fuzzy name match a human must confirm.
+  duplicateOfId    String?
+  /// 'hash' | 'email' | 'phone' | 'proposed'
+  duplicateVia     String?
+  /// Free ranking against every open req, computed without an AI call.
+  suggestions      Json?
+  /// The rubric score of the RÉSUMÉ against the batch's job. Distinct from
+  /// HiringApplication.aiScore, which scores an application including its
+  /// screening answers — this one sees only the CV, and says so in the UI.
+  aiScore          Int?
+  /// Per criterion: score, weight, evidence. Same contract as an application's:
+  /// a score with no evidence is a bug.
+  aiScoreBreakdown Json?
+  error            String?
+  createdAt        DateTime          @default(now())
+  updatedAt        DateTime          @updatedAt
+
+  @@unique([batchId, fileHash])
+  @@index([batchId, status])
+  @@index([duplicateOfId])
 }
