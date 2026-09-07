@@ -271,12 +271,31 @@ function plainMarkdown(s: string): string {
     .trim();
 }
 
-/** The first http(s) link in a chunk of markdown, if any. */
+/**
+ * The first http(s) link in a chunk of markdown, if any — never a ChatGPT one.
+ *
+ * The briefing is published as text, and readers should not be sent to
+ * chatgpt.com: the shared chat is how the desk sources the update, not
+ * something staff are meant to open. A cited government source is a different
+ * matter and stays.
+ */
 function firstUrl(md: string): string {
-  const inline = md.match(/\]\((https?:\/\/[^\s)]+)\)/);
-  if (inline) return inline[1];
-  const bare = md.match(/https?:\/\/[^\s)<>\]]+/);
-  return bare ? bare[0].replace(/[.,;]+$/, "") : "";
+  // Every link in document order, not just the first of each kind: the first one
+  // is often the shared chat itself, and the citation worth keeping comes after.
+  const candidates: string[] = [];
+  for (const m of md.matchAll(/\]\((https?:\/\/[^\s)]+)\)/g)) candidates.push(m[1]);
+  for (const m of md.matchAll(/https?:\/\/[^\s)<>\]]+/g)) candidates.push(m[0].replace(/[.,;]+$/, ""));
+
+  for (const raw of candidates) {
+    try {
+      const host = new URL(raw).hostname.toLowerCase().replace(/^www\./, "");
+      if (host === "chatgpt.com" || host === "chat.openai.com" || host === "openai.com") continue;
+      return raw;
+    } catch {
+      continue;
+    }
+  }
+  return "";
 }
 
 /** Drop a leading list marker / heading hash so a title reads as a title. */

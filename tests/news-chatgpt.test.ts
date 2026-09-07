@@ -446,3 +446,26 @@ describe("a share link is read as a chat whatever mode is selected", () => {
     expect(isChatGptShareUrl("https://thepienews.com/feed/")).toBe(false);
   });
 });
+
+describe("updates carry no ChatGPT link", () => {
+  it("never offers the shared chat as an item link", () => {
+    // The briefing is published as text; the shared chat is how the desk sources
+    // it, not somewhere staff should be sent.
+    const items = splitIntoItems(
+      "## Fee rise\nSee the chat at https://chatgpt.com/share/6a9e5149-e73c-83e8-8e57-e72979726f99 for detail.",
+    );
+    expect(items[0].url).toBe("");
+  });
+
+  it("still keeps a cited official source", () => {
+    const items = splitIntoItems("## Fee rise\nDetails at https://immi.homeaffairs.gov.au/fees today.");
+    expect(items[0].url).toBe("https://immi.homeaffairs.gov.au/fees");
+  });
+
+  it("skips a ChatGPT link to reach a real one", () => {
+    const items = splitIntoItems(
+      "## Fee rise\n[chat](https://chatgpt.com/share/abc) and https://immi.homeaffairs.gov.au/fees",
+    );
+    expect(items[0].url).toBe("https://immi.homeaffairs.gov.au/fees");
+  });
+});
