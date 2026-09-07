@@ -376,6 +376,7 @@ export const MODULES: AppModule[] = [
       { href: "/hiring/pipeline", label: "Pipeline", icon: "view_kanban", group: "HIRING" },
       { href: "/hiring/jobs", label: "Jobs", icon: "work", group: "HIRING" },
       { href: "/hiring/candidates", label: "Candidates", icon: "groups", group: "HIRING" },
+      { href: "/hiring/ingest", label: "Import résumés", icon: "upload_file", group: "HIRING" },
       { href: "/hiring/follow-ups", label: "Follow-ups", icon: "notifications_active", group: "HIRING" },
       { href: "/hiring/interviews", label: "Interviews", icon: "event_available", group: "HIRING" },
       { href: "/hiring/offers", label: "Offers & e-sign", icon: "draw", group: "HIRING" },

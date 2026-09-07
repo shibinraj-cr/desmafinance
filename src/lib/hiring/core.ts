@@ -193,9 +193,28 @@ export function missingMustHaves(mustHaves: string[], haystack: string): string[
   return mustHaves.filter((m) => {
     const needle = m.trim().toLowerCase();
     if (!needle) return false;
-    return !hay.includes(needle);
+    // The whole phrase, as written — the common case, and the cheapest.
+    if (hay.includes(needle)) return false;
+    // Otherwise its content words, each of which must appear somewhere.
+    // Recruiters write "Communication Skill"; a CV says "communication". Before
+    // this, a criterion phrased the natural way could never be evidenced, and
+    // every applicant came back flagged — which made the flag worthless.
+    const content = needle
+      .split(/[^a-z0-9+#.]+/)
+      // A lone digit is kept: "2 years sales" is not met by "three years".
+      .filter((t) => (t.length > 1 || /\d/.test(t)) && !MUST_HAVE_FILLER.has(t));
+    if (!content.length) return true;
+    return !content.every((t) => hay.includes(t));
   });
 }
+
+/** Words that carry no evidence on their own. See missingMustHaves. */
+const MUST_HAVE_FILLER = new Set([
+  "skill", "skills", "ability", "abilities", "knowledge", "handling", "management",
+  "experience", "good", "strong", "excellent", "basic", "working", "proficiency",
+  "proficient", "understanding", "level", "must", "have", "required", "preferred",
+  "and", "or", "the", "of", "in", "with", "a", "an",
+]);
 
 /**
  * The module's one date rendering: `dd MMM yyyy` in IST.

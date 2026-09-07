@@ -218,3 +218,109 @@ function clampScore(v: number | undefined): number {
   if (typeof v !== "number" || !Number.isFinite(v)) return 1;
   return Math.min(4, Math.max(1, Math.round(v)));
 }
+
+/**
+ * Score a PARSED RÉSUMÉ against a job's rubric, with no application involved.
+ *
+ * Bulk ingestion needs a number without putting anyone in the funnel, so this
+ * is the same rubric, the same guardrails and the same evidence contract as
+ * `scoreApplication` — but it reads only the CV.
+ *
+ * It is deliberately a separate function rather than a flag on the other one,
+ * because the two are not the same measurement and the UI must not present them
+ * as interchangeable: an application score has seen the candidate's answers to
+ * your screening questions, and this has not.
+ */
+export async function scoreParsedResume(opts: {
+  jobId: string;
+  userId: string;
+  parsed: {
+    currentTitle: string | null;
+    currentEmployer: string | null;
+    totalExperienceYears: number | null;
+    noticePeriodDays: number | null;
+    skills: string[];
+    education: string[];
+  };
+  entityId?: string;
+}): Promise<{ total: number; breakdown: CriterionScore[] } | null> {
+  const provider = getAiProvider();
+  if (!provider) return null;
+
+  const job = await prisma.hiringJob.findFirst({
+    where: { id: opts.jobId, deletedAt: null },
+    include: { rubrics: { orderBy: { position: "asc" } } },
+  });
+  if (!job) throw notFound("That requisition no longer exists.");
+  if (!rubricWeightsValid(job.rubrics)) {
+    throw unprocessable(
+      "This requisition's rubric weights do not total 100%, so a score would not mean anything.",
+      "bad_rubric",
+    );
+  }
+
+  // The résumé's own words, through the same redaction as everything else.
+  const payload = scoringPayload(
+    {
+      currentTitle: opts.parsed.currentTitle,
+      currentEmployer: opts.parsed.currentEmployer,
+      totalExperienceYears: opts.parsed.totalExperienceYears,
+      noticePeriodDays: opts.parsed.noticePeriodDays,
+      resumeText: [opts.parsed.skills.join(", "), opts.parsed.education.join("; ")]
+        .filter(Boolean)
+        .join("\n"),
+    },
+    [],
+  );
+
+  const profile = await loadCompanyProfile();
+
+  const result = await meter(
+    {
+      feature: "rubric_score",
+      userId: opts.userId,
+      entityType: "HiringIngestItem",
+      entityId: opts.entityId,
+    },
+    () =>
+      provider.generateJson({
+        system:
+          "You score a RÉSUMÉ against a weighted rubric for an Indian nursing-migration " +
+          "consultancy. You are seeing only the CV — no application answers — so where the " +
+          "document is silent on a criterion, score it low and say the résumé does not show it, " +
+          "rather than assuming either way. " +
+          BIAS_GUARDRAIL_INSTRUCTION +
+          profilePreamble(profile),
+        user: JSON.stringify(
+          {
+            role: { title: job.title, seniority: job.seniority },
+            mustHaves: job.mustHaves,
+            niceToHaves: job.niceToHaves,
+            rubric: job.rubrics.map((r) => ({ criterion: r.criterion, meaning: r.description, weight: r.weight })),
+            resume: payload,
+          },
+          null,
+          2,
+        ),
+        schema: SCHEMA as unknown as Record<string, unknown>,
+        maxTokens: 2000,
+      }),
+  );
+
+  const parsedCriteria =
+    (result.data as { criteria?: { criterion: string; score: number; evidence: string }[] }).criteria ?? [];
+
+  const breakdown: CriterionScore[] = job.rubrics.map((r) => {
+    const hit = parsedCriteria.find(
+      (p) => p.criterion.trim().toLowerCase() === r.criterion.trim().toLowerCase(),
+    );
+    return {
+      criterion: r.criterion,
+      weight: r.weight,
+      score: clampScore(hit?.score),
+      evidence: hit?.evidence?.trim() || "The résumé shows nothing for this criterion.",
+    };
+  });
+
+  return { total: weightedTotal(breakdown), breakdown };
+}

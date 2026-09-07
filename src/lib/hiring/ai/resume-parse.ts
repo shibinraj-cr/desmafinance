@@ -63,6 +63,75 @@ const SCHEMA = {
  * changed nothing, because a human had already filled those in" is a real and
  * common outcome that the UI needs to be able to say out loud.
  */
+/**
+ * Parse résumé BYTES. No candidate needed, so this is what bulk ingestion uses:
+ * it has a file and does not yet know whose it is.
+ *
+ * Metered like every other AI call. The caller says what the spend is against,
+ * so a batch of 300 shows up in the ledger as 300 attributable rows rather than
+ * one anonymous lump.
+ */
+export async function parseResumeBytes(opts: {
+  bytes: Buffer;
+  contentType: string;
+  userId: string;
+  entityType?: string;
+  entityId?: string;
+}): Promise<ParsedResume> {
+  const provider = getAiProvider();
+  if (!provider) {
+    throw unprocessable("No AI key is configured, so résumés cannot be parsed.", "ai_disabled");
+  }
+  if (!opts.contentType.includes("pdf")) {
+    throw unprocessable(
+      "Only PDF résumés can be read automatically.",
+      "unsupported_resume_type",
+    );
+  }
+  if (opts.bytes.byteLength > MAX_RESUME_BYTES) {
+    throw unprocessable("That résumé is too large to parse.", "resume_too_large");
+  }
+
+  const result = await meter(
+    {
+      feature: "resume_parse",
+      userId: opts.userId,
+      entityType: opts.entityType,
+      entityId: opts.entityId,
+    },
+    () =>
+      provider.generateJson({
+        system:
+          "You read a résumé and return the facts it states. Do not infer, estimate or fill in " +
+          "anything the document does not say — a null is correct and useful, an invention is not. " +
+          "Report low confidence for a scanned or image-heavy document.",
+        user: "Read this résumé and return its fields.",
+        schema: SCHEMA as unknown as Record<string, unknown>,
+        documents: [{ mediaType: "application/pdf", base64: opts.bytes.toString("base64") }],
+        maxTokens: 2000,
+      }),
+  );
+
+  return normalizeParsed(result.data as Partial<ParsedResume>);
+}
+
+/** Coerce whatever came back into the shape the rest of the module expects. */
+function normalizeParsed(raw: Partial<ParsedResume>): ParsedResume {
+  return {
+    fullName: str(raw.fullName),
+    email: normalizeEmail(raw.email ?? null),
+    phone: normalizeCandidatePhone(raw.phone ?? null),
+    currentTitle: str(raw.currentTitle),
+    currentEmployer: str(raw.currentEmployer),
+    locationText: str(raw.locationText),
+    totalExperienceYears: numOrNull(raw.totalExperienceYears),
+    noticePeriodDays: raw.noticePeriodDays == null ? null : Math.round(raw.noticePeriodDays),
+    skills: (raw.skills ?? []).map((s) => s.trim()).filter(Boolean).slice(0, 30),
+    education: (raw.education ?? []).map((s) => s.trim()).filter(Boolean).slice(0, 10),
+    confidence: typeof raw.confidence === "number" ? Math.min(1, Math.max(0, raw.confidence)) : 0,
+  };
+}
+
 export async function parseResume(opts: {
   candidateId: string;
   userId: string;
@@ -81,43 +150,13 @@ export async function parseResume(opts: {
   }
 
   const { base64, contentType } = await fetchResume(candidate.resumeUrl);
-  if (!contentType.includes("pdf")) {
-    throw unprocessable(
-      "Only PDF résumés can be parsed automatically. Ask for a PDF, or type the details in — " +
-        "the fields are all editable.",
-      "unsupported_resume_type",
-    );
-  }
-
-  const result = await meter(
-    { feature: "resume_parse", userId: opts.userId, entityType: "HiringCandidate", entityId: candidate.id },
-    () =>
-      provider.generateJson({
-        system:
-          "You read a résumé and return the facts it states. Do not infer, estimate or fill in " +
-          "anything the document does not say — a null is correct and useful, an invention is not. " +
-          "Report low confidence for a scanned or image-heavy document.",
-        user: "Read this résumé and return its fields.",
-        schema: SCHEMA as unknown as Record<string, unknown>,
-        documents: [{ mediaType: "application/pdf", base64 }],
-        maxTokens: 2000,
-      }),
-  );
-
-  const raw = result.data as Partial<ParsedResume>;
-  const parsed: ParsedResume = {
-    fullName: str(raw.fullName),
-    email: normalizeEmail(raw.email ?? null),
-    phone: normalizeCandidatePhone(raw.phone ?? null),
-    currentTitle: str(raw.currentTitle),
-    currentEmployer: str(raw.currentEmployer),
-    locationText: str(raw.locationText),
-    totalExperienceYears: numOrNull(raw.totalExperienceYears),
-    noticePeriodDays: raw.noticePeriodDays == null ? null : Math.round(raw.noticePeriodDays),
-    skills: (raw.skills ?? []).map((s) => s.trim()).filter(Boolean).slice(0, 30),
-    education: (raw.education ?? []).map((s) => s.trim()).filter(Boolean).slice(0, 10),
-    confidence: typeof raw.confidence === "number" ? Math.min(1, Math.max(0, raw.confidence)) : 0,
-  };
+  const parsed = await parseResumeBytes({
+    bytes: Buffer.from(base64, "base64"),
+    contentType,
+    userId: opts.userId,
+    entityType: "HiringCandidate",
+    entityId: candidate.id,
+  });
 
   // Fill blanks only, and never touch a human-edited field.
   const edited = new Set(candidate.humanEditedFields);
