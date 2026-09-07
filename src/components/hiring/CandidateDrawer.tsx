@@ -706,6 +706,14 @@ function FilesTab({ detail }: { detail: Detail }) {
   return (
     <section>
       <h3 className="text-h3 text-on-surface mb-sm">Files and links</h3>
+      {/* The drawer is scoped to ONE application; the profile is the whole
+          person, with every role they are in and their fit against the rest. */}
+      <a
+        href={`/hiring/candidates/${detail.candidate.id}`}
+        className="text-body-md text-primary hover:underline inline-block mb-sm"
+      >
+        Open full candidate profile →
+      </a>
       {links.length === 0 ? (
         <p className="text-body-sm text-on-surface-variant">
           Nothing attached. A candidate added by hand or imported from a spreadsheet often has none.

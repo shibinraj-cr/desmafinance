@@ -193,6 +193,19 @@ describe("free job ranking", () => {
     expect(ranked.every((r) => r.fit === 0)).toBe(true);
   });
 
+  // The candidate profile feeds `tags` in as `skills` — that column is what
+  // accept() writes the parsed résumé skills into. If the two ever drift apart,
+  // every profile silently shows 0% and looks like the matcher is broken.
+  it("still ranks a talent-pool candidate, who has tags but no job title", () => {
+    const ranked = rankJobs(
+      { currentTitle: null, skills: ["Malayalam", "sales", "1", "year"], totalExperienceYears: 1 },
+      jobs,
+    );
+    const bde = ranked.find((r) => r.jobId === "bde")!;
+    expect(bde.fit).toBeGreaterThan(0);
+    expect(bde.missingMustHaves).toEqual([]);
+  });
+
   it("breaks ties by title so the order is stable between reads", () => {
     const tied: MatchableJob[] = [
       { id: "b", title: "Bravo", mustHaves: [], niceToHaves: [], seniority: "mid" },
