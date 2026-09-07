@@ -11,6 +11,7 @@ import { formatHiringDate } from "@/lib/hiring/core";
 type Prospect = {
   id: string; candidateId: string; fullName: string; email: string | null; phone: string | null;
   currentTitle: string | null; tags: string[]; state: string; interestAreas: string[];
+  matches: { jobId: string; title: string; fit: number }[];
   lastTouchAt: string | null; nextTouchAt: string | null; ownerName: string | null; notesMd: string | null;
 };
 
@@ -223,6 +224,8 @@ export function TalentPoolClient({
                 </div>
               )}
 
+              <Fit matches={p.matches} />
+
               <div className="text-caption text-on-surface-variant">
                 Last touched {p.lastTouchAt ? formatHiringDate(p.lastTouchAt) : "never"}
                 {p.nextTouchAt ? ` · next ${formatHiringDate(p.nextTouchAt)}` : ""}
@@ -266,6 +269,39 @@ export function TalentPoolClient({
           ))}
         </ul>
       )}
+    </div>
+  );
+}
+
+/**
+ * Fit against each open role, on the card.
+ *
+ * Same number as the profile page and the same caveat: this is the free keyword
+ * matcher, not the AI rubric. There is no room on a card for the matched and
+ * missing must-haves that make a number defensible, so the card is deliberately
+ * quiet about it — small, grey, under the skills — and the profile page one
+ * click away carries the evidence.
+ */
+function Fit({ matches }: { matches: { jobId: string; title: string; fit: number }[] }) {
+  if (matches.length === 0) return null;
+  return (
+    <div className="space-y-2xs">
+      <div className="text-label-sm uppercase tracking-wider text-on-surface-variant">
+        Keyword fit
+      </div>
+      {matches.map((m) => (
+        <div key={m.jobId} className="flex items-center gap-sm">
+          <span className="text-caption text-on-surface-variant truncate flex-1 min-w-0" title={m.title}>
+            {m.title}
+          </span>
+          <span className="h-1 w-16 rounded-full bg-surface-container overflow-hidden shrink-0">
+            <span className="block h-full bg-primary" style={{ width: `${m.fit}%` }} />
+          </span>
+          <span className="text-caption tabular-nums text-on-surface w-9 text-right shrink-0">
+            {m.fit}%
+          </span>
+        </div>
+      ))}
     </div>
   );
 }
