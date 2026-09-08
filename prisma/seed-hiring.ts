@@ -441,7 +441,7 @@ async function createAll() {
       update: {},
       create: {
         candidateId: c.id,
-        state: "nurturing",
+        state: "contacted",
         interestAreas: ["Sales", "Counselling"],
         lastTouchAt: new Date(Date.now() - 20 * 86_400_000),
         nextTouchAt: new Date(Date.now() + 10 * 86_400_000),

@@ -139,7 +139,7 @@ export const STARTER_RECIPES: {
     name: "Reactivate cold candidates",
     description: "When a candidate has gone quiet for 30 days, put them in the talent pool to nurture.",
     trigger: { type: "no_activity", params: { days: 30 } },
-    actions: [{ type: "add_to_talent_pool", params: { state: "re_engage" } }],
+    actions: [{ type: "add_to_talent_pool", params: { state: "contacted" } }],
   },
   {
     name: "Background check kickoff",

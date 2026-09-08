@@ -1,4 +1,5 @@
 import { prisma } from "@/lib/prisma";
+import { recordPoolEvent } from "../talent-pool";
 import { logger } from "@/lib/logger";
 import { notFound } from "@/lib/http-error";
 import type { ParsedResume } from "../ai/resume-parse";
@@ -160,7 +161,7 @@ async function createFromResume(
       where: { candidateId: candidate.id },
       create: {
         candidateId: candidate.id,
-        state: "new",
+        state: "shortlisted",
         interestAreas: parsed.skills.slice(0, 6),
         ownerId: userId,
         lastTouchAt: null,
@@ -172,6 +173,14 @@ async function createFromResume(
       data: { status: "accepted", candidateId: candidate.id },
     }),
   ]);
+
+  await recordPoolEvent({
+    candidateId: candidate.id,
+    type: "added",
+    toState: "shortlisted",
+    note: "Imported from a résumé.",
+    actorId: userId,
+  });
 }
 
 /** Reject a row: keep it, mark it, so the file is not silently re-read forever. */

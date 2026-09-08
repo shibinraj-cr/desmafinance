@@ -137,6 +137,7 @@ model User {
   hiringOffersCreated      HiringOffer[]             @relation("HiringOfferCreatedBy")
   hiringReferrals          HiringReferral[]          @relation("HiringReferrer")
   hiringTalentPoolOwned    HiringTalentPool[]        @relation("HiringTalentPoolOwner")
+  hiringTalentPoolEvents   HiringTalentPoolEvent[]   @relation("HiringTalentPoolEventActor")
   hiringPartnersInvited    HiringPartner[]           @relation("HiringPartnerInvitedBy")
   hiringPartnerGrants      HiringPartnerJobAccess[]  @relation("HiringPartnerAccessGrantedBy")
   hiringAutomationsOwned   HiringAutomation[]        @relation("HiringAutomationOwner")
@@ -3597,6 +3598,7 @@ model HiringCandidate {
   talentPool        HiringTalentPool?
   partnerSubs       HiringPartnerSubmission[]
   hiringIngestItems HiringIngestItem[]
+  talentPoolEvents  HiringTalentPoolEvent[]
 
   @@index([source])
   @@index([ownerId])
@@ -3863,8 +3865,9 @@ model HiringTalentPool {
   id            String          @id @default(cuid())
   candidateId   String          @unique
   candidate     HiringCandidate @relation(fields: [candidateId], references: [id], onDelete: Cascade)
-  /// 'new' | 'nurturing' | 're_engage' | 'placed' | 'cold'
-  state         String          @default("new")
+  /// 'shortlisted' | 'contacted' | 'interview_scheduled' |
+  /// 'interview_attended' | 'rejected' | 'placed' | 'joined' | 'not_interested'
+  state         String          @default("shortlisted")
   interestAreas String[]        @default([])
   lastTouchAt   DateTime?
   nextTouchAt   DateTime?
@@ -3875,6 +3878,31 @@ model HiringTalentPool {
   updatedAt     DateTime        @updatedAt
 
   @@index([state, nextTouchAt])
+}
+
+/// Activity history for a candidate being worked outside a job pipeline.
+///
+/// Keyed on the CANDIDATE, not on the pool row, so removing somebody from the
+/// pool leaves their history intact — which is what the delete endpoint already
+/// promises ("the person stays, with their history").
+model HiringTalentPoolEvent {
+  id          String          @id @default(cuid())
+  candidateId String
+  candidate   HiringCandidate @relation(fields: [candidateId], references: [id], onDelete: Cascade)
+  /// 'added' | 'stage_changed' | 'note' | 'touched' | 'owner_changed' | 'removed'
+  type        String
+  fromState   String?
+  toState     String?
+  /// What the recruiter wrote at the time. Why a stage moved is worth more
+  /// later than the bare fact that it did.
+  note        String?
+  /// null actor = an automation moved it.
+  actorId     String?
+  actor       User?           @relation("HiringTalentPoolEventActor", fields: [actorId], references: [id], onDelete: SetNull)
+  occurredAt  DateTime        @default(now())
+
+  @@index([candidateId, occurredAt])
+  @@index([type, occurredAt])
 }
 
 /// External recruiting agency. Signs in by magic link (no Desgro password) —
