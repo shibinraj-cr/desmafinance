@@ -131,6 +131,19 @@ describe("renderRecipientParams", () => {
     const out = renderRecipientParams({ "1": "{name}" }, lead);
     expect(out["1"]).toBe("Test Candidate");
   });
+
+  // The composer stores a BARE token ("first_name"), not "{first_name}". A bare
+  // token must still resolve — the regression that shipped sent the literal word
+  // "first_name" to every recipient.
+  it("resolves a bare merge token, not just the braced form", () => {
+    expect(renderRecipientParams({ "1": "first_name" }, lead)["1"]).toBe("Test");
+    expect(renderRecipientParams({ "1": "name" }, lead)["1"]).toBe("Test Candidate");
+    expect(renderRecipientParams({ "1": "service" }, lead)["1"]).toBe("Study Abroad");
+  });
+
+  it("treats an empty slot as blank, not the word 'undefined'", () => {
+    expect(renderRecipientParams({ "1": "" }, lead)["1"]).toBe("");
+  });
 });
 
 describe("buildTemplateComponents", () => {
