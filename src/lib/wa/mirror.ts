@@ -289,6 +289,16 @@ async function mirrorBroadcastContext(
     ],
     skipDuplicates: true,
   });
+
+  // Tag the thread with the campaign so the inbox can filter to "broadcast
+  // replies" / one campaign and label the row. Latest wins — mirrorBroadcastContext
+  // already resolved the most recent send to this number.
+  await prisma.waConversation
+    .update({
+      where: { id: conversationId },
+      data: { sourceCampaign: recipient.broadcast.name, sourceCampaignAt: recipient.sentAt },
+    })
+    .catch(() => undefined);
 }
 
 /**

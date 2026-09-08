@@ -50,6 +50,12 @@ export type InboxScope = {
    * ANDs on top rather than replacing the chip.
    */
   owner?: string | string[] | null;
+  /**
+   * Broadcast-reply narrowing: `"__any__"` for every thread that replied to any
+   * campaign, or a specific campaign name. Independent of `filter`/`owner`, so it
+   * ANDs on top. Empty/undefined = no campaign narrowing.
+   */
+  campaign?: string | null;
 };
 
 /** The `status` constraint a filter implies — exported so the chip counts agree with the list. */
@@ -105,6 +111,11 @@ export function buildInboxWhere(filter: WaInboxFilter, scope: InboxScope, search
 
   const ownerWhere = inboxOwnerWhere(scope.owner);
   if (ownerWhere) and.push(ownerWhere);
+
+  // Broadcast-reply narrowing: "__any__" = replied to any campaign, else one
+  // campaign by name.
+  if (scope.campaign === "__any__") and.push({ sourceCampaign: { not: null } });
+  else if (scope.campaign) and.push({ sourceCampaign: scope.campaign });
 
   switch (filter) {
     case "mine":
@@ -171,6 +182,8 @@ export type InboxRow = {
   previewDirection: string | null;
   lead: { id: string; candidateName: string; statusLabel: string | null; statusColor: string | null } | null;
   assignedTo: { id: string; name: string } | null;
+  /** The broadcast campaign this thread most recently replied to, if any. */
+  sourceCampaign: string | null;
 };
 
 type ConversationWithPreview = {
@@ -189,6 +202,7 @@ type ConversationWithPreview = {
   } | null;
   assignedTo: { id: string; username: string; leadPulseRole: { displayName: string } | null } | null;
   messages: { body: string | null; type: string; direction: string }[];
+  sourceCampaign: string | null;
 };
 
 export function serializeInboxRow(c: ConversationWithPreview): InboxRow {
@@ -219,5 +233,6 @@ export function serializeInboxRow(c: ConversationWithPreview): InboxRow {
           name: c.assignedTo.leadPulseRole?.displayName ?? c.assignedTo.username,
         }
       : null,
+    sourceCampaign: c.sourceCampaign,
   };
 }

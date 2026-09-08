@@ -109,6 +109,27 @@ describe("buildInboxWhere", () => {
       AND: [OPEN, { assignedToId: "u2" }, { awaitingReply: true }],
     });
   });
+
+  // The broadcast-reply filter ANDs on top like the owner filter.
+  it("narrows to any broadcast reply with the __any__ sentinel", () => {
+    expect(buildInboxWhere("all", { ...scope, campaign: "__any__" })).toEqual({
+      AND: [OPEN, { sourceCampaign: { not: null } }],
+    });
+  });
+  it("narrows to one campaign by name", () => {
+    expect(buildInboxWhere("all", { ...scope, campaign: "T2" })).toEqual({
+      AND: [OPEN, { sourceCampaign: "T2" }],
+    });
+  });
+  it("adds no campaign clause when unset or empty", () => {
+    expect(buildInboxWhere("all", { ...scope, campaign: "" })).toEqual({ AND: [OPEN] });
+    expect(buildInboxWhere("all", { ...scope, campaign: null })).toEqual({ AND: [OPEN] });
+  });
+  it("combines a campaign with an owner and a status chip", () => {
+    expect(buildInboxWhere("needs_reply", { ...scope, owner: "u2", campaign: "T2" })).toEqual({
+      AND: [OPEN, { assignedToId: "u2" }, { sourceCampaign: "T2" }, { awaitingReply: true }],
+    });
+  });
   it("resolves the 'unassigned' owner sentinel to a null assignee", () => {
     expect(buildInboxWhere("all", { ...scope, owner: "unassigned" })).toEqual({
       AND: [OPEN, { assignedToId: null }],

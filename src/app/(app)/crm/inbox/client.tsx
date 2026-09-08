@@ -28,6 +28,7 @@ type InboxRow = {
   previewDirection: string | null;
   lead: { id: string; candidateName: string; statusLabel: string | null; statusColor: string | null } | null;
   assignedTo: { id: string; name: string } | null;
+  sourceCampaign: string | null;
 };
 
 type ThreadMessage = {
@@ -177,6 +178,9 @@ export function InboxClient({
   const [search, setSearch] = useState("");
   // Empty = no consultant narrowing; userIds and/or the "unassigned" sentinel.
   const [owner, setOwner] = useState<string[]>([]);
+  // "" = all threads; "__any__" = any broadcast reply; else one campaign name.
+  const [campaign, setCampaign] = useState<string>("");
+  const [campaigns, setCampaigns] = useState<string[]>([]);
   const [rows, setRows] = useState<InboxRow[]>([]);
   const [counts, setCounts] = useState({ needsReply: 0, unread: 0, unassigned: 0 });
   const [listLoading, setListLoading] = useState(true);
@@ -187,13 +191,22 @@ export function InboxClient({
     const qs = new URLSearchParams({ filter });
     if (search.trim()) qs.set("q", search.trim());
     for (const o of owner) qs.append("owner", o);
+    if (campaign) qs.set("campaign", campaign);
     const res = await fetch(`/api/crm/wa/conversations?${qs}`).catch(() => null);
     setListLoading(false);
     if (!res?.ok) return;
-    const d = (await res.json()) as { conversations: InboxRow[]; counts: typeof counts };
+    const d = (await res.json()) as { conversations: InboxRow[]; counts: typeof counts; campaigns?: string[] };
     setRows(d.conversations);
     setCounts(d.counts);
-  }, [filter, search, owner]);
+    const nextCampaigns = d.campaigns ?? [];
+    setCampaigns(nextCampaigns);
+    // If the selected campaign is no longer offered (its last visible thread was
+    // reassigned/closed, so the dropdown would vanish), fall back to All — the
+    // select is the only control for this state, so leaving it set would strand
+    // the user on an empty, uncontrollable filter.
+    if (campaign && campaign !== "__any__" && !nextCampaigns.includes(campaign)) setCampaign("");
+    else if (campaign === "__any__" && nextCampaigns.length === 0) setCampaign("");
+  }, [filter, search, owner, campaign]);
 
   // Debounced so typing in the search box does not fire a request per keystroke.
   useEffect(() => {
@@ -225,6 +238,9 @@ export function InboxClient({
           bdes={bdes}
           owner={owner}
           onOwner={setOwner}
+          campaign={campaign}
+          onCampaign={setCampaign}
+          campaigns={campaigns}
         />
         <ThreadPane
           conversationId={selectedId}
@@ -256,6 +272,9 @@ function ConversationList({
   bdes,
   owner,
   onOwner,
+  campaign,
+  onCampaign,
+  campaigns,
 }: {
   rows: InboxRow[];
   counts: { needsReply: number; unread: number; unassigned: number };
@@ -270,6 +289,9 @@ function ConversationList({
   bdes: BdeOpt[];
   owner: string[];
   onOwner: (o: string[]) => void;
+  campaign: string;
+  onCampaign: (c: string) => void;
+  campaigns: string[];
 }) {
   return (
     <div className="flex flex-col rounded-xl border border-outline-variant bg-surface-container-lowest overflow-hidden">
@@ -296,6 +318,25 @@ function ConversationList({
             selected={owner}
             onChange={onOwner}
           />
+        )}
+        {/* Broadcast-reply filter — a broadcast send never lands in the inbox, so
+            without this a campaign reply is indistinguishable from any other
+            inbound. Shown only once some thread has actually replied to one. */}
+        {campaigns.length > 0 && (
+          <select
+            value={campaign}
+            onChange={(e) => onCampaign(e.target.value)}
+            aria-label="Filter by broadcast campaign"
+            className="w-full h-9 px-md rounded-lg border border-outline-variant bg-surface-container-lowest text-label-sm focus:border-primary outline-none"
+          >
+            <option value="">All conversations</option>
+            <option value="__any__">Broadcast replies (any)</option>
+            {campaigns.map((c) => (
+              <option key={c} value={c}>
+                Replied to: {c}
+              </option>
+            ))}
+          </select>
         )}
         <div className="flex flex-wrap gap-xs">
           {FILTERS.map((f) => {
@@ -378,6 +419,14 @@ function ConversationList({
               {!r.lead && (
                 <span className="px-[6px] h-[17px] inline-flex items-center rounded-full text-[10px] font-semibold bg-surface-container text-on-surface-variant">
                   no lead
+                </span>
+              )}
+              {r.sourceCampaign && (
+                <span
+                  className="px-[6px] h-[17px] inline-flex items-center rounded-full text-[10px] font-semibold bg-sky-500/15 text-sky-600 truncate max-w-[120px]"
+                  title={`Replied to campaign: ${r.sourceCampaign}`}
+                >
+                  {r.sourceCampaign}
                 </span>
               )}
               {r.assignedTo && <span className="text-[10px] text-on-surface-variant ml-auto">{r.assignedTo.name}</span>}
