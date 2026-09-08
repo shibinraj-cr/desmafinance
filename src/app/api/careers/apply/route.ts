@@ -5,12 +5,13 @@ import { withApiHandler } from "@/lib/api";
 import { badRequest, unprocessable } from "@/lib/http-error";
 import { logger } from "@/lib/logger";
 import { siteBaseUrl } from "@/lib/site-url";
-import { getEmailConfig, sendEmail } from "@/lib/mailer";
+import { sendEmail } from "@/lib/mailer";
 import { uploadHiringFile as uploadProof, isBlobConfigured } from "@/lib/hiring/blob";
 import { submitApplication } from "@/lib/hiring/apply";
 import { isCareersPublic } from "@/lib/hiring/careers";
 import { rateLimit } from "@/lib/hiring/rate-limit";
 import { clientIp } from "@/lib/hiring/audit";
+import { getHiringEmailConfig } from "@/lib/hiring/email";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 60;
@@ -212,7 +213,7 @@ async function sendAcknowledgement(opts: {
 }): Promise<void> {
   if (!opts.to) return;
   try {
-    const cfg = await getEmailConfig();
+    const cfg = await getHiringEmailConfig();
     if (!cfg) return;
     const firstName = opts.name.trim().split(/\s+/)[0] ?? opts.name;
     await sendEmail(cfg, {

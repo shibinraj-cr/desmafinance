@@ -114,6 +114,7 @@ export default async function CareersRolePage({ params }: { params: { slug: stri
       <section id="apply" className="scroll-mt-lg">
         <h2 className="text-h2 careers-ink mb-md">Apply</h2>
         <ApplyForm
+          slug={form.slug}
           jobId={form.jobId}
           jobTitle={form.title}
           resumeMode={form.resumeMode}

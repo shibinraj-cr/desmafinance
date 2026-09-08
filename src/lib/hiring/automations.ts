@@ -2,10 +2,11 @@ import type { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
 import { recordPoolEvent } from "./talent-pool";
 import { logger } from "@/lib/logger";
-import { getEmailConfig, sendEmail } from "@/lib/mailer";
+import { sendEmail } from "@/lib/mailer";
 import { getWaProvider } from "@/lib/wa/registry";
 import { moveApplication } from "./pipeline";
 import { notifyUsers } from "./notify";
+import { getHiringEmailConfig } from "./email";
 import {
   timeTriggerWhere,
   triggerMatches,
@@ -161,7 +162,7 @@ async function runAction(
 
     case "send_email_template": {
       if (!app.candidate.email) return { action: action.type, ok: false, detail: "No email address." };
-      const cfg = await getEmailConfig();
+      const cfg = await getHiringEmailConfig();
       if (!cfg) return { action: action.type, ok: false, detail: "Email is not configured." };
       const text = render(String(params.body ?? ""), app);
       await sendEmail(cfg, {
