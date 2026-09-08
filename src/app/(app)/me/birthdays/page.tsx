@@ -9,6 +9,7 @@ import {
   monthLabel,
   upcomingBirthdays,
 } from "@/lib/hr-birthdays";
+import { celebrationsToday } from "@/lib/celebrations";
 
 export const dynamic = "force-dynamic";
 
@@ -29,16 +30,53 @@ export default async function MyBirthdaysPage({
     searchParams?.month && /^\d{1,2}$/.test(searchParams.month)
       ? Math.min(12, Math.max(1, Number(searchParams.month)))
       : now.getUTCMonth() + 1;
-  const all = await loadActiveEmployeeBirthdays();
+  // Today's list comes from the celebration query rather than the birthday
+  // calendar, because this is where the band under the header lands: it names
+  // work anniversaries too, and a page that answered with birthdays alone would
+  // not contain what the reader just clicked on.
+  const [all, today] = await Promise.all([
+    loadActiveEmployeeBirthdays(),
+    celebrationsToday(),
+  ]);
   const monthly = birthdaysForMonth(all, monthNum);
   const upcoming = upcomingBirthdays(all, 14);
   return (
     <>
       <TopBar
         title="Colleague Birthdays"
-        subtitle={`${monthly.length} in ${monthLabel(monthNum)} · ${upcoming.length} in next two weeks`}
+        subtitle={`${today.length} celebrating today · ${monthly.length} birthdays in ${monthLabel(monthNum)}`}
       />
       <div className="p-margin space-y-lg">
+        {today.length > 0 && (
+          <Section title="Today">
+            <div className="space-y-xs">
+              {today.map((c) => (
+                <div
+                  key={`${c.employeeId}:${c.kind}`}
+                  className="flex items-center gap-sm border border-outline-variant rounded-lg px-md py-sm"
+                >
+                  <div className="w-10 h-10 rounded-full bg-primary text-on-primary flex items-center justify-center text-h3">
+                    {c.kind === "birthday" ? "🎂" : "🎉"}
+                  </div>
+                  <div className="flex-1 min-w-0">
+                    <p className="font-semibold truncate">{c.name}</p>
+                    <p className="text-caption text-on-surface-variant truncate">
+                      {c.department ?? "—"}
+                    </p>
+                  </div>
+                  <p className="font-semibold">
+                    {c.kind === "birthday"
+                      ? c.age !== null
+                        ? `Turns ${c.age}`
+                        : "Birthday"
+                      : `${c.years} year${c.years === 1 ? "" : "s"}`}
+                  </p>
+                </div>
+              ))}
+            </div>
+          </Section>
+        )}
+
         <Section title="Upcoming (next 14 days)">
           {upcoming.length === 0 ? (
             <p className="py-md text-center text-on-surface-variant">No upcoming birthdays.</p>

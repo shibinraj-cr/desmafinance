@@ -16,6 +16,11 @@ type Settings = {
   reminderDays: number;
   channel: string;
   template: string;
+  bandEnabled: boolean;
+  greetingEnabled: boolean;
+  anniversaryEnabled: boolean;
+  showAge: boolean;
+  anniversaryTemplate: string;
 };
 
 export function BirthdayCalendarClient({
@@ -184,8 +189,93 @@ export function BirthdayCalendarClient({
 
       {openSettings && canManage && (
         <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-md">
-          <div className="bg-surface-container-lowest rounded-xl border border-outline-variant p-lg w-full max-w-md space-y-base">
-            <h3 className="text-h3">Birthday settings</h3>
+          <div className="bg-surface-container-lowest rounded-xl border border-outline-variant p-lg w-full max-w-lg space-y-base max-h-[90vh] overflow-y-auto">
+            <h3 className="text-h3">Celebration settings</h3>
+
+            <div className="space-y-base">
+              <p className="text-caption uppercase tracking-wider text-on-surface-variant font-semibold">
+                In the app
+              </p>
+              <label className="flex items-start gap-sm">
+                <input
+                  type="checkbox"
+                  className="mt-[3px]"
+                  checked={sLocal.bandEnabled}
+                  onChange={(e) => setSLocal({ ...sLocal, bandEnabled: e.target.checked })}
+                />
+                <span>
+                  <span className="font-semibold">Announce on the band</span>
+                  <span className="block text-caption text-on-surface-variant">
+                    Everyone sees today&apos;s celebrations in the strip under the header, on every
+                    page. Off means only the celebrant hears about it.
+                  </span>
+                </span>
+              </label>
+              <label className="flex items-start gap-sm">
+                <input
+                  type="checkbox"
+                  className="mt-[3px]"
+                  checked={sLocal.greetingEnabled}
+                  onChange={(e) => setSLocal({ ...sLocal, greetingEnabled: e.target.checked })}
+                />
+                <span>
+                  <span className="font-semibold">Greet the celebrant</span>
+                  <span className="block text-caption text-on-surface-variant">
+                    A one-time confetti greeting on their first page load of the day.
+                  </span>
+                </span>
+              </label>
+              <label className="flex items-start gap-sm">
+                <input
+                  type="checkbox"
+                  className="mt-[3px]"
+                  checked={sLocal.anniversaryEnabled}
+                  onChange={(e) => setSLocal({ ...sLocal, anniversaryEnabled: e.target.checked })}
+                />
+                <span>
+                  <span className="font-semibold">Include work anniversaries</span>
+                  <span className="block text-caption text-on-surface-variant">
+                    Every completed year, not only round-numbered ones.
+                  </span>
+                </span>
+              </label>
+              <label className="flex items-start gap-sm">
+                <input
+                  type="checkbox"
+                  className="mt-[3px]"
+                  checked={sLocal.showAge}
+                  onChange={(e) => setSLocal({ ...sLocal, showAge: e.target.checked })}
+                />
+                <span>
+                  <span className="font-semibold">Show age on the band</span>
+                  <span className="block text-caption text-on-surface-variant">
+                    Off by default. A date of birth is on file for payroll, not for publication —
+                    turn this on only if the team has agreed to it.
+                  </span>
+                </span>
+              </label>
+              <label className="block space-y-xs">
+                <span className="text-caption uppercase tracking-wider text-on-surface-variant">
+                  Anniversary wording (supports <code>{`{{name}}`}</code>,{" "}
+                  <code>{`{{years}}`}</code>, <code>{`{{dept}}`}</code>)
+                </span>
+                <textarea
+                  rows={3}
+                  value={sLocal.anniversaryTemplate}
+                  onChange={(e) => setSLocal({ ...sLocal, anniversaryTemplate: e.target.value })}
+                  className="w-full bg-surface-container border border-outline-variant rounded-lg px-sm py-xs"
+                />
+              </label>
+              <p className="text-caption text-on-surface-variant">
+                Anyone can keep themselves off the band entirely from My Account — that switch is
+                theirs, and it overrides everything here.
+              </p>
+            </div>
+
+            <hr className="border-outline-variant" />
+            <p className="text-caption uppercase tracking-wider text-on-surface-variant font-semibold">
+              Outbound wishes
+            </p>
             <label className="flex items-center gap-sm">
               <input
                 type="checkbox"

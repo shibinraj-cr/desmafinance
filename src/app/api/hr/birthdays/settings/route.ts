@@ -9,6 +9,12 @@ const Schema = z.object({
   reminderDays: z.number().int().min(0).max(30),
   channel: z.enum(["email", "whatsapp", "both", "disabled"]),
   template: z.string().min(5).max(500),
+  // Celebration band + greeting. See src/lib/celebrations.ts.
+  bandEnabled: z.boolean(),
+  greetingEnabled: z.boolean(),
+  anniversaryEnabled: z.boolean(),
+  showAge: z.boolean(),
+  anniversaryTemplate: z.string().min(5).max(500),
 });
 
 async function getSettings() {
