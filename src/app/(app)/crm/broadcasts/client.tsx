@@ -235,6 +235,7 @@ export function BroadcastsClient({
                 <BroadcastRowView
                   key={b.id}
                   row={b}
+                  batchSize={batchSize}
                   onChanged={load}
                   onEdit={() => void openEdit(b.id)}
                   onViewFailures={() => {
@@ -254,11 +255,13 @@ export function BroadcastsClient({
 
 function BroadcastRowView({
   row,
+  batchSize,
   onChanged,
   onEdit,
   onViewFailures,
 }: {
   row: BroadcastRow;
+  batchSize: number;
   onChanged: () => void;
   onEdit: () => void;
   onViewFailures: () => void;
@@ -346,7 +349,7 @@ function BroadcastRowView({
         {(row.status === "scheduled" || row.status === "sending") && (
           <>
             <ActionBtn busy={busy} onClick={() => void act("send_now")}>
-              {remaining > 0 ? `Send next ${Math.min(remaining, 100)}` : "Send now"}
+              {remaining > 0 ? `Send next ${Math.min(remaining, batchSize)}` : "Send now"}
             </ActionBtn>
             <ActionBtn busy={busy} danger onClick={() => void act("cancel")}>
               Cancel

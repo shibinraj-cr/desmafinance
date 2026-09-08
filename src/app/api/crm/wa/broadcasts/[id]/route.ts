@@ -89,10 +89,20 @@ export const GET = withApiHandler(async (_req: Request, { params }: { params: { 
     take: 2000,
     select: recipientSelect,
   });
-  // A page of the rest for context (delivered / read / accepted / skipped).
+  // A page of the rest for context, most-progressed FIRST: read, then delivered,
+  // then accepted, and only then the not-yet-processed (pending/skipped, which
+  // have no timestamps → sorted last). Ordering by lifecycle `status` instead
+  // buries every result under the pending rows — on an in-flight campaign with
+  // hundreds pending, the delivered/read rows fall off the 500-row page entirely
+  // and the report looks empty while the scoreboard says otherwise.
   const pageRecipients = await prisma.waBroadcastRecipient.findMany({
     where: { broadcastId: params.id },
-    orderBy: [{ status: "asc" }, { id: "asc" }],
+    orderBy: [
+      { readAt: { sort: "desc", nulls: "last" } },
+      { deliveredAt: { sort: "desc", nulls: "last" } },
+      { sentAt: { sort: "desc", nulls: "last" } },
+      { id: "asc" },
+    ],
     take: 500,
     select: recipientSelect,
   });
