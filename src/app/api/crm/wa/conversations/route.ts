@@ -41,6 +41,8 @@ export const GET = withApiHandler(async (req: Request) => {
   // consultant's `visibility` already hard-scopes them to their own threads, so
   // this can only narrow further, never widen.
   const owner = sp.getAll("owner");
+  // Broadcast-reply narrowing: "__any__" = any campaign, else one campaign name.
+  const campaign = sp.get("campaign");
   // Floored and floored-at-1: Prisma requires an Int, and a negative `take`
   // means "page backwards", which the hasMore/slice arithmetic below cannot
   // express — an unvalidated `?limit=-5` would silently return the wrong page.
@@ -49,7 +51,7 @@ export const GET = withApiHandler(async (req: Request) => {
   const cursor = sp.get("cursor");
 
   const visibility = conversationVisibilityWhere(access, userId);
-  const where = buildInboxWhere(filter, { userId, isBde: access.isBde, visibility, owner }, search);
+  const where = buildInboxWhere(filter, { userId, isBde: access.isBde, visibility, owner, campaign }, search);
 
   const rows = await prisma.waConversation.findMany({
     where,
@@ -69,6 +71,7 @@ export const GET = withApiHandler(async (req: Request) => {
         select: { id: true, candidateName: true, status: { select: { label: true, color: true } } },
       },
       assignedTo: { select: { id: true, username: true, leadPulseRole: { select: { displayName: true } } } },
+      sourceCampaign: true,
       // Newest message only — the list shows a one-line preview, not a thread.
       messages: {
         orderBy: { occurredAt: "desc" },
@@ -90,10 +93,17 @@ export const GET = withApiHandler(async (req: Request) => {
   // the owner filter, so picking a consultant re-scopes the badges to their
   // threads rather than leaving them showing the whole desk's numbers.
   const ownerScope = inboxOwnerWhere(owner);
+  // The campaign lens, as a where-clause — folded into BOTH the list (via
+  // buildInboxWhere) and the badge counts below, so a badge never promises work
+  // the campaign-narrowed list cannot show (the same reason ownerScope is folded
+  // in).
+  const campaignScope: Prisma.WaConversationWhereInput | null =
+    campaign === "__any__" ? { sourceCampaign: { not: null } } : campaign ? { sourceCampaign: campaign } : null;
   const open: Prisma.WaConversationWhereInput = {
     status: { not: "closed" },
     ...visibility,
     ...(ownerScope ?? {}),
+    ...(campaignScope ?? {}),
   };
   const [needsReply, unread, unassigned] = await Promise.all([
     prisma.waConversation.count({ where: { ...open, awaitingReply: true } }),
@@ -101,10 +111,26 @@ export const GET = withApiHandler(async (req: Request) => {
     prisma.waConversation.count({ where: { ...open, assignedToId: null } }),
   ]);
 
+  // Distinct campaigns with at least one reply, for the filter dropdown. Scoped
+  // to what this user may see, so the options never promise threads the list
+  // then hides.
+  const campaignGroups = await prisma.waConversation.groupBy({
+    by: ["sourceCampaign"],
+    // Match the working lists: exclude closed threads, so the dropdown never
+    // offers a campaign whose only visible replies have been closed (picking it
+    // would then show nothing).
+    where: { sourceCampaign: { not: null }, status: { not: "closed" }, ...(visibility ?? {}) },
+  });
+  const campaigns = campaignGroups
+    .map((g) => g.sourceCampaign)
+    .filter((c): c is string => !!c)
+    .sort((a, b) => a.localeCompare(b));
+
   return NextResponse.json({
     conversations: page.map(serializeInboxRow),
     nextCursor: hasMore ? page[page.length - 1]?.id ?? null : null,
     counts: { needsReply, unread, unassigned },
+    campaigns,
     filter,
   });
 });

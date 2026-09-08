@@ -2684,6 +2684,14 @@ model WaConversation {
   /// pagination. Set on inbound ingest, cleared on outbound send.
   awaitingReply    Boolean   @default(false)
 
+  /// The most recent broadcast campaign this number was sent, stamped when they
+  /// REPLY (see mirrorBroadcastContext). Lets the inbox filter to "broadcast
+  /// replies" / one campaign, and label the row — a reply used to arrive with no
+  /// hint which campaign it answered. Null for a thread that never replied to a
+  /// broadcast.
+  sourceCampaign   String?
+  sourceCampaignAt DateTime?
+
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
@@ -2695,6 +2703,8 @@ model WaConversation {
   @@index([sessionExpiresAt])
   /// The inbox's default landing query: unanswered threads, newest first.
   @@index([awaitingReply, lastMessageAt])
+  /// The broadcast-replies filter.
+  @@index([sourceCampaign])
 }
 
 /// One WhatsApp message, inbound or outbound.
