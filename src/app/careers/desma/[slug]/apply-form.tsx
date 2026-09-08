@@ -1,6 +1,7 @@
 "use client";
 
 import { useRef, useState } from "react";
+import { useRouter } from "next/navigation";
 import { trackPixel } from "@/lib/hiring/fbq";
 
 /**
@@ -23,16 +24,19 @@ type Question = {
 const inputCls = "w-full min-h-[44px] px-md py-sm rounded-lg text-body-md";
 
 export function ApplyForm({
+  slug,
   jobId,
   jobTitle,
   resumeMode,
   questions,
 }: {
+  slug: string;
   jobId: string;
   jobTitle: string;
   resumeMode: string;
   questions: Question[];
 }) {
+  const router = useRouter();
   const [state, setState] = useState<"idle" | "sending" | "sent">("idle");
   const [error, setError] = useState<string | null>(null);
   // The form's own dwell time — a script posts instantly, a person does not.
@@ -51,9 +55,10 @@ export function ApplyForm({
       const res = await fetch("/api/careers/apply", { method: "POST", body: data });
       if (res.ok) {
         setState("sent");
-        // The conversion Meta optimises the ad against. Named per job so one
-        // pixel can serve every role and still report them separately.
+        // Fired here rather than on the thank-you page: a refresh of that page
+        // would report a second conversion for the same application.
         trackPixel("Lead", { content_name: jobTitle, content_category: "careers" });
+        router.push(`/careers/desma/${slug}/thanks`);
         return;
       }
       const payload = (await res.json().catch(() => ({}))) as {
@@ -75,6 +80,8 @@ export function ApplyForm({
     }
   }
 
+  // Shown for the moment between a successful post and the thank-you page
+  // rendering — and it is also the whole answer if that navigation fails.
   if (state === "sent") {
     return (
       <div role="status" className="careers-card p-lg">
