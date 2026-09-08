@@ -125,10 +125,11 @@ export function skipReasonFor(lead: {
 /**
  * Render one recipient's template variables.
  *
- * The map is `{"1": "{name}", "2": "{service}"}` — Meta numbers body variables
- * positionally, and the tokens are the CRM's existing merge fields, so a
+ * The map is `{"1": "first_name", "2": "service"}` — Meta numbers body variables
+ * positionally, and the values are the CRM's existing merge-field tokens, so a
  * broadcast reuses exactly the vocabulary the email and WhatsApp composers
- * already use rather than inventing a second one.
+ * already use rather than inventing a second one. The composer stores a BARE
+ * token (`first_name`); a brace form (`{first_name}`) is accepted too — see below.
  */
 export type AudienceLead = {
   candidateName: string;
@@ -157,8 +158,19 @@ export function renderRecipientParams(
   });
 
   const out: Record<string, string> = {};
-  for (const [slot, token] of Object.entries(variableMap)) {
-    out[slot] = fillTemplate(token, vars);
+  for (const [slot, raw] of Object.entries(variableMap)) {
+    const value = (raw ?? "").trim();
+    if (!value) {
+      out[slot] = "";
+      continue;
+    }
+    // The composer stores a BARE merge token ("first_name"), but fillTemplate
+    // only substitutes BRACED tokens ("{first_name}") — so a bare token used to
+    // echo its own name ("Hi first_name," instead of "Hi Deepa,"), sending every
+    // recipient the literal word. Wrap a bare identifier before rendering; a
+    // brace/free-text value (older data, or a hand-built map) passes straight
+    // through.
+    out[slot] = /^[a-z0-9_]+$/i.test(value) ? fillTemplate(`{${value}}`, vars) : fillTemplate(value, vars);
   }
   return out;
 }
