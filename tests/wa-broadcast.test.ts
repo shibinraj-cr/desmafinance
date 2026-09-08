@@ -5,6 +5,7 @@ import {
   skipReasonFor,
   broadcastLeadWhere,
   headerMediaConsistent,
+  resendScopeWhere,
 } from "@/lib/wa/broadcast";
 import { isOptOutMessage } from "@/lib/wa/inbound";
 import {
@@ -33,6 +34,22 @@ describe("isOptOutMessage", () => {
   it("ignores empty input", () => {
     expect(isOptOutMessage(null)).toBe(false);
     expect(isOptOutMessage("   ")).toBe(false);
+  });
+});
+
+describe("resendScopeWhere", () => {
+  // The default must INCLUDE null waStatus (never-sent) — a bare notIn drops
+  // NULLs under SQL three-valued logic, which are exactly the rows to re-hit.
+  it("targets everyone not confirmed delivered/read by default (incl. never-sent)", () => {
+    const expected = { OR: [{ waStatus: null }, { waStatus: { notIn: ["delivered", "read"] } }] };
+    expect(resendScopeWhere("not_delivered")).toEqual(expected);
+    expect(resendScopeWhere(null)).toEqual(expected);
+    expect(resendScopeWhere(undefined)).toEqual(expected);
+    expect(resendScopeWhere("anything_unknown")).toEqual(expected);
+  });
+
+  it("targets only the errored recipients for failed_only", () => {
+    expect(resendScopeWhere("failed_only")).toEqual({ OR: [{ status: "failed" }, { waStatus: "failed" }] });
   });
 });
 

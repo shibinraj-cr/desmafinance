@@ -2820,6 +2820,14 @@ model WaBroadcast {
   headerMediaType String? // 'image' | 'video' | 'document'
   headerMediaUrl  String? // public https URL Meta can fetch
 
+  /// Re-send provenance: when set, this campaign's audience is NOT a lead segment
+  /// — it is seeded from the recipients of broadcast `resendOfId` whose delivery
+  /// outcome matched `resendScope` (see materialiseAudience). A plain id, not an
+  /// FK: if the source is deleted its recipients cascade away and this simply
+  /// materialises to nobody.
+  resendOfId  String?
+  resendScope String? // 'not_delivered' | 'failed_only'
+
   /// 'draft' | 'scheduled' | 'sending' | 'sent' | 'cancelled' | 'failed'
   status      String    @default("draft")
   /// When the drain may begin. Null means "as soon as it is queued".
