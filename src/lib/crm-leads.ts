@@ -154,12 +154,44 @@ export type LeadFilterParams = {
  * midnight — matching how the leads list renders assigned/created timestamps.
  */
 export function assignedDayRange(day: string | undefined): { from: Date; to: Date } | null {
+  const from = localDay(day);
+  if (!from) return null;
+  return { from, to: localDay(day, 1)! };
+}
+
+/**
+ * Local midnight for the calendar day `YYYY-MM-DD`, optionally `offsetDays`
+ * later. `undefined` when the string is absent or unparseable. The day-offset
+ * goes through the Date constructor rather than adding 24h of milliseconds, so
+ * it stays correct across month ends (and any DST boundary).
+ */
+function localDay(day: string | undefined, offsetDays = 0): Date | undefined {
   const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec((day ?? "").trim());
-  if (!m) return null;
-  const from = new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3]));
-  if (Number.isNaN(from.getTime())) return null;
-  const to = new Date(from.getTime() + 24 * 60 * 60 * 1000);
-  return { from, to };
+  if (!m) return undefined;
+  const d = new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3]) + offsetDays);
+  return Number.isNaN(d.getTime()) ? undefined : d;
+}
+
+/**
+ * Half-open `[from, to)` due-date range from the two calendar days the tasks
+ * board's "Due" filter offers. Either end may be left blank — each side applies
+ * on its own, so "from 01 Jul" (everything due since July) and "until 31 Jul"
+ * (everything due up to month end) are both valid narrowings.
+ *
+ * `to` is the last day the user wants *included*, so it resolves to the
+ * following midnight. Boundaries are server-local midnight, matching the
+ * overdue/today/this-week buckets this range intersects with. An inverted range
+ * (from after to) is a half-typed state, not a request for zero rows, so it is
+ * ignored until it makes sense.
+ */
+export function dueDateRange(
+  from: string | undefined,
+  to: string | undefined,
+): { from?: Date; to?: Date } {
+  const start = localDay(from);
+  const end = localDay(to, 1);
+  if (start && end && start >= end) return {};
+  return { from: start, to: end };
 }
 
 /**
@@ -689,6 +721,9 @@ export type CrmTaskFilterParams = {
   assignee?: MultiFilterValue; // userIds | 'unassigned' | 'all'
   priority?: MultiFilterValue; // 'low' | 'normal' | 'high'
   due?: MultiFilterValue; // 'overdue' | 'today' | 'week' | 'no_date'
+  /** Half-open `dueAt` range (e.g. from {@link dueDateRange}). `dueTo` is exclusive. */
+  dueFrom?: Date;
+  dueTo?: Date;
   kind?: MultiFilterValue; // 'reinquiry' — re-inquiry / re-engage follow-ups
   q?: string; // matches task subject OR lead name
   /** Injected "now" so date math is stable within a request. */
@@ -753,6 +788,17 @@ export function buildCrmTaskWhere(p: CrmTaskFilterParams): Prisma.CrmTaskWhereIn
   }
   if (dueClauses.length > 0) and.push({ OR: dueClauses });
 
+  // An explicit due-date range *narrows* the buckets rather than joining their
+  // union: "Overdue" + 01–31 Jul is the July slice of the overdue pile, which is
+  // the whole point of pairing them. It lands in `AND` alongside the bucket OR
+  // (paired with "No due date" it therefore matches nothing, honestly).
+  if (p.dueFrom || p.dueTo) {
+    const dueAt: Prisma.DateTimeFilter = {};
+    if (p.dueFrom) dueAt.gte = p.dueFrom;
+    if (p.dueTo) dueAt.lt = p.dueTo;
+    and.push({ dueAt });
+  }
+
   const q = p.q?.trim();
   if (q) {
     where.OR = [
@@ -777,11 +823,14 @@ export function crmTaskFilterParamsFromQuery(
   opts: { isBde: boolean; userId: string; now?: Date },
 ): CrmTaskFilterParams {
   const status = readAll(sp, "status");
+  const dueRange = dueDateRange(readOne(sp, "dueFrom"), readOne(sp, "dueTo"));
   return {
     status: status.length > 0 ? status : ["open"],
     assignee: resolveAssigneeFilter(readAll(sp, "assignee"), opts),
     priority: readAll(sp, "priority"),
     due: readAll(sp, "due"),
+    dueFrom: dueRange.from,
+    dueTo: dueRange.to,
     kind: readAll(sp, "kind"),
     q: readOne(sp, "q"),
     now: opts.now,

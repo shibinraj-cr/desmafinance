@@ -17,6 +17,13 @@ export type TaskCounts = { open: number; overdue: number; dueToday: number; unas
 // ── Reusable class strings (verbatim from the leads board design system) ────
 const selectClass =
   "h-9 px-md rounded-lg border border-outline-variant bg-surface-container-lowest text-on-surface text-label-sm focus:border-primary focus:ring-2 focus:ring-primary/30 outline-none transition";
+// Same shape as `selectClass` but with the colours left out, so a control can
+// pick its own border/background per state. Two competing `border-*` utilities
+// in one class string resolve by stylesheet order, not by which was written
+// last — which is why the active variant swaps the whole colour half instead of
+// appending to it. Mirrors how MultiSelect builds its trigger.
+const controlShape =
+  "h-9 px-md rounded-lg border text-label-sm outline-none transition inline-flex items-center gap-xs";
 
 function Th({ children, className = "" }: { children?: React.ReactNode; className?: string }) {
   return <th className={"px-md py-sm text-label-sm uppercase tracking-wider " + className}>{children}</th>;
@@ -141,6 +148,11 @@ export function TasksBoard({
   // ticks something else. Ticking both Open and Done widens it to everything.
   const statusVals = picked("status").length > 0 ? picked("status") : ["open"];
   const dueVals = picked("due");
+  // Explicit due-date range ("dueFrom"/"dueTo", local YYYY-MM-DD). Single-valued,
+  // so it reads with `get` rather than `picked`. Either end stands on its own.
+  const dueFrom = search.get("dueFrom") ?? "";
+  const dueTo = search.get("dueTo") ?? "";
+  const hasDueRange = !!dueFrom || !!dueTo;
   // Effective assignee mirrors the server default: a BDE with no explicit
   // assignee lands on their own queue ("my tasks"); non-BDEs (and the explicit
   // "All tasks" / "all" choice) see everyone. Used for the select value + chips.
@@ -151,6 +163,7 @@ export function TasksBoard({
     picked("assignee").length > 0 ||
     picked("priority").length > 0 ||
     dueVals.length > 0 ||
+    hasDueRange ||
     kindVals.length > 0 ||
     !!search.get("q");
 
@@ -164,19 +177,21 @@ export function TasksBoard({
 
   // Quick-filter chips. `active` highlights the chip when its filter is set.
   // Each chip is a one-click preset: it sets the dimension(s) it owns and clears
-  // the others (status/assignee/priority/due/kind) so the chips stay exclusive.
+  // the others (status/assignee/priority/due + range/kind) so the chips stay
+  // exclusive — including a due-date range typed before the chip was clicked.
   // "No narrowing" = the plain open list with no due/kind/priority facet, used so
   // the All/My scope chips light up only when nothing else is filtering.
-  const noNarrowing = statusVal === "open" && dueVals.length === 0 && kindVals.length === 0 && picked("priority").length === 0;
+  const noNarrowing =
+    statusVal === "open" && dueVals.length === 0 && !hasDueRange && kindVals.length === 0 && picked("priority").length === 0;
   const chips: { key: string; label: string; count?: number; active: boolean; patch: Record<string, string | string[] | null> }[] = [
-    { key: "open", label: "All open", count: counts.open, active: assigneeVal === "all" && noNarrowing, patch: { status: null, assignee: "all", priority: null, due: null, kind: null, q: null } },
-    { key: "overdue", label: "Overdue", count: counts.overdue, active: dueVal === "overdue", patch: { due: "overdue", status: null, assignee: null, priority: null, kind: null } },
-    { key: "today", label: "Due today", count: counts.dueToday, active: dueVal === "today", patch: { due: "today", status: null, assignee: null, priority: null, kind: null } },
-    { key: "reinquiry", label: "Re-inquiry", count: counts.reinquiry, active: kindVal === "reinquiry", patch: { kind: "reinquiry", status: null, assignee: null, priority: null, due: null } },
-    { key: "unassigned", label: "Unassigned", count: counts.unassignedOpen, active: assigneeVal === "unassigned", patch: { assignee: "unassigned", status: null, due: null, priority: null, kind: null } },
+    { key: "open", label: "All open", count: counts.open, active: assigneeVal === "all" && noNarrowing, patch: { status: null, assignee: "all", priority: null, due: null, kind: null, q: null, dueFrom: null, dueTo: null } },
+    { key: "overdue", label: "Overdue", count: counts.overdue, active: dueVal === "overdue", patch: { due: "overdue", status: null, assignee: null, priority: null, kind: null, dueFrom: null, dueTo: null } },
+    { key: "today", label: "Due today", count: counts.dueToday, active: dueVal === "today", patch: { due: "today", status: null, assignee: null, priority: null, kind: null, dueFrom: null, dueTo: null } },
+    { key: "reinquiry", label: "Re-inquiry", count: counts.reinquiry, active: kindVal === "reinquiry", patch: { kind: "reinquiry", status: null, assignee: null, priority: null, due: null, dueFrom: null, dueTo: null } },
+    { key: "unassigned", label: "Unassigned", count: counts.unassignedOpen, active: assigneeVal === "unassigned", patch: { assignee: "unassigned", status: null, due: null, priority: null, kind: null, dueFrom: null, dueTo: null } },
   ];
   if (access.isBde) {
-    chips.push({ key: "mine", label: "My tasks", active: assigneeVal === access.userId && noNarrowing, patch: { assignee: access.userId, status: null, due: null, kind: null, priority: null } });
+    chips.push({ key: "mine", label: "My tasks", active: assigneeVal === access.userId && noNarrowing, patch: { assignee: access.userId, status: null, due: null, kind: null, priority: null, dueFrom: null, dueTo: null } });
   }
 
   // When completing the last open task on a still-active lead, the API rejects
@@ -376,6 +391,43 @@ export function TasksBoard({
           onChange={(next) => update({ due: next })}
         />
 
+        {/* Due-date range. Narrows whatever buckets are ticked rather than
+            joining them, so "Overdue" + 01–31 Jul is the July slice of the
+            overdue pile. Either end works alone ("everything due since 01 Jul").
+            Mirrors the Leads board's "Created" range control. */}
+        <label
+          className={
+            controlShape +
+            " " +
+            (hasDueRange
+              ? "border-primary bg-primary/10 text-on-surface"
+              : "border-outline-variant bg-surface-container-lowest text-on-surface-variant")
+          }
+          title="Show only tasks whose due date falls in this range"
+        >
+          <span className="material-symbols-outlined" style={{ fontSize: 18 }} aria-hidden>
+            date_range
+          </span>
+          <span className="whitespace-nowrap">Due</span>
+          <input
+            type="date"
+            value={dueFrom}
+            max={dueTo || undefined}
+            aria-label="Due on or after"
+            onChange={(e) => update({ dueFrom: e.target.value || null })}
+            className="bg-transparent outline-none text-on-surface"
+          />
+          <span aria-hidden>–</span>
+          <input
+            type="date"
+            value={dueTo}
+            min={dueFrom || undefined}
+            aria-label="Due on or before"
+            onChange={(e) => update({ dueTo: e.target.value || null })}
+            className="bg-transparent outline-none text-on-surface"
+          />
+        </label>
+
         <select className={selectClass} value={search.get("sort") ?? "due_asc"} onChange={(e) => update({ sort: e.target.value })}>
           {SORT_OPTIONS.map((o) => (
             <option key={o.value} value={o.value}>
@@ -387,7 +439,9 @@ export function TasksBoard({
         {anyFilter && (
           <button
             type="button"
-            onClick={() => update({ status: null, assignee: null, priority: null, due: null, kind: null, q: null })}
+            onClick={() =>
+              update({ status: null, assignee: null, priority: null, due: null, dueFrom: null, dueTo: null, kind: null, q: null })
+            }
             className="h-9 px-md rounded-lg border border-outline-variant text-label-sm text-on-surface-variant hover:text-on-surface hover:bg-surface-container-low transition"
           >
             Clear all
