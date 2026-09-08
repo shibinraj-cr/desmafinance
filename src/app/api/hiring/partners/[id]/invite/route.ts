@@ -4,7 +4,8 @@ import { withApiHandler } from "@/lib/api";
 import { notFound, unprocessable } from "@/lib/http-error";
 import { logger } from "@/lib/logger";
 import { siteBaseUrl } from "@/lib/site-url";
-import { getEmailConfig, sendEmail } from "@/lib/mailer";
+import { sendEmail } from "@/lib/mailer";
+import { getHiringEmailConfig } from "@/lib/hiring/email";
 import { requireHiring } from "@/lib/hiring/access";
 import { recordHiringAudit, clientIp } from "@/lib/hiring/audit";
 import { createMagicLink } from "@/lib/hiring/partner-scope";
@@ -26,7 +27,7 @@ export const POST = withApiHandler(async (req: Request, { params }: { params: { 
   const partner = await prisma.hiringPartner.findUnique({ where: { id: params.id } });
   if (!partner) throw notFound("That partner no longer exists.");
 
-  const cfg = await getEmailConfig();
+  const cfg = await getHiringEmailConfig();
   if (!cfg) {
     throw unprocessable(
       "Email is not configured, so the invite cannot be sent. Set it up on CRM → Settings → Integrations first.",
