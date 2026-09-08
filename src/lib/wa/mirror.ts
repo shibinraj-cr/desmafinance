@@ -36,6 +36,7 @@ import {
   WA_PROVIDER_KEY,
 } from "../app-settings";
 import { isOptOutMessage, type WaInboundMessage } from "./inbound";
+import { renderTemplatePreview } from "./cloud-provider";
 import type { WaProviderKey } from "./provider";
 
 /** Source master an auto-created lead is attributed to (see prisma/seed-lead-pulse.ts). */
@@ -205,6 +206,89 @@ async function createInboundLead(
   }
 
   return { lead, created: inserted.count > 0 };
+}
+
+/** How far back a broadcast send can be and still be shown as a reply's context. */
+const BROADCAST_CONTEXT_WINDOW_MS = 60 * 24 * 60 * 60 * 1000; // 60 days
+
+/**
+ * Drop the sent template into the thread when a broadcast recipient replies.
+ *
+ * A broadcast send calls Meta directly and records only the recipient row — it
+ * never writes to the inbox — so a reply used to land with no outbound above it
+ * and no hint which campaign it answered. On reply, find the most recent
+ * broadcast that sent to this number (within the window) and inject the template
+ * we sent as a back-dated outbound bubble, its label carrying the campaign name
+ * ("T2 · welcome_nurse"), so the BDE sees exactly what went out and to which
+ * campaign they are replying.
+ *
+ * ON REPLY, never on send: mirroring at send time would create a thread per
+ * recipient and bury the inbox under people who never answered. Idempotent — one
+ * bubble per campaign send, keyed on its send-time, so later replies don't stack
+ * copies. Carries NO providerMessageId on purpose: the wamid stays owned by the
+ * recipient row, so delivery-status keeps landing there (see applyDeliveryStatuses).
+ * The body is reconstructed from the locally-stored template plus this recipient's
+ * merge values; when the template has no local body (authored at Meta) the bubble
+ * still shows the campaign+template label.
+ */
+async function mirrorBroadcastContext(
+  conversationId: string,
+  phoneE164: string,
+  provider: WaProviderKey,
+): Promise<void> {
+  const since = new Date(Date.now() - BROADCAST_CONTEXT_WINDOW_MS);
+  const recipient = await prisma.waBroadcastRecipient.findFirst({
+    where: { phoneE164, status: "sent", sentAt: { gte: since } },
+    orderBy: { sentAt: "desc" },
+    select: {
+      id: true,
+      sentAt: true,
+      renderedParams: true,
+      broadcast: { select: { name: true, templateName: true } },
+    },
+  });
+  if (!recipient?.sentAt || !recipient.broadcast) return;
+
+  // `templateName` is stored "name:lang" (a WABA holds one name per language).
+  const [name, lang] = recipient.broadcast.templateName.split(":");
+  const tpl = await prisma.waTemplate.findFirst({
+    where: { name, ...(lang ? { language: lang } : {}) },
+    select: { spec: true },
+  });
+  const specBody =
+    tpl && tpl.spec && typeof tpl.spec === "object" && !Array.isArray(tpl.spec)
+      ? (tpl.spec as Record<string, unknown>).body
+      : undefined;
+  const body = renderTemplatePreview(
+    typeof specBody === "string" ? specBody : null,
+    (recipient.renderedParams ?? {}) as Record<string, string>,
+  );
+
+  // Idempotent AT THE DATABASE, not via a read-then-write: a deterministic,
+  // non-wamid id keys the bubble to this one campaign send, so a second reply
+  // arriving as a separate concurrent webhook collapses on the @unique
+  // providerMessageId (skipDuplicates) instead of stacking a duplicate. The id
+  // can never equal a Meta `wamid.…`, so a delivery-status callback never matches
+  // it — delivered/read/failed keeps landing on the recipient row, not here.
+  await prisma.waMessage.createMany({
+    data: [
+      {
+        conversationId,
+        direction: "out",
+        type: "template",
+        // The mono label above the bubble — carries the campaign so the reply's
+        // origin is unmistakable.
+        templateName: `${recipient.broadcast.name} · ${name}`,
+        body: body || null,
+        provider,
+        waStatus: "sent",
+        // Back-dated to the send so it sits ABOVE the reply in the thread.
+        occurredAt: recipient.sentAt,
+        providerMessageId: `bcastctx:${recipient.id}`,
+      },
+    ],
+    skipDuplicates: true,
+  });
 }
 
 /**
@@ -397,6 +481,13 @@ export async function ingestInboundMessage(
         text: msg.body,
       }).catch(() => undefined);
     }
+
+    // Show WHAT campaign this is a reply to, in the thread. A broadcast send never
+    // touches the inbox, so without this the reply arrives with no outbound above
+    // it and no campaign attribution. Best-effort, like the hook above — a missing
+    // context bubble must never cost us the message. Only on `stored`, so a
+    // redelivery cannot stack a second copy.
+    await mirrorBroadcastContext(conversation.id, phoneE164, config.provider).catch(() => undefined);
 
     return {
       ok: true,
