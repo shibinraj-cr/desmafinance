@@ -10,7 +10,7 @@ import { MetaPixelSetting } from "@/components/hiring/MetaPixelSetting";
 import { HiringSenderSetting } from "@/components/hiring/HiringSenderSetting";
 import { isCareersPublic } from "@/lib/hiring/careers";
 import { getMetaPixelId } from "@/lib/hiring/pixel";
-import { getHiringSender } from "@/lib/hiring/email";
+import { getHiringSender, getHiringSmtp, getHiringSmtpUser } from "@/lib/hiring/email";
 import { getEmailConfig } from "@/lib/mailer";
 import { getCreditsState, FEATURE_COSTS, FEATURE_LABELS } from "@/lib/hiring/ai/credits";
 import { SettingsClient } from "./client";
@@ -35,7 +35,7 @@ export default async function HiringSettingsPage() {
     );
   }
 
-  const [members, users, lastActive, credits, aiByFeature, careersPublic, metaPixelId, hiringSender, emailCfg, liveJobs] =
+  const [members, users, lastActive, credits, aiByFeature, careersPublic, metaPixelId, hiringSender, hiringSmtp, hiringSmtpUser, emailCfg, liveJobs] =
     await Promise.all([
     prisma.hiringMember.findMany({
       include: { user: { select: { id: true, username: true, email: true, isActive: true } } },
@@ -63,6 +63,8 @@ export default async function HiringSettingsPage() {
     isCareersPublic(),
     getMetaPixelId(),
     getHiringSender(),
+    getHiringSmtp(),
+    getHiringSmtpUser(),
     getEmailConfig(),
     prisma.hiringJob.count({ where: { status: "live", deletedAt: null } }),
   ]);
@@ -99,6 +101,8 @@ export default async function HiringSettingsPage() {
           address={hiringSender.address}
           name={hiringSender.name}
           globalAddress={emailCfg?.fromAddress ?? null}
+          smtpUser={hiringSmtpUser}
+          smtpPassSet={!!hiringSmtp?.pass}
         />
 
         <MetaPixelSetting pixelId={metaPixelId} careersPublic={careersPublic} />
