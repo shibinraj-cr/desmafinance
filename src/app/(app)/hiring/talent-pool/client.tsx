@@ -26,16 +26,39 @@ export function TalentPoolClient({
   prospects,
   counts,
   activeState,
+  jobs,
+  activeJobId,
+  sort,
+  hiddenZeroCount,
+  showingAll,
   canWrite,
   loadedAt,
 }: {
   prospects: Prospect[];
   counts: Record<string, number>;
   activeState: string;
+  jobs: { id: string; title: string }[];
+  activeJobId: string;
+  sort: string;
+  hiddenZeroCount: number;
+  showingAll: boolean;
   canWrite: boolean;
   loadedAt: string;
 }) {
   const router = useRouter();
+
+  /**
+   * Build a URL that changes ONE filter and leaves the rest alone. The state
+   * chips used to hard-code `?state=`, which silently dropped a chosen job the
+   * moment somebody clicked a stage.
+   */
+  function href(next: Partial<{ state: string; job: string; sort: string; all: string }>): string {
+    const q = new URLSearchParams();
+    const merged = { state: activeState, job: activeJobId, sort, all: showingAll ? "1" : "", ...next };
+    for (const [k, v] of Object.entries(merged)) if (v) q.set(k, v);
+    const qs = q.toString();
+    return qs ? `/hiring/talent-pool?${qs}` : "/hiring/talent-pool";
+  }
   const [adding, setAdding] = useState(false);
   const [busy, setBusy] = useState<string | null>(null);
   /** Which card is asking for a note, and what has been typed into it. */
@@ -104,7 +127,7 @@ export function TalentPoolClient({
       <div className="flex flex-wrap items-center justify-between gap-md">
         <nav className="flex flex-wrap gap-xs" aria-label="Filter by state">
           <a
-            href="/hiring/talent-pool"
+            href={href({ state: "" })}
             aria-current={activeState === "" ? "page" : undefined}
             className={
               "h-8 inline-flex items-center px-md rounded-full text-label-sm border transition " +
@@ -118,7 +141,7 @@ export function TalentPoolClient({
           {TALENT_POOL_STATES.map((s) => (
             <a
               key={s}
-              href={`/hiring/talent-pool?state=${s}`}
+              href={href({ state: s })}
               aria-current={activeState === s ? "page" : undefined}
               className={
                 "h-8 inline-flex items-center px-md rounded-full text-label-sm border transition " +
@@ -132,7 +155,35 @@ export function TalentPoolClient({
             </a>
           ))}
         </nav>
-        <div className="flex items-center gap-xs">
+        <div className="flex flex-wrap items-center gap-xs">
+          {jobs.length > 0 && (
+            <>
+              <label className="sr-only" htmlFor="pool-job">Filter by job</label>
+              <select
+                id="pool-job"
+                className="h-9 px-sm rounded-lg border border-outline-variant bg-surface-container-lowest text-body-sm"
+                value={activeJobId}
+                onChange={(e) => router.push(href({ job: e.target.value, all: "" }))}
+              >
+                <option value="">All jobs</option>
+                {jobs.map((j) => (
+                  <option key={j.id} value={j.id}>{j.title}</option>
+                ))}
+              </select>
+            </>
+          )}
+          <label className="sr-only" htmlFor="pool-sort">Sort by</label>
+          <select
+            id="pool-sort"
+            className="h-9 px-sm rounded-lg border border-outline-variant bg-surface-container-lowest text-body-sm"
+            value={sort}
+            onChange={(e) => router.push(href({ sort: e.target.value }))}
+          >
+            <option value="fit">Best fit first</option>
+            <option value="due">Follow-up due</option>
+            <option value="recent">Recently added</option>
+            <option value="name">Name</option>
+          </select>
           <RefreshBar loadedAt={loadedAt} />
           {canWrite && (
             <button type="button" className={primaryBtn} onClick={() => setAdding((v) => !v)}>
@@ -187,6 +238,26 @@ export function TalentPoolClient({
         </section>
       )}
 
+      {hiddenZeroCount > 0 && (
+        <p className="text-body-sm text-on-surface-variant">
+          {hiddenZeroCount} {hiddenZeroCount === 1 ? "person is" : "people are"} hidden with no
+          keyword match for this role.{" "}
+          <a href={href({ all: "1" })} className="text-primary hover:underline">
+            Show them anyway
+          </a>
+          {" — "}a must-have worded so nothing can evidence it, like “Language” or “Degree”, scores
+          everyone zero.
+        </p>
+      )}
+      {showingAll && activeJobId && (
+        <p className="text-body-sm text-on-surface-variant">
+          Showing everyone, including no-match.{" "}
+          <a href={href({ all: "" })} className="text-primary hover:underline">
+            Hide no-match
+          </a>
+        </p>
+      )}
+
       {prospects.length === 0 ? (
         <div className="rounded-xl border border-dashed border-outline-variant bg-surface-container-lowest p-xl text-center">
           <div className="text-body-lg text-on-surface mb-xs">
@@ -226,7 +297,7 @@ export function TalentPoolClient({
                 </div>
               )}
 
-              <Fit matches={p.matches} />
+              <Fit matches={p.matches} activeJobId={activeJobId} />
 
               <div className="text-caption text-on-surface-variant">
                 Last touched {p.lastTouchAt ? formatHiringDate(p.lastTouchAt) : "never"}
@@ -321,15 +392,33 @@ export function TalentPoolClient({
  * quiet about it — small, grey, under the skills — and the profile page one
  * click away carries the evidence.
  */
-function Fit({ matches }: { matches: { jobId: string; title: string; fit: number }[] }) {
+function Fit({
+  matches,
+  activeJobId,
+}: {
+  matches: { jobId: string; title: string; fit: number }[];
+  activeJobId: string;
+}) {
   if (matches.length === 0) return null;
+  // Filtering to a job makes that row the point of the card; the others stay
+  // visible underneath, because "who else might this person suit?" is the
+  // question a pool is for.
+  const ordered = activeJobId
+    ? [...matches].sort((a, b) => Number(b.jobId === activeJobId) - Number(a.jobId === activeJobId))
+    : matches;
   return (
     <div className="space-y-2xs">
       <div className="text-label-sm uppercase tracking-wider text-on-surface-variant">
         Keyword fit
       </div>
-      {matches.map((m) => (
-        <div key={m.jobId} className="flex items-center gap-sm">
+      {ordered.map((m) => (
+        <div
+          key={m.jobId}
+          className={
+            "flex items-center gap-sm " +
+            (activeJobId && m.jobId === activeJobId ? "text-on-surface font-medium" : "")
+          }
+        >
           <span className="text-caption text-on-surface-variant truncate flex-1 min-w-0" title={m.title}>
             {m.title}
           </span>
