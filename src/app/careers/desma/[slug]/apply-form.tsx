@@ -1,6 +1,7 @@
 "use client";
 
 import { useRef, useState } from "react";
+import { trackPixel } from "@/lib/hiring/fbq";
 
 /**
  * The public apply form. Built to work on a phone at 390px, without JavaScript
@@ -50,6 +51,9 @@ export function ApplyForm({
       const res = await fetch("/api/careers/apply", { method: "POST", body: data });
       if (res.ok) {
         setState("sent");
+        // The conversion Meta optimises the ad against. Named per job so one
+        // pixel can serve every role and still report them separately.
+        trackPixel("Lead", { content_name: jobTitle, content_category: "careers" });
         return;
       }
       const payload = (await res.json().catch(() => ({}))) as {
