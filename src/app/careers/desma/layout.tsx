@@ -1,5 +1,7 @@
 import Image from "next/image";
 import Link from "next/link";
+import { MetaPixel } from "@/components/careers/MetaPixel";
+import { getMetaPixelId } from "@/lib/hiring/pixel";
 
 /**
  * The public careers shell.
@@ -10,9 +12,14 @@ import Link from "next/link";
  * scoped to `.careers-theme` (see globals.css) so nothing here can leak into
  * the rest of the app.
  */
-export default function CareersLayout({ children }: { children: React.ReactNode }) {
+export default async function CareersLayout({ children }: { children: React.ReactNode }) {
+  // Careers pages only. The rest of Desgro shows salaries, résumés and client
+  // records, and none of that traffic belongs in an ad platform.
+  const pixelId = await getMetaPixelId();
+
   return (
     <div className="careers-theme min-h-screen flex flex-col">
+      <MetaPixel pixelId={pixelId} />
       <div className="careers-rule" aria-hidden />
 
       <header className="careers-surface border-b careers-border">

@@ -6,7 +6,9 @@ import { getHiringAccess } from "@/lib/hiring/access";
 import { can } from "@/lib/hiring/rbac";
 import { CreditsMeter } from "@/components/hiring/CreditsMeter";
 import { CareersVisibility } from "@/components/hiring/CareersVisibility";
+import { MetaPixelSetting } from "@/components/hiring/MetaPixelSetting";
 import { isCareersPublic } from "@/lib/hiring/careers";
+import { getMetaPixelId } from "@/lib/hiring/pixel";
 import { getCreditsState, FEATURE_COSTS, FEATURE_LABELS } from "@/lib/hiring/ai/credits";
 import { SettingsClient } from "./client";
 
@@ -30,7 +32,8 @@ export default async function HiringSettingsPage() {
     );
   }
 
-  const [members, users, lastActive, credits, aiByFeature, careersPublic, liveJobs] = await Promise.all([
+  const [members, users, lastActive, credits, aiByFeature, careersPublic, metaPixelId, liveJobs] =
+    await Promise.all([
     prisma.hiringMember.findMany({
       include: { user: { select: { id: true, username: true, email: true, isActive: true } } },
       orderBy: [{ isActive: "desc" }, { createdAt: "asc" }],
@@ -55,6 +58,7 @@ export default async function HiringSettingsPage() {
       _count: { _all: true },
     }),
     isCareersPublic(),
+    getMetaPixelId(),
     prisma.hiringJob.count({ where: { status: "live", deletedAt: null } }),
   ]);
 
@@ -85,6 +89,8 @@ export default async function HiringSettingsPage() {
         />
 
         <CareersVisibility isPublic={careersPublic} liveJobCount={liveJobs} />
+
+        <MetaPixelSetting pixelId={metaPixelId} careersPublic={careersPublic} />
 
         <CreditsMeter
           budget={credits.budget}
