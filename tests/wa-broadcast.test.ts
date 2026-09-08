@@ -1,5 +1,11 @@
 import { describe, it, expect } from "vitest";
-import { renderRecipientParams, skipReasonFor, broadcastLeadWhere } from "@/lib/wa/broadcast";
+import { z } from "zod";
+import {
+  renderRecipientParams,
+  skipReasonFor,
+  broadcastLeadWhere,
+  headerMediaConsistent,
+} from "@/lib/wa/broadcast";
 import { isOptOutMessage } from "@/lib/wa/inbound";
 import {
   buildTemplateComponents,
@@ -27,6 +33,41 @@ describe("isOptOutMessage", () => {
   it("ignores empty input", () => {
     expect(isOptOutMessage(null)).toBe(false);
     expect(isOptOutMessage("   ")).toBe(false);
+  });
+});
+
+describe("headerMediaConsistent", () => {
+  // The drain builds the header only when BOTH type and url are set, so a
+  // half-set pair sends with no header component and Meta rejects the whole
+  // audience with 132012 — reject it at the schema boundary, whatever the caller.
+  const schema = z
+    .object({
+      headerMediaType: z.enum(["image", "video", "document"]).nullable().optional(),
+      headerMediaUrl: z.string().url().nullable().optional(),
+    })
+    .superRefine(headerMediaConsistent);
+
+  it("accepts a text template (neither field)", () => {
+    expect(schema.safeParse({}).success).toBe(true);
+    expect(schema.safeParse({ headerMediaType: null, headerMediaUrl: null }).success).toBe(true);
+  });
+
+  it("accepts a media header with both type and url", () => {
+    expect(
+      schema.safeParse({ headerMediaType: "image", headerMediaUrl: "https://x.test/a.jpg" }).success,
+    ).toBe(true);
+  });
+
+  it("rejects a media type with no url (the 132012 landmine)", () => {
+    const r = schema.safeParse({ headerMediaType: "image", headerMediaUrl: null });
+    expect(r.success).toBe(false);
+    if (!r.success) expect(r.error.issues[0].path).toEqual(["headerMediaUrl"]);
+  });
+
+  it("rejects a url with no media type", () => {
+    const r = schema.safeParse({ headerMediaType: null, headerMediaUrl: "https://x.test/a.jpg" });
+    expect(r.success).toBe(false);
+    if (!r.success) expect(r.error.issues[0].path).toEqual(["headerMediaType"]);
   });
 });
 

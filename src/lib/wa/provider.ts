@@ -97,6 +97,14 @@ export type WaSendTemplateInput = {
   /** Merge values, already rendered by the caller. */
   params?: Record<string, string>;
   /**
+   * Media for a template whose HEADER is an image/video/document. Meta requires
+   * the media on every send (the sample uploaded at creation is only for
+   * approval), so it rides here rather than in `params` (which is per-recipient
+   * text). `link` must be a public https URL Meta can fetch. Null/omitted for
+   * text-header or header-less templates.
+   */
+  headerMedia?: { kind: "image" | "video" | "document"; link: string; fileName?: string } | null;
+  /**
    * Pre-resolved destination, for callers that already picked an endpoint —
    * today's outbox rows capture the URL at enqueue time so that editing settings
    * later never rewrites the history of what was actually sent where. Ignored by
@@ -139,6 +147,12 @@ export type WaTemplateSummary = {
   body: string | null;
   /** Header text, when the template has a text header. */
   header: string | null;
+  /**
+   * The header's format — 'TEXT' | 'IMAGE' | 'VIDEO' | 'DOCUMENT', or null when
+   * the template has no header. A media header means a send must attach the media
+   * (see WaSendTemplateInput.headerMedia); the composer uses this to ask for it.
+   */
+  headerFormat: string | null;
   /**
    * How many `{{n}}` placeholders the body carries.
    *

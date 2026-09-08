@@ -18,6 +18,7 @@
  * in memory between chunks, because nothing survives there.
  */
 import type { Prisma } from "@prisma/client";
+import { z } from "zod";
 import { prisma } from "../prisma";
 import { buildLeadWhere, type LeadFilterParams } from "../crm-leads";
 import { buildLeadMergeVars, fillTemplate } from "../crm";
@@ -55,6 +56,35 @@ const INTER_SEND_DELAY_MS = 120;
  * keep a campaign cycling forever.
  */
 const MAX_SEND_ATTEMPTS = 3;
+
+/**
+ * A media-header template must carry BOTH its media type and a URL, or neither.
+ *
+ * A half-set pair is a landmine: `drainBroadcasts` builds the header only when
+ * `url && type`, so a stored `type` without a `url` sends with NO header component
+ * and Meta rejects the whole audience with 132012 — the exact failure media-header
+ * support exists to prevent. The form gates this, but the form is not a boundary;
+ * a script or a direct API call is. Enforced at the schema so the pair can never
+ * be persisted inconsistently, whatever the caller.
+ */
+export function headerMediaConsistent(v: Record<string, unknown>, ctx: z.RefinementCtx): void {
+  const type = v.headerMediaType;
+  const url = v.headerMediaUrl;
+  if (type && !url) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ["headerMediaUrl"],
+      message: "A media-header template needs a header media URL",
+    });
+  }
+  if (url && !type) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ["headerMediaType"],
+      message: "A header media URL needs a media type",
+    });
+  }
+}
 
 export type BroadcastConfig = { enabled: boolean; batchSize: number };
 
@@ -306,7 +336,7 @@ export async function drainBroadcasts(now: Date = new Date()): Promise<DrainSumm
       OR: [{ scheduledAt: null }, { scheduledAt: { lte: now } }],
     },
     orderBy: { scheduledAt: "asc" },
-    select: { id: true, templateName: true, status: true },
+    select: { id: true, templateName: true, status: true, headerMediaType: true, headerMediaUrl: true },
   });
 
   const provider = await getWaProvider();
@@ -325,7 +355,23 @@ export async function drainBroadcasts(now: Date = new Date()): Promise<DrainSumm
       });
     }
 
-    const result = await drainOne(broadcast.id, broadcast.templateName, provider, config.batchSize, deadline);
+    // Campaign-level header media (same for every recipient) for a media-header
+    // template — Meta needs it on every send.
+    const headerMedia =
+      broadcast.headerMediaUrl && broadcast.headerMediaType
+        ? {
+            kind: broadcast.headerMediaType as "image" | "video" | "document",
+            link: broadcast.headerMediaUrl,
+          }
+        : null;
+    const result = await drainOne(
+      broadcast.id,
+      broadcast.templateName,
+      provider,
+      config.batchSize,
+      deadline,
+      headerMedia,
+    );
     summary.sent += result.sent;
     summary.failed += result.failed;
     summary.remaining += result.remaining;
@@ -344,6 +390,7 @@ async function drainOne(
   provider: Awaited<ReturnType<typeof getWaProvider>>,
   batchSize: number,
   deadline: number,
+  headerMedia: { kind: "image" | "video" | "document"; link: string } | null,
 ): Promise<{ sent: number; failed: number; remaining: number; stoppedEarly: boolean }> {
   let sent = 0;
   let failed = 0;
@@ -393,6 +440,7 @@ async function drainOne(
       toE164: recipient.phoneE164,
       template: templateName,
       params: (recipient.renderedParams ?? {}) as Record<string, string>,
+      headerMedia,
       endpointUrl: null,
     });
 
