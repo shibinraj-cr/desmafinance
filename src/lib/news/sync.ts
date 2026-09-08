@@ -15,6 +15,9 @@ import {
   assistantMessages,
   conversationTitle,
   splitIntoItems,
+  isSharedTaskUrl,
+  looksLikeSharedAutomation,
+  SHARED_TASK_GUIDANCE,
 } from "@/lib/news/chatgpt";
 
 /** How long a single source gets before we give up and move to the next one. */
@@ -38,6 +41,17 @@ const FIRST_RUN_MAX_ITEMS = 5;
 export const FIRST_RUN_MAX_AGE_DAYS = NEWS_WINDOW_DAYS;
 /** Per-run ceiling, so one misbehaving feed cannot fill the table. */
 const MAX_ITEMS_PER_RUN = 50;
+/**
+ * The same ceiling for a shared ChatGPT chat, set far higher.
+ *
+ * 50 is an anti-runaway guard against a feed we do not control. A shared chat is
+ * the opposite: one document an admin curated and pasted on purpose, often
+ * carrying weeks of accumulated updates they want backfilled. Worse, the low cap
+ * was not merely a trim — the leftovers were unreachable, because the next run
+ * sees an unchanged conversation, short-circuits, and files nothing further. So
+ * anything past the cap was silently lost for good, not deferred.
+ */
+const CHATGPT_MAX_ITEMS_PER_RUN = 500;
 
 export type SyncResult = {
   sourceId: string;
@@ -202,10 +216,32 @@ export async function syncSource(source: SourceRow, now = new Date()): Promise<S
 
   if (!isFetchableUrl(source.url)) return fail("not a fetchable public http(s) URL");
 
+  // Checked ahead of the mode, not inside the chatgpt branch: a task link is
+  // equally useless read as a page or as a feed, and left on "watch the page" it
+  // would sit at "working \u00b7 0 updates" forever instead of saying anything.
+  if (isSharedTaskUrl(source.url)) return fail(SHARED_TASK_GUIDANCE);
+
+  /**
+   * A ChatGPT share link is a conversation whatever the dropdown says, so the
+   * URL decides the read mode and the stored `kind` only breaks ties.
+   *
+   * Left on "watch the page" — an easy mis-set, and the mode an admin who has
+   * used it before will reach for again — the share URL yields a client-rendered
+   * shell with literally zero characters of text. The source then reports
+   * "working" forever while publishing nothing, the same silent failure that
+   * shared-task links caused. A mode dropdown should not be able to make a link
+   * unreadable.
+   */
+  const kind = shareIdFrom(source.url) ? "chatgpt" : source.kind;
+  if (kind !== source.kind) {
+    // Persist it so the Sources page shows how the link is really being read.
+    await prisma.newsSource.update({ where: { id: source.id }, data: { kind } }).catch(() => {});
+  }
+
   // A ChatGPT share page renders client-side, so the URL the admin pasted is not
   // the URL that holds the conversation. Read its data endpoint instead.
   let fetchUrl = source.url;
-  if (source.kind === "chatgpt") {
+  if (kind === "chatgpt") {
     const shareId = shareIdFrom(source.url);
     if (!shareId) {
       return fail(
@@ -223,7 +259,7 @@ export async function syncSource(source: SourceRow, now = new Date()): Promise<S
     // The share endpoint answers 404 both for a wrong id and for a conversation
     // whose sharing was turned off — the second is much likelier here, and the
     // fix is different, so name it.
-    if (source.kind === "chatgpt" && /HTTP 404/.test(msg)) {
+    if (kind === "chatgpt" && /HTTP 404/.test(msg)) {
       return fail(
         "This shared chat is no longer public. Re-share it in ChatGPT and paste the new link.",
       );
@@ -234,10 +270,15 @@ export async function syncSource(source: SourceRow, now = new Date()): Promise<S
   // Hash what we actually publish from, not the envelope around it. A share
   // payload carries view counts and moderation fields that churn between reads;
   // hashing the raw JSON would report an update every single day.
+  // Some shared objects are only identifiable from the page they serve. The
+  // router payload names its own type, so use that rather than guessing from the
+  // URL shape alone.
+  if (looksLikeSharedAutomation(body)) return fail(SHARED_TASK_GUIDANCE);
+
   const hash = hashString(
-    source.kind === "page"
+    kind === "page"
       ? pageText(body)
-      : source.kind === "chatgpt"
+      : kind === "chatgpt"
         ? chatGptContentFor(body)
         : body,
   );
@@ -254,7 +295,9 @@ export async function syncSource(source: SourceRow, now = new Date()): Promise<S
   }
 
   let candidates: ParsedFeedItem[];
-  if (source.kind === "chatgpt") {
+  /** Set when a chat carried more updates than one import can take. */
+  let truncatedFrom = 0;
+  if (kind === "chatgpt") {
     let payload: unknown;
     try {
       payload = JSON.parse(body);
@@ -303,7 +346,12 @@ export async function syncSource(source: SourceRow, now = new Date()): Promise<S
 
     // No first-run age filter here, unlike a feed: the admin pasted this link
     // deliberately, so its contents are new to the company whatever their date.
-    candidates = candidates.slice(0, MAX_ITEMS_PER_RUN);
+    if (candidates.length > CHATGPT_MAX_ITEMS_PER_RUN) {
+      // Never truncate in silence. The dropped entries cannot be recovered on a
+      // later run, so the admin has to be told to split the conversation up.
+      truncatedFrom = candidates.length;
+      candidates = candidates.slice(0, CHATGPT_MAX_ITEMS_PER_RUN);
+    }
 
     // Give the source the conversation's title when it was added with a
     // placeholder name, so the feed credits something meaningful.
@@ -311,7 +359,23 @@ export async function syncSource(source: SourceRow, now = new Date()): Promise<S
     if (convo && isFirstRun && source.name.trim().length === 0) {
       await prisma.newsSource.update({ where: { id: source.id }, data: { name: convo } }).catch(() => {});
     }
-  } else if (source.kind === "page") {
+  } else if (kind === "page") {
+    // A page with no readable text cannot be watched: there is nothing whose
+    // change could be detected, so this source would report "working" forever
+    // while being incapable of ever publishing. That is almost always a
+    // client-rendered app, where the words arrive by script after the HTML.
+    if (pageText(body).trim().length === 0) {
+      const why =
+        "There is no readable text at this link \u2014 the page builds itself in the browser, so there is nothing to watch. Use the site\u2019s RSS feed if it has one.";
+      await prisma.newsSource
+        .update({
+          where: { id: source.id },
+          data: { lastFetchedAt: now, lastStatus: "empty", lastError: why, lastItemCount: 0, contentHash: hash },
+        })
+        .catch(() => {});
+      return { ...base, status: "empty", created: 0, error: why };
+    }
+
     // No feed to read: the change in the page text IS the update. On a first run
     // there is no previous hash to compare against, so we only record the
     // baseline — announcing "updated" the moment a page is added would be a lie.
@@ -417,14 +481,27 @@ export async function syncSource(source: SourceRow, now = new Date()): Promise<S
     }
   }
 
+  const overflow = truncatedFrom
+    ? `That chat held ${truncatedFrom} updates \u2014 the newest ${CHATGPT_MAX_ITEMS_PER_RUN} were imported. Split the rest into a second shared chat to bring them in.`
+    : null;
+
   await prisma.newsSource
     .update({
       where: { id: source.id },
-      data: { lastFetchedAt: now, lastStatus: "ok", lastError: null, lastItemCount: created, contentHash: hash },
+      data: {
+        lastFetchedAt: now,
+        lastStatus: "ok",
+        // Truncation is not a failure, but it is the one "ok" outcome the admin
+        // must act on, so it persists on the row rather than living only in the
+        // response to whoever happened to trigger the import.
+        lastError: overflow,
+        lastItemCount: created,
+        contentHash: hash,
+      },
     })
     .catch(() => {});
 
-  return { ...base, status: "ok", created };
+  return { ...base, status: "ok", created, ...(overflow ? { error: overflow } : {}) };
 }
 
 /**

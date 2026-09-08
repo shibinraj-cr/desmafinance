@@ -172,11 +172,15 @@ export async function applyDeliveryStatuses(updates: readonly WaDeliveryUpdate[]
     // travels with the write instead of depending on what we read a moment ago.
     const supersedes = (Object.keys(RANK) as WaDeliveryState[]).filter((s) => RANK[s] < RANK[update.status]);
 
+    // Forward-only: a row already at a later stage matches nothing. Reused for
+    // both tables below — a wamid belongs to exactly one of them.
+    const guard = { OR: [{ waStatus: null }, { waStatus: { in: supersedes } }] };
+
     try {
       const result = await prisma.waMessage.updateMany({
         where: {
           providerMessageId: update.providerMessageId,
-          OR: [{ waStatus: null }, { waStatus: { in: supersedes } }],
+          ...guard,
         },
         data: {
           waStatus: update.status,
@@ -193,14 +197,41 @@ export async function applyDeliveryStatuses(updates: readonly WaDeliveryUpdate[]
         continue;
       }
 
-      // Nothing changed. Either we do not know this message — a send from
-      // another tool on the same number, or one that predates this feature — or
-      // the row is already further along. Separated because the first is worth
-      // investigating and the second is the guard working.
-      const exists = await prisma.waMessage.count({
-        where: { providerMessageId: update.providerMessageId },
+      // A BROADCAST send is not mirrored into the inbox as a WaMessage — its
+      // wamid lives only on the recipient row — so a delivered/read/failed
+      // callback for a broadcast matched nothing above and used to be discarded.
+      // Same unique providerMessageId, same forward-only guard; exactly one table
+      // owns any given wamid, so this can never double-count against WaMessage.
+      const rcpt = await prisma.waBroadcastRecipient.updateMany({
+        where: {
+          providerMessageId: update.providerMessageId,
+          ...guard,
+        },
+        data: {
+          waStatus: update.status,
+          // Distinct handset timestamps, set only on the event that earns them,
+          // so a later `read` never overwrites the real `delivered` moment.
+          ...(update.status === "delivered" ? { deliveredAt: update.occurredAt ?? new Date() } : {}),
+          ...(update.status === "read" ? { readAt: update.occurredAt ?? new Date() } : {}),
+          waErrorCode: update.status === "failed" ? update.errorCode : null,
+          waErrorMessage: update.status === "failed" ? update.errorMessage : null,
+        },
       });
-      if (exists > 0) summary.ignored++;
+
+      if (rcpt.count > 0) {
+        summary.applied += rcpt.count;
+        continue;
+      }
+
+      // Nothing moved forward in EITHER table. Either we do not know this wamid —
+      // a send from another tool, or one that predates this feature — or the row
+      // is already further along. Separated because the first is worth
+      // investigating and the second is the guard working.
+      const [msgExists, rcptExists] = await Promise.all([
+        prisma.waMessage.count({ where: { providerMessageId: update.providerMessageId } }),
+        prisma.waBroadcastRecipient.count({ where: { providerMessageId: update.providerMessageId } }),
+      ]);
+      if (msgExists + rcptExists > 0) summary.ignored++;
       else summary.unmatched++;
     } catch (e) {
       logger.warn("wa_delivery_status_failed", {

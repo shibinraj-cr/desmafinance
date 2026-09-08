@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 import { useState, useTransition } from "react";
 import { Section } from "@/components/Cards";
 import type { FeedItem } from "@/lib/news/read";
+import { groupByDay } from "@/lib/news/group";
 
 export type TopicChip = {
   id: string;
@@ -35,6 +36,27 @@ export const TOPIC_COLORS = Object.keys(TOPIC_TONE);
 
 export function toneFor(color: string) {
   return TOPIC_TONE[color] ?? TOPIC_TONE.blue;
+}
+
+/**
+ * Why a request produced nothing.
+ *
+ * `fetch` rejects — rather than resolving with a bad status — when the
+ * connection drops or the request is aborted, and a resolved-but-failed response
+ * still means the action did not happen. Both were being ignored here, so a
+ * refused delete looked exactly like a successful one.
+ */
+async function failureReason(res: Response | null, thrown?: unknown): Promise<string> {
+  if (thrown) {
+    const detail = thrown instanceof Error ? thrown.message : String(thrown);
+    return `The request didn't reach the server (${detail}). Try again.`;
+  }
+  if (res) {
+    const body = await res.json().catch(() => null);
+    if (body && typeof body.error === "string") return body.error;
+    return `That didn't work (${res.status}).`;
+  }
+  return "That didn't work.";
 }
 
 /** "2 hours ago" for anything recent; a plain date once that stops being useful. */
@@ -74,6 +96,7 @@ export function NewsFeedClient({
   // clicked, without waiting for the server round trip and refresh.
   const [readNow, setReadNow] = useState<Set<string>>(new Set());
   const [busy, setBusy] = useState(false);
+  const [actionError, setActionError] = useState<string | null>(null);
 
   function href(next: { topic?: string | null; unread?: boolean }) {
     const params = new URLSearchParams();
@@ -95,14 +118,21 @@ export function NewsFeedClient({
 
   async function markAllRead() {
     setBusy(true);
+    setActionError(null);
     try {
-      await fetch("/api/news/read-all", {
+      const res = await fetch("/api/news/read-all", {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({ topic: activeSlug }),
       });
+      if (!res.ok) {
+        setActionError(await failureReason(res));
+        return;
+      }
       setReadNow(new Set(items.map((i) => i.id)));
       start(() => router.refresh());
+    } catch (e) {
+      setActionError(await failureReason(null, e));
     } finally {
       setBusy(false);
     }
@@ -195,100 +225,138 @@ export function NewsFeedClient({
         </div>
       </div>
 
-      <Section title="">
-        {items.length === 0 ? (
+      {actionError && (
+        <p className="rounded-lg bg-red-50 text-red-800 text-label-sm px-md py-sm">{actionError}</p>
+      )}
+
+      {items.length === 0 ? (
+        <Section title="">
           <EmptyState hasTopics={hasTopics} unreadOnly={unreadOnly} isAdmin={isAdmin} />
-        ) : (
-          <ul className="space-y-sm">
-            {items.map((n) => {
-              const read = n.isRead || readNow.has(n.id);
-              const tone = toneFor(n.topicColor);
-              return (
-                <li
-                  key={n.id}
-                  className={
-                    "relative border rounded-lg p-md transition " +
-                    (read ? "border-outline-variant bg-surface" : "border-primary bg-yellow-50/30")
-                  }
-                >
-                  {!read && (
-                    <span
-                      aria-hidden
-                      className="absolute left-[-5px] top-md h-2.5 w-2.5 rounded-full bg-red-500"
-                    />
-                  )}
-                  <div className="flex items-start justify-between gap-sm">
-                    <div className="flex-1 min-w-0">
-                      <div className="flex flex-wrap items-center gap-xs mb-xs">
-                        <Link
-                          href={href({ topic: n.topicSlug })}
-                          scroll={false}
-                          className={"inline-flex items-center gap-xs rounded-full border px-sm py-[1px] text-[11px] " + tone.chip}
-                        >
-                          <span className="material-symbols-outlined" style={{ fontSize: 13 }}>
-                            {n.topicIcon}
-                          </span>
-                          {n.topicName}
-                        </Link>
-                        {n.isPinned && (
-                          <span className="inline-flex items-center gap-xs text-[11px] text-amber-700">
-                            <span className="material-symbols-outlined" style={{ fontSize: 13 }}>
-                              push_pin
+        </Section>
+      ) : (
+        <div className="space-y-lg">
+          {groupByDay(items).map((section) => (
+            <section key={section.key}>
+              {/* The date is a heading over the day's updates rather than a line
+                  of metadata under each one — these arrive as a dated daily
+                  briefing, and that is how they are read. */}
+              <h3 className="flex items-center gap-sm mb-sm">
+                <span className="text-label-sm font-bold uppercase tracking-widest text-on-surface-variant">
+                  {section.heading}
+                </span>
+                <span className="flex-1 h-px bg-outline-variant" />
+                <span className="text-caption text-on-surface-variant">
+                  {section.items.length} update{section.items.length === 1 ? "" : "s"}
+                </span>
+              </h3>
+
+              <div className="space-y-md">
+                {section.items.map((n) => {
+                  const read = n.isRead || readNow.has(n.id);
+                  const tone = toneFor(n.topicColor);
+                  return (
+                    <article
+                      key={n.id}
+                      className={
+                        "relative rounded-xl border p-lg transition " +
+                        (read
+                          ? "border-outline-variant bg-surface-container-lowest"
+                          : "border-primary bg-yellow-50/30")
+                      }
+                    >
+                      <div className="flex items-start justify-between gap-md">
+                        <div className="min-w-0 flex-1">
+                          <div className="flex flex-wrap items-center gap-xs mb-sm">
+                            {!read && (
+                              <span className="inline-flex items-center gap-xs rounded-full bg-red-500 text-white text-[10px] font-bold px-sm py-[1px]">
+                                NEW
+                              </span>
+                            )}
+                            <Link
+                              href={href({ topic: n.topicSlug })}
+                              scroll={false}
+                              className={
+                                "inline-flex items-center gap-xs rounded-full border px-sm py-[1px] text-[11px] " +
+                                tone.chip
+                              }
+                            >
+                              <span className="material-symbols-outlined" style={{ fontSize: 13 }}>
+                                {n.topicIcon}
+                              </span>
+                              {n.topicName}
+                            </Link>
+                            {n.isPinned && (
+                              <span className="inline-flex items-center gap-xs text-[11px] text-amber-700">
+                                <span className="material-symbols-outlined" style={{ fontSize: 13 }}>
+                                  push_pin
+                                </span>
+                                Pinned
+                              </span>
+                            )}
+                          </div>
+
+                          <h4 className="text-h3 font-bold text-on-surface leading-snug">{n.title}</h4>
+
+                          {n.summary && (
+                            /* The whole update, at reading size. For a briefing
+                               this text IS the article — there is no "full
+                               version" elsewhere to link to — so it is set as
+                               body copy, line length capped for readability and
+                               the writer's own line breaks preserved. */
+                            <div className="mt-md text-body-md text-on-surface whitespace-pre-wrap leading-relaxed max-w-[72ch]">
+                              {n.summary}
+                            </div>
+                          )}
+
+                          <div className="flex flex-wrap items-center gap-sm mt-md pt-sm border-t border-outline-variant">
+                            <span
+                              className="text-caption text-on-surface-variant"
+                              title={new Date(n.publishedAt).toLocaleString()}
+                            >
+                              {new Date(n.publishedAt).toLocaleTimeString(undefined, {
+                                hour: "numeric",
+                                minute: "2-digit",
+                              })}
+                              {n.sourceName ? ` · ${n.sourceName}` : ""}
                             </span>
-                            Pinned
-                          </span>
+                            {/* Only when there is somewhere to go: a feed entry
+                                is a teaser for an article elsewhere, while a
+                                briefing is complete in itself. */}
+                            {n.url && (
+                              <a
+                                href={n.url}
+                                target="_blank"
+                                rel="noopener noreferrer nofollow"
+                                onClick={() => markRead(n.id)}
+                                className="text-blue-700 underline text-label-sm"
+                              >
+                                Open the original ↗
+                              </a>
+                            )}
+                            {!read && (
+                              <button
+                                type="button"
+                                onClick={() => markRead(n.id)}
+                                className="ml-auto text-blue-700 underline text-label-sm"
+                              >
+                                Mark read
+                              </button>
+                            )}
+                          </div>
+                        </div>
+
+                        {isAdmin && (
+                          <AdminItemControls item={n} onDone={() => start(() => router.refresh())} />
                         )}
                       </div>
-
-                      <p className={"text-body-md " + (read ? "font-semibold" : "font-bold")}>{n.title}</p>
-
-                      {n.summary && (
-                        <p className="text-on-surface-variant text-label-sm mt-xs whitespace-pre-wrap">
-                          {n.summary}
-                        </p>
-                      )}
-
-                      <div className="flex flex-wrap items-center gap-sm mt-sm">
-                        {n.url && (
-                          <a
-                            href={n.url}
-                            target="_blank"
-                            rel="noopener noreferrer nofollow"
-                            onClick={() => markRead(n.id)}
-                            className="text-blue-700 underline text-label-sm"
-                          >
-                            Read the full update ↗
-                          </a>
-                        )}
-                        <span
-                          className="text-caption text-on-surface-variant"
-                          title={new Date(n.publishedAt).toLocaleString()}
-                        >
-                          {relativeTime(n.publishedAt)}
-                          {n.sourceName ? ` · ${n.sourceName}` : ""}
-                        </span>
-                      </div>
-                    </div>
-
-                    <div className="flex flex-col items-end gap-xs flex-shrink-0">
-                      {!read && (
-                        <button
-                          type="button"
-                          onClick={() => markRead(n.id)}
-                          className="text-blue-700 underline text-label-sm"
-                        >
-                          Mark read
-                        </button>
-                      )}
-                      {isAdmin && <AdminItemControls item={n} onDone={() => start(() => router.refresh())} />}
-                    </div>
-                  </div>
-                </li>
-              );
-            })}
-          </ul>
-        )}
-      </Section>
+                    </article>
+                  );
+                })}
+              </div>
+            </section>
+          ))}
+        </div>
+      )}
     </div>
   );
 }
@@ -349,16 +417,26 @@ function EmptyState({
 /** Pin and remove, shown only to admins, inline on each item. */
 function AdminItemControls({ item, onDone }: { item: FeedItem; onDone: () => void }) {
   const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
   async function pin(next: boolean) {
     setBusy(true);
+    setError(null);
     try {
-      await fetch(`/api/news/items/${item.id}`, {
+      const res = await fetch(`/api/news/items/${item.id}`, {
         method: "PATCH",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({ isPinned: next }),
       });
+      // Without this the pin silently reverts on the next render and the admin
+      // is left thinking they mis-clicked.
+      if (!res.ok) {
+        setError(await failureReason(res));
+        return;
+      }
       onDone();
+    } catch (e) {
+      setError(await failureReason(null, e));
     } finally {
       setBusy(false);
     }
@@ -367,16 +445,25 @@ function AdminItemControls({ item, onDone }: { item: FeedItem; onDone: () => voi
   async function remove() {
     if (!confirm(`Remove "${item.title}" from the feed for everyone?`)) return;
     setBusy(true);
+    setError(null);
     try {
-      await fetch(`/api/news/items/${item.id}`, { method: "DELETE" });
+      const res = await fetch(`/api/news/items/${item.id}`, { method: "DELETE" });
+      if (!res.ok) {
+        setError(await failureReason(res));
+        return;
+      }
       onDone();
+    } catch (e) {
+      setError(await failureReason(null, e));
     } finally {
       setBusy(false);
     }
   }
 
   return (
-    <div className="flex items-center gap-xs">
+    <div className="flex flex-col items-end gap-xs">
+      {error && <span className="text-caption text-red-700 max-w-[16rem] text-right">{error}</span>}
+      <div className="flex items-center gap-xs">
       <button
         type="button"
         onClick={() => pin(!item.isPinned)}
@@ -401,6 +488,7 @@ function AdminItemControls({ item, onDone }: { item: FeedItem; onDone: () => voi
           delete
         </span>
       </button>
+      </div>
     </div>
   );
 }

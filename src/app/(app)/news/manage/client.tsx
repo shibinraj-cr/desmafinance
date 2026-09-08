@@ -34,6 +34,23 @@ export type ManageTopic = {
   sources: ManageSource[];
 };
 
+/**
+ * Describe a request that never produced a response at all.
+ *
+ * `fetch` rejects rather than resolving when the connection drops, the request
+ * is aborted, or the server dies mid-flight. Every handler here used to let that
+ * escape as an unhandled rejection, so the button reset itself and said nothing
+ * — the user's report was, exactly, "nothing happened after clicking refresh".
+ * A failure the operator cannot see is worse than the failure itself.
+ */
+function networkError(e: unknown): string {
+  if (e instanceof Error && (e.name === "AbortError" || e.name === "TimeoutError")) {
+    return "That took too long and was stopped. The check may still be running — reload in a minute to see.";
+  }
+  const detail = e instanceof Error ? e.message : String(e);
+  return `The request didn't reach the server (${detail}). Check your connection and try again.`;
+}
+
 /** Read an error message out of a failed API response, whatever shape it took. */
 async function errorFrom(res: Response): Promise<string> {
   const body = await res.json().catch(() => null);
@@ -64,6 +81,8 @@ export function NewsManageClient({ topics }: { topics: ManageTopic[] }) {
         text: `Checked ${data.ran} source${data.ran === 1 ? "" : "s"} · ${data.created} new update${data.created === 1 ? "" : "s"}.`,
       });
       refresh();
+    } catch (e) {
+      setNotice({ tone: "error", text: networkError(e) });
     } finally {
       setBusy(false);
     }
@@ -158,6 +177,8 @@ function NewTopicForm({ onDone }: { onDone: () => void }) {
       setColor("blue");
       setOpen(false);
       onDone();
+    } catch (e) {
+      setError(networkError(e));
     } finally {
       setBusy(false);
     }
@@ -278,6 +299,8 @@ function TopicCard({
       });
       if (!res.ok) setError(await errorFrom(res));
       else onDone();
+    } catch (e) {
+      setError(networkError(e));
     } finally {
       setBusy(false);
     }
@@ -291,6 +314,8 @@ function TopicCard({
       const res = await fetch(`/api/news/topics/${topic.id}`, { method: "DELETE" });
       if (!res.ok) setError(await errorFrom(res));
       else onDone();
+    } catch (e) {
+      setError(networkError(e));
     } finally {
       setBusy(false);
     }
@@ -394,6 +419,8 @@ function SourceRow({
       });
       if (!res.ok) setError(await errorFrom(res));
       else onDone();
+    } catch (e) {
+      setError(networkError(e));
     } finally {
       setBusy(false);
     }
@@ -415,14 +442,17 @@ function SourceRow({
       }
       const data = await res.json();
       const r = data.results?.[0];
+      const count = r?.created ?? 0;
       setResult(
         r?.status === "error"
           ? `Failed: ${r.error}`
-          : r?.created === 0 && r?.error
+          : count === 0 && r?.error
             ? r.error
-            : `${r?.created ?? 0} new update${(r?.created ?? 0) === 1 ? "" : "s"}.`,
+            : `${count} new update${count === 1 ? "" : "s"}.${r?.error ? ` ${r.error}` : ""}`,
       );
       onDone();
+    } catch (e) {
+      setError(networkError(e));
     } finally {
       setBusy(false);
     }
@@ -436,6 +466,8 @@ function SourceRow({
       const res = await fetch(`/api/news/sources/${source.id}`, { method: "DELETE" });
       if (!res.ok) setError(await errorFrom(res));
       else onDone();
+    } catch (e) {
+      setError(networkError(e));
     } finally {
       setBusy(false);
     }
@@ -485,8 +517,22 @@ function SourceRow({
               {source.lastError ?? "Nothing readable at this link."}
             </p>
           )}
-          {result && <p className="text-label-sm text-on-surface-variant mt-xs">{result}</p>}
-          {error && <p className="text-label-sm text-red-700 mt-xs">{error}</p>}
+          {/* A successful import can still need attention — e.g. a chat holding
+              more updates than one import takes. */}
+          {source.lastStatus === "ok" && source.lastError && (
+            <p className="text-label-sm text-amber-800 mt-xs">{source.lastError}</p>
+          )}
+          {/* The outcome of a manual check, tinted so it is not mistaken for the
+              row's own metadata — "nothing appeared to happen" was the whole
+              problem this fixes. */}
+          {result && (
+            <p className="mt-sm rounded-lg bg-emerald-50 text-emerald-800 text-label-sm px-md py-sm">
+              {result}
+            </p>
+          )}
+          {error && (
+            <p className="mt-sm rounded-lg bg-red-50 text-red-800 text-label-sm px-md py-sm">{error}</p>
+          )}
         </div>
 
         <div className="flex flex-wrap items-center gap-xs flex-shrink-0">
@@ -585,18 +631,23 @@ function NewSourceForm({ topicId, onDone }: { topicId: string; onDone: () => voi
         setError(`Saved, but the link could not be read: ${r.error}`);
       } else if (r?.status === "empty") {
         setError(`Saved, but nothing was published. ${r.error ?? ""}`.trim());
-      } else if (r?.error) {
+      } else if (r?.error && (r?.created ?? 0) === 0) {
         // A successful pull can still file nothing — e.g. a live feed whose
         // newest entry predates the window. The sync explains which; relay it
         // rather than showing a bare "0 filed" that reads as a failure.
         setResult(`Added · ${r.error}`);
       } else {
-        setResult(`Added · ${r?.created ?? 0} update${(r?.created ?? 0) === 1 ? "" : "s"} filed.`);
+        const count = r?.created ?? 0;
+        setResult(
+          `Added · ${count} update${count === 1 ? "" : "s"} filed.${r?.error ? ` ${r.error}` : ""}`,
+        );
       }
       setName("");
       setUrl("");
       setKindTouched(false);
       onDone();
+    } catch (e) {
+      setError(networkError(e));
     } finally {
       setBusy(false);
     }

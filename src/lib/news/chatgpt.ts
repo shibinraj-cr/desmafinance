@@ -50,6 +50,42 @@ export function shareIdFrom(rawUrl: string): string | null {
   return null;
 }
 
+/**
+ * True when this is a shared ChatGPT *task* link (`/s/task_…`).
+ *
+ * These look like share links and are not. A task share publishes the
+ * automation's recipe — its title, prompt and RRULE schedule — so that someone
+ * else can import it. What it never publishes is any run's output: those land in
+ * the owner's own account and stay private. So there is no news behind such a
+ * link, in any read mode, ever, and the only useful thing to do with one is
+ * refuse it and say why.
+ */
+export function isSharedTaskUrl(rawUrl: string): boolean {
+  let u: URL;
+  try {
+    u = new URL(rawUrl.trim());
+  } catch {
+    return false;
+  }
+  const host = u.hostname.toLowerCase().replace(/^www\./, "");
+  if (host !== "chatgpt.com" && host !== "chat.openai.com") return false;
+  const parts = u.pathname.split("/").filter(Boolean);
+  return parts[0] === "s" && (parts[1] ?? "").startsWith("task_");
+}
+
+/**
+ * The same thing detected from a fetched page rather than its URL, for the
+ * shared-object forms we have not seen. The share page declares its own type in
+ * the router payload it ships.
+ */
+export function looksLikeSharedAutomation(body: string): boolean {
+  return /\\?"kind\\?",\\?"shared_automation\\?"/.test(body);
+}
+
+/** What to tell an admin who pasted a task link. */
+export const SHARED_TASK_GUIDANCE =
+  "That link shares the task itself \u2014 its prompt and schedule \u2014 not the updates it produces. ChatGPT keeps each run\u2019s output private to the account that runs it. Open the conversation the task produced, use Share on that conversation, and paste the https://chatgpt.com/share/\u2026 link it gives you.";
+
 /** True when this URL is a ChatGPT share link — used to auto-pick the source kind. */
 export function isChatGptShareUrl(rawUrl: string): boolean {
   return shareIdFrom(rawUrl) !== null;
@@ -58,6 +94,26 @@ export function isChatGptShareUrl(rawUrl: string): boolean {
 /** The JSON endpoint behind a share page. */
 export function shareApiUrl(shareId: string): string {
   return `https://chatgpt.com/backend-api/share/${shareId}`;
+}
+
+/**
+ * ChatGPT wraps its source citations in private-use control characters —
+ * `\uE200cite\uE202turn982260search0\uE201` — which are invisible in its own UI
+ * and arrive as "citeturn982260search0" glued to the end of a sentence
+ * anywhere else. Strip the whole span, delimiters included.
+ */
+export function stripCitations(s: string): string {
+  return s
+    .replace(/\uE200[\s\S]*?\uE201/g, "")
+    // Any stray delimiter left by a truncated span, plus the rest of the
+    // private-use block ChatGPT reserves for this markup.
+    .replace(/[\uE200-\uE20F]/g, "")
+    .replace(/[ \t]{2,}/g, " ")
+    .replace(/ +([.,;:])/g, "$1")
+    // A citation sat at the end of a sentence, so removing it strands the space
+    // in front of it — visible as ragged trailing whitespace on most lines.
+    .replace(/[ \t]+$/gm, "")
+    .trim();
 }
 
 /** One assistant turn, reduced to plain text. */
@@ -150,7 +206,21 @@ export function assistantMessages(payload: unknown): SharedMessage[] {
     const meta = asRecord(msg.metadata);
     if (meta?.is_visually_hidden_from_conversation === true) continue;
 
-    const text = contentText(msg.content).trim();
+    // A conversation carries far more assistant turns than the reader ever saw.
+    // "commentary" is the model talking to itself before acting, and anything
+    // that is not plain text is machinery: `code` turns hold tool calls (a
+    // scheduled task's own JSON definition, for instance), `reasoning_recap`
+    // holds chain-of-thought, `model_editable_context` holds memory writes.
+    // Publishing those as company news is not a formatting problem, it is
+    // publishing the wrong thing. Only "final" text turns are the answer.
+    const channel = typeof msg.channel === "string" ? msg.channel : null;
+    if (channel && channel !== "final") continue;
+
+    const content = asRecord(msg.content);
+    const contentType = typeof content?.content_type === "string" ? content.content_type : null;
+    if (contentType && contentType !== "text" && contentType !== "multimodal_text") continue;
+
+    const text = stripCitations(contentText(msg.content)).trim();
     if (!text) continue;
     out.push({ text, createdAt: timeFrom(msg.create_time) });
   }
@@ -178,6 +248,12 @@ export type ChatGptNewsItem = {
   guid: string;
 };
 
+/**
+ * How much of a briefing to keep. Long enough that a full daily update survives
+ * intact, bounded so a runaway answer cannot bloat a row.
+ */
+const MAX_BODY = 12_000;
+
 /** Strip the markdown that would otherwise show up as literal punctuation. */
 function plainMarkdown(s: string): string {
   return s
@@ -195,12 +271,31 @@ function plainMarkdown(s: string): string {
     .trim();
 }
 
-/** The first http(s) link in a chunk of markdown, if any. */
+/**
+ * The first http(s) link in a chunk of markdown, if any — never a ChatGPT one.
+ *
+ * The briefing is published as text, and readers should not be sent to
+ * chatgpt.com: the shared chat is how the desk sources the update, not
+ * something staff are meant to open. A cited government source is a different
+ * matter and stays.
+ */
 function firstUrl(md: string): string {
-  const inline = md.match(/\]\((https?:\/\/[^\s)]+)\)/);
-  if (inline) return inline[1];
-  const bare = md.match(/https?:\/\/[^\s)<>\]]+/);
-  return bare ? bare[0].replace(/[.,;]+$/, "") : "";
+  // Every link in document order, not just the first of each kind: the first one
+  // is often the shared chat itself, and the citation worth keeping comes after.
+  const candidates: string[] = [];
+  for (const m of md.matchAll(/\]\((https?:\/\/[^\s)]+)\)/g)) candidates.push(m[1]);
+  for (const m of md.matchAll(/https?:\/\/[^\s)<>\]]+/g)) candidates.push(m[0].replace(/[.,;]+$/, ""));
+
+  for (const raw of candidates) {
+    try {
+      const host = new URL(raw).hostname.toLowerCase().replace(/^www\./, "");
+      if (host === "chatgpt.com" || host === "chat.openai.com" || host === "openai.com") continue;
+      return raw;
+    } catch {
+      continue;
+    }
+  }
+  return "";
 }
 
 /** Drop a leading list marker / heading hash so a title reads as a title. */
@@ -209,40 +304,47 @@ function cleanHeading(s: string): string {
 }
 
 /**
- * Split one assistant answer into individual updates.
+ * Split one assistant answer into updates.
  *
- * A digest is written for a person, not a parser, so the structure varies: this
- * tries markdown headings, then a numbered list, then top-level bullets, and
- * falls back to treating the whole answer as a single update. The fallback
- * matters — a digest written as flowing prose should still reach the feed as
- * one item rather than being dropped for not matching a pattern.
+ * Headings are the only split point, and that is a deliberate narrowing after
+ * seeing real briefings. A daily update is written as prose with an internal
+ * bullet list of figures — "190 ROIs waiting: 908", "491 ROIs waiting: 592" —
+ * and splitting on those bullets produced eight "updates" whose headlines were
+ * row labels and whose bodies were bare numbers. The briefing is one update; its
+ * bullets are its contents.
+ *
+ * A `##` heading is different: an author reaches for one to separate distinct
+ * stories. So split there, and otherwise keep the answer whole, titled by its
+ * opening line.
  */
 export function splitIntoItems(markdown: string): ChatGptNewsItem[] {
-  const text = markdown.replace(/\r\n/g, "\n").trim();
+  const text = stripCitations(markdown).replace(/\r\n/g, "\n").trim();
   if (!text) return [];
 
   const build = (rawTitle: string, rawBody: string): ChatGptNewsItem | null => {
     const title = truncate(cleanHeading(rawTitle), 300);
     if (!title) return null;
-    const summary = truncate(plainMarkdown(rawBody), 600);
     return {
       title,
-      summary,
+      // Generous, unlike a feed summary. A feed entry is a teaser pointing at an
+      // article; this briefing IS the article, and there is nowhere else to read
+      // the rest of it.
+      summary: truncate(plainMarkdown(rawBody), MAX_BODY),
       url: firstUrl(`${rawTitle}\n${rawBody}`),
       // Identity is the title, so re-reading the same shared conversation
-      // tomorrow does not file every entry a second time.
+      // tomorrow does not file every entry a second time. Daily briefings carry
+      // their date in the headline, which keeps each day distinct.
       guid: `gpt:${hashString(title.toLowerCase())}`,
     };
   };
 
   const items: ChatGptNewsItem[] = [];
 
-  // 1. Markdown headings (##, ###) — the usual shape of a generated digest.
-  //    Level-1 headings are skipped as the digest's own title, unless they are
-  //    the only headings present.
   const headingRe = /^(#{2,6})\s+(.+)$/gm;
   const heads = [...text.matchAll(headingRe)];
   if (heads.length > 0) {
+    // Anything before the first heading is a preamble belonging to the whole
+    // answer, not to any one story; the headings carry the stories.
     for (let i = 0; i < heads.length; i++) {
       const start = heads[i].index! + heads[i][0].length;
       const end = i + 1 < heads.length ? heads[i + 1].index! : text.length;
@@ -252,52 +354,13 @@ export function splitIntoItems(markdown: string): ChatGptNewsItem[] {
     if (items.length > 0) return dedupe(items);
   }
 
-  // 2. A numbered list, each number an update.
-  const numbered = [...text.matchAll(/^\s*\d+[.)]\s+(.+)$/gm)];
-  if (numbered.length >= 2) {
-    for (let i = 0; i < numbered.length; i++) {
-      const start = numbered[i].index! + numbered[i][0].length;
-      const end = i + 1 < numbered.length ? numbered[i + 1].index! : text.length;
-      const { head, body } = leadAndRest(numbered[i][1], text.slice(start, end));
-      const item = build(head, body);
-      if (item) items.push(item);
-    }
-    if (items.length > 0) return dedupe(items);
-  }
-
-  // 3. Top-level bullets.
-  const bullets = [...text.matchAll(/^[-*+]\s+(.+)$/gm)];
-  if (bullets.length >= 2) {
-    for (let i = 0; i < bullets.length; i++) {
-      const start = bullets[i].index! + bullets[i][0].length;
-      const end = i + 1 < bullets.length ? bullets[i + 1].index! : text.length;
-      const { head, body } = leadAndRest(bullets[i][1], text.slice(start, end));
-      const item = build(head, body);
-      if (item) items.push(item);
-    }
-    if (items.length > 0) return dedupe(items);
-  }
-
-  // 4. Prose: one update, titled by its opening sentence.
-  const firstLine = text.split("\n").find((l) => l.trim().length > 0) ?? "";
-  const sentence = plainMarkdown(firstLine).split(/(?<=[.!?])\s/)[0] ?? firstLine;
-  const single = build(sentence || "Update", text);
+  // One update, titled by its opening line — which for a generated briefing is
+  // its headline ("Australia PR / ROI update — 4 September 2026").
+  const lines = text.split("\n");
+  const firstLine = lines.find((l) => l.trim().length > 0) ?? "";
+  const rest = text.slice(text.indexOf(firstLine) + firstLine.length);
+  const single = build(firstLine, rest.trim() || text);
   return single ? [single] : [];
-}
-
-/**
- * A list entry usually leads with its own headline — bolded, or before a dash or
- * colon — and continues into detail. Split there so the title is a headline
- * rather than the entry's first 300 characters.
- */
-function leadAndRest(firstLine: string, rest: string): { head: string; body: string } {
-  const bold = firstLine.match(/^\s*[*_]{2}([^*_]+)[*_]{2}\s*[:—–-]?\s*(.*)$/);
-  if (bold) return { head: bold[1], body: `${bold[2]}\n${rest}` };
-  const split = firstLine.match(/^(.{4,120}?)\s+[—–-]\s+(.*)$/);
-  if (split) return { head: split[1], body: `${split[2]}\n${rest}` };
-  const colon = firstLine.match(/^([^:]{4,120}):\s+(.*)$/);
-  if (colon) return { head: colon[1], body: `${colon[2]}\n${rest}` };
-  return { head: firstLine, body: rest };
 }
 
 /** Same headline twice in one answer is one update. */
