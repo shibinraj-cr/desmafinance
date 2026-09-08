@@ -2814,10 +2814,16 @@ model WaBroadcastRecipient {
   /// matches on — exactly, rather than by phone and timing.
   providerMessageId String? @unique
 
-  /// Async Meta state, arriving after we already got a 200 from the send.
+  /// Async Meta state, arriving after we already got a 200 from the send:
+  /// 'sent' (accepted) → 'delivered' (reached the phone) → 'read', or 'failed'.
+  /// Set forward-only by the delivery-status webhook, keyed on providerMessageId.
   waStatus       String?
   waErrorCode    String?
   waErrorMessage String?
+  /// When Meta confirmed the message reached / was read on the handset. Distinct
+  /// from `sentAt` (which is only "accepted by Meta"); either can stay null when
+  /// the recipient's read receipts are off or no callback ever arrives.
+  deliveredAt    DateTime?
   readAt         DateTime?
 
   attempts Int       @default(0)

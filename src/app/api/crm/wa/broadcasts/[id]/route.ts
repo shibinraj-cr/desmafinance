@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { z } from "zod";
+import type { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
 import { withApiHandler } from "@/lib/api";
 import { unauthorized, forbidden, notFound, badRequest } from "@/lib/http-error";
@@ -39,26 +40,66 @@ export const GET = withApiHandler(async (_req: Request, { params }: { params: { 
   });
   if (!broadcast) throw notFound();
 
-  // Failures first: a report exists to answer "who did not get this, and why",
-  // and a page of successes buries that.
-  const recipients = await prisma.waBroadcastRecipient.findMany({
+  // Per-number delivery outcome, over the WHOLE audience (not just the page
+  // below). `waStatus` is the async Meta state — 'sent' is only "accepted by
+  // Meta", while 'delivered'/'read' are the handset confirmations the webhook
+  // now records against each recipient. A 'read' also reached the phone, so it
+  // counts toward delivered.
+  const byWaStatus = await prisma.waBroadcastRecipient.groupBy({
+    by: ["waStatus"],
+    where: { broadcastId: params.id },
+    _count: { _all: true },
+  });
+  const waCount = (s: string) => byWaStatus.find((g) => g.waStatus === s)?._count._all ?? 0;
+  const readCount = waCount("read");
+  const deliveredCount = waCount("delivered") + readCount; // a read message also reached the phone
+  const delivery = {
+    // A nested funnel, so the top line stays monotonic as confirmations arrive:
+    // accepted (everything Meta took) ⊇ delivered (reached the phone) ⊇ read.
+    // `accepted` is NOT the residual 'sent' bucket alone — that empties toward 0
+    // as a healthy campaign delivers, which reads as "nothing got accepted".
+    accepted: waCount("sent") + deliveredCount,
+    delivered: deliveredCount,
+    read: readCount,
+    failed: waCount("failed"),
+  };
+
+  const recipientSelect = {
+    id: true,
+    phoneE164: true,
+    status: true,
+    skipReason: true,
+    waStatus: true,
+    waErrorCode: true,
+    waErrorMessage: true,
+    sentAt: true,
+    deliveredAt: true,
+    readAt: true,
+    lead: { select: { id: true, candidateName: true } },
+  } satisfies Prisma.WaBroadcastRecipientSelect;
+
+  // EVERY failure — send-time (status 'failed') AND delivery-time (waStatus
+  // 'failed', which leaves status 'sent') — fetched in full so the on-screen
+  // breakdown always reconciles with the scoreboard. A delivery failure does not
+  // sort first by `status`, so a plain page would silently drop it past the cap
+  // on a large campaign. The xlsx export (…/export) carries the entire audience.
+  const failedRecipients = await prisma.waBroadcastRecipient.findMany({
+    where: { broadcastId: params.id, OR: [{ status: "failed" }, { waStatus: "failed" }] },
+    orderBy: { id: "asc" },
+    take: 2000,
+    select: recipientSelect,
+  });
+  // A page of the rest for context (delivered / read / accepted / skipped).
+  const pageRecipients = await prisma.waBroadcastRecipient.findMany({
     where: { broadcastId: params.id },
     orderBy: [{ status: "asc" }, { id: "asc" }],
-    take: 200,
-    select: {
-      id: true,
-      phoneE164: true,
-      status: true,
-      skipReason: true,
-      waStatus: true,
-      waErrorCode: true,
-      waErrorMessage: true,
-      sentAt: true,
-      lead: { select: { id: true, candidateName: true } },
-    },
+    take: 500,
+    select: recipientSelect,
   });
+  const failedIds = new Set(failedRecipients.map((r) => r.id));
+  const recipients = [...failedRecipients, ...pageRecipients.filter((r) => !failedIds.has(r.id))];
 
-  return NextResponse.json({ broadcast, recipients });
+  return NextResponse.json({ broadcast, delivery, recipients });
 });
 
 const PatchSchema = z.discriminatedUnion("action", [

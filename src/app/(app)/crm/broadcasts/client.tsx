@@ -325,9 +325,9 @@ function BroadcastRowView({
       <td className="px-md py-sm text-right tabular-nums text-error">{row.failedCount || ""}</td>
       <td className="px-md py-sm text-right tabular-nums text-on-surface-variant">{row.skippedCount || ""}</td>
       <td className="px-md py-sm text-right whitespace-nowrap">
-        {row.failedCount > 0 && (
+        {row.sentCount + row.failedCount + row.skippedCount > 0 && (
           <ActionBtn busy={busy} onClick={onViewFailures}>
-            Failures
+            Report
           </ActionBtn>
         )}
         {row.status === "draft" && (
@@ -669,20 +669,59 @@ type RecipientRow = {
   phoneE164: string;
   status: string;
   skipReason: string | null;
+  waStatus: string | null;
   waErrorCode: string | null;
   waErrorMessage: string | null;
+  sentAt: string | null;
+  deliveredAt: string | null;
+  readAt: string | null;
   lead: { id: string; candidateName: string | null } | null;
 };
 
+type DeliveryCounts = { accepted: number; delivered: number; read: number; failed: number };
+
+const DELIVERY_TONE: Record<string, string> = {
+  read: "bg-emerald-500/15 text-emerald-600",
+  delivered: "bg-sky-500/15 text-sky-600",
+  accepted: "bg-surface-container text-on-surface-variant",
+  failed: "bg-error/15 text-error",
+  skipped: "bg-amber-500/15 text-amber-600",
+  sending: "bg-primary/15 text-primary",
+  pending: "bg-surface-container text-on-surface-variant",
+};
+
+/** The one honest per-number outcome, from the async Meta state or the lifecycle. */
+function recipientState(r: RecipientRow): string {
+  if (r.waStatus === "read") return "read";
+  if (r.waStatus === "delivered") return "delivered";
+  if (r.waStatus === "failed" || r.status === "failed") return "failed";
+  if (r.status === "skipped") return "skipped";
+  if (r.status === "pending") return "pending";
+  // A row claimed by a drain but not yet confirmed sent — never call it
+  // "accepted", which would imply Meta took it. Matches the export's label.
+  if (r.status === "sending") return "sending";
+  return "accepted"; // sent to Meta, no handset confirmation (yet)
+}
+
+function fmtTs(ts: string | null): string {
+  if (!ts) return "";
+  const d = new Date(ts);
+  return Number.isNaN(d.getTime()) ? "" : d.toLocaleString();
+}
+
 /**
- * Why a broadcast's recipients failed — the panel the list never had. Fetches the
- * campaign detail (failures first) and shows a by-error-code breakdown plus the
- * individual bounces, so "107 failed" stops being a mystery.
+ * A broadcast's delivery report. Fetches the campaign detail and shows the
+ * accepted → delivered → read funnel, a by-error-code breakdown for failures, and
+ * the number-by-number outcome. "Sent" alone is only "Meta accepted it" —
+ * delivered/read arrive later on the webhook, so this is where "did it actually
+ * land" gets answered. The on-screen table pages at 500; the xlsx export carries
+ * every recipient.
  */
 function FailurePanel({ broadcastId, name, onClose }: { broadcastId: string; name: string; onClose: () => void }) {
   const [loading, setLoading] = useState(true);
   const [recipients, setRecipients] = useState<RecipientRow[]>([]);
-  const [counts, setCounts] = useState<{ failedCount: number; skippedCount: number } | null>(null);
+  const [delivery, setDelivery] = useState<DeliveryCounts | null>(null);
+  const [skipped, setSkipped] = useState(0);
 
   useEffect(() => {
     let alive = true;
@@ -693,10 +732,12 @@ function FailurePanel({ broadcastId, name, onClose }: { broadcastId: string; nam
       setLoading(false);
       if (!res?.ok) return;
       const d = (await res.json()) as {
-        broadcast: { failedCount: number; skippedCount: number };
+        broadcast: { skippedCount: number };
+        delivery: DeliveryCounts;
         recipients: RecipientRow[];
       };
-      setCounts({ failedCount: d.broadcast.failedCount, skippedCount: d.broadcast.skippedCount });
+      setDelivery(d.delivery);
+      setSkipped(d.broadcast.skippedCount);
       setRecipients(d.recipients);
     })();
     return () => {
@@ -704,80 +745,141 @@ function FailurePanel({ broadcastId, name, onClose }: { broadcastId: string; nam
     };
   }, [broadcastId]);
 
-  const failed = useMemo(() => recipients.filter((r) => r.status === "failed"), [recipients]);
   const byCode = useMemo(() => {
     const m = new Map<string, number>();
-    for (const r of failed) {
+    for (const r of recipients) {
+      if (recipientState(r) !== "failed") continue;
       const k = r.waErrorCode ?? "none";
       m.set(k, (m.get(k) ?? 0) + 1);
     }
     return [...m.entries()].sort((a, b) => b[1] - a[1]);
-  }, [failed]);
+  }, [recipients]);
+
+  const scoreboard: { key: string; label: string; n: number }[] = delivery
+    ? [
+        { key: "accepted", label: "Accepted", n: delivery.accepted },
+        { key: "delivered", label: "Delivered", n: delivery.delivered },
+        { key: "read", label: "Read", n: delivery.read },
+        { key: "failed", label: "Failed", n: delivery.failed },
+        { key: "skipped", label: "Skipped", n: skipped },
+      ]
+    : [];
 
   return (
     <div className="rounded-xl border border-outline-variant bg-surface-container-lowest p-lg space-y-md">
       <div className="flex items-center justify-between gap-base">
-        <h3 className="text-h3 text-on-surface">Failures — {name}</h3>
-        <button type="button" onClick={onClose} className="h-9 px-md text-label-sm text-on-surface-variant">
-          Close
-        </button>
+        <h3 className="text-h3 text-on-surface">Delivery report — {name}</h3>
+        <div className="flex items-center gap-base">
+          <a
+            href={`/api/crm/wa/broadcasts/${broadcastId}/export`}
+            className="h-9 px-md inline-flex items-center rounded-lg border border-outline-variant text-label-sm font-semibold text-on-surface-variant hover:bg-surface-container-low"
+          >
+            Download all (.xlsx)
+          </a>
+          <button type="button" onClick={onClose} className="h-9 px-md text-label-sm text-on-surface-variant">
+            Close
+          </button>
+        </div>
       </div>
 
       {loading ? (
         <p className="text-body-md text-on-surface-variant">Loading…</p>
       ) : (
         <>
-          <p className="text-label-sm text-on-surface-variant">
-            {counts?.failedCount ?? failed.length} failed · {counts?.skippedCount ?? 0} skipped. A hard failure (131026)
-            flags the number so later sends skip it; 131049 is Meta&apos;s cold-marketing cap.
-          </p>
-
           <div className="flex flex-wrap gap-base">
-            {byCode.map(([code, n]) => (
+            {scoreboard.map((s) => (
               <span
-                key={code}
-                className="inline-flex items-center rounded-lg border border-outline-variant bg-surface-container-low px-md py-xs text-label-sm text-on-surface-variant"
+                key={s.key}
+                className={
+                  "inline-flex items-center gap-xs rounded-lg px-md py-xs text-label-sm font-semibold " +
+                  (DELIVERY_TONE[s.key] ?? DELIVERY_TONE.accepted)
+                }
               >
-                <span className="font-semibold text-on-surface">{code === "none" ? "No code" : code}</span>
-                <span className="ml-xs">· {n} · {errMeaning(code === "none" ? null : code)}</span>
+                {s.label} <span className="tabular-nums">{s.n}</span>
               </span>
             ))}
           </div>
+          <p className="text-label-sm text-on-surface-variant">
+            <span className="font-medium">Accepted</span> = Meta took it; <span className="font-medium">Delivered</span>{" "}
+            = reached the phone (includes read); <span className="font-medium">Read</span> only counts when the
+            recipient has read receipts on. Statuses arrive after sending, so this fills in over minutes/hours. A hard
+            failure (131026) flags the number so later sends skip it; 131049 is Meta&apos;s cold-marketing cap.
+          </p>
+
+          {byCode.length > 0 && (
+            <div className="flex flex-wrap gap-base">
+              {byCode.map(([code, n]) => (
+                <span
+                  key={code}
+                  className="inline-flex items-center rounded-lg border border-outline-variant bg-surface-container-low px-md py-xs text-label-sm text-on-surface-variant"
+                >
+                  <span className="font-semibold text-on-surface">{code === "none" ? "No code" : code}</span>
+                  <span className="ml-xs">· {n} · {errMeaning(code === "none" ? null : code)}</span>
+                </span>
+              ))}
+            </div>
+          )}
 
           <div className="rounded-xl border border-outline-variant overflow-hidden">
             <div className="overflow-auto scrollbar-thin max-h-[420px]">
               <table className="w-full text-body-sm">
                 <thead className="bg-surface-container-low text-on-surface-variant sticky top-0">
                   <tr>
-                    <th className="px-md py-sm text-label-sm uppercase tracking-wider text-left">Lead</th>
+                    <th className="px-md py-sm text-label-sm uppercase tracking-wider text-left">Candidate</th>
                     <th className="px-md py-sm text-label-sm uppercase tracking-wider text-left">Phone</th>
-                    <th className="px-md py-sm text-label-sm uppercase tracking-wider text-left">Why it failed</th>
+                    <th className="px-md py-sm text-label-sm uppercase tracking-wider text-left">Status</th>
+                    <th className="px-md py-sm text-label-sm uppercase tracking-wider text-left">Detail</th>
                   </tr>
                 </thead>
                 <tbody>
-                  {failed.length === 0 && (
+                  {recipients.length === 0 && (
                     <tr>
-                      <td colSpan={3} className="px-md py-lg text-center text-on-surface-variant">
-                        No failed recipients in this campaign.
+                      <td colSpan={4} className="px-md py-lg text-center text-on-surface-variant">
+                        No recipients materialised yet.
                       </td>
                     </tr>
                   )}
-                  {failed.map((r) => (
-                    <tr key={r.id} className="border-t border-outline-variant align-top">
-                      <td className="px-md py-sm">{r.lead?.candidateName || "(unnamed)"}</td>
-                      <td className="px-md py-sm font-mono">{r.phoneE164}</td>
-                      <td className="px-md py-sm">
-                        <span className="font-medium text-on-surface">{r.waErrorCode ?? "—"}</span>
-                        <span className="text-on-surface-variant"> · {errMeaning(r.waErrorCode)}</span>
-                      </td>
-                    </tr>
-                  ))}
+                  {recipients.map((r) => {
+                    const st = recipientState(r);
+                    const detail =
+                      st === "failed"
+                        ? `${r.waErrorCode ?? "—"} · ${errMeaning(r.waErrorCode)}`
+                        : st === "skipped"
+                          ? r.skipReason ?? "skipped"
+                          : st === "read"
+                            ? `Read ${fmtTs(r.readAt)}`.trim()
+                            : st === "delivered"
+                              ? `Delivered ${fmtTs(r.deliveredAt)}`.trim()
+                              : st === "accepted"
+                                ? `Sent ${fmtTs(r.sentAt)}`.trim()
+                                : "—";
+                    return (
+                      <tr key={r.id} className="border-t border-outline-variant align-top">
+                        <td className="px-md py-sm">{r.lead?.candidateName || "(unnamed)"}</td>
+                        <td className="px-md py-sm font-mono">{r.phoneE164}</td>
+                        <td className="px-md py-sm">
+                          <span
+                            className={
+                              "px-sm h-6 inline-flex items-center rounded-full text-label-sm font-semibold " +
+                              (DELIVERY_TONE[st] ?? DELIVERY_TONE.accepted)
+                            }
+                          >
+                            {st}
+                          </span>
+                        </td>
+                        <td className="px-md py-sm text-on-surface-variant">{detail}</td>
+                      </tr>
+                    );
+                  })}
                 </tbody>
               </table>
             </div>
           </div>
-          {recipients.length >= 200 && (
-            <p className="text-label-sm text-on-surface-variant">Showing the first 200 recipients (failures first).</p>
+          {recipients.length >= 500 && (
+            <p className="text-label-sm text-on-surface-variant">
+              Every failed number is listed; delivered/accepted rows are a sample. Use{" "}
+              <span className="font-medium">Download all</span> for the complete per-number list.
+            </p>
           )}
         </>
       )}
