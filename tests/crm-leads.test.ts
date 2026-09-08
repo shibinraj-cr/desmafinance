@@ -9,6 +9,8 @@ import {
   buildLeadWhere,
   buildCrmTaskWhere,
   crmTaskAssigneeScope,
+  crmTaskFilterParamsFromQuery,
+  dueDateRange,
   requiresNextStepOnComplete,
   crmTaskFollowAssignmentWhere,
 } from "@/lib/crm-leads";
@@ -317,6 +319,77 @@ describe("buildCrmTaskWhere — multi-select filters", () => {
     const where = buildCrmTaskWhere({ assignee: ["unassigned", "u1"] });
     expect(where.assignedToId).toBeUndefined();
     expect(where.AND).toEqual([{ OR: [{ assignedToId: null }, { assignedToId: "u1" }] }]);
+  });
+});
+
+describe("dueDateRange — the tasks board's due-date range", () => {
+  it("makes the picked end day inclusive by resolving it to the next midnight", () => {
+    const r = dueDateRange("2026-07-01", "2026-07-31");
+    expect(r.from).toEqual(new Date(2026, 6, 1));
+    expect(r.to).toEqual(new Date(2026, 7, 1)); // exclusive: 31 Jul is still in
+  });
+
+  it("applies each end on its own", () => {
+    expect(dueDateRange("2026-07-01", undefined)).toEqual({ from: new Date(2026, 6, 1), to: undefined });
+    expect(dueDateRange(undefined, "2026-07-31")).toEqual({ from: undefined, to: new Date(2026, 7, 1) });
+  });
+
+  it("ignores a blank, malformed or inverted range rather than matching nothing", () => {
+    expect(dueDateRange(undefined, undefined)).toEqual({ from: undefined, to: undefined });
+    expect(dueDateRange("not-a-date", "31-07-2026")).toEqual({ from: undefined, to: undefined });
+    expect(dueDateRange("2026-07-31", "2026-07-01")).toEqual({});
+  });
+
+  it("rolls a month end over correctly", () => {
+    expect(dueDateRange(undefined, "2026-01-31").to).toEqual(new Date(2026, 1, 1));
+  });
+});
+
+describe("buildCrmTaskWhere — due-date range", () => {
+  const now = new Date("2026-09-03T10:00:00");
+
+  it("narrows the picked buckets rather than joining their union", () => {
+    const where = buildCrmTaskWhere({
+      due: ["overdue"],
+      dueFrom: new Date(2026, 6, 1),
+      dueTo: new Date(2026, 7, 1),
+      now,
+    });
+    const and = where.AND as Array<Record<string, unknown>>;
+    // The bucket OR and the range are separate AND terms — both must hold.
+    expect(and).toHaveLength(2);
+    expect(and[1]).toEqual({ dueAt: { gte: new Date(2026, 6, 1), lt: new Date(2026, 7, 1) } });
+  });
+
+  it("applies an open-ended range on its own", () => {
+    expect(buildCrmTaskWhere({ dueFrom: new Date(2026, 6, 1) }).AND).toEqual([
+      { dueAt: { gte: new Date(2026, 6, 1) } },
+    ]);
+    expect(buildCrmTaskWhere({ dueTo: new Date(2026, 7, 1) }).AND).toEqual([
+      { dueAt: { lt: new Date(2026, 7, 1) } },
+    ]);
+  });
+
+  it("emits nothing when no range is given", () => {
+    expect(buildCrmTaskWhere({ now }).AND).toBeUndefined();
+  });
+});
+
+describe("crmTaskFilterParamsFromQuery — due-date range", () => {
+  const opts = { isBde: false, userId: "u1" };
+
+  it("reads dueFrom/dueTo off the query string, end day inclusive", () => {
+    const sp = new URLSearchParams("due=overdue&dueFrom=2026-07-01&dueTo=2026-07-31");
+    const p = crmTaskFilterParamsFromQuery(sp, opts);
+    expect(p.due).toEqual(["overdue"]);
+    expect(p.dueFrom).toEqual(new Date(2026, 6, 1));
+    expect(p.dueTo).toEqual(new Date(2026, 7, 1));
+  });
+
+  it("leaves the range undefined when the params are absent", () => {
+    const p = crmTaskFilterParamsFromQuery(new URLSearchParams(""), opts);
+    expect(p.dueFrom).toBeUndefined();
+    expect(p.dueTo).toBeUndefined();
   });
 });
 
