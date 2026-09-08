@@ -1186,6 +1186,11 @@ model Employee {
   reportsTo          Employee?      @relation("EmployeeReportsTo", fields: [reportsToId], references: [id], onDelete: SetNull)
   reports            Employee[]     @relation("EmployeeReportsTo")
   halfHourConcession Boolean        @default(false)
+  /// "Leave me out of it" — suppresses this employee from the celebration
+  /// band AND from being greeted. A date of birth is given to HR for payroll,
+  /// not for publication, so opting out has to be the employee's own call:
+  /// it is set from /me/account, not by HR.
+  celebrationOptOut  Boolean        @default(false)
   active             Boolean        @default(true)
   userId             String?        @unique
   user               User?          @relation("UserEmployee", fields: [userId], references: [id], onDelete: SetNull)
@@ -1214,6 +1219,7 @@ model Employee {
   regularizations        HrAttendanceRegularization[] @relation("RegEmployee")
   attendanceScoreSignals HrAttendanceScoreSignal[]
   birthdayWishes         HrBirthdayWish[]             @relation("BirthdayRecipient")
+  celebrations           HrCelebration[]              @relation("CelebrationRecipient")
   /// Finance transactions/drafts where this employee is the counterparty
   /// (salary / incentive outflows).
   transactions           Transaction[]                @relation("EmployeeTransactions")
@@ -1902,8 +1908,49 @@ model HrBirthdaySettings {
   /// Send via email, whatsapp, both, or none ("disabled").
   channel         String   @default("email")
   /// Template used for the auto-wish (supports {{name}}, {{dept}}).
-  template        String   @default("Happy birthday, {{name}}! Wishing you a wonderful year ahead. — Team DESGRO")
+  ///
+  /// Signed "Team DESMA", not "Team DESGRO": DESMA is the company, DesGro is
+  /// the ERP it runs on. The default shipped with the ERP's name by mistake
+  /// from 0_init until the celebration-band migration corrected it.
+  template        String   @default("Happy birthday, {{name}}! Wishing you a wonderful year ahead. — Team DESMA")
+
+  // ── Celebration band + greeting ──────────────────────────────────
+  /// Announce today's celebrations to everyone on the band under the header.
+  /// Off means only the celebrant hears about it.
+  bandEnabled         Boolean @default(true)
+  /// Show the celebrant the one-time confetti greeting on their first page
+  /// load of the day.
+  greetingEnabled     Boolean @default(true)
+  /// Include work anniversaries alongside birthdays. Every completed year
+  /// counts, not only round-numbered ones.
+  anniversaryEnabled  Boolean @default(true)
+  /// Put the age on the band ("turns 30"). Off by default — see
+  /// CELEBRATION_DEFAULTS in src/lib/celebrations.ts.
+  showAge             Boolean @default(false)
+  /// Anniversary wording (supports {{name}}, {{years}}, {{dept}}).
+  anniversaryTemplate String  @default("Thank you for everything you have built here, {{name}}. Here is to the year ahead. — Team DESMA")
   updatedAt       DateTime @updatedAt
+}
+
+/// One row per (employee, kind, year) the moment a celebrant is shown their
+/// greeting. This is the *only* thing the celebration feature persists —
+/// who is celebrating today is derived from Employee.dob / .joinDate on
+/// read. Its whole job is making the greeting fire exactly once a year, on
+/// whichever device the person happens to open DesGro on first.
+model HrCelebration {
+  id         String   @id @default(cuid())
+  employeeId String
+  employee   Employee @relation("CelebrationRecipient", fields: [employeeId], references: [id], onDelete: Cascade)
+  /// "birthday" | "anniversary"
+  kind       String
+  /// Calendar year (IST) the greeting belongs to.
+  year       Int
+  /// Completed years of service, for an anniversary. Null for a birthday.
+  years      Int?
+  greetedAt  DateTime @default(now())
+
+  @@unique([employeeId, kind, year])
+  @@index([year])
 }
 
 /// One row per (employee, year) when the system sends a birthday

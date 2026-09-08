@@ -10,6 +10,7 @@ import {
   monthLabel,
   upcomingBirthdays,
 } from "@/lib/hr-birthdays";
+import { CELEBRATION_DEFAULTS } from "@/lib/celebrations";
 import { BirthdayCalendarClient } from "./client";
 
 export const dynamic = "force-dynamic";
@@ -65,13 +66,17 @@ export default async function BirthdayCalendarPage({
                   reminderDays: settings.reminderDays,
                   channel: settings.channel,
                   template: settings.template,
+                  bandEnabled: settings.bandEnabled,
+                  greetingEnabled: settings.greetingEnabled,
+                  anniversaryEnabled: settings.anniversaryEnabled,
+                  showAge: settings.showAge,
+                  anniversaryTemplate: settings.anniversaryTemplate,
                 }
               : {
                   autoWishEnabled: false,
                   reminderDays: 1,
                   channel: "email",
-                  template:
-                    "Happy birthday, {{name}}! Wishing you a wonderful year ahead. — Team DESGRO",
+                  ...CELEBRATION_DEFAULTS,
                 }
           }
         />
