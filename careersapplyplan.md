@@ -145,6 +145,12 @@ the internal view all keep working untouched, and the tabs are additive. If
 sections are absent or stale, the page falls back to rendering the blob exactly
 as it does today.
 
+There is no reusable tab component to lean on. `GroupTabs` is app-navigation
+bound to `usePathname`, module groups and RBAC; the tab-ish patterns in CRM
+settings are each local to their page. Phase 1 therefore includes a small
+`careers`-scoped tabs/accordion component — the careers shell is deliberately
+separate from the app shell, so it should not import app chrome anyway.
+
 Public rendering: tabs on desktop, accordion below ~640px — most applicants are
 on a phone, and a tab strip over long text is painful there. Every panel stays
 in the DOM even when hidden, so search engines and the `JobPosting` structured
