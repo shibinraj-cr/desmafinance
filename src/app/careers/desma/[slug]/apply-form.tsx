@@ -39,6 +39,8 @@ export function ApplyForm({
   const router = useRouter();
   const [state, setState] = useState<"idle" | "sending" | "sent">("idle");
   const [error, setError] = useState<string | null>(null);
+  /** Filename of the attached résumé — a file input shows nothing useful on iOS. */
+  const [picked, setPicked] = useState<string | null>(null);
   // The form's own dwell time — a script posts instantly, a person does not.
   const mountedAt = useRef(Date.now());
 
@@ -113,8 +115,45 @@ export function ApplyForm({
         <input id="website" name="website" type="text" tabIndex={-1} autoComplete="off" />
       </div>
 
+      {resumeMode !== "skip" && (
+        <fieldset className="space-y-md" disabled={state === "sending"}>
+          <Step n={1} title="Your résumé" />
+          <Field
+            label="Résumé (PDF or Word, up to 5 MB)"
+            htmlFor="resume"
+            hint={
+              resumeMode === "required"
+                ? "A résumé or a link below — one of the two."
+                : "Optional, but it is the fastest way to tell us about your work."
+            }
+          >
+            <input
+              id="resume"
+              name="resume"
+              type="file"
+              accept=".pdf,.doc,.docx,application/pdf,application/msword,application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+              onChange={(e) => setPicked(e.currentTarget.files?.[0]?.name ?? null)}
+              className={inputCls + " file:mr-sm file:rounded file:border-0 file:bg-[color:var(--careers-canvas)] file:px-sm file:py-xs file:text-label-sm"}
+            />
+          </Field>
+          {picked && (
+            <p role="status" className="text-body-sm careers-ink">
+              Attached: <strong>{picked}</strong>
+            </p>
+          )}
+          <div className="grid gap-md sm:grid-cols-2">
+            <Field label="Portfolio or website" htmlFor="portfolioUrl">
+              <input id="portfolioUrl" name="portfolioUrl" type="url" maxLength={500} placeholder="https://" className={inputCls} />
+            </Field>
+            <Field label="LinkedIn" htmlFor="linkedinUrl">
+              <input id="linkedinUrl" name="linkedinUrl" type="url" maxLength={500} placeholder="https://" className={inputCls} />
+            </Field>
+          </div>
+        </fieldset>
+      )}
+
       <fieldset className="space-y-md" disabled={state === "sending"}>
-        <legend className="sr-only">About you</legend>
+        <Step n={resumeMode === "skip" ? 1 : 2} title="About you" />
 
         <Field label="Your name" htmlFor="fullName" required>
           <input id="fullName" name="fullName" required maxLength={120} autoComplete="name" className={inputCls} />
@@ -151,41 +190,9 @@ export function ApplyForm({
         </div>
       </fieldset>
 
-      {resumeMode !== "skip" && (
-        <fieldset className="space-y-md" disabled={state === "sending"}>
-          <legend className="text-body-lg font-semibold careers-ink mb-xs">
-            Your work
-            {resumeMode === "required" && (
-              <span className="ml-xs text-label-sm font-normal careers-muted">
-                — a résumé or a link, one of the two
-              </span>
-            )}
-          </legend>
-          <Field label="Résumé (PDF or Word, up to 5 MB)" htmlFor="resume">
-            <input
-              id="resume"
-              name="resume"
-              type="file"
-              accept=".pdf,.doc,.docx,application/pdf,application/msword,application/vnd.openxmlformats-officedocument.wordprocessingml.document"
-              className={inputCls + " file:mr-sm file:rounded file:border-0 file:bg-[color:var(--careers-canvas)] file:px-sm file:py-xs file:text-label-sm"}
-            />
-          </Field>
-          <div className="grid gap-md sm:grid-cols-2">
-            <Field label="Portfolio or website" htmlFor="portfolioUrl">
-              <input id="portfolioUrl" name="portfolioUrl" type="url" maxLength={500} placeholder="https://" className={inputCls} />
-            </Field>
-            <Field label="LinkedIn" htmlFor="linkedinUrl">
-              <input id="linkedinUrl" name="linkedinUrl" type="url" maxLength={500} placeholder="https://" className={inputCls} />
-            </Field>
-          </div>
-        </fieldset>
-      )}
-
       {questions.length > 0 && (
         <fieldset className="space-y-md" disabled={state === "sending"}>
-          <legend className="text-body-lg font-semibold careers-ink mb-xs">
-            A few questions
-          </legend>
+          <Step n={resumeMode === "skip" ? 2 : 3} title="A few questions" />
           {questions.map((q) => (
             <QuestionField key={q.id} question={q} />
           ))}
@@ -221,6 +228,29 @@ export function ApplyForm({
         </button>
       </div>
     </form>
+  );
+}
+
+/**
+ * A numbered step heading.
+ *
+ * The form is one native <form> submitted in one go, not a wizard — a candidate
+ * on a phone with a patchy connection should never lose what they typed to a
+ * step transition. These number the sections so the order is legible; they do
+ * not gate anything.
+ */
+function Step({ n, title }: { n: number; title: string }) {
+  return (
+    <legend className="flex items-center gap-sm mb-xs">
+      <span
+        aria-hidden
+        className="h-7 w-7 shrink-0 rounded-full flex items-center justify-center text-label-sm font-bold"
+        style={{ background: "var(--careers-yellow)", color: "var(--careers-grey-deep)" }}
+      >
+        {n}
+      </span>
+      <span className="text-body-lg font-semibold careers-ink">{title}</span>
+    </legend>
   );
 }
 
