@@ -80,10 +80,37 @@ band the page renders separately — so every real section was recovered:
   ✓ Experience               68 chars,  2 bullets → <ul>
 ```
 
-So the AI fallback is a safety net for oddly-written JDs, not part of the
-normal path — this costs nothing to run on the jobs that exist today. It also
-puts a number on the bullet problem: **26 bullets** currently rendering as
-run-on paragraph text on a page that ads are pointing at.
+That conclusion was too confident, and running the same prototype against the
+SECOND live job caught it. Documentation Executive placed only 4 of 10
+paragraphs, for two distinct reasons:
+
+- **Section names differ per JD.** It says "Company Overview" and "Position
+  Overview" where the other says "About the Company" and "About the Role".
+- **Bullet runs get their own `<p>`.** Three paragraphs start with `•` — they
+  are continuations of the section above, not new sections, and treating each
+  paragraph independently orphaned them.
+
+The second cause is the important one, and its fix needs no vocabulary at all:
+**a paragraph that names no section continues the previous one.** With that rule
+plus a vocabulary widened from both JDs, the two live jobs split as:
+
+```
+academic-counsellor      9 sections, 1 unplaced of 10 paragraphs
+documentation-executive  6 sections, 1 unplaced of 10 paragraphs
+```
+
+Both remaining misses are the `₹… LPA` salary line, which is not description
+text — the page renders the band separately.
+
+**Read that honestly: the vocabulary was widened using the second job's own
+headings, so this is fitted to a two-job sample, not validated against unseen
+input.** A third JD written differently will miss again. Which is why the AI
+fallback stays, and why the recruiter reviews the proposed split before it
+saves — that review is what makes vocabulary fragility survivable rather than a
+correctness problem.
+
+Across both jobs the free pass also recovers **42 bullets** currently rendering
+as run-on paragraph text, against zero `<ul>` on either page.
 
 The recruiter sees the proposed split, edits it, saves. Existing pasted JDs are
 handled; so are future ones.
