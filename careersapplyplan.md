@@ -150,16 +150,42 @@ applicant has no account. `meter()` underneath it already accepts
 A paid AI call behind a public unauthenticated endpoint. 15 credits a parse, and
 the credits are the same pool bulk résumé import draws on. A script drains it.
 
-Controls, in order of how much they matter:
+**The existing careers defence does not transfer to this endpoint, and that
+changes the design.** `src/lib/hiring/rate-limit.ts` is honest about being
+in-process memory — per warm serverless instance, not global. It works on the
+apply route because it is one of four layers, and the fourth does the real work:
+the database's own uniqueness on (candidate, job) makes duplicate applications
+pointless no matter how many get through.
 
-1. **A separate daily budget for public parses.** When spent, the form falls
-   back to manual and the candidate sees an ordinary form, not an error. This
-   is the control that actually bounds the loss.
-2. Rate limit per IP, tighter than apply's `5 / 10 min` — suggest `3 / 30 min`.
-3. Reuse the honeypot and dwell-time checks that already exist BEFORE spending
-   a credit.
-4. Careers must be public and the slug a live job.
-5. 5 MB cap, PDF only — both already enforced on upload.
+**A parse endpoint has no fourth layer.** It creates nothing, so there is no
+constraint to violate; every call simply costs 15 credits. Rate limiting is
+therefore a speed bump here, not a control — an attacker spread across IPs or
+cold instances walks past it.
+
+So the ordering is not "budget first, then rate limit". It is:
+
+1. **A separate daily budget for public parses — the only hard ceiling.** It
+   must be DB-backed to be global, which `getCreditsState()` already is (it
+   reads budget and spend from the database, not module memory). When spent,
+   the form falls back to manual and the candidate sees an ordinary form rather
+   than an error.
+2. **A short-lived signed token issued when the job page renders**, required by
+   the parse endpoint. This does not stop a determined attacker, but it stops
+   the trivial case — a bare `curl` loop against a known URL — which is the one
+   that actually happens.
+3. Honeypot and dwell-time, checked BEFORE spending a credit. Free, and they
+   matter more here than on apply precisely because nothing downstream catches
+   what they miss.
+4. Rate limit per IP — keep it, but bill it as a speed bump. Suggest
+   `3 / 30 min`.
+5. Careers must be public and the slug a live job.
+6. 5 MB cap, PDF only — both already enforced on upload.
+
+If the signed token proves awkward, the honest fallback is to not build phase 3
+as a public endpoint at all: parse on submit instead, server-side, where the
+application record itself is the rate limit. The candidate loses the
+review-before-submit step, which is the point of the feature — so the token is
+worth trying first.
 
 The consent text needs a line about automated reading of the CV, since that now
 happens before submission.
