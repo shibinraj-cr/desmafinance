@@ -18,22 +18,30 @@ import { createHmac, timingSafeEqual } from "node:crypto";
  */
 const TTL_MS = 30 * 60_000;
 
-function secret(): string {
-  // NEXTAUTH_SECRET is already required for the app to boot, so there is no new
-  // configuration to forget. It is only ever used to sign, never sent.
-  const s = process.env.NEXTAUTH_SECRET ?? process.env.AUTH_SECRET;
-  if (!s) throw new Error("NEXTAUTH_SECRET is required to sign careers tokens");
-  return s;
+function secret(): string | null {
+  // Already required for the app to boot, so there is no new configuration to
+  // forget. Only ever used to sign, never sent.
+  return process.env.NEXTAUTH_SECRET ?? process.env.AUTH_SECRET ?? null;
 }
 
-function sign(payload: string): string {
-  return createHmac("sha256", secret()).update(payload).digest("base64url");
+function sign(payload: string, key: string): string {
+  return createHmac("sha256", key).update(payload).digest("base64url");
 }
 
-/** Mint a token for one job slug. Safe to embed in the page. */
-export function mintCareersToken(slug: string, now = Date.now()): string {
+/**
+ * Mint a token for one job slug. Safe to embed in the page.
+ *
+ * Returns null rather than throwing when there is no secret to sign with. This
+ * is minted during the render of the PUBLIC job page — the page the recruitment
+ * ad points at — and autofill is a convenience. Taking the job ad down because
+ * a convenience cannot be signed is the wrong way round: without a token the
+ * form simply asks people to type, which is what it did before any of this.
+ */
+export function mintCareersToken(slug: string, now = Date.now()): string | null {
+  const key = secret();
+  if (!key) return null;
   const payload = `${slug}.${now + TTL_MS}`;
-  return `${payload}.${sign(payload)}`;
+  return `${payload}.${sign(payload, key)}`;
 }
 
 /**
@@ -49,11 +57,16 @@ export function verifyCareersToken(
 ): { ok: true } | { ok: false; reason: "missing" | "malformed" | "expired" | "bad_signature" } {
   if (!token) return { ok: false, reason: "missing" };
 
+  // No secret means nothing was ever validly signed, so nothing verifies. The
+  // endpoint refuses and the form falls back to being typed by hand.
+  const key = secret();
+  if (!key) return { ok: false, reason: "bad_signature" };
+
   const parts = token.split(".");
   if (parts.length !== 3) return { ok: false, reason: "malformed" };
   const [tokenSlug, expiresAt, mac] = parts as [string, string, string];
 
-  const expected = sign(`${tokenSlug}.${expiresAt}`);
+  const expected = sign(`${tokenSlug}.${expiresAt}`, key);
   const a = Buffer.from(mac);
   const b = Buffer.from(expected);
   // Compare before anything else that could leak timing, and length-check

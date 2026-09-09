@@ -32,7 +32,8 @@ export function ApplyForm({
   questions,
 }: {
   slug: string;
-  parseToken: string;
+  /** null when the server could not sign one — autofill is simply off. */
+  parseToken: string | null;
   jobId: string;
   jobTitle: string;
   resumeMode: string;
@@ -56,7 +57,7 @@ export function ApplyForm({
    * form or reports an error.
    */
   async function autofillFrom(file: File) {
-    if (!file.type.includes("pdf")) return setAutofill("skipped");
+    if (!parseToken || !file.type.includes("pdf")) return setAutofill("skipped");
     setAutofill("reading");
 
     const body = new FormData();
