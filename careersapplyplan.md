@@ -115,6 +115,36 @@ as run-on paragraph text, against zero `<ul>` on either page.
 The recruiter sees the proposed split, edits it, saves. Existing pasted JDs are
 handled; so are future ones.
 
+### `descriptionMd` stays the source of truth
+
+This is the constraint that decides the whole phase, and it only shows up if
+you grep for who reads that column. There are eight consumers, and two of them
+fail silently if content moves out of it:
+
+```
+src/lib/hiring/careers.ts:159   description: job.descriptionMd ?? job.title
+                                → the JobPosting structured data Google reads
+src/app/careers/desma/[slug]/page.tsx:30
+                                → the page's meta description, via markdownToPlainText
+src/lib/hiring/core.ts:170      "The job needs a description."
+                                → the publish gate; a sections-only job cannot go live
+```
+
+Plus the internal job view, both create/update paths, and the AI JD drafter,
+which *emits* `descriptionMd` and would need to emit sections too.
+
+A job published with sections and an empty `descriptionMd` would hand Google a
+JobPosting whose entire description is the job title. For a company paying for
+recruitment ads, quietly falling out of Google Jobs is a worse outcome than not
+having tabs.
+
+So: **`sections` is a rendering structure derived from `descriptionMd`, not a
+replacement for it.** The splitter writes sections; the full text stays whole
+and canonical. Structured data, meta description, publish gate, AI drafter and
+the internal view all keep working untouched, and the tabs are additive. If
+sections are absent or stale, the page falls back to rendering the blob exactly
+as it does today.
+
 Public rendering: tabs on desktop, accordion below ~640px — most applicants are
 on a phone, and a tab strip over long text is painful there. Every panel stays
 in the DOM even when hidden, so search engines and the `JobPosting` structured
