@@ -7,6 +7,7 @@ import { markdownToPlainText } from "@/lib/hiring/markdown";
 import { Markdown } from "@/components/hiring/Markdown";
 import { JobTabs } from "@/components/careers/JobTabs";
 import { splitDescription, groupIntoTabs } from "@/lib/hiring/job-sections";
+import { mintCareersToken } from "@/lib/hiring/careers-token";
 import { ApplyForm } from "./apply-form";
 
 export const dynamic = "force-dynamic";
@@ -143,6 +144,7 @@ export default async function CareersRolePage({ params }: { params: { slug: stri
         <h2 className="text-h2 careers-ink mb-md">Apply</h2>
         <ApplyForm
           slug={form.slug}
+          parseToken={mintCareersToken(form.slug)}
           jobId={form.jobId}
           jobTitle={form.title}
           resumeMode={form.resumeMode}

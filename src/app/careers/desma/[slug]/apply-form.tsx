@@ -25,12 +25,14 @@ const inputCls = "w-full min-h-[44px] px-md py-sm rounded-lg text-body-md";
 
 export function ApplyForm({
   slug,
+  parseToken,
   jobId,
   jobTitle,
   resumeMode,
   questions,
 }: {
   slug: string;
+  parseToken: string;
   jobId: string;
   jobTitle: string;
   resumeMode: string;
@@ -41,6 +43,53 @@ export function ApplyForm({
   const [error, setError] = useState<string | null>(null);
   /** Filename of the attached résumé — a file input shows nothing useful on iOS. */
   const [picked, setPicked] = useState<string | null>(null);
+  /** "reading" while the CV is being parsed; "filled" once fields were set. */
+  const [autofill, setAutofill] = useState<"idle" | "reading" | "filled" | "skipped">("idle");
+  const formRef = useRef<HTMLFormElement>(null);
+
+  /**
+   * Read the chosen CV and fill in what it finds.
+   *
+   * Only ever fills EMPTY fields, so anything the applicant has already typed
+   * wins over the model. Every failure — no PDF, budget spent, parser down — is
+   * silent: they simply carry on typing, which is why nothing here blocks the
+   * form or reports an error.
+   */
+  async function autofillFrom(file: File) {
+    if (!file.type.includes("pdf")) return setAutofill("skipped");
+    setAutofill("reading");
+
+    const body = new FormData();
+    body.set("resume", file);
+    body.set("slug", slug);
+    body.set("token", parseToken);
+    body.set("dwellMs", String(Date.now() - mountedAt.current));
+    body.set("website", "");
+
+    try {
+      const res = await fetch("/api/careers/parse-resume", { method: "POST", body });
+      const data = (await res.json().catch(() => ({}))) as {
+        parsed?: Record<string, string | number | null> | null;
+      };
+      if (!res.ok || !data.parsed) return setAutofill("skipped");
+
+      const form = formRef.current;
+      if (!form) return setAutofill("skipped");
+
+      let filled = 0;
+      for (const [name, value] of Object.entries(data.parsed)) {
+        if (value === null || value === "") continue;
+        const el = form.elements.namedItem(name);
+        if (el instanceof HTMLInputElement && !el.value) {
+          el.value = String(value);
+          filled++;
+        }
+      }
+      setAutofill(filled > 0 ? "filled" : "skipped");
+    } catch {
+      setAutofill("skipped");
+    }
+  }
   // The form's own dwell time — a script posts instantly, a person does not.
   const mountedAt = useRef(Date.now());
 
@@ -98,7 +147,7 @@ export function ApplyForm({
   }
 
   return (
-    <form onSubmit={onSubmit} className="space-y-lg" noValidate={false}>
+    <form ref={formRef} onSubmit={onSubmit} className="space-y-lg" noValidate={false}>
       {error && (
         <div
           role="alert"
@@ -132,13 +181,25 @@ export function ApplyForm({
               name="resume"
               type="file"
               accept=".pdf,.doc,.docx,application/pdf,application/msword,application/vnd.openxmlformats-officedocument.wordprocessingml.document"
-              onChange={(e) => setPicked(e.currentTarget.files?.[0]?.name ?? null)}
+              onChange={(e) => {
+                const f = e.currentTarget.files?.[0] ?? null;
+                setPicked(f?.name ?? null);
+                if (f) void autofillFrom(f);
+              }}
               className={inputCls + " file:mr-sm file:rounded file:border-0 file:bg-[color:var(--careers-canvas)] file:px-sm file:py-xs file:text-label-sm"}
             />
           </Field>
           {picked && (
             <p role="status" className="text-body-sm careers-ink">
               Attached: <strong>{picked}</strong>
+              {autofill === "reading" && (
+                <span className="careers-muted"> — reading it to save you typing…</span>
+              )}
+              {autofill === "filled" && (
+                <span className="careers-muted">
+                  {" "}— we filled in what we could below. Please check it.
+                </span>
+              )}
             </p>
           )}
           <div className="grid gap-md sm:grid-cols-2">
@@ -210,7 +271,8 @@ export function ApplyForm({
           />
           <span>
             I agree that DESMA International may store and use the details above to consider me for
-            this role and for similar roles. We keep applications for 24 months, and you can ask us
+            this role and for similar roles, and that my CV may be read automatically to fill in
+            this form. We keep applications for 24 months, and you can ask us
             to delete yours at any time by writing to{" "}
             <a className="underline" href="mailto:hr@desma.in">
               hr@desma.in

@@ -81,7 +81,9 @@ const SCHEMA = {
 export async function parseResumeBytes(opts: {
   bytes: Buffer;
   contentType: string;
-  userId: string;
+  /** null = the public apply form. There is no account behind that request,
+   *  and the usage ledger should say so rather than borrow somebody's id. */
+  userId: string | null;
   entityType?: string;
   entityId?: string;
 }): Promise<ParsedResume> {
