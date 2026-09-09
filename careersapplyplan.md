@@ -64,6 +64,27 @@ action:
    one call, roughly 20 credits, run once per job by a human who then reviews
    the result before saving.
 
+**The free pass was prototyped against the live Academic Counsellor
+description before committing to this design.** It placed 9 of 10 paragraphs;
+the one miss (`₹1.44–4 LPA`) is not description text at all — it is the salary
+band the page renders separately — so every real section was recovered:
+
+```
+  ✓ About the Company       479 chars
+  ✓ About the Role          307 chars
+  ✓ Key Responsibilities    575 chars,  8 bullets → <ul>
+  ✓ Requirements            339 chars,  6 bullets → <ul>
+  ✓ Preferred Skills        144 chars,  3 bullets → <ul>
+  ✓ What We Offer           144 chars,  3 bullets → <ul>
+  ✓ Benefits                 73 chars,  4 bullets → <ul>
+  ✓ Experience               68 chars,  2 bullets → <ul>
+```
+
+So the AI fallback is a safety net for oddly-written JDs, not part of the
+normal path — this costs nothing to run on the jobs that exist today. It also
+puts a number on the bullet problem: **26 bullets** currently rendering as
+run-on paragraph text on a page that ads are pointing at.
+
 The recruiter sees the proposed split, edits it, saves. Existing pasted JDs are
 handled; so are future ones.
 
@@ -132,4 +153,6 @@ are hurting the page today, for every visitor arriving from the ad.
 - Daily cap for public parses. Suggest 200/day (3,000 credits) against a
   balance of roughly 19,800.
 - Whether "Preferred Skills" and "What We Offer" are their own tabs or fold
-  into "About the role" — eight tabs is too many on a phone.
+  into "About the role" — the split above yields eight, which is too many on a
+  phone. Suggest four: About DESMA · The role · Responsibilities · What you
+  need, with Benefits and Experience folded into the last.
