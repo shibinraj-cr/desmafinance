@@ -68,6 +68,52 @@ function suggestPT(gross: number) {
   return 125;
 }
 
+/** Gross implied by a saved structure (basic + all allowances). */
+function grossOf(s: Structure) {
+  return (
+    s.basic +
+    Math.round((s.basic * s.hraPct) / 100) +
+    Math.round((s.basic * s.conveyancePct) / 100) +
+    Math.round((s.basic * s.medicalPct) / 100) +
+    Math.round((s.basic * s.specialPct) / 100)
+  );
+}
+
+/**
+ * Build the editor draft for `month` (YYYY-MM). If a structure already exists for
+ * that month we edit it as-is; otherwise the newest structure's percentages, ESI/PF
+ * flags and PT carry forward, so a new month never silently resets to DEFAULT_PCTS.
+ */
+function draftForMonth(structures: Structure[], month: string) {
+  const src = structures.find((s) => s.effectiveFrom.slice(0, 7) === month) ?? structures[0];
+  return {
+    effectiveFrom: month,
+    basic: src?.basic ?? 0,
+    hraPct: src?.hraPct ?? DEFAULT_PCTS.hraPct,
+    conveyancePct: src?.conveyancePct ?? DEFAULT_PCTS.conveyancePct,
+    medicalPct: src?.medicalPct ?? DEFAULT_PCTS.medicalPct,
+    specialPct: src?.specialPct ?? DEFAULT_PCTS.specialPct,
+    esiApplicable: src ? src.esiApplicable : true,
+    pfApplicable: src ? src.pfApplicable : true,
+    professionalTax: src?.professionalTax ?? 125,
+    notes: src?.notes ?? "",
+    // Auto only while the saved PT still matches the Kerala slab — a manual
+    // override stays an override instead of being recomputed on next save.
+    autoPT: src ? src.professionalTax === suggestPT(grossOf(src)) : true,
+  };
+}
+
+/** True when a draft carries anything the collapsed form would hide. */
+function hasNonDefaultAllowances(d: ReturnType<typeof draftForMonth>) {
+  return (
+    d.hraPct !== DEFAULT_PCTS.hraPct ||
+    d.conveyancePct !== DEFAULT_PCTS.conveyancePct ||
+    d.medicalPct !== DEFAULT_PCTS.medicalPct ||
+    d.specialPct !== DEFAULT_PCTS.specialPct ||
+    !d.autoPT
+  );
+}
+
 type LeaveLedgerRow = {
   month: number;
   label: string;
@@ -456,7 +502,6 @@ export function EmployeeEditor({
           employeeId={employee.id}
           structures={structures}
           canEdit={canEdit}
-          basicGuess={structures[0]?.basic ?? 0}
         />
       )}
 
@@ -469,30 +514,24 @@ function SalaryStructureTab({
   employeeId,
   structures,
   canEdit,
-  basicGuess,
 }: {
   employeeId: string;
   structures: Structure[];
   canEdit: boolean;
-  basicGuess: number;
 }) {
   const router = useRouter();
   const [pending, start] = useTransition();
-  const [draft, setDraft] = useState({
-    effectiveFrom: new Date().toISOString().slice(0, 7),
-    basic: basicGuess || 0,
-    hraPct: DEFAULT_PCTS.hraPct,
-    conveyancePct: DEFAULT_PCTS.conveyancePct,
-    medicalPct: DEFAULT_PCTS.medicalPct,
-    specialPct: DEFAULT_PCTS.specialPct,
-    esiApplicable: true,
-    pfApplicable: true,
-    professionalTax: 125,
-    notes: "",
-    autoPT: true,
-  });
-  const [showAdvanced, setShowAdvanced] = useState(false);
+  const [draft, setDraft] = useState(() =>
+    draftForMonth(structures, new Date().toISOString().slice(0, 7)),
+  );
+  // Open Advanced when the saved structure isn't on the default %s / PT slab, so a
+  // custom split is visible instead of hidden behind the collapsed panel.
+  const [showAdvanced, setShowAdvanced] = useState(() => hasNonDefaultAllowances(draft));
   const [error, setError] = useState<string | null>(null);
+
+  // Which saved row this draft maps to (drives the hint under Effective from).
+  const editing = structures.find((s) => s.effectiveFrom.slice(0, 7) === draft.effectiveFrom);
+  const carriedFrom = editing ? undefined : structures[0];
 
   // Live breakdown
   const basic = Number(draft.basic) || 0;
@@ -545,7 +584,17 @@ function SalaryStructureTab({
               <input
                 className="w-full px-sm py-sm rounded border border-outline-variant bg-surface"
                 value={draft.effectiveFrom}
-                onChange={(e) => setDraft({ ...draft, effectiveFrom: e.target.value })}
+                onChange={(e) => {
+                  const month = e.target.value;
+                  // Switching to a month that already has a structure loads that row;
+                  // any other month keeps what is on screen and saves as a new row.
+                  const existing = structures.find((s) => s.effectiveFrom.slice(0, 7) === month);
+                  setDraft(
+                    existing && month !== draft.effectiveFrom
+                      ? draftForMonth(structures, month)
+                      : { ...draft, effectiveFrom: month },
+                  );
+                }}
               />
             </Field>
             <Field label="Basic (₹ / month) *">
@@ -557,7 +606,16 @@ function SalaryStructureTab({
               />
             </Field>
             <div className="text-label-sm text-on-surface-variant">
-              All allowances default to % of Basic — change in Advanced.
+              {editing ? (
+                <>Editing the structure effective {editing.effectiveFrom.slice(0, 7)} — saving overwrites it.</>
+              ) : carriedFrom ? (
+                <>
+                  New structure for {draft.effectiveFrom} — values carried forward from{" "}
+                  {carriedFrom.effectiveFrom.slice(0, 7)}.
+                </>
+              ) : (
+                <>All allowances default to % of Basic — change in Advanced.</>
+              )}
             </div>
           </div>
 
