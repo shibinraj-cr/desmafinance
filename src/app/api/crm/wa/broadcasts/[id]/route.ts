@@ -6,7 +6,7 @@ import { withApiHandler } from "@/lib/api";
 import { unauthorized, forbidden, notFound, badRequest } from "@/lib/http-error";
 import { getCurrentUserAndPermissions } from "@/lib/permissions";
 import { getCrmAccess } from "@/lib/crm-rbac";
-import { drainBroadcasts, materialiseAudience, countSegment, headerMediaConsistent } from "@/lib/wa/broadcast";
+import { drainBroadcasts, materialiseAudience, countSegment, headerMediaConsistent, resendScopeWhere } from "@/lib/wa/broadcast";
 import type { LeadFilterParams } from "@/lib/crm-leads";
 
 export const dynamic = "force-dynamic";
@@ -154,7 +154,7 @@ export const PATCH = withApiHandler(async (req: Request, { params }: { params: {
 
   const broadcast = await prisma.waBroadcast.findUnique({
     where: { id: params.id },
-    select: { id: true, status: true },
+    select: { id: true, status: true, resendOfId: true, resendScope: true },
   });
   if (!broadcast) throw notFound();
 
@@ -162,7 +162,14 @@ export const PATCH = withApiHandler(async (req: Request, { params }: { params: {
     // Only a draft is editable — once queued the recipient list is frozen and the
     // campaign is a record of what was sent, not a thing to rewrite.
     if (broadcast.status !== "draft") throw badRequest("Only a draft can be edited", "not_draft");
-    const estimate = await countSegment(body.segment as LeadFilterParams);
+    // A re-send draft's audience is its SOURCE's undelivered recipients, not the
+    // (copied, inert) lead segment — so count that, not countSegment, or the row
+    // would show the whole segment's size instead of the re-send subset.
+    const estimate = broadcast.resendOfId
+      ? await prisma.waBroadcastRecipient.count({
+          where: { broadcastId: broadcast.resendOfId, leadId: { not: null }, ...resendScopeWhere(broadcast.resendScope) },
+        })
+      : await countSegment(body.segment as LeadFilterParams);
     await prisma.waBroadcast.update({
       where: { id: params.id },
       data: {

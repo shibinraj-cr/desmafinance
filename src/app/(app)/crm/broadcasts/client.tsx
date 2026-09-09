@@ -97,6 +97,7 @@ export function BroadcastsClient({
   const [creating, setCreating] = useState(false);
   const [editing, setEditing] = useState<{ id: string; initial: FormInitial } | null>(null);
   const [viewing, setViewing] = useState<{ id: string; name: string } | null>(null);
+  const [resending, setResending] = useState<{ id: string; name: string } | null>(null);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -222,6 +223,16 @@ export function BroadcastsClient({
         />
       )}
 
+      {resending && (
+        <ResendPanel
+          key={`resend:${resending.id}`}
+          broadcastId={resending.id}
+          name={resending.name}
+          onClose={() => setResending(null)}
+          onReload={load}
+        />
+      )}
+
       <div className="rounded-xl border border-outline-variant bg-surface-container-lowest overflow-hidden">
         <div className="overflow-auto scrollbar-thin">
           <table className="w-full text-body-md">
@@ -262,7 +273,14 @@ export function BroadcastsClient({
                   onViewFailures={() => {
                     setCreating(false);
                     setEditing(null);
+                    setResending(null);
                     setViewing({ id: b.id, name: b.name });
+                  }}
+                  onResend={() => {
+                    setCreating(false);
+                    setEditing(null);
+                    setViewing(null);
+                    setResending({ id: b.id, name: b.name });
                   }}
                 />
               ))}
@@ -280,12 +298,14 @@ function BroadcastRowView({
   onChanged,
   onEdit,
   onViewFailures,
+  onResend,
 }: {
   row: BroadcastRow;
   batchSize: number;
   onChanged: () => void;
   onEdit: () => void;
   onViewFailures: () => void;
+  onResend: () => void;
 }) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -352,6 +372,11 @@ function BroadcastRowView({
         {row.sentCount + row.failedCount + row.skippedCount > 0 && (
           <ActionBtn busy={busy} onClick={onViewFailures}>
             Report
+          </ActionBtn>
+        )}
+        {(row.status === "sent" || row.status === "cancelled") && (
+          <ActionBtn busy={busy} onClick={onResend}>
+            Re-send
           </ActionBtn>
         )}
         {row.status === "draft" && (
@@ -807,6 +832,103 @@ function fmtTs(ts: string | null): string {
  * land" gets answered. The on-screen table pages at 500; the xlsx export carries
  * every recipient.
  */
+/**
+ * Re-send to the recipients a campaign didn't reach. Creates a DRAFT (never sends
+ * here) whose audience is seeded from this campaign's own recipients by delivery
+ * outcome, with merge variables re-rendered — so a corrected send reaches only the
+ * people the first one missed. The user Queues the resulting draft from the list.
+ */
+function ResendPanel({
+  broadcastId,
+  name,
+  onClose,
+  onReload,
+}: {
+  broadcastId: string;
+  name: string;
+  onClose: () => void;
+  onReload: () => void;
+}) {
+  const [scope, setScope] = useState<"not_delivered" | "failed_only">("not_delivered");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [note, setNote] = useState<string | null>(null);
+
+  async function create() {
+    setBusy(true);
+    setError(null);
+    setNote(null);
+    const res = await fetch(`/api/crm/wa/broadcasts/${broadcastId}/resend`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ scope }),
+    }).catch(() => null);
+    setBusy(false);
+    const d = res ? ((await res.json().catch(() => ({}))) as { id?: string; estimate?: number; message?: string }) : {};
+    if (!res?.ok) {
+      setError(d.message ?? "The re-send draft could not be created.");
+      return;
+    }
+    onReload();
+    setNote(
+      `Draft created for up to ${d.estimate ?? 0} recipient(s). Find “${name} · re-send” in the list and Queue it to send.`,
+    );
+  }
+
+  return (
+    <div className="rounded-xl border border-outline-variant bg-surface-container-lowest p-lg space-y-md">
+      <div className="flex items-center justify-between gap-base">
+        <h3 className="text-h3 text-on-surface">Re-send — {name}</h3>
+        <button type="button" onClick={onClose} className="h-9 px-md text-label-sm text-on-surface-variant">
+          Close
+        </button>
+      </div>
+      {error && <p className="text-label-sm text-error">{error}</p>}
+      {note && <p className="text-label-sm text-emerald-600">{note}</p>}
+      <p className="text-body-md text-on-surface-variant">
+        Builds a new draft that re-sends this campaign&apos;s template to the recipients below — seeded from this
+        campaign (not a fresh audience), with merge variables re-rendered from current lead data. Opted-out and
+        undeliverable numbers are skipped automatically, and anyone already confirmed delivered/read is left out.
+      </p>
+      <div className="space-y-xs">
+        <label className="flex items-start gap-sm">
+          <input
+            type="radio"
+            name="resend-scope"
+            checked={scope === "not_delivered"}
+            onChange={() => setScope("not_delivered")}
+            className="mt-1"
+          />
+          <span className="text-label-sm text-on-surface-variant">
+            <span className="font-semibold text-on-surface">Not delivered / read</span> — everyone the first send
+            didn&apos;t confirm reached: accepted-but-unconfirmed, failed, and never-sent. Recommended.
+          </span>
+        </label>
+        <label className="flex items-start gap-sm">
+          <input
+            type="radio"
+            name="resend-scope"
+            checked={scope === "failed_only"}
+            onChange={() => setScope("failed_only")}
+            className="mt-1"
+          />
+          <span className="text-label-sm text-on-surface-variant">
+            <span className="font-semibold text-on-surface">Failed only</span> — just the recipients that errored.
+          </span>
+        </label>
+      </div>
+      <button
+        type="button"
+        disabled={busy}
+        onClick={() => void create()}
+        className="h-9 px-lg rounded-lg bg-primary text-on-primary text-label-sm font-semibold disabled:opacity-40"
+      >
+        Create re-send draft
+      </button>
+    </div>
+  );
+}
+
 function FailurePanel({ broadcastId, name, onClose }: { broadcastId: string; name: string; onClose: () => void }) {
   const [loading, setLoading] = useState(true);
   const [recipients, setRecipients] = useState<RecipientRow[]>([]);

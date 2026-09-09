@@ -230,24 +230,79 @@ export async function countSegment(segment: LeadFilterParams): Promise<number> {
 }
 
 /**
+ * Which of a source campaign's recipients a "re-send to undelivered" targets.
+ *
+ * `not_delivered` (default) — everyone NOT confirmed delivered/read: the accepted
+ * (Meta took it, no handset confirmation), the failed, and the never-sent
+ * (pending/skipped/cancelled). The explicit `waStatus: null` arm is load-bearing:
+ * a bare `notIn` drops NULLs under SQL three-valued logic, which would exclude
+ * exactly the never-sent rows a re-send most wants to reach.
+ * `failed_only` — just the ones that errored.
+ *
+ * Opt-outs and dead numbers are NOT excluded here on purpose: materialiseAudience
+ * re-applies skipReasonFor against CURRENT consent, so they are re-skipped
+ * whatever this returns — using live consent, not the source's stale skip reason.
+ */
+export function resendScopeWhere(scope: string | null | undefined): Prisma.WaBroadcastRecipientWhereInput {
+  if (scope === "failed_only") {
+    return { OR: [{ status: "failed" }, { waStatus: "failed" }] };
+  }
+  return { OR: [{ waStatus: null }, { waStatus: { notIn: ["delivered", "read"] } }] };
+}
+
+/**
  * Freeze a segment into recipient rows.
  *
  * Runs in chunks so a large audience does not build one enormous statement, and
  * uses `skipDuplicates` so re-queuing a broadcast cannot double-insert anyone —
  * the `(broadcastId, leadId)` unique index is the real guarantee.
+ *
+ * A RE-SEND campaign (resendOfId set) draws its audience from the SOURCE
+ * campaign's recipients — those whose delivery outcome matched `resendScope` —
+ * instead of a lead segment. Everything downstream (skip, dedup, per-recipient
+ * render) is identical, so a corrected template/merge reaches exactly the people
+ * the first send missed, re-rendered against current lead data.
  */
 export async function materialiseAudience(broadcastId: string): Promise<{ total: number; skipped: number }> {
   const broadcast = await prisma.waBroadcast.findUnique({
     where: { id: broadcastId },
-    select: { id: true, segment: true, variableMap: true },
+    select: { id: true, segment: true, variableMap: true, resendOfId: true, resendScope: true },
   });
   if (!broadcast) return { total: 0, skipped: 0 };
 
   const segment = (broadcast.segment ?? {}) as LeadFilterParams;
   const variableMap = (broadcast.variableMap ?? null) as Record<string, string> | null;
-  // Resolve the audience where ONCE (the engaged gate reads a set of numbers) and
-  // reuse it for every chunk, so the frozen list matches the preview exactly.
-  const where = await broadcastLeadWhere(segment);
+  // Resolve the audience where ONCE (the engaged gate / re-send lookup reads a
+  // set) and reuse it for every chunk, so the frozen list matches the preview.
+  //
+  // Phones the caller must NOT be sent to even if a matching lead is in scope —
+  // for a re-send, the numbers the SOURCE already confirmed delivered/read.
+  const preClaimedPhones = new Set<string>();
+  let where: Prisma.LeadWhereInput;
+  if (broadcast.resendOfId) {
+    // Audience = leads that HAVE a source-campaign recipient matching the scope.
+    // A relation filter, not an `id: { in: [...] }` list, so a large undelivered
+    // set cannot blow past Postgres's bind-parameter ceiling. `some` implies the
+    // recipient's leadId is non-null (it is linked to this lead).
+    where = {
+      waBroadcastRecipients: {
+        some: { broadcastId: broadcast.resendOfId, ...resendScopeWhere(broadcast.resendScope) },
+      },
+    };
+    // Never re-message a handset the SOURCE already confirmed delivered/read. A
+    // re-enrolled sibling lead shares the phone but was skipped as a duplicate in
+    // the source (so its waStatus is null and it matches the "not delivered"
+    // scope) — without this it would slip through and double-send to someone who
+    // already got it. Seeding these phones as already-claimed records them as
+    // duplicate skips in the re-send instead of sending.
+    const confirmed = await prisma.waBroadcastRecipient.findMany({
+      where: { broadcastId: broadcast.resendOfId, waStatus: { in: ["delivered", "read"] } },
+      select: { phoneE164: true },
+    });
+    for (const c of confirmed) preClaimedPhones.add(c.phoneE164);
+  } else {
+    where = await broadcastLeadWhere(segment);
+  }
 
   const CHUNK = 500;
   let cursor: string | null = null;
@@ -259,14 +314,15 @@ export async function materialiseAudience(broadcastId: string): Promise<{ total:
   // onto a new lead per service), and the unique index is (broadcastId, leadId)
   // — so without this the same handset receives the identical campaign twice.
   // Seeded from what is already stored so an interrupted run resumes correctly.
-  const claimedNumbers = new Set(
-    (
+  const claimedNumbers = new Set<string>([
+    ...preClaimedPhones,
+    ...(
       await prisma.waBroadcastRecipient.findMany({
         where: { broadcastId, status: "pending" },
         select: { phoneE164: true },
       })
     ).map((r) => r.phoneE164),
-  );
+  ]);
 
   for (;;) {
     // Explicitly typed rather than spread inline: a conditional spread makes the
