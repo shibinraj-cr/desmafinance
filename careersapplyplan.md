@@ -3,7 +3,25 @@
 Sectioned job content, résumé-first applying, and AI autofill for
 `/careers/desma/<slug>`.
 
-Status: plan. Nothing here is built yet.
+Status: **built.** Phase 1 in #292, phases 2 and 3 in #293.
+
+Two things came out differently from what is planned below, and the plan is
+left as written with the differences recorded here — the reasoning that led to
+each is worth more than a tidy document.
+
+**Sections are not stored.** Phase 1 plans a `sections` field written by a
+"Split into sections" action in the editor. Once the splitter existed as a pure
+function it was obvious it could just run at render: no column, no migration,
+no editor UI, and no second copy of the description to drift out of step. The
+plan's own constraint — that `descriptionMd` stays the source of truth — is
+satisfied by construction rather than by care.
+
+**The AI fallback was not needed.** The free pass handles both live JDs. It is
+not built; if a third JD defeats the splitter the page falls back to today's
+rendering, which is the same safety net the plan already relies on.
+
+Everything else shipped as described, including the signed page token and the
+database-counted daily cap.
 
 ## The public link does not change
 
