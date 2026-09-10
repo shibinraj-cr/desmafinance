@@ -3,8 +3,12 @@ import { istToday, isLeapYear } from "@/lib/dates";
 import {
   fallsOnDay,
   renderGreeting,
+  celebrationsInMonth,
+  upcomingCelebrations,
+  celebrationsToCsv,
   CELEBRATION_DEFAULTS,
   type Celebration,
+  type Celebrant,
 } from "@/lib/celebrations";
 
 /** A stored `@db.Date` — Prisma hands these back at UTC midnight. */
@@ -157,5 +161,132 @@ describe("renderGreeting", () => {
   it("leaves an unknown placeholder alone rather than blanking it", () => {
     const settings = { ...CELEBRATION_DEFAULTS, template: "{{name}} {{nickname}}" };
     expect(renderGreeting(base, settings)).toBe("Asha {{nickname}}");
+  });
+});
+
+// ── Calendar ─────────────────────────────────────────────────────────
+
+/** A celebrant with whichever dates the case needs. */
+function person(name: string, dates: { dob?: string; joined?: string }): Celebrant {
+  return {
+    employeeId: `e-${name}`,
+    empCode: `E${name.length}`,
+    name,
+    designation: "Executive",
+    department: "Ops",
+    photoUrl: null,
+    dob: dates.dob ? d(dates.dob) : null,
+    joinDate: dates.joined ? d(dates.joined) : null,
+  };
+}
+
+const SEP_10 = new Date("2026-09-10T06:00:00Z"); // 11:30 IST
+
+describe("celebrationsInMonth", () => {
+  const roster = [
+    person("Asha", { dob: "1996-09-13" }),
+    person("Bina", { joined: "2025-09-09" }),
+    person("Chandra", { dob: "1990-09-13", joined: "2019-09-25" }),
+    person("Divya", { dob: "1994-11-02" }),
+  ];
+
+  it("carries birthdays and anniversaries together, in date order", () => {
+    const out = celebrationsInMonth(roster, 9, 2026, SEP_10);
+    expect(out.map((e) => [e.name, e.kind, e.monthDay])).toEqual([
+      ["Bina", "anniversary", "09-09"],
+      ["Asha", "birthday", "09-13"],
+      ["Chandra", "birthday", "09-13"],
+      ["Chandra", "anniversary", "09-25"],
+    ]);
+  });
+
+  it("gives one person a row per occasion, not one row overall", () => {
+    const out = celebrationsInMonth(roster, 9, 2026, SEP_10);
+    expect(out.filter((e) => e.name === "Chandra")).toHaveLength(2);
+  });
+
+  it("counts the year against the month being viewed", () => {
+    const out = celebrationsInMonth(roster, 9, 2026, SEP_10);
+    expect(out.find((e) => e.name === "Bina")?.years).toBe(1);
+    expect(out.find((e) => e.name === "Chandra" && e.kind === "anniversary")?.years).toBe(7);
+    expect(out.find((e) => e.name === "Asha")?.age).toBe(30);
+  });
+
+  it("keeps a date that has already passed this month", () => {
+    // The 9th is behind us on the 10th; a month view still has to show it.
+    const bina = celebrationsInMonth(roster, 9, 2026, SEP_10).find((e) => e.name === "Bina");
+    expect(bina?.delta).toBe(-1);
+  });
+
+  it("excludes other months", () => {
+    expect(celebrationsInMonth(roster, 9, 2026, SEP_10).some((e) => e.name === "Divya")).toBe(false);
+    expect(celebrationsInMonth(roster, 11, 2026, SEP_10).map((e) => e.name)).toEqual(["Divya"]);
+  });
+
+  it("leaves out the year somebody joined — a start date is not an anniversary", () => {
+    const fresh = [person("Eshan", { joined: "2026-09-20" })];
+    expect(celebrationsInMonth(fresh, 9, 2026, SEP_10)).toEqual([]);
+    expect(celebrationsInMonth(fresh, 9, 2027, SEP_10)[0]?.years).toBe(1);
+  });
+
+  it("lists a 29 February date on the 28th in a non-leap year", () => {
+    const leapling = [person("Farah", { dob: "1996-02-29" })];
+    expect(celebrationsInMonth(leapling, 2, 2026, SEP_10)[0]?.monthDay).toBe("02-28");
+    expect(celebrationsInMonth(leapling, 2, 2028, SEP_10)[0]?.monthDay).toBe("02-29");
+  });
+});
+
+describe("upcomingCelebrations", () => {
+  const roster = [
+    person("Asha", { dob: "1996-09-13" }),
+    person("Bina", { joined: "2025-09-09" }),
+    person("Chandra", { joined: "2019-09-25" }),
+  ];
+
+  it("is ordered by how soon, and excludes what has already passed", () => {
+    // On the 10th: Bina's 9 Sep is behind us, Asha's 13th is 3 days out, and
+    // Chandra's 25th is 15 — just outside a fortnight.
+    expect(upcomingCelebrations(roster, 20, SEP_10).map((e) => [e.name, e.delta])).toEqual([
+      ["Asha", 3],
+      ["Chandra", 15],
+    ]);
+  });
+
+  it("respects the window", () => {
+    expect(upcomingCelebrations(roster, 14, SEP_10).map((e) => e.name)).toEqual(["Asha"]);
+    expect(upcomingCelebrations(roster, 30, SEP_10).map((e) => e.name)).toEqual([
+      "Asha",
+      "Chandra",
+    ]);
+  });
+
+  it("includes today", () => {
+    const out = upcomingCelebrations([person("Gita", { dob: "1990-09-10" })], 14, SEP_10);
+    expect(out[0]?.delta).toBe(0);
+  });
+
+  it("wraps into next year, counting the year it will actually fall in", () => {
+    const newYear = new Date("2026-12-28T06:00:00Z");
+    const out = upcomingCelebrations([person("Hari", { joined: "2020-01-02" })], 14, newYear);
+    expect(out[0]?.delta).toBe(5);
+    // Five days away, in 2027 — so it is their seventh year, not their sixth.
+    expect(out[0]?.years).toBe(7);
+  });
+});
+
+describe("celebrationsToCsv", () => {
+  it("names the occasion and quotes a name containing a comma", () => {
+    const rows = celebrationsInMonth(
+      [person("Iyer, Meena", { dob: "1996-09-13" }), person("Jaya", { joined: "2024-09-09" })],
+      9,
+      2026,
+      SEP_10,
+    );
+    const csv = celebrationsToCsv(rows);
+    const lines = csv.split("\n");
+    expect(lines[0]).toContain("Occasion");
+    expect(csv).toContain("Work anniversary");
+    expect(csv).toContain("Birthday");
+    expect(csv).toContain('"Iyer, Meena"');
   });
 });

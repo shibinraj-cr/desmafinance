@@ -4,13 +4,14 @@ import { getCurrentUserAndPermissions } from "@/lib/permissions";
 import { isHrUser, canApproveHr } from "@/lib/hr-rbac";
 import { TopBar } from "@/components/TopBar";
 import { Section } from "@/components/Cards";
+import { monthLabel } from "@/lib/hr-birthdays";
+import { istToday } from "@/lib/dates";
 import {
-  birthdaysForMonth,
-  loadActiveEmployeeBirthdays,
-  monthLabel,
-  upcomingBirthdays,
-} from "@/lib/hr-birthdays";
-import { CELEBRATION_DEFAULTS } from "@/lib/celebrations";
+  CELEBRATION_DEFAULTS,
+  celebrationsInMonth,
+  loadCelebrants,
+  upcomingCelebrations,
+} from "@/lib/celebrations";
 import { BirthdayCalendarClient } from "./client";
 
 export const dynamic = "force-dynamic";
@@ -35,21 +36,25 @@ export default async function BirthdayCalendarPage({
     );
   }
   const now = new Date();
+  const ist = istToday(now);
   const monthNum = searchParams?.month && /^\d{1,2}$/.test(searchParams.month)
     ? Math.min(12, Math.max(1, Number(searchParams.month)))
-    : now.getUTCMonth() + 1;
-  const [all, settings] = await Promise.all([
-    loadActiveEmployeeBirthdays(),
+    : ist.month;
+  const [celebrants, settings] = await Promise.all([
+    loadCelebrants(),
     prisma.hrBirthdaySettings.findFirst({ where: { singleton: true } }),
   ]);
-  const monthly = birthdaysForMonth(all, monthNum);
-  const upcoming = upcomingBirthdays(all, 30);
+  // Birthdays and work anniversaries together, the same as the employee-facing
+  // page. Ages are shown here whatever the "show age" switch says: that switch
+  // governs the company-wide band, and HR holds these dates already.
+  const monthly = celebrationsInMonth(celebrants, monthNum, ist.year, now);
+  const upcoming = upcomingCelebrations(celebrants, 30, now);
   const todayList = upcoming.filter((u) => u.delta === 0);
   return (
     <>
       <TopBar
         title="Birthday Calendar"
-        subtitle={`${all.length} active employees with a DOB on file · ${todayList.length} celebrating today`}
+        subtitle={`${celebrants.length} active employees on the calendar · ${todayList.length} celebrating today`}
       />
       <div className="p-margin space-y-lg">
         <BirthdayCalendarClient

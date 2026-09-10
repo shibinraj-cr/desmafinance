@@ -83,10 +83,6 @@ export async function loadActiveEmployeeBirthdays(): Promise<BirthdayRow[]> {
     });
 }
 
-/** Birthdays falling in a specific month (1–12). */
-export function birthdaysForMonth(rows: BirthdayRow[], month: number): BirthdayRow[] {
-  return rows.filter((r) => Number(r.dob.slice(5, 7)) === month).sort((a, b) => a.dob.localeCompare(b.dob));
-}
 
 /** Upcoming birthdays within `windowDays`, sorted ascending from today. */
 export function upcomingBirthdays(rows: BirthdayRow[], windowDays = 14): UpcomingBirthday[] {
@@ -100,25 +96,4 @@ export function upcomingBirthdays(rows: BirthdayRow[], windowDays = 14): Upcomin
     })
     .filter((r) => r.delta <= windowDays)
     .sort((a, b) => a.delta - b.delta);
-}
-
-/** Build CSV body for the export endpoint. */
-export function birthdaysToCsv(rows: BirthdayRow[]): string {
-  const header = ["Emp Code", "Name", "Designation", "Department", "DOB (Y-M-D)", "Birthday (M-D)"];
-  const body = rows.map((r) => [
-    r.empCode,
-    csvEscape(r.name),
-    csvEscape(r.designation ?? ""),
-    csvEscape(r.department ?? ""),
-    r.dob,
-    r.dob.slice(5),
-  ]);
-  return [header, ...body].map((row) => row.join(",")).join("\n");
-}
-
-function csvEscape(s: string): string {
-  if (s.includes(",") || s.includes('"') || s.includes("\n")) {
-    return `"${s.replace(/"/g, '""')}"`;
-  }
-  return s;
 }
