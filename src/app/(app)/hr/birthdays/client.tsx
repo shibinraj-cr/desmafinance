@@ -4,7 +4,7 @@ import { useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { Section } from "@/components/Cards";
-import type { BirthdayRow, UpcomingBirthday } from "@/lib/hr-birthdays";
+import type { CelebrationEntry, CelebrationKind } from "@/lib/celebrations";
 
 const MONTH_NAMES = [
   "Jan", "Feb", "Mar", "Apr", "May", "Jun",
@@ -35,9 +35,9 @@ export function BirthdayCalendarClient({
   canManage: boolean;
   monthNum: number;
   monthLabel: string;
-  monthly: BirthdayRow[];
-  upcoming: UpcomingBirthday[];
-  todayList: UpcomingBirthday[];
+  monthly: CelebrationEntry[];
+  upcoming: CelebrationEntry[];
+  todayList: CelebrationEntry[];
   settings: Settings;
 }) {
   const router = useRouter();
@@ -118,11 +118,11 @@ export function BirthdayCalendarClient({
         }
       >
         {todayList.length === 0 ? (
-          <p className="py-md text-center text-on-surface-variant">No birthdays today.</p>
+          <p className="py-md text-center text-on-surface-variant">Nothing to celebrate today.</p>
         ) : (
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-base">
-            {todayList.map((b) => (
-              <BirthdayCard key={b.id} b={b} highlight />
+            {todayList.map((e) => (
+              <CelebrationCard key={`${e.employeeId}:${e.kind}`} e={e} highlight />
             ))}
           </div>
         )}
@@ -130,7 +130,7 @@ export function BirthdayCalendarClient({
       </Section>
 
       <Section
-        title={`${monthLabel} birthdays (${monthly.length})`}
+        title={`${monthLabel} (${monthly.length})`}
         action={
           <div className="flex items-center gap-xs">
             {MONTH_NAMES.map((m, i) => (
@@ -146,11 +146,13 @@ export function BirthdayCalendarClient({
         }
       >
         {monthly.length === 0 ? (
-          <p className="py-lg text-center text-on-surface-variant">No birthdays in {monthLabel}.</p>
+          <p className="py-lg text-center text-on-surface-variant">
+            Nothing to celebrate in {monthLabel}.
+          </p>
         ) : (
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-base">
-            {monthly.map((b) => (
-              <BirthdayCard key={b.id} b={b} />
+            {monthly.map((e) => (
+              <CelebrationCard key={`${e.employeeId}:${e.kind}`} e={e} />
             ))}
           </div>
         )}
@@ -158,27 +160,30 @@ export function BirthdayCalendarClient({
 
       <Section title="Upcoming (next 30 days)">
         {upcoming.length === 0 ? (
-          <p className="py-md text-center text-on-surface-variant">No upcoming birthdays.</p>
+          <p className="py-md text-center text-on-surface-variant">Nothing coming up.</p>
         ) : (
           <div className="space-y-xs">
-            {upcoming.map((b) => (
+            {upcoming.map((e) => (
               <div
-                key={b.id}
+                key={`${e.employeeId}:${e.kind}`}
                 className="flex items-center gap-sm border border-outline-variant rounded-lg px-md py-sm"
               >
-                <Avatar b={b} />
+                <OccasionAvatar kind={e.kind} />
                 <div className="flex-1 min-w-0">
-                  <p className="font-semibold truncate">
-                    {b.name} <span className="text-on-surface-variant">· {b.empCode}</span>
-                  </p>
+                  <div className="flex items-center gap-xs flex-wrap">
+                    <p className="font-semibold truncate">
+                      {e.name} <span className="text-on-surface-variant">· {e.empCode}</span>
+                    </p>
+                    <OccasionChip kind={e.kind} />
+                  </div>
                   <p className="text-caption text-on-surface-variant">
-                    {b.designation ?? "—"} · {b.department ?? "—"}
+                    {e.designation ?? "—"} · {e.department ?? "—"}
                   </p>
                 </div>
                 <div className="text-right">
-                  <p className="text-h3 font-extrabold tabular-nums">{b.dob.slice(5)}</p>
-                  <p className="text-caption text-on-surface-variant">
-                    {b.delta === 0 ? "Today" : `in ${b.delta} days`}
+                  <p className="text-h3 font-extrabold tabular-nums">{e.monthDay}</p>
+                  <p className="text-caption text-on-surface-variant whitespace-nowrap">
+                    {e.delta === 0 ? "Today" : e.delta === 1 ? "Tomorrow" : `in ${e.delta} days`}
                   </p>
                 </div>
               </div>
@@ -349,42 +354,63 @@ export function BirthdayCalendarClient({
   );
 }
 
-function BirthdayCard({ b, highlight }: { b: BirthdayRow; highlight?: boolean }) {
+function CelebrationCard({ e, highlight }: { e: CelebrationEntry; highlight?: boolean }) {
   return (
     <div
       className={`flex items-center gap-sm rounded-xl border p-md ${highlight ? "border-primary bg-yellow-50" : "border-outline-variant bg-surface-container-lowest"}`}
     >
-      <Avatar b={b} />
+      <Avatar name={e.name} photoUrl={e.photoUrl} />
       <div className="flex-1 min-w-0">
-        <p className="font-bold truncate">{b.name}</p>
+        <p className="font-bold truncate">{e.name}</p>
         <p className="text-caption text-on-surface-variant truncate">
-          {b.empCode} · {b.designation ?? "—"}
+          {e.empCode} · {e.designation ?? "—"}
         </p>
-        <p className="text-caption text-on-surface-variant truncate">{b.department ?? "—"}</p>
+        <div className="mt-[2px]">
+          <OccasionChip kind={e.kind} />
+        </div>
       </div>
       <div className="text-right">
-        <p className="text-h3 font-extrabold tabular-nums">{b.dob.slice(5)}</p>
-        <p className="text-caption text-on-surface-variant">turning {b.ageThisYear}</p>
+        <p className="text-h3 font-extrabold tabular-nums">{e.monthDay}</p>
+        <p className="text-caption text-on-surface-variant whitespace-nowrap">
+          {e.kind === "birthday"
+            ? `turning ${e.age}`
+            : `${e.years} year${e.years === 1 ? "" : "s"}`}
+        </p>
       </div>
     </div>
   );
 }
 
-function Avatar({ b }: { b: BirthdayRow }) {
-  const initials = b.name
+/**
+ * The occasion in words. HR sees the same wording as everyone else, so a
+ * conversation about "the chip on the celebrations page" means one thing.
+ */
+function OccasionChip({ kind }: { kind: CelebrationKind }) {
+  return (
+    <span className="text-[10px] font-bold uppercase tracking-wider px-xs py-[1px] rounded-full bg-surface-container border border-outline-variant text-on-surface-variant whitespace-nowrap">
+      {kind === "birthday" ? "Birthday" : "Work anniversary"}
+    </span>
+  );
+}
+
+/** Cake or party popper, for the compact rows that have no room for a photo. */
+function OccasionAvatar({ kind }: { kind: CelebrationKind }) {
+  return (
+    <div className="w-12 h-12 flex-none rounded-full bg-primary text-on-primary flex items-center justify-center text-h3">
+      {kind === "birthday" ? "🎂" : "🎉"}
+    </div>
+  );
+}
+
+function Avatar({ name, photoUrl }: { name: string; photoUrl: string | null }) {
+  const initials = name
     .split(/\s+/)
     .filter(Boolean)
     .slice(0, 2)
     .map((s) => s[0]?.toUpperCase() ?? "")
     .join("");
-  if (b.photoUrl) {
-    return (
-      <img
-        src={b.photoUrl}
-        alt={b.name}
-        className="w-12 h-12 rounded-full object-cover"
-      />
-    );
+  if (photoUrl) {
+    return <img src={photoUrl} alt={name} className="w-12 h-12 rounded-full object-cover" />;
   }
   return (
     <div className="w-12 h-12 rounded-full bg-primary text-on-primary flex items-center justify-center font-bold">

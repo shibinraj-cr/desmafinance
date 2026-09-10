@@ -3,13 +3,15 @@ import { redirect } from "next/navigation";
 import { getCurrentUserAndPermissions } from "@/lib/permissions";
 import { TopBar } from "@/components/TopBar";
 import { Section } from "@/components/Cards";
+import { monthLabel } from "@/lib/hr-birthdays";
+import { istToday } from "@/lib/dates";
 import {
-  birthdaysForMonth,
-  loadActiveEmployeeBirthdays,
-  monthLabel,
-  upcomingBirthdays,
-} from "@/lib/hr-birthdays";
-import { celebrationsToday } from "@/lib/celebrations";
+  celebrationsInMonth,
+  celebrationsToday,
+  loadCelebrants,
+  upcomingCelebrations,
+  type CelebrationKind,
+} from "@/lib/celebrations";
 
 export const dynamic = "force-dynamic";
 
@@ -26,25 +28,21 @@ export default async function MyBirthdaysPage({
   const { perms } = await getCurrentUserAndPermissions();
   if (!perms) redirect("/login");
   const now = new Date();
+  const ist = istToday(now);
   const monthNum =
     searchParams?.month && /^\d{1,2}$/.test(searchParams.month)
       ? Math.min(12, Math.max(1, Number(searchParams.month)))
-      : now.getUTCMonth() + 1;
-  // Today's list comes from the celebration query rather than the birthday
-  // calendar, because this is where the band under the header lands: it names
-  // work anniversaries too, and a page that answered with birthdays alone would
-  // not contain what the reader just clicked on.
-  const [all, today] = await Promise.all([
-    loadActiveEmployeeBirthdays(),
-    celebrationsToday(),
-  ]);
-  const monthly = birthdaysForMonth(all, monthNum);
-  const upcoming = upcomingBirthdays(all, 14);
+      : ist.month;
+  // Both kinds throughout. Today keeps its own query — it is the one that
+  // respects the "show age" switch, since that is the list the band mirrors.
+  const [celebrants, today] = await Promise.all([loadCelebrants(), celebrationsToday()]);
+  const monthly = celebrationsInMonth(celebrants, monthNum, ist.year);
+  const upcoming = upcomingCelebrations(celebrants, 14);
   return (
     <>
       <TopBar
         title="Celebrations"
-        subtitle={`${today.length} celebrating today · ${monthly.length} birthdays in ${monthLabel(monthNum)}`}
+        subtitle={`${today.length} celebrating today · ${monthly.length} in ${monthLabel(monthNum)}`}
       />
       <div className="p-margin space-y-lg">
         {today.length > 0 && (
@@ -55,15 +53,11 @@ export default async function MyBirthdaysPage({
                   key={`${c.employeeId}:${c.kind}`}
                   className="flex items-center gap-sm border border-outline-variant rounded-lg px-md py-sm"
                 >
-                  <div className="w-10 h-10 rounded-full bg-primary text-on-primary flex items-center justify-center text-h3">
-                    {c.kind === "birthday" ? "🎂" : "🎉"}
-                  </div>
+                  <OccasionAvatar kind={c.kind} />
                   <div className="flex-1 min-w-0">
                     <div className="flex items-center gap-xs flex-wrap">
                       <p className="font-semibold truncate">{c.name}</p>
-                      <span className="text-[10px] font-bold uppercase tracking-wider px-xs py-[1px] rounded-full bg-surface-container border border-outline-variant text-on-surface-variant whitespace-nowrap">
-                        {c.kind === "birthday" ? "Birthday" : "Work anniversary"}
-                      </span>
+                      <OccasionChip kind={c.kind} />
                     </div>
                     <p className="text-caption text-on-surface-variant truncate">
                       {c.department ?? "—"}
@@ -82,33 +76,32 @@ export default async function MyBirthdaysPage({
           </Section>
         )}
 
-        <Section title="Upcoming birthdays (next 14 days)">
+        <Section title="Upcoming (next 14 days)">
           {upcoming.length === 0 ? (
-            <p className="py-md text-center text-on-surface-variant">No upcoming birthdays.</p>
+            <p className="py-md text-center text-on-surface-variant">
+              Nothing coming up in the next two weeks.
+            </p>
           ) : (
             <div className="space-y-xs">
-              {upcoming.map((b) => (
+              {upcoming.map((e) => (
                 <div
-                  key={b.id}
+                  key={`${e.employeeId}:${e.kind}`}
                   className="flex items-center gap-sm border border-outline-variant rounded-lg px-md py-sm"
                 >
-                  <div className="w-10 h-10 rounded-full bg-primary text-on-primary flex items-center justify-center font-bold">
-                    {b.name
-                      .split(/\s+/)
-                      .slice(0, 2)
-                      .map((s) => s[0]?.toUpperCase() ?? "")
-                      .join("")}
-                  </div>
+                  <OccasionAvatar kind={e.kind} />
                   <div className="flex-1 min-w-0">
-                    <p className="font-semibold truncate">{b.name}</p>
+                    <div className="flex items-center gap-xs flex-wrap">
+                      <p className="font-semibold truncate">{e.name}</p>
+                      <OccasionChip kind={e.kind} />
+                    </div>
                     <p className="text-caption text-on-surface-variant truncate">
-                      {b.designation ?? "—"} · {b.department ?? "—"}
+                      {e.designation ?? "—"} · {e.department ?? "—"}
                     </p>
                   </div>
                   <div className="text-right">
-                    <p className="font-bold tabular-nums">{b.dob.slice(5)}</p>
-                    <p className="text-caption text-on-surface-variant">
-                      {b.delta === 0 ? "Today" : `in ${b.delta} days`}
+                    <p className="font-bold tabular-nums">{e.monthDay}</p>
+                    <p className="text-caption text-on-surface-variant whitespace-nowrap">
+                      {e.delta === 0 ? "Today" : e.delta === 1 ? "Tomorrow" : `in ${e.delta} days`}
                     </p>
                   </div>
                 </div>
@@ -118,7 +111,7 @@ export default async function MyBirthdaysPage({
         </Section>
 
         <Section
-          title={`${monthLabel(monthNum)} birthdays`}
+          title={`${monthLabel(monthNum)}`}
           action={
             <div className="flex items-center gap-xs">
               {MONTH_NAMES.map((m, i) => (
@@ -134,28 +127,29 @@ export default async function MyBirthdaysPage({
           }
         >
           {monthly.length === 0 ? (
-            <p className="py-md text-center text-on-surface-variant">No birthdays this month.</p>
+            <p className="py-md text-center text-on-surface-variant">
+              Nothing to celebrate in {monthLabel(monthNum)}.
+            </p>
           ) : (
             <ul className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-sm">
-              {monthly.map((b) => (
+              {monthly.map((e) => (
                 <li
-                  key={b.id}
+                  key={`${e.employeeId}:${e.kind}`}
                   className="flex items-center gap-sm border border-outline-variant rounded-lg px-md py-sm"
                 >
-                  <div className="w-10 h-10 rounded-full bg-primary text-on-primary flex items-center justify-center font-bold">
-                    {b.name
-                      .split(/\s+/)
-                      .slice(0, 2)
-                      .map((s) => s[0]?.toUpperCase() ?? "")
-                      .join("")}
-                  </div>
+                  <OccasionAvatar kind={e.kind} />
                   <div className="flex-1 min-w-0">
-                    <p className="font-semibold truncate">{b.name}</p>
-                    <p className="text-caption text-on-surface-variant truncate">
-                      {b.designation ?? "—"}
-                    </p>
+                    <p className="font-semibold truncate">{e.name}</p>
+                    <div className="flex items-center gap-xs">
+                      <OccasionChip kind={e.kind} />
+                      {e.kind === "anniversary" ? (
+                        <span className="text-caption text-on-surface-variant whitespace-nowrap">
+                          {e.years} yr{e.years === 1 ? "" : "s"}
+                        </span>
+                      ) : null}
+                    </div>
                   </div>
-                  <p className="font-bold tabular-nums">{b.dob.slice(5)}</p>
+                  <p className="font-bold tabular-nums">{e.monthDay}</p>
                 </li>
               ))}
             </ul>
@@ -163,5 +157,26 @@ export default async function MyBirthdaysPage({
         </Section>
       </div>
     </>
+  );
+}
+
+/** Cake or party popper, on the same gold disc the rest of the page uses. */
+function OccasionAvatar({ kind }: { kind: CelebrationKind }) {
+  return (
+    <div className="w-10 h-10 flex-none rounded-full bg-primary text-on-primary flex items-center justify-center text-h3">
+      {kind === "birthday" ? "🎂" : "🎉"}
+    </div>
+  );
+}
+
+/**
+ * The occasion in words. The emoji above is decoration; this is the part that
+ * actually tells a birthday and an anniversary apart.
+ */
+function OccasionChip({ kind }: { kind: CelebrationKind }) {
+  return (
+    <span className="text-[10px] font-bold uppercase tracking-wider px-xs py-[1px] rounded-full bg-surface-container border border-outline-variant text-on-surface-variant whitespace-nowrap">
+      {kind === "birthday" ? "Birthday" : "Work anniversary"}
+    </span>
   );
 }

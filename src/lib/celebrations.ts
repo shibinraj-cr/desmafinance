@@ -223,3 +223,230 @@ export function renderGreeting(c: Celebration, settings: CelebrationSettings): s
     .replaceAll("{{dept}}", c.department ?? "")
     .replaceAll("{{years}}", c.years === null ? "" : String(c.years));
 }
+
+// ──────────────────────────────────────────────────────────────────────
+// Calendar — the same two kinds, but looked up ahead and behind rather
+// than only for today.
+//
+// `celebrationsToday` above is the hot path: it runs on every page render
+// in the app shell, so its select carries no joins and no columns the band
+// will not print. These functions back the Celebrations pages instead, where
+// one extra round trip is affordable and the reader wants designation and
+// employee code too. The two share their *rules* — `fallsOnDay`, the opt-out
+// filter, the anniversary switch — so the calendar can never disagree with
+// the band about who is celebrating.
+// ──────────────────────────────────────────────────────────────────────
+
+/** An employee as the calendar reads them, before occasions are derived. */
+export type Celebrant = {
+  employeeId: string;
+  empCode: string;
+  name: string;
+  designation: string | null;
+  department: string | null;
+  photoUrl: string | null;
+  dob: Date | null;
+  joinDate: Date | null;
+};
+
+/** One occasion on the calendar: this person, this kind, this date. */
+export type CelebrationEntry = {
+  employeeId: string;
+  empCode: string;
+  kind: CelebrationKind;
+  name: string;
+  designation: string | null;
+  department: string | null;
+  photoUrl: string | null;
+  /** Month of the occasion, 1–12. */
+  month: number;
+  /** Day it is observed — 28 for a 29 February date in a non-leap year. */
+  day: number;
+  /** "MM-DD", for display and for sorting within a month. */
+  monthDay: string;
+  /** Whole days from today. 0 = today; negative = already passed this month. */
+  delta: number;
+  /** Age being turned. Birthdays only. */
+  age: number | null;
+  /** Completed years of service. Anniversaries only. */
+  years: number | null;
+};
+
+/**
+ * Everyone the calendar can draw from: active, not opted out, with at least
+ * one date on file. Anniversaries are dropped at source when HR has switched
+ * them off, so no caller has to remember to check.
+ */
+export async function loadCelebrants(settings?: CelebrationSettings): Promise<Celebrant[]> {
+  const s = settings ?? (await celebrationSettings());
+  const rows = await prisma.employee
+    .findMany({
+      where: {
+        active: true,
+        celebrationOptOut: false,
+        OR: [{ dob: { not: null } }, { joinDate: { not: null } }],
+      },
+      select: {
+        id: true,
+        empCode: true,
+        name: true,
+        designation: true,
+        department: true,
+        photoUrl: true,
+        dob: true,
+        joinDate: true,
+        designationRef: { select: { name: true } },
+        departments: { where: { isPrimary: true }, include: { department: true } },
+      },
+      orderBy: { name: "asc" },
+    })
+    .catch(() => []);
+
+  return rows.map((r) => ({
+    employeeId: r.id,
+    empCode: r.empCode,
+    name: r.name,
+    designation: r.designationRef?.name ?? r.designation,
+    department: r.departments[0]?.department.name ?? r.department,
+    photoUrl: r.photoUrl,
+    dob: r.dob,
+    joinDate: s.anniversaryEnabled ? r.joinDate : null,
+  }));
+}
+
+/**
+ * The UTC timestamp on which a month/day is observed in a given year.
+ * 29 February is observed on the 28th when the year has no 29th — the same
+ * rule `fallsOnDay` applies, kept here so a date can never be listed on the
+ * calendar for a day it would not actually fire on.
+ */
+function observedOn(year: number, month: number, day: number): number {
+  if (month === 2 && day === 29 && !isLeapYear(year)) return Date.UTC(year, 1, 28);
+  return Date.UTC(year, month - 1, day);
+}
+
+/** Whole days between two UTC midnights. */
+function daysBetween(fromTs: number, toTs: number): number {
+  return Math.round((toTs - fromTs) / 86_400_000);
+}
+
+/** Every occasion a person has, as (kind, source date) pairs. */
+function occasionsOf(c: Celebrant): Array<{ kind: CelebrationKind; on: Date }> {
+  const out: Array<{ kind: CelebrationKind; on: Date }> = [];
+  if (c.dob) out.push({ kind: "birthday", on: c.dob });
+  if (c.joinDate) out.push({ kind: "anniversary", on: c.joinDate });
+  return out;
+}
+
+function entryFor(
+  c: Celebrant,
+  kind: CelebrationKind,
+  source: Date,
+  /** The year the occasion is being counted in — decides age and years. */
+  inYear: number,
+  todayTs: number,
+): CelebrationEntry {
+  const month = source.getUTCMonth() + 1;
+  const rawDay = source.getUTCDate();
+  const ts = observedOn(inYear, month, rawDay);
+  const observedDay = new Date(ts).getUTCDate();
+  const count = inYear - source.getUTCFullYear();
+  return {
+    employeeId: c.employeeId,
+    empCode: c.empCode,
+    kind,
+    name: c.name,
+    designation: c.designation,
+    department: c.department,
+    photoUrl: c.photoUrl,
+    month,
+    day: observedDay,
+    monthDay: `${String(month).padStart(2, "0")}-${String(observedDay).padStart(2, "0")}`,
+    delta: daysBetween(todayTs, ts),
+    age: kind === "birthday" ? count : null,
+    years: kind === "anniversary" ? count : null,
+  };
+}
+
+/**
+ * Every occasion falling in `month` of `year`, birthdays and anniversaries
+ * together, in date order — the "who are we celebrating in September" view.
+ *
+ * An anniversary that has not yet been completed in that year is left out: in
+ * the year somebody joined, the date on the calendar is a start date, not an
+ * anniversary, and listing it as "0 years" reads like a bug.
+ */
+export function celebrationsInMonth(
+  celebrants: Celebrant[],
+  month: number,
+  year: number,
+  now: Date = new Date(),
+): CelebrationEntry[] {
+  const today = istToday(now);
+  const todayTs = Date.UTC(today.year, today.month - 1, today.day);
+  const out: CelebrationEntry[] = [];
+
+  for (const c of celebrants) {
+    for (const { kind, on } of occasionsOf(c)) {
+      if (on.getUTCMonth() + 1 !== month) continue;
+      const entry = entryFor(c, kind, on, year, todayTs);
+      if (kind === "anniversary" && (entry.years ?? 0) < 1) continue;
+      out.push(entry);
+    }
+  }
+
+  return out.sort(
+    (a, b) => a.day - b.day || a.name.localeCompare(b.name) || a.kind.localeCompare(b.kind),
+  );
+}
+
+/**
+ * The next `windowDays` of occasions, soonest first, wrapping across the turn
+ * of the year — so on 28 December the first week of January is still "coming
+ * up", counted against the year it will actually fall in.
+ */
+export function upcomingCelebrations(
+  celebrants: Celebrant[],
+  windowDays = 14,
+  now: Date = new Date(),
+): CelebrationEntry[] {
+  const today = istToday(now);
+  const todayTs = Date.UTC(today.year, today.month - 1, today.day);
+  const out: CelebrationEntry[] = [];
+
+  for (const c of celebrants) {
+    for (const { kind, on } of occasionsOf(c)) {
+      const month = on.getUTCMonth() + 1;
+      const day = on.getUTCDate();
+      // This year's occurrence if it is still to come, otherwise next year's.
+      const year = observedOn(today.year, month, day) >= todayTs ? today.year : today.year + 1;
+      const entry = entryFor(c, kind, on, year, todayTs);
+      if (entry.delta < 0 || entry.delta > windowDays) continue;
+      if (kind === "anniversary" && (entry.years ?? 0) < 1) continue;
+      out.push(entry);
+    }
+  }
+
+  return out.sort(
+    (a, b) => a.delta - b.delta || a.name.localeCompare(b.name) || a.kind.localeCompare(b.kind),
+  );
+}
+
+/** CSV for the HR export — one row per occasion, both kinds. */
+export function celebrationsToCsv(entries: CelebrationEntry[]): string {
+  const header = ["Emp Code", "Name", "Occasion", "Designation", "Department", "Date (MM-DD)", "Turning / Years"];
+  const body = entries.map((e) => [
+    e.empCode,
+    csvCell(e.name),
+    e.kind === "birthday" ? "Birthday" : "Work anniversary",
+    csvCell(e.designation ?? ""),
+    csvCell(e.department ?? ""),
+    e.monthDay,
+    e.kind === "birthday" ? String(e.age ?? "") : String(e.years ?? ""),
+  ]);
+  return [header, ...body].map((row) => row.join(",")).join("\n");
+}
+
+function csvCell(s: string): string {
+  return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
+}
