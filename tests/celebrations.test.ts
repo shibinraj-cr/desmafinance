@@ -73,6 +73,34 @@ describe("fallsOnDay", () => {
   });
 });
 
+describe("a work anniversary lands on the joining date itself", () => {
+  // The stated requirement, pinned: joined 9 September, wished on 9 September.
+  // Worth its own block because the two halves are independently correct and
+  // still wrong together if the timezone anchor ever slips — fallsOnDay only
+  // compares month and day, so everything rests on which day istToday reports.
+  const joined = d("2021-09-09");
+
+  it("stays quiet on the 8th", () => {
+    expect(fallsOnDay(joined, istToday(new Date("2026-09-08T09:00:00Z")))).toBe(false);
+  });
+
+  it("fires for the whole of the 9th in India", () => {
+    const throughTheDay = [
+      "2026-09-08T18:35:00Z", // 00:05 IST — the 9th in India, still the 8th in UTC
+      "2026-09-09T03:30:00Z", // 09:00 IST — people arriving
+      "2026-09-09T13:00:00Z", // 18:30 IST — end of day
+      "2026-09-09T18:25:00Z", // 23:55 IST — last minute of the 9th
+    ];
+    for (const at of throughTheDay) {
+      expect(fallsOnDay(joined, istToday(new Date(at)))).toBe(true);
+    }
+  });
+
+  it("stops once it is the 10th in India", () => {
+    expect(fallsOnDay(joined, istToday(new Date("2026-09-09T18:35:00Z")))).toBe(false);
+  });
+});
+
 describe("renderGreeting", () => {
   const base: Celebration = {
     employeeId: "e1",
