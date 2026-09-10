@@ -225,6 +225,22 @@ export function isExcludedAssignee(displayName: string | null | undefined): bool
 }
 
 /**
+ * The automated intro is an L2-only message. Its approved template introduces
+ * the assignee to the candidate as the consultant handling their case — true of
+ * an L2 BDE, but not of an L1, who holds a lead only to qualify it before it
+ * reaches whoever will actually own it. An L1 assignment introducing an L1 as
+ * "your consultant" both misstates who the candidate should talk to and burns
+ * the one first-contact message the real consultant needs.
+ *
+ * Gating on the tier rather than on names is what `isExcludedAssignee`'s own
+ * comment asks for: it holds for every L1, present and future, with no set to
+ * keep in step with the roster.
+ */
+export function isIntroExcludedRole(role: string | null | undefined): boolean {
+  return (role ?? "").trim().toLowerCase() === "l1";
+}
+
+/**
  * The consultant's Wabis identity. `LeadPulseRole.displayName` / `.phone` are
  * the source of truth — they already drive the CRM's `{consultant_phone}` merge
  * field. The endpoint's `agentName` / `agentPhone` override them only for the
@@ -811,13 +827,20 @@ export async function enqueueLeadAssignedWebhook(opts: {
   assignedAt: Date | null | undefined;
   agentDisplayName: string | null | undefined;
   agentPhone: string | null | undefined;
+  /**
+   * The assignee's `LeadPulseRole.role` ("l1" / "l2"). L1 assignments don't send
+   * — see `isIntroExcludedRole`.
+   */
+  assigneeRole: string | null | undefined;
 }): Promise<void> {
   try {
     const skipReason = opts.isStudyAbroad
       ? "this lead's service is Study Abroad, which has its own separate intro (not this template)"
-      : isExcludedAssignee(opts.agentDisplayName)
-        ? "this consultant is excluded from the automated intro"
-        : null;
+      : isIntroExcludedRole(opts.assigneeRole)
+        ? "the lead is assigned to an L1 BDE, and the automated intro only goes out for L2 consultants"
+        : isExcludedAssignee(opts.agentDisplayName)
+          ? "this consultant is excluded from the automated intro"
+          : null;
     if (skipReason) {
       await prisma.crmWebhookDelivery
         .create({
