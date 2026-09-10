@@ -142,10 +142,16 @@ export function AnnouncementBand({
  */
 function CelebrationSpan({ c }: { c: BandCelebration }) {
   const who = c.isSelf ? `${c.name} (you)` : c.name;
-  const detail =
+  // Always name the occasion. Without it a birthday with age hidden reached the
+  // band as a bare name and a cake glyph, indistinguishable at a glance from an
+  // anniversary — which is the one thing this strip has to get across.
+  const occasion =
     c.kind === "birthday"
-      ? [c.age !== null ? `turns ${c.age}` : null, c.department].filter(Boolean).join(" · ")
-      : [`${c.years} year${c.years === 1 ? "" : "s"}`, c.department].filter(Boolean).join(" · ");
+      ? c.age !== null
+        ? `birthday · turns ${c.age}`
+        : "birthday"
+      : `${c.years} year${c.years === 1 ? "" : "s"} with us`;
+  const detail = [occasion, c.department].filter(Boolean).join(" · ");
 
   return (
     <span className="inline-flex items-center gap-xs text-label-sm">

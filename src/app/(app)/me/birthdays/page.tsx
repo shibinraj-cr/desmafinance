@@ -43,7 +43,7 @@ export default async function MyBirthdaysPage({
   return (
     <>
       <TopBar
-        title="Colleague Birthdays"
+        title="Celebrations"
         subtitle={`${today.length} celebrating today · ${monthly.length} birthdays in ${monthLabel(monthNum)}`}
       />
       <div className="p-margin space-y-lg">
@@ -59,25 +59,30 @@ export default async function MyBirthdaysPage({
                     {c.kind === "birthday" ? "🎂" : "🎉"}
                   </div>
                   <div className="flex-1 min-w-0">
-                    <p className="font-semibold truncate">{c.name}</p>
+                    <div className="flex items-center gap-xs flex-wrap">
+                      <p className="font-semibold truncate">{c.name}</p>
+                      <span className="text-[10px] font-bold uppercase tracking-wider px-xs py-[1px] rounded-full bg-surface-container border border-outline-variant text-on-surface-variant whitespace-nowrap">
+                        {c.kind === "birthday" ? "Birthday" : "Work anniversary"}
+                      </span>
+                    </div>
                     <p className="text-caption text-on-surface-variant truncate">
                       {c.department ?? "—"}
                     </p>
                   </div>
-                  <p className="font-semibold">
-                    {c.kind === "birthday"
-                      ? c.age !== null
-                        ? `Turns ${c.age}`
-                        : "Birthday"
-                      : `${c.years} year${c.years === 1 ? "" : "s"}`}
-                  </p>
+                  {c.kind === "anniversary" ? (
+                    <p className="font-semibold whitespace-nowrap">
+                      {c.years} year{c.years === 1 ? "" : "s"}
+                    </p>
+                  ) : c.age !== null ? (
+                    <p className="font-semibold whitespace-nowrap">Turns {c.age}</p>
+                  ) : null}
                 </div>
               ))}
             </div>
           </Section>
         )}
 
-        <Section title="Upcoming (next 14 days)">
+        <Section title="Upcoming birthdays (next 14 days)">
           {upcoming.length === 0 ? (
             <p className="py-md text-center text-on-surface-variant">No upcoming birthdays.</p>
           ) : (
@@ -113,7 +118,7 @@ export default async function MyBirthdaysPage({
         </Section>
 
         <Section
-          title={`${monthLabel(monthNum)}`}
+          title={`${monthLabel(monthNum)} birthdays`}
           action={
             <div className="flex items-center gap-xs">
               {MONTH_NAMES.map((m, i) => (
