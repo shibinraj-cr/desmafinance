@@ -265,6 +265,8 @@ export function WabisWebhookCard() {
           <p className="text-label-sm text-on-surface-variant">
             Reassigning a lead to a different consultant sends again, so the conversation moves to the new
             consultant&apos;s Wabis inbox. The same consultant is never introduced twice for the same lead.
+            Leads assigned to an L1 BDE are never introduced — the template names the assignee as the
+            candidate&apos;s consultant, which only holds once an L2 owns the lead.
           </p>
 
           {/* ── Endpoints ─────────────────────────────────────────────── */}

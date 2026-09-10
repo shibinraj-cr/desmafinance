@@ -28,6 +28,9 @@ export async function assignLeadTo(
 
   // Validate the new assignee is an active L1/L2 BDE (matches the dropdown).
   let targetName: string | null = null;
+  // Kept alongside the name because the automated WhatsApp intro is L2-only —
+  // read here rather than re-queried later, since this lookup already has it.
+  let targetRole: string | null = null;
   if (targetUserId) {
     const role = await prisma.leadPulseRole.findUnique({
       where: { userId: targetUserId },
@@ -37,6 +40,7 @@ export async function assignLeadTo(
       throw badRequest("Assignee must be an active L1/L2 BDE", "invalid_assignee");
     }
     targetName = role.displayName;
+    targetRole = role.role;
   }
 
   if (existing.assignedToId === targetUserId) {
@@ -121,6 +125,7 @@ export async function assignLeadTo(
       assignedAt: updated.assignedAt,
       agentDisplayName: updated.assignedTo?.leadPulseRole?.displayName,
       agentPhone: updated.assignedTo?.leadPulseRole?.phone,
+      assigneeRole: targetRole,
     });
   }
 

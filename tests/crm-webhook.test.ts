@@ -5,6 +5,7 @@ import {
   istTimestamp,
   resolveAgent,
   isExcludedAssignee,
+  isIntroExcludedRole,
   isWabisWebhookUrl,
   pickEndpoint,
   STUDY_ABROAD_EVENT,
@@ -117,6 +118,23 @@ describe("isExcludedAssignee", () => {
     expect(isExcludedAssignee(null)).toBe(false);
     expect(isExcludedAssignee(undefined)).toBe(false);
     expect(isExcludedAssignee("")).toBe(false);
+  });
+});
+
+describe("isIntroExcludedRole", () => {
+  it("suppresses the intro for an L1 assignee", () => {
+    expect(isIntroExcludedRole("l1")).toBe(true);
+    expect(isIntroExcludedRole("L1")).toBe(true);
+    expect(isIntroExcludedRole(" l1 ")).toBe(true);
+  });
+  it("still sends for an L2 consultant, who the template actually describes", () => {
+    expect(isIntroExcludedRole("l2")).toBe(false);
+  });
+  it("does not suppress on an unknown or missing role — the send stays the default", () => {
+    expect(isIntroExcludedRole("admin")).toBe(false);
+    expect(isIntroExcludedRole(null)).toBe(false);
+    expect(isIntroExcludedRole(undefined)).toBe(false);
+    expect(isIntroExcludedRole("")).toBe(false);
   });
 });
 
