@@ -16,6 +16,7 @@ import {
   LEDGER_FROM,
   getSalesObjective,
   monthLabelFromKey,
+  previousMonthKey,
   type ObjectiveMonth,
   type ObjectiveQuarter,
 } from "@/lib/sales-objective";
@@ -54,6 +55,9 @@ export default async function SalesObjectivePage({
   const months = objective.months.filter((m) => scope === "all" || m.fy === scope);
 
   const firstLive = months.find((m) => m.source === "ledger");
+  // The "vs sheet" column only exists when the archive was seeded with the
+  // overlap months (--with-reference). By default it has nothing to compare.
+  const showReference = objective.hasReference;
   const perDay =
     objective.currentShortfall !== null && objective.daysLeftInQuarter > 0
       ? objective.currentShortfall / objective.daysLeftInQuarter
@@ -261,7 +265,7 @@ export default async function SalesObjectivePage({
                   <Th align="left">Month</Th>
                   <Th>Collected</Th>
                   <Th align="left">Source</Th>
-                  <Th>vs sheet</Th>
+                  {showReference && <Th>vs sheet</Th>}
                   <Th>Monthly target</Th>
                   <Th>Achieved</Th>
                   <Th>Gap</Th>
@@ -271,7 +275,7 @@ export default async function SalesObjectivePage({
               </thead>
               <tbody>
                 {quarters.map((q) => (
-                  <QuarterRows key={q.id} quarter={q} />
+                  <QuarterRows key={q.id} quarter={q} showReference={showReference} />
                 ))}
               </tbody>
             </table>
@@ -290,15 +294,27 @@ export default async function SalesObjectivePage({
               <b className="text-on-surface">Everything before it is frozen.</b> DesGro holds no
               ledger for those months, so they are read from{" "}
               <Code>SalesObjectiveArchive</Code> — loaded from the objective workbook by{" "}
-              <Code>prisma/seed-sales-objective-archive.ts</Code>. They never recompute and never
-              move, and they sit in the database rather than in source because this repository is
-              public.
+              <Code>prisma/seed-sales-objective-archive.ts</Code>, which stops where the ledger
+              starts. They never recompute and never move, and they sit in the database rather than
+              in source because this repository is public.
             </Note>
-            <Note icon="rule">
-              <b className="text-on-surface">Where the two disagree, the ledger wins.</b> A gap under{" "}
-              {DEVIATION_TOLERANCE * 100}% is adopted silently and shown in the “vs sheet” column;
-              anything larger also raises the banner at the top of this page.
-            </Note>
+            {showReference ? (
+              <Note icon="rule">
+                <b className="text-on-surface">Where the two disagree, the ledger wins.</b> This
+                database also holds the workbook&apos;s figures for months the ledger covers, so the
+                two are reconciled: a gap under {DEVIATION_TOLERANCE * 100}% is adopted silently and
+                shown in the “vs sheet” column, and anything larger raises the banner at the top of
+                this page.
+              </Note>
+            ) : (
+              <Note icon="rule">
+                <b className="text-on-surface">The two halves never overlap.</b> The archive stops
+                at {monthLabelFromKey(previousMonthKey(LEDGER_FROM))} and the ledger takes over from{" "}
+                {monthLabelFromKey(LEDGER_FROM)}, so no month has two sources and there is nothing to
+                reconcile. Re-run the seed with <Code>--with-reference</Code> to also load the
+                workbook&apos;s figures for the ledger months and audit one against the other.
+              </Note>
+            )}
             <Note icon="edit_note">
               <b className="text-on-surface">Two workbook labels are corrected here.</b> The column
               called “% of Growth” is not growth — it is the quarter&apos;s collection divided by its
@@ -319,11 +335,22 @@ export default async function SalesObjectivePage({
   );
 }
 
-function QuarterRows({ quarter: q }: { quarter: ObjectiveQuarter }) {
+function QuarterRows({
+  quarter: q,
+  showReference,
+}: {
+  quarter: ObjectiveQuarter;
+  showReference: boolean;
+}) {
   return (
     <>
       {q.months.map((m, i) => (
-        <MonthRow key={m.key} month={m} quarterLabel={i === 0 ? q.short : ""} />
+        <MonthRow
+          key={m.key}
+          month={m}
+          quarterLabel={i === 0 ? q.short : ""}
+          showReference={showReference}
+        />
       ))}
       <tr className="bg-surface-container font-semibold border-b-2 border-outline">
         <Td align="left">{q.short}</Td>
@@ -334,7 +361,7 @@ function QuarterRows({ quarter: q }: { quarter: ObjectiveQuarter }) {
         <Td align="left">
           <SourcePill source={q.live ? "ledger" : "archive"} />
         </Td>
-        <Td muted>—</Td>
+        {showReference && <Td muted>—</Td>}
         <Td mono muted>
           {q.monthlyTarget === null ? "—" : inrFull(q.monthlyTarget)}
         </Td>
@@ -353,7 +380,15 @@ function QuarterRows({ quarter: q }: { quarter: ObjectiveQuarter }) {
   );
 }
 
-function MonthRow({ month: m, quarterLabel }: { month: ObjectiveMonth; quarterLabel: string }) {
+function MonthRow({
+  month: m,
+  quarterLabel,
+  showReference,
+}: {
+  month: ObjectiveMonth;
+  quarterLabel: string;
+  showReference: boolean;
+}) {
   return (
     <tr className={"border-b border-outline-variant " + (m.needsReview ? "bg-error-container/40" : "")}>
       <Td align="left" muted>
@@ -369,6 +404,7 @@ function MonthRow({ month: m, quarterLabel }: { month: ObjectiveMonth; quarterLa
       <Td align="left">
         <SourcePill source={m.source} fallback={m.archiveFallback} />
       </Td>
+      {showReference && (
       <Td mono>
         {m.deviation === null ? (
           <span className="text-on-surface-variant">—</span>
@@ -384,6 +420,7 @@ function MonthRow({ month: m, quarterLabel }: { month: ObjectiveMonth; quarterLa
           </span>
         )}
       </Td>
+      )}
       <Td mono muted>
         {m.target === null ? "—" : inrFull(m.target)}
       </Td>
