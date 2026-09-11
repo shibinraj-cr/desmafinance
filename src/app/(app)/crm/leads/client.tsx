@@ -32,6 +32,8 @@ export type LeadsAccess = {
   canAssign: boolean;
   canBulkImport: boolean;
   canBulkEmail: boolean;
+  /** Move many selected leads to one stage at once (admin / Marketing Admin). */
+  canBulkStatus: boolean;
   emailConfigured: boolean;
   isAdmin: boolean;
   isBde: boolean;
@@ -620,12 +622,16 @@ export function LeadsTable({
     return listParam(search.getAll(key));
   }
 
-  // ── Bulk selection (admins only) ────────────────────────────────────────────
-  const bulk = access.canBulkEmail;
+  // ── Bulk selection ─────────────────────────────────────────────────────────
+  // One selection, several actions: "Send email" (CRM admins) and "Change
+  // stage" (admin / Marketing Admin). Rows are therefore selectable regardless
+  // of whether they have an email — each action reports what it had to skip.
+  const bulk = access.canBulkEmail || access.canBulkStatus;
   const [selected, setSelected] = useState<Set<string>>(new Set());
-  const [matchedAll, setMatchedAll] = useState<{ emailable: number; total: number; truncated: boolean } | null>(null);
+  const [matchedAll, setMatchedAll] = useState<{ selected: number; emailable: number; total: number; truncated: boolean } | null>(null);
   const [selectingAll, setSelectingAll] = useState(false);
   const [composeOpen, setComposeOpen] = useState(false);
+  const [stageOpen, setStageOpen] = useState(false);
 
   // Reset the selection whenever the FILTER (not just the page) changes, so a
   // "select all matching" set can never leak onto a different filter.
@@ -639,9 +645,21 @@ export function LeadsTable({
     setMatchedAll(null);
   }, [filterKey]);
 
-  const pageEmailableIds = useMemo(() => leads.filter((l) => l.email).map((l) => l.id), [leads]);
-  const allPageSelected = pageEmailableIds.length > 0 && pageEmailableIds.every((id) => selected.has(id));
-  const somePageSelected = pageEmailableIds.some((id) => selected.has(id));
+  const pageIds = useMemo(() => leads.map((l) => l.id), [leads]);
+  const allPageSelected = pageIds.length > 0 && pageIds.every((id) => selected.has(id));
+  const somePageSelected = pageIds.some((id) => selected.has(id));
+  // What each action would have to skip. Selection spans pages, so the rows in
+  // hand only give a FLOOR — except for no-email after a select-all, where the
+  // server counted the whole match. Both modals word it accordingly.
+  const selectedEnrolledOnPage = useMemo(
+    () => leads.filter((l) => selected.has(l.id) && l.status.code === "enrolled").length,
+    [leads, selected],
+  );
+  const selectedNoEmailOnPage = useMemo(
+    () => leads.filter((l) => selected.has(l.id) && !l.email).length,
+    [leads, selected],
+  );
+  const selectedNoEmail = matchedAll ? Math.max(0, matchedAll.selected - matchedAll.emailable) : selectedNoEmailOnPage;
 
   // ── Reorderable columns (drag headers; persisted per browser) ───────────────
   const [colOrder, setColOrder] = useState<string[]>([...LEADS_DEFAULT_COLUMNS]);
@@ -690,8 +708,8 @@ export function LeadsTable({
   function togglePage() {
     setSelected((prev) => {
       const next = new Set(prev);
-      if (allPageSelected) pageEmailableIds.forEach((id) => next.delete(id));
-      else pageEmailableIds.forEach((id) => next.add(id));
+      if (allPageSelected) pageIds.forEach((id) => next.delete(id));
+      else pageIds.forEach((id) => next.add(id));
       return next;
     });
     setMatchedAll(null);
@@ -705,12 +723,16 @@ export function LeadsTable({
     const params = new URLSearchParams(search.toString());
     params.delete("page");
     params.delete("pageSize");
-    const res = await fetch(`/api/crm/leads/ids${params.toString() ? `?${params.toString()}` : ""}`);
+    // "all" while the user can change stages — a stage sweep has no reason to
+    // skip leads without an email. Email-only admins keep the emailable scope so
+    // the 5,000-id cap can't fill up with leads they could never email.
+    params.set("scope", access.canBulkStatus ? "all" : "emailable");
+    const res = await fetch(`/api/crm/leads/ids?${params.toString()}`);
     setSelectingAll(false);
     if (!res.ok) return;
     const d = (await res.json()) as { ids: string[]; emailable: number; total: number; truncated: boolean };
     setSelected(new Set(d.ids));
-    setMatchedAll({ emailable: d.emailable, total: d.total, truncated: d.truncated });
+    setMatchedAll({ selected: d.ids.length, emailable: d.emailable, total: d.total, truncated: d.truncated });
   }
 
   const totalPages = Math.max(1, Math.ceil(total / pageSize));
@@ -1129,39 +1151,75 @@ export function LeadsTable({
           <span className="text-label-md font-semibold text-on-surface">
             {selected.size.toLocaleString()} selected
           </span>
-          {!matchedAll && total > pageEmailableIds.length && (
+          {!matchedAll && total > pageIds.length && (
             <button type="button" onClick={selectAllMatching} disabled={selectingAll} className="text-label-sm text-primary hover:underline disabled:opacity-60">
-              {selectingAll ? "Selecting…" : "Select every emailable lead matching the filter"}
+              {selectingAll
+                ? "Selecting…"
+                : access.canBulkStatus
+                  ? `Select all ${total.toLocaleString()} leads matching the filter`
+                  : "Select every emailable lead matching the filter"}
             </button>
           )}
           {matchedAll && (
             <span className="text-label-sm text-on-surface-variant">
-              All {matchedAll.emailable.toLocaleString()} emailable lead{matchedAll.emailable === 1 ? "" : "s"} selected
-              {matchedAll.truncated ? " (capped at 5,000)" : ""}
-              {matchedAll.total > matchedAll.emailable ? ` · ${(matchedAll.total - matchedAll.emailable).toLocaleString()} have no email` : ""}
+              {matchedAll.truncated
+                ? `First ${matchedAll.selected.toLocaleString()} of ${matchedAll.total.toLocaleString()} matching leads selected (capped)`
+                : `All ${matchedAll.selected.toLocaleString()}${access.canBulkStatus ? "" : " emailable"} lead${matchedAll.selected === 1 ? "" : "s"} matching the filter selected`}
+              {selectedNoEmail > 0 ? ` · ${selectedNoEmail.toLocaleString()} have no email` : ""}
             </span>
           )}
           <div className="ml-auto flex items-center gap-base">
             <button type="button" onClick={clearSelection} className="text-label-sm text-on-surface-variant hover:text-on-surface">
               Clear
             </button>
-            <button
-              type="button"
-              onClick={() => setComposeOpen(true)}
-              className="inline-flex items-center gap-xs h-9 px-md rounded-lg bg-primary text-on-primary text-label-sm font-semibold hover:bg-primary-container transition"
-            >
-              <span className="material-symbols-outlined" style={{ fontSize: 18 }}>
-                mail
-              </span>
-              Send email
-            </button>
+            {access.canBulkStatus && (
+              <button
+                type="button"
+                onClick={() => setStageOpen(true)}
+                className="inline-flex items-center gap-xs h-9 px-md rounded-lg border border-primary/50 text-primary text-label-sm font-semibold hover:bg-primary/10 transition"
+              >
+                <span className="material-symbols-outlined" style={{ fontSize: 18 }}>
+                  move_down
+                </span>
+                Change stage
+              </button>
+            )}
+            {access.canBulkEmail && (
+              <button
+                type="button"
+                onClick={() => setComposeOpen(true)}
+                className="inline-flex items-center gap-xs h-9 px-md rounded-lg bg-primary text-on-primary text-label-sm font-semibold hover:bg-primary-container transition"
+              >
+                <span className="material-symbols-outlined" style={{ fontSize: 18 }}>
+                  mail
+                </span>
+                Send email
+              </button>
+            )}
           </div>
         </div>
+      )}
+
+      {stageOpen && (
+        <BulkStatusModal
+          leadIds={Array.from(selected)}
+          statuses={masters.statuses}
+          knownEnrolled={selectedEnrolledOnPage}
+          truncated={matchedAll?.truncated ?? false}
+          onClose={() => setStageOpen(false)}
+          onDone={() => {
+            setStageOpen(false);
+            clearSelection();
+            router.refresh();
+          }}
+        />
       )}
 
       {composeOpen && (
         <BulkEmailModal
           leadIds={Array.from(selected)}
+          noEmail={selectedNoEmail}
+          noEmailExact={!!matchedAll}
           truncated={matchedAll?.truncated ?? false}
           emailConfigured={access.emailConfigured}
           templates={templates}
@@ -1185,9 +1243,9 @@ export function LeadsTable({
                     <Checkbox
                       checked={allPageSelected}
                       indeterminate={somePageSelected && !allPageSelected}
-                      disabled={pageEmailableIds.length === 0}
+                      disabled={pageIds.length === 0}
                       onChange={togglePage}
-                      title="Select all emailable on this page"
+                      title="Select all on this page"
                     />
                   </Th>
                 )}
@@ -1232,9 +1290,8 @@ export function LeadsTable({
                         <Td>
                           <Checkbox
                             checked={selected.has(lead.id)}
-                            disabled={!lead.email}
                             onChange={() => toggleOne(lead.id)}
-                            title={lead.email ? "Select" : "No email address"}
+                            title="Select"
                           />
                         </Td>
                       )}
@@ -1440,6 +1497,8 @@ const ZERO_PROGRESS: BulkProgress = { done: 0, sent: 0, failed: 0, skippedNoEmai
 
 function BulkEmailModal({
   leadIds,
+  noEmail,
+  noEmailExact,
   truncated,
   emailConfigured,
   templates,
@@ -1447,6 +1506,13 @@ function BulkEmailModal({
   onDone,
 }: {
   leadIds: string[];
+  /**
+   * Selected leads with no email address — the server skips these. Exact when
+   * `noEmailExact` (it counted the whole filter match), otherwise a floor from
+   * the rows on screen, since the selection can span pages.
+   */
+  noEmail: number;
+  noEmailExact: boolean;
   truncated: boolean;
   emailConfigured: boolean;
   templates: MessageTemplateDTO[];
@@ -1578,6 +1644,13 @@ function BulkEmailModal({
               Each lead receives its own individual email (no shared To/CC). A copy lands in the team mailbox&apos;s Sent
               folder and on each lead&apos;s timeline.
             </p>
+            {noEmail > 0 && (
+              <p className="text-label-sm text-on-surface-variant">
+                {noEmailExact ? "" : "At least "}
+                <span className="font-semibold">{noEmail.toLocaleString()}</span> of these {noEmail === 1 ? "has" : "have"} no
+                email address and will be skipped.
+              </p>
+            )}
             {truncated && (
               <div className="rounded-lg bg-amber-50 text-amber-800 border border-amber-200 px-md py-sm text-label-sm">
                 More than 5,000 leads match this filter; only the first 5,000 are selected. Narrow the filter to reach the rest.
@@ -1700,6 +1773,260 @@ function BulkEmailModal({
                 <p className="text-label-sm text-on-surface-variant">
                   {progress.sent.toLocaleString()} of {total.toLocaleString()} sent so far
                   {progress.failed > 0 ? ` · ${progress.failed} failed` : ""}. {total - cursor} not yet attempted.
+                </p>
+              </div>
+            </div>
+            {error && <div className="rounded-lg bg-error-container text-on-error-container px-md py-sm text-label-sm">{error}</div>}
+            <div className="flex justify-end gap-base">
+              <button type="button" className={secondaryBtn} onClick={onDone}>
+                Close
+              </button>
+              <button type="button" className={primaryBtn} onClick={() => void runFrom(cursor, progress)}>
+                Retry remaining ({(total - cursor).toLocaleString()})
+              </button>
+            </div>
+          </div>
+        )}
+      </div>
+    </div>,
+    document.body,
+  );
+}
+
+// ── Bulk stage change ───────────────────────────────────────────────────────
+// Moves the whole selection to one pipeline stage in chunks, mirroring the
+// bulk-email modal's shape (idle → sending → done/error, resumable). The server
+// enforces the rules; this only explains them up front and reports the outcome.
+
+// A literal for the same reason crm-leads.ts keeps one: crm-reinquiry (which
+// owns REMARKETING_STATUS_CODE) pulls in the mailer, which can't be bundled for
+// the client. Must stay in sync with crm-reinquiry.REMARKETING_STATUS_CODE.
+const REMARKETING_CODE = "re_marketing";
+
+type StageProgress = {
+  done: number;
+  moved: number;
+  skippedEnrolled: number;
+  skippedUnchanged: number;
+  skippedMissing: number;
+};
+
+const ZERO_STAGE: StageProgress = { done: 0, moved: 0, skippedEnrolled: 0, skippedUnchanged: 0, skippedMissing: 0 };
+
+function BulkStatusModal({
+  leadIds,
+  statuses,
+  knownEnrolled,
+  truncated,
+  onClose,
+  onDone,
+}: {
+  leadIds: string[];
+  statuses: StatusOpt[];
+  /** Enrolled leads among the selection that are visible on this page — a floor, not a total. */
+  knownEnrolled: number;
+  /** The "select all matching" set hit the 5,000-id cap, so leads are left behind. */
+  truncated: boolean;
+  onClose: () => void;
+  onDone: () => void;
+}) {
+  const [mounted, setMounted] = useState(false);
+  // Action-only stages (Set deal / Enroll / the importer's Duplicate flag) are
+  // never reachable from a picker — the server rejects them too.
+  const options = useMemo(() => statuses.filter((s) => !isActionOnlyStatus(s.code)), [statuses]);
+  const [statusId, setStatusId] = useState("");
+  const [status, setStatus] = useState<"idle" | "saving" | "done" | "error">("idle");
+  const [progress, setProgress] = useState<StageProgress>(ZERO_STAGE);
+  const [cursor, setCursor] = useState(0); // next leadIds index to attempt (enables Retry remaining)
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => setMounted(true), []);
+  useEffect(() => {
+    const prev = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    return () => {
+      document.body.style.overflow = prev;
+    };
+  }, []);
+
+  const target = options.find((s) => s.id === statusId) ?? null;
+
+  // Move leadIds[startIdx..] in chunks, accumulating onto `base`. On any chunk
+  // failure it stops at that index so "Retry remaining" can resume from there
+  // without re-moving the leads that already landed.
+  async function runFrom(startIdx: number, base: StageProgress) {
+    setError(null);
+    setStatus("saving");
+    const agg: StageProgress = { ...base };
+    const CHUNK = 200; // must stay ≤ MAX_PER_REQUEST on the server
+    let i = startIdx;
+    for (; i < leadIds.length; i += CHUNK) {
+      const chunk = leadIds.slice(i, i + CHUNK);
+      let res: Response | null = null;
+      try {
+        res = await fetch("/api/crm/leads/bulk-status", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ leadIds: chunk, statusId }),
+        });
+      } catch {
+        res = null; // network error
+      }
+      if (!res || !res.ok) {
+        const d = res ? ((await res.json().catch(() => ({}))) as { message?: string; error?: string }) : {};
+        setError(d.message || d.error || "The stage change was interrupted. The leads already moved are unchanged by retrying.");
+        setProgress({ ...agg });
+        setCursor(i); // resume here
+        setStatus("error");
+        return;
+      }
+      const d = (await res.json()) as {
+        moved: number;
+        skippedEnrolled: number;
+        skippedUnchanged: number;
+        skippedMissing: number;
+      };
+      agg.done += chunk.length;
+      agg.moved += d.moved;
+      agg.skippedEnrolled += d.skippedEnrolled;
+      agg.skippedUnchanged += d.skippedUnchanged;
+      agg.skippedMissing += d.skippedMissing;
+      setProgress({ ...agg });
+    }
+    setCursor(leadIds.length);
+    setStatus("done");
+  }
+
+  function start() {
+    if (!statusId) {
+      setError("Pick the stage to move these leads to.");
+      return;
+    }
+    setProgress(ZERO_STAGE);
+    void runFrom(0, ZERO_STAGE);
+  }
+
+  if (!mounted) return null;
+  const total = leadIds.length;
+  const pct = total === 0 ? 0 : Math.round((progress.done / total) * 100);
+  const terminal = status === "done" || status === "error";
+
+  return createPortal(
+    <div className="fixed inset-0 z-[1000] grid place-items-center bg-black/50 p-md" onClick={() => (status === "idle" ? onClose() : terminal ? onDone() : undefined)}>
+      <div
+        onClick={(e) => e.stopPropagation()}
+        className="w-full max-w-md max-h-[90vh] overflow-y-auto bg-surface-container-lowest border border-outline-variant rounded-xl shadow-lg p-lg space-y-md"
+      >
+        <div className="flex items-center justify-between">
+          <h3 className="text-h3 text-on-surface">
+            Change stage for {total.toLocaleString()} lead{total === 1 ? "" : "s"}
+          </h3>
+          <span className="material-symbols-outlined text-on-surface-variant" style={{ fontSize: 24 }}>
+            move_down
+          </span>
+        </div>
+
+        {status === "idle" && (
+          <>
+            <Field label="Move to stage">
+              <select className={inputCls} value={statusId} onChange={(e) => setStatusId(e.target.value)}>
+                <option value="">Select a stage…</option>
+                {options.map((s) => (
+                  <option key={s.id} value={s.id}>
+                    {s.label}
+                  </option>
+                ))}
+              </select>
+            </Field>
+
+            {target && (
+              <div className="flex items-center gap-xs text-label-sm text-on-surface-variant">
+                Each lead lands on <StatusPill status={target} /> and gets a timeline entry.
+              </div>
+            )}
+
+            <p className="text-label-sm text-on-surface-variant">
+              Leads already on that stage are left alone. <span className="font-semibold">Enrolled</span> leads are never
+              moved — their candidate, finance and Operations records own that stage
+              {knownEnrolled > 0 ? `, and at least ${knownEnrolled.toLocaleString()} of this selection ${knownEnrolled === 1 ? "is" : "are"} Enrolled` : ""}.
+            </p>
+
+            {truncated && (
+              <div className="rounded-lg bg-amber-50 text-amber-800 border border-amber-200 px-md py-sm text-label-sm">
+                More than 5,000 leads match this filter; only the first 5,000 are selected. Narrow the filter and repeat to
+                reach the rest.
+              </div>
+            )}
+
+            {target?.code === REMARKETING_CODE && (
+              <div className="rounded-lg bg-amber-50 text-amber-800 border border-amber-200 px-md py-sm text-label-sm">
+                Re-marketing starts a WhatsApp nurturing drip for every lead moved here. Only sweep leads you want
+                contacted on that schedule.
+              </div>
+            )}
+
+            {error && <div className="rounded-lg bg-error-container text-on-error-container px-md py-sm text-label-sm">{error}</div>}
+
+            <div className="flex justify-end gap-base pt-xs">
+              <button type="button" className={secondaryBtn} onClick={onClose}>
+                Cancel
+              </button>
+              <button type="button" className={primaryBtn} disabled={!statusId} onClick={start}>
+                Move {total.toLocaleString()} lead{total === 1 ? "" : "s"}
+              </button>
+            </div>
+          </>
+        )}
+
+        {status === "saving" && (
+          <div className="space-y-sm py-md">
+            <p className="text-body-md text-on-surface">
+              Moving… {progress.done.toLocaleString()} / {total.toLocaleString()}
+            </p>
+            <div className="h-2 w-full rounded-full bg-surface-container-high overflow-hidden">
+              <div className="h-full bg-primary transition-all" style={{ width: `${pct}%` }} />
+            </div>
+            <p className="text-label-sm text-on-surface-variant">Please keep this window open.</p>
+          </div>
+        )}
+
+        {status === "done" && (
+          <div className="space-y-md py-sm">
+            <div className="flex items-center gap-sm">
+              <span className="material-symbols-outlined text-green-600" style={{ fontSize: 28 }}>
+                check_circle
+              </span>
+              <div>
+                <p className="text-body-md font-semibold text-on-surface">
+                  {progress.moved.toLocaleString()} lead{progress.moved === 1 ? "" : "s"} moved to {target?.label}
+                </p>
+                <p className="text-label-sm text-on-surface-variant">
+                  {progress.skippedUnchanged > 0 && `${progress.skippedUnchanged.toLocaleString()} already there · `}
+                  {progress.skippedEnrolled > 0 && `${progress.skippedEnrolled.toLocaleString()} Enrolled (not moved) · `}
+                  {progress.skippedMissing > 0 && `${progress.skippedMissing.toLocaleString()} no longer exist · `}
+                  logged on each lead&apos;s timeline.
+                </p>
+              </div>
+            </div>
+            <div className="flex justify-end">
+              <button type="button" className={primaryBtn} onClick={onDone}>
+                Done
+              </button>
+            </div>
+          </div>
+        )}
+
+        {status === "error" && (
+          <div className="space-y-md py-sm">
+            <div className="flex items-start gap-sm">
+              <span className="material-symbols-outlined text-error" style={{ fontSize: 28 }}>
+                error
+              </span>
+              <div>
+                <p className="text-body-md font-semibold text-on-surface">Stage change stopped</p>
+                <p className="text-label-sm text-on-surface-variant">
+                  {progress.moved.toLocaleString()} of {total.toLocaleString()} moved so far. {(total - cursor).toLocaleString()} not yet
+                  attempted.
                 </p>
               </div>
             </div>

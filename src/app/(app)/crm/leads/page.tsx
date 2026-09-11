@@ -125,6 +125,7 @@ export default async function LeadsPage({ searchParams }: { searchParams: SP }) 
     canAssign: access.canAssign,
     canBulkImport: access.canBulkImport,
     canBulkEmail: access.canBulkEmail,
+    canBulkStatus: access.canBulkStatus,
     emailConfigured,
     isAdmin: access.isAdmin,
     isBde: access.isBde,
