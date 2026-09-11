@@ -23,6 +23,10 @@
  *   npx tsx prisma/seed-sales-objective-archive.ts "path/to/workbook.xlsx"
  *   npx tsx prisma/seed-sales-objective-archive.ts "path/to/workbook.xlsx" --dry
  */
+// Prisma Client reads process.env and does NOT load .env itself, so a bare
+// `npx tsx prisma/seed-...` would die on a missing DATABASE_URL. Same fix the
+// other env-driven script in here uses (grant-marketing-admin-bde-enrollment).
+import "dotenv/config";
 import * as path from "node:path";
 import * as XLSX from "xlsx";
 import { PrismaClient } from "@prisma/client";
@@ -83,6 +87,16 @@ async function main() {
   if (!file) {
     console.error(
       'Usage: npx tsx prisma/seed-sales-objective-archive.ts "DESMA - Sales Objective Target.xlsx" [--dry]',
+    );
+    process.exit(1);
+  }
+
+  // Reading the workbook needs no database, so only guard the write path —
+  // --dry stays usable anywhere, including a checkout with no .env.
+  if (!dry && !process.env.DATABASE_URL) {
+    console.error(
+      "DATABASE_URL is not set. Run this from a checkout whose .env has it, or\n" +
+        "pass it inline:  DATABASE_URL=... npx tsx prisma/seed-sales-objective-archive.ts <file>",
     );
     process.exit(1);
   }
