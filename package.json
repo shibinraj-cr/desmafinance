@@ -19,6 +19,7 @@
     "db:seed": "tsx prisma/seed.ts",
     "db:seed-roles": "tsx prisma/seed-roles.ts",
     "db:seed-hr": "tsx prisma/seed-hr.ts",
+    "db:seed-sales-objective-archive": "tsx prisma/seed-sales-objective-archive.ts",
     "db:seed-hr-roles": "tsx prisma/seed-hr-roles.ts",
     "db:seed-salary-structures": "tsx prisma/seed-salary-structures.ts",
     "db:seed-salary-structures-v2": "tsx prisma/seed-salary-structures-v2.ts",

@@ -4318,3 +4318,29 @@ model HiringIngestItem {
   @@index([batchId, status])
   @@index([duplicateOfId])
 }
+
+// ──────────────────────────────────────────────────────────────────────
+// Sales Objective
+// ──────────────────────────────────────────────────────────────────────
+
+/// Monthly collection as recorded in the DESMA sales-objective workbook.
+///
+/// Deliberately NOT a constant in source: this repo is public and these are
+/// the company's actual monthly collections. Populated from the workbook by
+/// prisma/seed-sales-objective-archive.ts.
+///
+/// The table does two jobs at once, split at the month the finance ledger
+/// starts (LEDGER_FROM in src/lib/sales-objective.ts):
+///   - before it, this is the ONLY record that exists, and it is what the
+///     Sales Objective page shows;
+///   - from it on, the ledger supplies the figure and this is purely the
+///     reconciliation reference the ledger gets checked against.
+model SalesObjectiveArchive {
+  /// Calendar month, "YYYY-MM" (e.g. "2025-12").
+  monthKey  String   @id
+  collected Decimal  @db.Decimal(14, 2)
+  /// Free text from the workbook — e.g. why a month was netted off.
+  note      String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
