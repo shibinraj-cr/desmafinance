@@ -30,7 +30,8 @@ const ARCHIVE_MONTHS: Record<string, number> = {
   "2025-07": 200_000, "2025-08": 200_000, "2025-09": 200_000,
   "2025-10": 300_000, "2025-11": 300_000, "2025-12": 300_000,
   "2026-01": 400_000, "2026-02": 400_000, "2026-03": 400_000,
-  // From LEDGER_FROM on these are only the reconciliation reference.
+  // From LEDGER_FROM on these are the OPTIONAL reconciliation reference — the
+  // default seed stops before them, which `preLedgerArchive()` reproduces.
   "2026-04": 500_000, "2026-05": 500_000, "2026-06": 500_000,
   "2026-07": 600_000, "2026-08": 600_000,
 };
@@ -40,7 +41,12 @@ const LIVE_KEYS = ["2026-04", "2026-05", "2026-06", "2026-07", "2026-08"];
 /** 10 Sep 2026 — mid-quarter, with Jul and Aug closed and Sep still open. */
 const AS_OF = new Date(Date.UTC(2026, 8, 10));
 
+/** Everything, including the overlap — what `--with-reference` loads. */
 const archive = (): Archive => new Map(Object.entries(ARCHIVE_MONTHS));
+
+/** What the DEFAULT seed loads: pre-ledger months only. */
+const preLedgerArchive = (): Archive =>
+  new Map(Object.entries(ARCHIVE_MONTHS).filter(([k]) => k < LEDGER_FROM));
 
 /** A ledger that agrees with the archive on every live month. */
 function agreeingLedger(keys: string[] = LIVE_KEYS): Map<string, LedgerMonth> {
@@ -259,6 +265,56 @@ describe("provenance", () => {
     // Every past live month falls back, and none of them is a "disagreement".
     expect(o.months.filter((m) => m.archiveFallback).length).toBe(5);
     expect(o.reviewCount).toBe(0);
+  });
+});
+
+describe("the default seed — archive stops where the ledger starts", () => {
+  const o = deriveSalesObjective(preLedgerArchive(), agreeingLedger(), AS_OF);
+
+  it("still covers the full series: archive history, then the ledger", () => {
+    expect(o.months[0].key).toBe("2025-04");
+    expect(o.months[o.months.length - 1].key).toBe("2026-09");
+    expect(o.months.find((m) => m.key === "2026-03")!.source).toBe("archive");
+    expect(o.months.find((m) => m.key === "2026-04")!.source).toBe("ledger");
+    expect(o.archiveEmpty).toBe(false);
+  });
+
+  it("targets every quarter exactly as the overlapping archive does", () => {
+    const withOverlap = build();
+    expect(o.quarters.map((q) => q.committed)).toEqual(
+      withOverlap.quarters.map((q) => q.committed),
+    );
+    expect(o.quarters.map((q) => q.collected)).toEqual(
+      withOverlap.quarters.map((q) => q.collected),
+    );
+  });
+
+  it("has nothing to reconcile, so the vs-sheet column is switched off", () => {
+    expect(o.hasReference).toBe(false);
+    expect(o.reviewCount).toBe(0);
+    expect(o.months.filter((m) => m.deviation !== null)).toEqual([]);
+    expect(o.months.every((m) => m.key < LEDGER_FROM || m.sheet === null)).toBe(true);
+  });
+
+  it("leaves a past live month with no rows blank instead of inventing one", () => {
+    // With no workbook figure to stand in, there is nothing honest to show —
+    // and quietly borrowing the sheet's number is exactly what we don't want.
+    const gapped = deriveSalesObjective(
+      preLedgerArchive(),
+      agreeingLedger(["2026-04", "2026-05", "2026-06", "2026-08"]),
+      AS_OF,
+    );
+    const jul = gapped.months.find((m) => m.key === "2026-07")!;
+    expect(jul.source).toBe("pending");
+    expect(jul.collected).toBeNull();
+    expect(jul.archiveFallback).toBe(false);
+    expect(jul.achievement).toBeNull();
+  });
+});
+
+describe("--with-reference — the overlap is loaded", () => {
+  it("turns the reconciliation on", () => {
+    expect(build().hasReference).toBe(true);
   });
 });
 
