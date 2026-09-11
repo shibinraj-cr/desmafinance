@@ -12,16 +12,22 @@
  * DERIVED, and the app recomputes all of it from the chain rule — so only
  * column D is read here. A month with no figure is skipped, not stored as zero.
  *
- * WHY BOTH HALVES ARE STORED: months before the finance ledger starts are the
- * only record that exists and are what the page shows. Months from the ledger's
- * first month on are kept as the reconciliation reference — the ledger supplies
- * the displayed figure and this is what it gets checked against.
+ * SCOPE: only months BEFORE the finance ledger starts (LEDGER_FROM) are loaded.
+ * From that month on DesGro is the record, and the page reads Transaction rows
+ * directly — storing the workbook's figures for those months would just be a
+ * second, staler copy of what the ledger already knows.
+ *
+ * --with-reference additionally loads the overlap months as a reconciliation
+ * reference: the ledger still supplies the displayed figure, but the page then
+ * shows a "vs sheet" column and flags any month that has drifted. Use it when
+ * you want to audit the ledger against the workbook; leave it off otherwise.
  *
  * IDEMPOTENT: upserts one row per month key. Safe to re-run after the workbook
  * is updated; a month dropped from the sheet is left in place, not deleted.
  *
  *   npx tsx prisma/seed-sales-objective-archive.ts "path/to/workbook.xlsx"
  *   npx tsx prisma/seed-sales-objective-archive.ts "path/to/workbook.xlsx" --dry
+ *   npx tsx prisma/seed-sales-objective-archive.ts "path/to/workbook.xlsx" --with-reference
  */
 // Prisma Client reads process.env and does NOT load .env itself, so a bare
 // `npx tsx prisma/seed-...` would die on a missing DATABASE_URL. Same fix the
@@ -29,9 +35,8 @@
 import "dotenv/config";
 import * as path from "node:path";
 import * as XLSX from "xlsx";
-import { PrismaClient } from "@prisma/client";
-
-const prisma = new PrismaClient();
+import { prisma } from "../src/lib/prisma";
+import { LEDGER_FROM } from "../src/lib/sales-objective";
 
 const SHEET_NAME = "Collection ";
 /** 1-based columns on the sheet: B = period, C = month, D = collected. */
@@ -84,6 +89,7 @@ function readWorkbook(file: string): Row[] {
 async function main() {
   const file = process.argv[2];
   const dry = process.argv.includes("--dry");
+  const withReference = process.argv.includes("--with-reference");
   if (!file) {
     console.error(
       'Usage: npx tsx prisma/seed-sales-objective-archive.ts "DESMA - Sales Objective Target.xlsx" [--dry]',
@@ -101,13 +107,31 @@ async function main() {
     process.exit(1);
   }
 
-  const rows = readWorkbook(path.resolve(file));
-  if (rows.length === 0) throw new Error("No month rows found — check the sheet layout");
+  const all = readWorkbook(path.resolve(file));
+  if (all.length === 0) throw new Error("No month rows found — check the sheet layout");
+
+  // Everything from LEDGER_FROM on is DesGro's to answer for. Say what is being
+  // left behind rather than quietly dropping it.
+  const rows = withReference ? all : all.filter((r) => r.monthKey < LEDGER_FROM);
+  const skipped = all.length - rows.length;
+  if (rows.length === 0) {
+    throw new Error(`Every month in the workbook is ${LEDGER_FROM} or later — nothing to archive`);
+  }
 
   const first = rows[0].monthKey;
   const last = rows[rows.length - 1].monthKey;
   const total = rows.reduce((s, r) => s + r.collected, 0);
-  console.log(`Read ${rows.length} months (${first} → ${last}), totalling ${total.toFixed(2)}`);
+  console.log(
+    `Read ${all.length} months from the workbook; loading ${rows.length} ` +
+      `(${first} → ${last}), totalling ${total.toFixed(2)}`,
+  );
+  if (skipped > 0) {
+    console.log(
+      `Skipping ${skipped} month${skipped === 1 ? "" : "s"} from ${LEDGER_FROM} on — ` +
+        "DesGro's ledger is the record for those. Pass --with-reference to load them " +
+        "anyway as a reconciliation reference.",
+    );
+  }
 
   if (dry) {
     for (const r of rows) console.log(`  ${r.monthKey}  ${r.collected.toFixed(2)}`);

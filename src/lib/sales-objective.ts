@@ -19,12 +19,13 @@
 //                     Dashboard's revenue tile sums them, so the two screens
 //                     cannot disagree.
 //
-// Where the ledger and the sheet both hold a figure for the same month, the
-// LEDGER WINS — that is the whole point of putting this on DesGro. A small
-// disagreement is adopted silently; anything past DEVIATION_TOLERANCE is
-// flagged for Finance, because at that size it usually means the sheet netted
-// something off (its own formulas do exactly that — Dec-25 is entered as
-// `3709273 - 34220`).
+// The archive normally stops where the ledger starts, so the two never overlap
+// and there is nothing to reconcile. The seed can optionally load the overlap
+// months as a REFERENCE (--with-reference), and then: the LEDGER STILL WINS —
+// that is the whole point of putting this on DesGro — but a small disagreement
+// is adopted silently while anything past DEVIATION_TOLERANCE is flagged for
+// Finance, because at that size it usually means the sheet netted something off
+// (the workbook's own formulas do exactly that on at least one month).
 
 import { prisma } from "./prisma";
 
@@ -41,8 +42,9 @@ export const DEVIATION_TOLERANCE = 0.02;
  * The archive, as the model wants it: collection by "YYYY-MM".
  *
  * Rows before LEDGER_FROM are the only record of those months and are shown
- * as-is. Rows from LEDGER_FROM on are the reconciliation reference the ledger
- * is checked against — the ledger still supplies the figure that's displayed.
+ * as-is — that is the whole archive under the default seed. Rows from
+ * LEDGER_FROM on are optional, and are purely the reconciliation reference the
+ * ledger gets checked against; the ledger still supplies the displayed figure.
  */
 export type Archive = Map<string, number>;
 
@@ -137,6 +139,13 @@ export type SalesObjective = {
   reviewCount: number;
   /** No archive rows at all — the seed hasn't been run on this database. */
   archiveEmpty: boolean;
+  /**
+   * The archive carries workbook figures for months the ledger also covers, so
+   * there is something to reconcile. False under the default seed, which stops
+   * where the ledger starts — and then the "vs sheet" column has nothing to say
+   * and is not rendered.
+   */
+  hasReference: boolean;
   asOf: Date;
 };
 
@@ -174,6 +183,11 @@ export function monthLabelFromKey(key: string): string {
 function parseKey(key: string): { y: number; m: number } {
   const [y, m] = key.split("-").map(Number);
   return { y, m };
+}
+
+/** The month before `key`. Used to name where the archive stops. */
+export function previousMonthKey(key: string): string {
+  return addMonths(key, -1);
 }
 
 function addMonths(key: string, n: number): string {
@@ -397,6 +411,7 @@ export function deriveSalesObjective(
     fyGrowthPct: fyPriorSamePeriod > 0 ? (fyToDate / fyPriorSamePeriod - 1) * 100 : null,
     reviewCount: months.filter((mo) => mo.needsReview).length,
     archiveEmpty: archive.size === 0,
+    hasReference: months.some((mo) => mo.key >= LEDGER_FROM && mo.sheet !== null),
     asOf,
   };
 }
