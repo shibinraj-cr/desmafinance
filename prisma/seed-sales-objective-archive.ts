@@ -25,9 +25,14 @@
  * IDEMPOTENT: upserts one row per month key. Safe to re-run after the workbook
  * is updated; a month dropped from the sheet is left in place, not deleted.
  *
+ * --prune removes rows from LEDGER_FROM on, for a database that was loaded
+ * before the scope narrowed. Reported on every write run, deleted only when
+ * asked — this never drops a row you didn't say to drop.
+ *
  *   npx tsx prisma/seed-sales-objective-archive.ts "path/to/workbook.xlsx"
  *   npx tsx prisma/seed-sales-objective-archive.ts "path/to/workbook.xlsx" --dry
  *   npx tsx prisma/seed-sales-objective-archive.ts "path/to/workbook.xlsx" --with-reference
+ *   npx tsx prisma/seed-sales-objective-archive.ts "path/to/workbook.xlsx" --prune
  */
 // Prisma Client reads process.env and does NOT load .env itself, so a bare
 // `npx tsx prisma/seed-...` would die on a missing DATABASE_URL. Same fix the
@@ -90,6 +95,7 @@ async function main() {
   const file = process.argv[2];
   const dry = process.argv.includes("--dry");
   const withReference = process.argv.includes("--with-reference");
+  const prune = process.argv.includes("--prune");
   if (!file) {
     console.error(
       'Usage: npx tsx prisma/seed-sales-objective-archive.ts "DESMA - Sales Objective Target.xlsx" [--dry]',
@@ -155,6 +161,33 @@ async function main() {
     else created++;
   }
   console.log(`Done: ${created} created, ${updated} updated.`);
+
+  // A database seeded before the scope narrowed still carries the ledger-band
+  // months. They are harmless — the ledger wins on every month it covers — but
+  // they do switch the "vs sheet" reconciliation column on, so say they're there.
+  if (!withReference) {
+    const stale = await prisma.salesObjectiveArchive.findMany({
+      where: { monthKey: { gte: LEDGER_FROM } },
+      select: { monthKey: true },
+      orderBy: { monthKey: "asc" },
+    });
+    if (stale.length > 0) {
+      const span = `${stale[0].monthKey} → ${stale[stale.length - 1].monthKey}`;
+      if (prune) {
+        await prisma.salesObjectiveArchive.deleteMany({
+          where: { monthKey: { gte: LEDGER_FROM } },
+        });
+        console.log(`Pruned ${stale.length} out-of-scope row(s) (${span}).`);
+      } else {
+        console.log(
+          `\nNote: ${stale.length} row(s) from ${LEDGER_FROM} on are still stored (${span}).\n` +
+            "DesGro's ledger is the record for those months, so the page ignores them for the\n" +
+            "figure — but their presence turns the \"vs sheet\" reconciliation column on.\n" +
+            "Re-run with --prune to remove them, or --with-reference to keep them deliberately.",
+        );
+      }
+    }
+  }
 }
 
 main()
