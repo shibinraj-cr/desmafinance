@@ -149,6 +149,16 @@ model User {
   hiringResumeSources      HiringResumeSource[]      @relation("HiringResumeSourceCreatedBy")
   hiringIngestBatches      HiringIngestBatch[]       @relation("HiringIngestBatchCreatedBy")
 
+  // Personal Wealth (Executive) — private to the owning user. Every row is
+  // scoped by ownerUserId; the page is admin-gated but the DATA is owner-gated,
+  // so a second admin sees their own (empty) desk, never this one's.
+  wealthHoldings      WealthHolding[]      @relation("WealthHoldingOwner")
+  wealthLiabilities   WealthLiability[]    @relation("WealthLiabilityOwner")
+  wealthGoldItems     WealthGoldItem[]     @relation("WealthGoldOwner")
+  wealthReminders     WealthReminder[]     @relation("WealthReminderOwner")
+  wealthSetting       WealthSetting?       @relation("WealthSettingOwner")
+  wealthSecretReveals WealthSecretReveal[] @relation("WealthSecretRevealActor")
+
   @@index([roleId])
 }
 
@@ -1898,38 +1908,38 @@ model HrSandwichPolicy {
 // ──────────────────────────────────────────────────────────────────────
 
 model HrBirthdaySettings {
-  id              String   @id @default(cuid())
+  id              String  @id @default(cuid())
   /// Singleton row — enforced via `@@unique([singleton])`.
-  singleton       Boolean  @unique @default(true)
+  singleton       Boolean @unique @default(true)
   /// Send the auto-generated wish on the birthday morning.
-  autoWishEnabled Boolean  @default(false)
+  autoWishEnabled Boolean @default(false)
   /// Reminder N days in advance (0 = day-of only).
-  reminderDays    Int      @default(1)
+  reminderDays    Int     @default(1)
   /// Send via email, whatsapp, both, or none ("disabled").
-  channel         String   @default("email")
+  channel         String  @default("email")
   /// Template used for the auto-wish (supports {{name}}, {{dept}}).
   ///
   /// Signed "Team DESMA", not "Team DESGRO": DESMA is the company, DesGro is
   /// the ERP it runs on. The default shipped with the ERP's name by mistake
   /// from 0_init until the celebration-band migration corrected it.
-  template        String   @default("Happy birthday, {{name}}! Wishing you a wonderful year ahead. — Team DESMA")
+  template        String  @default("Happy birthday, {{name}}! Wishing you a wonderful year ahead. — Team DESMA")
 
   // ── Celebration band + greeting ──────────────────────────────────
   /// Announce today's celebrations to everyone on the band under the header.
   /// Off means only the celebrant hears about it.
-  bandEnabled         Boolean @default(true)
+  bandEnabled         Boolean  @default(true)
   /// Show the celebrant the one-time confetti greeting on their first page
   /// load of the day.
-  greetingEnabled     Boolean @default(true)
+  greetingEnabled     Boolean  @default(true)
   /// Include work anniversaries alongside birthdays. Every completed year
   /// counts, not only round-numbered ones.
-  anniversaryEnabled  Boolean @default(true)
+  anniversaryEnabled  Boolean  @default(true)
   /// Put the age on the band ("turns 30"). Off by default — see
   /// CELEBRATION_DEFAULTS in src/lib/celebrations.ts.
-  showAge             Boolean @default(false)
+  showAge             Boolean  @default(false)
   /// Anniversary wording (supports {{name}}, {{years}}, {{dept}}).
-  anniversaryTemplate String  @default("Thank you for everything you have built here, {{name}}. Here is to the year ahead. — Team DESMA")
-  updatedAt       DateTime @updatedAt
+  anniversaryTemplate String   @default("Thank you for everything you have built here, {{name}}. Here is to the year ahead. — Team DESMA")
+  updatedAt           DateTime @updatedAt
 }
 
 /// One row per (employee, kind, year) the moment a celebrant is shown their
@@ -4343,4 +4353,221 @@ model SalesObjectiveArchive {
   note      String?
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
+}
+
+// ---------------------------------------------------------------------------
+// Personal Wealth (Executive module)
+//
+// The owner's own investments, gold, borrowings and renewal dates — deliberately
+// separate from company Finance: nothing here touches revenue, payroll or any
+// reporting surface. Every table carries `ownerUserId` and every query filters
+// on the signed-in user, so the page is multi-tenant by construction: a second
+// admin opening /executive/wealth sees their own empty desk.
+//
+// Amounts are Decimal(14,2) to match the Finance convention. Dates that mean a
+// calendar day (valuation date, due date) are @db.Date — no timezone drift.
+// ---------------------------------------------------------------------------
+
+model WealthHolding {
+  id          String @id @default(cuid())
+  ownerUserId String
+  owner       User   @relation("WealthHoldingOwner", fields: [ownerUserId], references: [id], onDelete: Cascade)
+
+  name        String
+  /// equity | cash | lending | insurance | savings | protection | other
+  assetClass  String  @default("other")
+  /// personal | business — a business-tagged row is excluded from the
+  /// personal-only view (DESMA balances, keyman cover, investor stakes).
+  scope       String  @default("personal")
+  /// Free text: who it is held for ("Self", "Spouse", a child's name). Free
+  /// text rather than an enum so it never needs a migration to add a person.
+  holderLabel String  @default("Self")
+  institution String?
+  policyNo    String?
+
+  /// What was put in (may differ from what it is worth today).
+  investedAmount     Decimal?  @db.Decimal(14, 2)
+  /// The recurring contribution/premium, if any.
+  contributionAmount Decimal?  @db.Decimal(14, 2)
+  /// monthly | quarterly | yearly | three_yearly | one_time | none
+  frequency          String    @default("none")
+  /// For monthly/quarterly schedules: the day the money goes out.
+  dueDayOfMonth      Int?
+  /// For yearly/multi-year schedules: the anchor date the cycle repeats from.
+  renewalOn          DateTime? @db.Date
+  termYears          Int?
+  /// Cover, for protection policies that have no fund value.
+  sumAssured         Decimal?  @db.Decimal(14, 2)
+  /// How many days ahead the reminder fires. A ₹4.5L renewal wants six weeks;
+  /// a ₹927 premium wants three days.
+  reminderLeadDays   Int       @default(7)
+
+  portalUrl       String?
+  portalUsername  String?
+  /// AES-256-GCM ciphertext (see lib/wealth-crypto). NEVER selected by list
+  /// queries — only the single-holding reveal endpoint reads it, and that
+  /// write an audit row.
+  portalSecretEnc String?
+
+  notes      String?
+  archivedAt DateTime?
+  createdAt  DateTime  @default(now())
+  updatedAt  DateTime  @updatedAt
+
+  valuations WealthValuation[]
+  reminders  WealthReminder[]
+  reveals    WealthSecretReveal[]
+
+  @@index([ownerUserId, archivedAt])
+  @@index([ownerUserId, assetClass])
+}
+
+/// Append-only valuation history. "What is it worth" is the latest row, so the
+/// page can chart how the corpus actually moved instead of only showing today.
+/// One row per holding per day — re-saving the same day corrects it.
+model WealthValuation {
+  id        String        @id @default(cuid())
+  holdingId String
+  holding   WealthHolding @relation(fields: [holdingId], references: [id], onDelete: Cascade)
+
+  asOn        DateTime @db.Date
+  value       Decimal  @db.Decimal(14, 2)
+  /// manual | import
+  source      String   @default("manual")
+  createdById String?
+  note        String?
+
+  createdAt DateTime @default(now())
+
+  @@unique([holdingId, asOn])
+  @@index([holdingId, asOn])
+}
+
+model WealthLiability {
+  id          String @id @default(cuid())
+  ownerUserId String
+  owner       User   @relation("WealthLiabilityOwner", fields: [ownerUserId], references: [id], onDelete: Cascade)
+
+  name   String
+  /// housing | car | gold | personal | business | other
+  kind   String  @default("other")
+  scope  String  @default("personal")
+  lender String?
+
+  principal     Decimal?  @db.Decimal(14, 2)
+  outstanding   Decimal   @default(0) @db.Decimal(14, 2)
+  /// Annual percentage rate, e.g. 8.750.
+  interestRate  Decimal?  @db.Decimal(6, 3)
+  emiAmount     Decimal?  @db.Decimal(14, 2)
+  emiDayOfMonth Int?
+  startedOn     DateTime? @db.Date
+  tenureMonths  Int?
+
+  notes    String?
+  closedAt DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  reminders WealthReminder[]
+
+  @@index([ownerUserId, closedAt])
+}
+
+/// One row per piece. Grams are the source of truth; the value is grams times
+/// the single editable rate on WealthSetting, so a rate change re-prices the
+/// whole vault without touching a single row.
+model WealthGoldItem {
+  id          String @id @default(cuid())
+  ownerUserId String
+  owner       User   @relation("WealthGoldOwner", fields: [ownerUserId], references: [id], onDelete: Cascade)
+
+  /// Bangles | Chains | Rings | Coins | ... — free text, grouped in the UI.
+  category    String
+  name        String
+  grams       Decimal   @db.Decimal(10, 3)
+  holderLabel String    @default("Self")
+  purityKarat Int?
+  notes       String?
+  /// Scheme instalments that are bought but not yet delivered carry a date.
+  dueOn       DateTime? @db.Date
+
+  archivedAt DateTime?
+  createdAt  DateTime  @default(now())
+  updatedAt  DateTime  @updatedAt
+
+  @@index([ownerUserId, archivedAt])
+}
+
+/// A single dated money event — a SIP debit, a premium, a renewal, an EMI.
+/// Generated from the holding/liability schedule by lib/wealth-reminders and
+/// then owned by the user (paid / skipped). The unique key makes the generator
+/// and the cron safe to re-run.
+model WealthReminder {
+  id          String @id @default(cuid())
+  ownerUserId String
+  owner       User   @relation("WealthReminderOwner", fields: [ownerUserId], references: [id], onDelete: Cascade)
+
+  holdingId String?
+  holding   WealthHolding? @relation(fields: [holdingId], references: [id], onDelete: Cascade)
+
+  liabilityId String?
+  liability   WealthLiability? @relation(fields: [liabilityId], references: [id], onDelete: Cascade)
+
+  label  String
+  /// sip | premium | renewal | emi | deposit | custom
+  kind   String   @default("custom")
+  dueOn  DateTime @db.Date
+  amount Decimal? @db.Decimal(14, 2)
+
+  /// open | paid | skipped
+  status     String    @default("open")
+  paidOn     DateTime? @db.Date
+  paidAmount Decimal?  @db.Decimal(14, 2)
+  /// When the daily cron last raised an in-app notification for this row.
+  notifiedAt DateTime?
+  notes      String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([holdingId, dueOn, kind])
+  @@unique([liabilityId, dueOn, kind])
+  @@index([ownerUserId, status, dueOn])
+  @@index([ownerUserId, dueOn])
+}
+
+/// Per-owner preferences. The gold rate lives here because it prices the whole
+/// vault; keeping it in one place is what makes the rate field editable.
+model WealthSetting {
+  ownerUserId String @id
+  owner       User   @relation("WealthSettingOwner", fields: [ownerUserId], references: [id], onDelete: Cascade)
+
+  goldRatePerGram   Decimal   @default(0) @db.Decimal(10, 2)
+  goldRateAsOn      DateTime? @db.Date
+  /// Flip the page to personal-only (hides scope="business" rows).
+  hideBusinessScope Boolean   @default(false)
+  /// Daily reminder digest on/off.
+  remindersEnabled  Boolean   @default(true)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+/// Audit trail for credential reads. Every reveal of a stored portal password
+/// writes one row — the point of an encrypted field is undone if nobody can
+/// tell it was opened.
+model WealthSecretReveal {
+  id        String        @id @default(cuid())
+  holdingId String
+  holding   WealthHolding @relation(fields: [holdingId], references: [id], onDelete: Cascade)
+
+  actorUserId String
+  actor       User   @relation("WealthSecretRevealActor", fields: [actorUserId], references: [id], onDelete: Cascade)
+
+  ip        String?
+  createdAt DateTime @default(now())
+
+  @@index([holdingId, createdAt])
+  @@index([actorUserId, createdAt])
 }
