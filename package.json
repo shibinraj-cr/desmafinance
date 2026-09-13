@@ -44,6 +44,7 @@
     "db:seed-ahpra-oba-template": "tsx prisma/seed-ahpra-oba-template.ts",
     "db:seed-ahpra-oba-template:dry": "tsx prisma/seed-ahpra-oba-template.ts --dry-run",
     "db:seed-from-excel": "tsx prisma/seed-from-excel.ts",
+    "wealth:import": "tsx prisma/import-wealth.ts",
     "lp:import-historical": "tsx prisma/lead-pulse-import-historical.ts",
     "lp:import-historical:dry": "tsx prisma/lead-pulse-import-historical.ts --dry-run"
   },

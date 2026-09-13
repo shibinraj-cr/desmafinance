@@ -117,6 +117,10 @@ export const ADMIN_RESTRICTED_PAGES = [
   // Managing which links the feed polls is an admin job; /news itself is open to
   // everyone, and this entry is checked first so the blanket grant cannot leak it.
   "/news/manage",
+  // The Personal Wealth desk. Its rows are owner-scoped in the database, so a
+  // non-owner would only ever see their own empty page — but a private-finance
+  // route has no business appearing in anyone else's sidebar either.
+  "/executive/wealth",
   // Removed automatically when WA_UI_ADMIN_ONLY flips — the CRM-user rule below
   // then takes over for the inbox, and /crm/broadcasts falls back to its own
   // canBulkEmail gate.

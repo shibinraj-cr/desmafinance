@@ -53,6 +53,12 @@ export const MODULES: AppModule[] = [
         icon: "flag",
         adminOnly: true,
       },
+      {
+        href: "/executive/wealth",
+        label: "Personal Wealth",
+        icon: "savings",
+        adminOnly: true,
+      },
     ],
   },
   {
