@@ -86,6 +86,14 @@ export const ALWAYS_VISIBLE_PAGES = [
   // page grant would mean an announcement silently reaching only some staff.
   // Its admin surface stays out via ADMIN_RESTRICTED_PAGES below.
   "/news",
+  // The SOP reading surfaces, for the same reason: a published SOP that only
+  // some roles can find is not published, and anyone asked to acknowledge one
+  // has to be able to open it. Authoring (/sop/create), governance
+  // (/sop/review, /sop/kpi-reviews, /sop/acknowledgements) and the admin pages
+  // (/sop/archived, /sop/settings) are NOT here — they need a page grant, and
+  // each one re-checks authority server-side through getSopAccess.
+  "/sop/library",
+  "/sop/my-sops",
 ];
 
 // Hard admin-only pages: hidden from EVERY non-admin's nav even when a role
