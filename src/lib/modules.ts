@@ -336,6 +336,40 @@ export const MODULES: AppModule[] = [
     ],
   },
   {
+    // Standard Operating Procedures: authoring, review/approval, publication,
+    // acknowledgement and KPI review. Structured so a step can later become an
+    // executable task — see src/lib/sop/constants.ts.
+    //
+    // The reading surfaces (/sop/library, /sop/my-sops) are visible to every
+    // signed-in user (ALWAYS_VISIBLE_PAGES in rbac.ts): an SOP nobody can find
+    // is not published, and an employee asked to acknowledge one has to be able
+    // to open it. Authoring and governance pages need explicit page grants.
+    id: "sop",
+    name: "SOP Management",
+    icon: "menu_book",
+    basePath: "/sop",
+    status: "active",
+    pages: [
+      { href: "/sop/dashboard", label: "Dashboard", icon: "dashboard", group: "OVERVIEW" },
+      { href: "/sop/library", label: "SOP Library", icon: "library_books", group: "OVERVIEW" },
+      { href: "/sop/create", label: "Create SOP", icon: "note_add", group: "AUTHORING" },
+      { href: "/sop/my-sops", label: "My SOPs", icon: "assignment_ind", group: "AUTHORING" },
+      { href: "/sop/review", label: "Review & Approval", icon: "rule", group: "GOVERNANCE" },
+      { href: "/sop/kpi-reviews", label: "KPI Reviews", icon: "monitoring", group: "GOVERNANCE" },
+      { href: "/sop/acknowledgements", label: "Acknowledgements", icon: "how_to_reg", group: "GOVERNANCE" },
+      { href: "/sop/archived", label: "Archived SOPs", icon: "inventory_2", group: "ADMIN" },
+      {
+        // Granting a role this page promotes it to the SOP-admin tier (publish,
+        // archive, manage categories) — the same trick as /crm/settings and
+        // /operations/settings. Not adminOnly: that is the whole point.
+        href: "/sop/settings",
+        label: "Categories & Access",
+        icon: "tune",
+        group: "ADMIN",
+      },
+    ],
+  },
+  {
     id: "hr",
     name: "HR",
     icon: "badge",

@@ -149,6 +149,22 @@ model User {
   hiringResumeSources      HiringResumeSource[]      @relation("HiringResumeSourceCreatedBy")
   hiringIngestBatches      HiringIngestBatch[]       @relation("HiringIngestBatchCreatedBy")
 
+  // SOP Management relations
+  sopsCreated            Sop[]                @relation("SopCreatedBy")
+  sopsArchived           Sop[]                @relation("SopArchivedBy")
+  sopVersionsCreated     SopVersion[]         @relation("SopVersionCreatedBy")
+  sopVersionsToReview    SopVersion[]         @relation("SopVersionReviewer")
+  sopVersionsToApprove   SopVersion[]         @relation("SopVersionApprover")
+  sopVersionsReviewed    SopVersion[]         @relation("SopVersionReviewedBy")
+  sopVersionsApproved    SopVersion[]         @relation("SopVersionApprovedBy")
+  sopVersionsPublished   SopVersion[]         @relation("SopVersionPublishedBy")
+  sopReviewActions       SopReviewAction[]    @relation("SopReviewActor")
+  sopKpiReviews          SopKpiReview[]       @relation("SopKpiReviewer")
+  sopAcknowledgements    SopAcknowledgement[] @relation("SopAcknowledgeUser")
+  sopAttachments         SopAttachment[]      @relation("SopAttachmentUploader")
+  sopAuditLogs           SopAuditLog[]        @relation("SopAuditActor")
+  sopNotifications       SopNotification[]    @relation("SopNotifications")
+
   @@index([roleId])
 }
 
@@ -1224,6 +1240,15 @@ model Employee {
   /// (salary / incentive outflows).
   transactions           Transaction[]                @relation("EmployeeTransactions")
   transactionDrafts      TransactionDraft[]           @relation("EmployeeTransactionDrafts")
+  /// SOP Management — the employee master is the single source of people, so
+  /// SOP ownership/assignment FKs point here rather than duplicating a roster.
+  sopsOwned              Sop[]                        @relation("SopOwner")
+  sopVersionsOwned       SopVersion[]                 @relation("SopVersionOwner")
+  sopReviewOwnerOf       SopVersion[]                 @relation("SopReviewOwner")
+  sopStepsAssigned       SopStep[]                    @relation("SopStepAssignee")
+  sopExceptionEscalations SopException[]              @relation("SopExceptionEscalatee")
+  sopKpisOwned           SopKpi[]                     @relation("SopKpiOwner")
+  sopAcknowledgements    SopAcknowledgement[]         @relation("SopAcknowledger")
 
   @@index([active])
   @@index([shiftId])
@@ -1264,6 +1289,9 @@ model HrDepartment {
   updatedAt      DateTime               @updatedAt
   members        HrEmployeeDepartment[]
   sandwichPolicy HrSandwichPolicy[]
+  sops           Sop[]                  @relation("SopDepartment")
+  sopVersions    SopVersion[]           @relation("SopVersionDepartment")
+  sopSteps       SopStep[]              @relation("SopStepDepartment")
 
   @@index([active])
 }
@@ -1296,6 +1324,8 @@ model HrRole {
   createdAt   DateTime         @default(now())
   updatedAt   DateTime         @updatedAt
   members     HrEmployeeRole[]
+  sopSteps      SopStep[]      @relation("SopStepRole")
+  sopExceptions SopException[] @relation("SopExceptionRole")
 
   @@index([active])
 }
@@ -4343,4 +4373,640 @@ model SalesObjectiveArchive {
   note      String?
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
+}
+
+// ══════════════════════════════════════════════════════════════════════
+// SOP MANAGEMENT
+//
+// Two layers, deliberately split:
+//
+//   IDENTITY  — `Sop` is the permanent record. Its `sopNumber`
+//               (OPS-SOP-001) is minted once and never changes, whatever
+//               later revisions do to the title, owner or department.
+//   CONTENT   — `SopVersion` carries everything an author writes, plus the
+//               workflow status. A revision is a NEW version row; a
+//               published one is frozen (`isLocked`) and never rewritten.
+//
+// Every child record (steps, checklists, quality criteria, exceptions,
+// KPIs, attachments) hangs off the VERSION, not the Sop, so a published
+// version keeps the exact steps it was approved with even after a revision
+// rewrites them. `Sop.currentVersionId` points at the live published one and
+// `Sop.draftVersionId` at the in-flight edit, so the library list needs no
+// sub-query.
+//
+// Structure over prose: steps and checklists are rows with typed columns
+// (responsible role, SLA value + unit, expected output), not a blob of HTML.
+// That is what lets a later phase turn `SopStep` into an executable task —
+// see src/lib/sop/README notes in src/lib/sop/constants.ts.
+//
+// Access is resolved in src/lib/sop/rbac.ts and enforced in BOTH the page and
+// the API route, the same shape as ops-rbac / hiring rbac.
+// ══════════════════════════════════════════════════════════════════════
+
+/// Admin-managed SOP classification (e.g. "Process", "Policy", "Compliance",
+/// "Quality"). Kept as a table, not an enum, so SOP admins add categories from
+/// /sop/settings without a migration.
+model SopCategory {
+  id          String       @id @default(cuid())
+  name        String       @unique
+  description String?
+  /// Sort key for the pickers; ties break on name.
+  sortOrder   Int          @default(0)
+  isActive    Boolean      @default(true)
+  createdAt   DateTime     @default(now())
+  updatedAt   DateTime     @updatedAt
+  sops        Sop[]
+  versions    SopVersion[]
+
+  @@index([isActive, sortOrder])
+}
+
+/// The permanent SOP record. One row per SOP for its whole life; revisions add
+/// `SopVersion` rows underneath it.
+///
+/// The metadata columns here (title, department, owner, …) are a DENORMALISED
+/// copy of the currently-live version, maintained on publish (and on draft edit
+/// while the SOP has never been published). They exist so the library table and
+/// the dashboard filters are a single indexed query. The authoritative value for
+/// any given version is always on `SopVersion`.
+model Sop {
+  id String @id @default(cuid())
+
+  /// Permanent, human-facing identifier — "OPS-SOP-001". Minted once at
+  /// creation from the department code + a per-code sequence, and never
+  /// reissued, even if the SOP later moves department.
+  sopNumber String @unique
+  /// The department code the number was minted under ("OPS"), kept so the
+  /// sequence stays stable when a department is renamed.
+  deptCode  String
+  /// Per-code sequence number (1 for OPS-SOP-001). Unique with deptCode.
+  seq       Int
+
+  title           String
+  departmentId    String?
+  department      HrDepartment? @relation("SopDepartment", fields: [departmentId], references: [id], onDelete: SetNull)
+  categoryId      String?
+  category        SopCategory?  @relation(fields: [categoryId], references: [id], onDelete: SetNull)
+  /// Free-text process / function this SOP covers (e.g. "Candidate onboarding").
+  processFunction String?
+
+  /// Mandatory process owner, from the DESGRO employee master.
+  ownerEmployeeId String
+  ownerEmployee   Employee @relation("SopOwner", fields: [ownerEmployeeId], references: [id], onDelete: Restrict)
+
+  /// General | Department Only | Management | Restricted — see CONFIDENTIALITY
+  /// in src/lib/sop/constants.ts. Enforced in canViewSop().
+  confidentiality String @default("general")
+
+  /// Status of the version a reader would consider "the" SOP right now —
+  /// the published one when there is one, else the in-flight draft. Mirrors
+  /// SopVersion.status; kept here purely so the dashboard can filter.
+  status String @default("draft")
+
+  /// The live PUBLISHED version. Null until the first publish.
+  currentVersionId String?     @unique
+  currentVersion   SopVersion? @relation("SopCurrentVersion", fields: [currentVersionId], references: [id], onDelete: SetNull)
+  /// The in-flight, not-yet-published version (draft / in review / approved).
+  /// Null when everything is published. At most one at a time.
+  draftVersionId   String?     @unique
+  draftVersion     SopVersion? @relation("SopDraftVersion", fields: [draftVersionId], references: [id], onDelete: SetNull)
+
+  /// Denormalised from the live published version, for dashboard buckets.
+  effectiveDate  DateTime? @db.Date
+  nextReviewDate DateTime? @db.Date
+  /// Copied from the live version so the library can badge "acknowledgement required".
+  requiresAcknowledgement Boolean @default(false)
+
+  /// Read counter for the library's "Most viewed" sort. Incremented on the
+  /// published reading view only.
+  viewCount Int @default(0)
+
+  createdById String?
+  createdBy   User?   @relation("SopCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
+
+  // ── Archive (soft retirement, never a delete) ────────────────────────
+  isArchived      Boolean   @default(false)
+  archivedAt      DateTime?
+  archivedById    String?
+  archivedBy      User?     @relation("SopArchivedBy", fields: [archivedById], references: [id], onDelete: SetNull)
+  archiveReason   String?
+  /// The SOP that supersedes this one, when the archive names a replacement.
+  replacementSopId String?
+  replacementSop   Sop?     @relation("SopReplacement", fields: [replacementSopId], references: [id], onDelete: SetNull)
+  supersedes       Sop[]    @relation("SopReplacement")
+
+  /// Soft delete — a mis-created SOP disappears from every list but the row
+  /// (and its number) is retained, so the audit trail never has a hole.
+  deletedAt DateTime?
+
+  versions         SopVersion[]        @relation("SopVersions")
+  acknowledgements SopAcknowledgement[]
+  kpiReviews       SopKpiReview[]
+  auditLogs        SopAuditLog[]
+  notifications    SopNotification[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([deptCode, seq])
+  @@index([isArchived, deletedAt, status])
+  @@index([departmentId])
+  @@index([ownerEmployeeId])
+  @@index([categoryId])
+  @@index([nextReviewDate])
+  @@index([status])
+}
+
+/// One authored revision of an SOP. Everything a user writes lives here.
+///
+/// IMMUTABILITY: once published, `isLocked` is set and every write path
+/// (API + lib) refuses to touch the row or its children. Editing a published
+/// SOP means creating the next version, which starts as a deep copy.
+model SopVersion {
+  id    String @id @default(cuid())
+  sopId String
+  sop   Sop    @relation("SopVersions", fields: [sopId], references: [id], onDelete: Cascade)
+
+  /// Display label — "V1.0", "V1.1", "V2.0". Derived from major/minor.
+  versionLabel String
+  major        Int    @default(1)
+  minor        Int    @default(0)
+
+  /// draft | review_requested | changes_requested | approval_pending |
+  /// approved | published | revision_required | archived.
+  /// See SOP_STATUSES in src/lib/sop/constants.ts.
+  status String @default("draft")
+
+  /// Set true the moment the version is published. The one flag every write
+  /// path checks — a locked version is history, not a document.
+  isLocked Boolean @default(false)
+
+  // ── Section A: basic information (authoritative per version) ─────────
+  title           String
+  departmentId    String?
+  department      HrDepartment? @relation("SopVersionDepartment", fields: [departmentId], references: [id], onDelete: SetNull)
+  categoryId      String?
+  category        SopCategory?  @relation(fields: [categoryId], references: [id], onDelete: SetNull)
+  processFunction String?
+  ownerEmployeeId String
+  ownerEmployee   Employee      @relation("SopVersionOwner", fields: [ownerEmployeeId], references: [id], onDelete: Restrict)
+  /// Supporting team / responsible roles — HrRole ids. An array rather than a
+  /// join table: it is a flat, order-free label set that is only ever read
+  /// whole, and Prisma cannot FK an array (documented, not an oversight).
+  supportingRoleIds String[] @default([])
+  confidentiality   String   @default("general")
+
+  /// Who must sign this version off. Users, not employees: a reviewer has to
+  /// sign in and act, and only a User can. The process OWNER is an Employee
+  /// (see ownerEmployeeId) because that is an accountability record, not a login.
+  reviewerId String?
+  reviewer   User?   @relation("SopVersionReviewer", fields: [reviewerId], references: [id], onDelete: SetNull)
+  approverId String?
+  approver   User?   @relation("SopVersionApprover", fields: [approverId], references: [id], onDelete: SetNull)
+
+  // ── Purpose + trigger ────────────────────────────────────────────────
+  /// Markdown subset (see src/lib/sop/richtext.ts) — parsed to React elements,
+  /// never to an HTML string, so authored copy cannot inject markup.
+  purpose String?
+
+  /// Human description of what starts this process.
+  triggerDescription String?
+  /// Structured trigger, for the automation phase. Phase 1 stores and displays
+  /// them; nothing executes yet. See TRIGGER_TYPES in constants.ts.
+  triggerType        String?
+  /// Free text naming the system/entity the trigger watches ("CRM lead", "Ops task").
+  triggerSource      String?
+  /// The condition expression in plain words ("status = Documents Submitted").
+  triggerCondition   String?
+
+  // ── Quality standard ─────────────────────────────────────────────────
+  qualityStandard String?
+
+  // ── Review schedule ──────────────────────────────────────────────────
+  /// weekly | monthly | quarterly | half_yearly | yearly | custom.
+  reviewFrequency      String?
+  /// Only meaningful when reviewFrequency = "custom".
+  reviewIntervalDays   Int?
+  lastReviewDate       DateTime? @db.Date
+  nextReviewDate       DateTime? @db.Date
+  reviewOwnerEmployeeId String?
+  reviewOwnerEmployee   Employee? @relation("SopReviewOwner", fields: [reviewOwnerEmployeeId], references: [id], onDelete: SetNull)
+  /// Days before nextReviewDate that the "review due soon" hook fires.
+  reviewReminderDays   Int       @default(15)
+
+  // ── Publication settings (filled by the Publish modal) ───────────────
+  effectiveDate           DateTime? @db.Date
+  /// Who the SOP applies to. Id arrays for the same reason as supportingRoleIds.
+  applicableDepartmentIds String[]  @default([])
+  applicableRoleIds       String[]  @default([])
+  applicableEmployeeIds   String[]  @default([])
+  requiresAcknowledgement Boolean   @default(false)
+  acknowledgementDeadline DateTime? @db.Date
+  publishNotes            String?
+
+  /// What changed in this revision — the version-history line.
+  changeSummary String?
+
+  // ── Workflow timestamps + actors ─────────────────────────────────────
+  createdById          String?
+  createdBy            User?     @relation("SopVersionCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
+  submittedForReviewAt DateTime?
+  reviewedAt           DateTime?
+  reviewedById         String?
+  reviewedBy           User?     @relation("SopVersionReviewedBy", fields: [reviewedById], references: [id], onDelete: SetNull)
+  submittedForApprovalAt DateTime?
+  approvedAt           DateTime?
+  approvedById         String?
+  approvedBy           User?     @relation("SopVersionApprovedBy", fields: [approvedById], references: [id], onDelete: SetNull)
+  publishedAt          DateTime?
+  publishedById        String?
+  publishedBy          User?     @relation("SopVersionPublishedBy", fields: [publishedById], references: [id], onDelete: SetNull)
+  archivedAt           DateTime?
+
+  /// The version this one was revised from — the version-history chain.
+  previousVersionId String?     @unique
+  previousVersion   SopVersion? @relation("SopVersionChain", fields: [previousVersionId], references: [id], onDelete: SetNull)
+  nextVersion       SopVersion? @relation("SopVersionChain")
+
+  // Back-relations for the Sop pointers.
+  currentOf Sop? @relation("SopCurrentVersion")
+  draftOf   Sop? @relation("SopDraftVersion")
+
+  steps            SopStep[]
+  qualityCriteria  SopQualityCriterion[]
+  exceptions       SopException[]
+  kpis             SopKpi[]
+  attachments      SopAttachment[]
+  actions          SopReviewAction[]
+  acknowledgements SopAcknowledgement[]
+  kpiReviews       SopKpiReview[]
+  auditLogs        SopAuditLog[]
+  notifications    SopNotification[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([sopId, versionLabel])
+  @@index([sopId, status])
+  @@index([status])
+  @@index([reviewerId, status])
+  @@index([approverId, status])
+  @@index([nextReviewDate])
+}
+
+/// One ordered step of a process. The structural unit the future workflow
+/// engine will instantiate as a task: responsible role + department + SLA are
+/// separate typed columns precisely so a task can be created from a row
+/// without re-parsing prose.
+model SopStep {
+  id        String     @id @default(cuid())
+  versionId String
+  version   SopVersion @relation(fields: [versionId], references: [id], onDelete: Cascade)
+
+  /// 1-based position. Renumbered contiguously on every reorder.
+  seq         Int
+  title       String
+  /// Markdown subset — the detailed instruction / activity.
+  instruction String?
+
+  /// Responsible role, from the HR role master where one fits; `responsibleRoleName`
+  /// carries a free-text role for the cases the master has no row for yet
+  /// (and doubles as the snapshot label if the master row is later renamed).
+  responsibleRoleId       String?
+  responsibleRole         HrRole?       @relation("SopStepRole", fields: [responsibleRoleId], references: [id], onDelete: SetNull)
+  responsibleRoleName     String?
+  responsibleDepartmentId String?
+  responsibleDepartment   HrDepartment? @relation("SopStepDepartment", fields: [responsibleDepartmentId], references: [id], onDelete: SetNull)
+  /// Optional named individual — most steps name a role, not a person.
+  assignedEmployeeId      String?
+  assignedEmployee        Employee?     @relation("SopStepAssignee", fields: [assignedEmployeeId], references: [id], onDelete: SetNull)
+
+  /// SLA as a value + unit rather than a normalised minute count, so the SOP
+  /// reads back exactly as it was written ("1 day", not "1440 minutes").
+  /// `slaMinutes` is the derived comparable, maintained by the API.
+  slaValue   Int?
+  /// minutes | hours | days
+  slaUnit    String?
+  slaMinutes Int?
+
+  requiredInput      String?
+  expectedOutput     String?
+  /// Evidence / proof of completion expected from whoever runs the step.
+  evidence           String?
+  supportingDocument String?
+  templateRef        String?
+  linkUrl            String?
+  notes              String?
+
+  checklists SopStepChecklist[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([versionId, seq])
+  @@index([versionId])
+  @@index([responsibleRoleId])
+  @@index([assignedEmployeeId])
+}
+
+/// A tick-box inside a step ("Passport available"). Its own table rather than a
+/// JSON column so a future task instance can record each item's completion.
+model SopStepChecklist {
+  id     String  @id @default(cuid())
+  stepId String
+  step   SopStep @relation(fields: [stepId], references: [id], onDelete: Cascade)
+
+  seq         Int
+  text        String
+  isMandatory Boolean @default(true)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([stepId, seq])
+  @@index([stepId])
+}
+
+/// One row of the "definition of done" table.
+model SopQualityCriterion {
+  id        String     @id @default(cuid())
+  versionId String
+  version   SopVersion @relation(fields: [versionId], references: [id], onDelete: Cascade)
+
+  seq         Int
+  criterion   String
+  /// The target / standard as written ("100%", "Must match passport").
+  target      String?
+  isMandatory Boolean @default(true)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([versionId, seq])
+  @@index([versionId])
+}
+
+/// One row of the exception & escalation matrix.
+model SopException {
+  id        String     @id @default(cuid())
+  versionId String
+  version   SopVersion @relation(fields: [versionId], references: [id], onDelete: Cascade)
+
+  seq            Int
+  issue          String
+  condition      String?
+  requiredAction String?
+
+  escalateToRoleId     String?
+  escalateToRole       HrRole?   @relation("SopExceptionRole", fields: [escalateToRoleId], references: [id], onDelete: SetNull)
+  escalateToRoleName   String?
+  escalateToEmployeeId String?
+  escalateToEmployee   Employee? @relation("SopExceptionEscalatee", fields: [escalateToEmployeeId], references: [id], onDelete: SetNull)
+
+  escalationSla   Int?
+  /// minutes | hours | days
+  escalationUnit  String?
+  escalationMinutes Int?
+
+  /// low | medium | high | critical. Critical rows are highlighted in the UI.
+  priority             String  @default("medium")
+  notifyProcessOwner   Boolean @default(false)
+  notifyDepartmentHead Boolean @default(false)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([versionId, seq])
+  @@index([versionId])
+  @@index([priority])
+}
+
+/// A KPI defined on a version. The DEFINITION only — measured results are
+/// `SopKpiReview` rows, one per review period, so the history is kept.
+/// `latest*` mirrors the newest review for cheap list rendering.
+model SopKpi {
+  id        String     @id @default(cuid())
+  versionId String
+  version   SopVersion @relation(fields: [versionId], references: [id], onDelete: Cascade)
+
+  seq               Int
+  name              String
+  description       String?
+  /// Target as written ("< 24", "> 95"). Free text: targets are expressed
+  /// with a comparison, and forcing them into a number loses the direction.
+  target            String?
+  unit              String?
+  measurementMethod String?
+  /// Where the number comes from — the anchor a future automatic actual would
+  /// be computed from ("Ops task completion timestamps").
+  dataSource        String?
+  /// weekly | monthly | quarterly | half_yearly | yearly | custom
+  reviewFrequency   String?
+
+  kpiOwnerEmployeeId String?
+  kpiOwnerEmployee   Employee? @relation("SopKpiOwner", fields: [kpiOwnerEmployeeId], references: [id], onDelete: SetNull)
+
+  /// Denormalised newest review — on_target | needs_attention | below_target.
+  latestActual     String?
+  latestStatus     String?
+  latestReviewedAt DateTime?
+
+  reviews SopKpiReview[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([versionId, seq])
+  @@index([versionId])
+}
+
+/// One recorded measurement of a KPI for a period.
+///
+/// `actual` is text for the same reason `SopKpi.target` is — a turnaround can
+/// be "18h" and an accuracy "96%". `actualNumeric` is the optional parsed
+/// number, populated when the input parses cleanly, so charts stay possible.
+model SopKpiReview {
+  id        String     @id @default(cuid())
+  kpiId     String
+  kpi       SopKpi     @relation(fields: [kpiId], references: [id], onDelete: Cascade)
+  versionId String
+  version   SopVersion @relation(fields: [versionId], references: [id], onDelete: Cascade)
+  sopId     String
+  sop       Sop        @relation(fields: [sopId], references: [id], onDelete: Cascade)
+
+  periodStart   DateTime  @db.Date
+  periodEnd     DateTime  @db.Date
+  actual        String
+  actualNumeric Decimal?  @db.Decimal(14, 4)
+  /// on_target | needs_attention | below_target
+  status        String
+  notes         String?
+
+  reviewedById String?
+  reviewedBy   User?    @relation("SopKpiReviewer", fields: [reviewedById], references: [id], onDelete: SetNull)
+  reviewedAt   DateTime @default(now())
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([kpiId, periodStart, periodEnd])
+  @@index([sopId, reviewedAt])
+  @@index([versionId])
+  @@index([status])
+}
+
+/// A review or approval decision on a version.
+///
+/// One table with a `stage` discriminator rather than the separate
+/// `sop_reviews` / `sop_approvals` the brief sketched: the two carry identical
+/// columns and are always read together as one chronological trail, so
+/// splitting them would mean a UNION on every render for no gain.
+model SopReviewAction {
+  id        String     @id @default(cuid())
+  versionId String
+  version   SopVersion @relation(fields: [versionId], references: [id], onDelete: Cascade)
+
+  /// review | approval
+  stage    String
+  /// submitted | approved | changes_requested
+  decision String
+  comments String?
+
+  actorId String?
+  actor   User?    @relation("SopReviewActor", fields: [actorId], references: [id], onDelete: SetNull)
+  actedAt DateTime @default(now())
+
+  @@index([versionId, actedAt])
+  @@index([actorId])
+}
+
+/// A published SOP version assigned to one employee to read and acknowledge.
+///
+/// Rows are materialised at publish time (from the version's applicable
+/// departments / roles / employees), so "who was told" is a fact of the
+/// publication, not something recomputed later from a roster that has moved on.
+model SopAcknowledgement {
+  id        String     @id @default(cuid())
+  sopId     String
+  sop       Sop        @relation(fields: [sopId], references: [id], onDelete: Cascade)
+  versionId String
+  version   SopVersion @relation(fields: [versionId], references: [id], onDelete: Cascade)
+
+  employeeId String
+  employee   Employee @relation("SopAcknowledger", fields: [employeeId], references: [id], onDelete: Cascade)
+  /// The login that actually acknowledged, when the employee has one.
+  userId     String?
+  user       User?    @relation("SopAcknowledgeUser", fields: [userId], references: [id], onDelete: SetNull)
+
+  assignedAt DateTime  @default(now())
+  deadline   DateTime? @db.Date
+  viewedAt   DateTime?
+  acknowledgedAt DateTime?
+
+  /// not_viewed | viewed | acknowledged. "Overdue" is DERIVED from deadline +
+  /// acknowledgedAt at read time (see acknowledgementState) rather than stored,
+  /// so it is never stale because no job ran.
+  status String @default("not_viewed")
+
+  /// Captured at acknowledgement for the compliance record.
+  ipAddress String?
+  userAgent String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([versionId, employeeId])
+  @@index([employeeId, status])
+  @@index([sopId])
+  @@index([versionId, status])
+}
+
+/// A form, template, policy or link attached to a version. Files go to the
+/// same Vercel Blob store the Operations module uses (src/lib/sop/blob.ts
+/// re-exports it); only the URL is stored here.
+model SopAttachment {
+  id        String     @id @default(cuid())
+  versionId String
+  version   SopVersion @relation(fields: [versionId], references: [id], onDelete: Cascade)
+
+  title   String
+  /// form | checklist | template | policy | training_video | drive | link | other
+  docType String  @default("other")
+  /// Exactly one of fileUrl / linkUrl is set — a stored file or an external link.
+  fileUrl  String?
+  linkUrl  String?
+  fileName String?
+  mimeType String?
+  sizeBytes Int?
+  /// The document's own version label, as written by the uploader ("Rev B").
+  docVersion String?
+
+  uploadedById String?
+  uploadedBy   User?   @relation("SopAttachmentUploader", fields: [uploadedById], references: [id], onDelete: SetNull)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([versionId])
+}
+
+/// Append-only audit trail. Written for every state change and every sensitive
+/// action; `oldValue` / `newValue` are stringified so one table covers scalars,
+/// dates and ids without a JSON diff per row (`metadata` carries the rest).
+model SopAuditLog {
+  id        String      @id @default(cuid())
+  sopId     String
+  sop       Sop         @relation(fields: [sopId], references: [id], onDelete: Cascade)
+  versionId String?
+  version   SopVersion? @relation(fields: [versionId], references: [id], onDelete: SetNull)
+
+  userId String?
+  user   User?   @relation("SopAuditActor", fields: [userId], references: [id], onDelete: SetNull)
+
+  /// See SOP_AUDIT_ACTIONS in src/lib/sop/constants.ts.
+  action String
+  /// The field that changed, when the action is an edit.
+  field    String?
+  oldValue String?
+  newValue String?
+  /// The version label the action happened on, frozen at write time.
+  versionLabel String?
+  metadata Json?
+
+  ipAddress String?
+  userAgent String?
+
+  occurredAt DateTime @default(now())
+
+  @@index([sopId, occurredAt])
+  @@index([userId, occurredAt])
+  @@index([action])
+}
+
+/// Per-user in-app notification for the SOP module. Same shape as
+/// CrmNotification — the app has no single generic notification table, and
+/// every module that needs one owns its own; copying the established shape is
+/// what keeps the notification pages interchangeable.
+model SopNotification {
+  id     String @id @default(cuid())
+  userId String
+  user   User   @relation("SopNotifications", fields: [userId], references: [id], onDelete: Cascade)
+
+  /// See SOP_NOTIFICATION_KINDS in src/lib/sop/constants.ts.
+  kind  String
+  title String
+  body  String
+  linkUrl String?
+
+  sopId     String?
+  sop       Sop?        @relation(fields: [sopId], references: [id], onDelete: Cascade)
+  versionId String?
+  version   SopVersion? @relation(fields: [versionId], references: [id], onDelete: SetNull)
+
+  readAt    DateTime?
+  createdAt DateTime  @default(now())
+
+  @@index([userId, readAt])
+  @@index([userId, createdAt])
+  @@index([sopId])
 }
