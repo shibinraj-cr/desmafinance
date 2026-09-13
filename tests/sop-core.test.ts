@@ -39,6 +39,19 @@ describe("SOP numbering", () => {
     expect(deriveDeptCode("Marketing")).toBe("MKT");
   });
 
+  it("uses the obvious prefix for the department names this install actually has", () => {
+    // Without the override these mint HA / FA / MS, which is correct by the
+    // initials rule and wrong by every other measure.
+    expect(deriveDeptCode("HR & Administration")).toBe("HR");
+    expect(deriveDeptCode("Finance & Accounting")).toBe("FIN");
+    expect(deriveDeptCode("Marketing Services")).toBe("MKT");
+    // The ones with no override still derive sensibly.
+    expect(deriveDeptCode("Candidate Support & Guidance")).toBe("CSG");
+    expect(deriveDeptCode("Lead Filtering & Qualification")).toBe("LFQ");
+    expect(deriveDeptCode("Management")).toBe("MGT");
+    expect(deriveDeptCode("Sales")).toBe("SLS");
+  });
+
   it("makes initials from a multi-word name and drops connectives", () => {
     expect(deriveDeptCode("Learning and Development")).toBe("LD");
     expect(deriveDeptCode("Client Relations Department")).toBe("CR");

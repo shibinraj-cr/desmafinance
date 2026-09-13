@@ -409,6 +409,15 @@ export type SopNotificationKind = (typeof SOP_NOTIFICATION_KINDS)[number];
  * department never renumbers SOPs that already exist.
  */
 export const DEPT_CODE_OVERRIDES: Record<string, string> = {
+  // The names this install actually uses. Without these the initials rule
+  // would mint "HA-SOP-001" for HR & Administration and "FA-SOP-001" for
+  // Finance & Accounting — technically fine, but not what anyone calls them.
+  "hr & administration": "HR",
+  "finance & accounting": "FIN",
+  "marketing services": "MKT",
+
+  // Common alternatives, so a renamed or newly added department keeps the
+  // obvious prefix.
   operations: "OPS",
   operation: "OPS",
   "human resources": "HR",
