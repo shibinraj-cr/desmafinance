@@ -85,6 +85,7 @@ model User {
   crmTasksAssigned        CrmTask[]              @relation("CrmTaskAssignee")
   crmTasksCreated         CrmTask[]              @relation("CrmTaskCreatedBy")
   crmTasksCompleted       CrmTask[]              @relation("CrmTaskCompletedBy")
+  crmTaskRemindersCreated CrmTaskReminder[]      @relation("CrmTaskReminderCreatedBy")
   crmMessageTemplates     CrmMessageTemplate[]   @relation("CrmMessageTemplateCreatedBy")
   crmNotifications        CrmNotification[]      @relation("CrmNotifications")
   crmDailyReports         CrmDailyReport[]       @relation("CrmDailyReportUser")
@@ -2344,6 +2345,7 @@ model Lead {
   opsProjects           OpsProject[]             @relation("OpsProjectLead")
   waConversations       WaConversation[]
   waBroadcastRecipients WaBroadcastRecipient[]
+  taskReminders         CrmTaskReminder[]
 
   /// When the candidate asked to stop receiving marketing WhatsApp ("STOP",
   /// "unsubscribe"). Set by the conversation mirror on an opt-out keyword and
@@ -2479,10 +2481,91 @@ model CrmTask {
   createdAt     DateTime  @default(now())
   updatedAt     DateTime  @updatedAt
 
+  reminders CrmTaskReminder[]
+
   @@index([leadId, status])
   // Supports a future cross-lead "My open tasks" / overdue view.
   @@index([assignedToId, status, dueAt])
   @@index([dueAt])
+}
+
+/// One armed candidate-facing reminder for one task, on one channel.
+///
+/// The safety net behind an overdue task: if the consultant has not completed it
+/// by the time it falls due, the candidate hears from us anyway — an approved
+/// WhatsApp template and an email from the team mailbox. The consultant arms it
+/// when they create the task; completing the task disarms it.
+///
+/// ONE ROW PER CHANNEL, not one row with two flags. Email and WhatsApp fail
+/// independently and for different reasons (no address vs opted out vs a
+/// template Meta paused), and a single row could only record one outcome — the
+/// same reasoning that gives WaBroadcastRecipient a row per recipient rather
+/// than a counter.
+///
+/// THE CONTENT IS FROZEN AT ARM TIME. `templateName`/`subject`/`body` are
+/// resolved and stored when the reminder is armed, not read from settings when
+/// it fires. An admin who rewrites the default template next week has not
+/// silently rewritten what a consultant already reviewed and armed.
+model CrmTaskReminder {
+  id     String  @id @default(cuid())
+  taskId String
+  task   CrmTask @relation(fields: [taskId], references: [id], onDelete: Cascade)
+  /// Denormalised so the drain can apply the per-lead cooldown and the opt-out
+  /// checks without joining through the task on every row.
+  leadId String
+  lead   Lead    @relation(fields: [leadId], references: [id], onDelete: Cascade)
+
+  /// 'whatsapp' | 'email'
+  channel String
+
+  /// When the drain may send: the morning after the task's due date (see
+  /// `reminderFireAt`). Moves whenever the task's due date moves.
+  fireAt DateTime
+
+  /// 'pending' | 'sending' | 'sent' | 'failed' | 'skipped' | 'cancelled'.
+  ///
+  /// `sending` is a CLAIM, not a state anybody chose: the drain flips a row to it
+  /// before calling the provider so two overlapping runs cannot both send it. A
+  /// row still in `sending` long after the fact means that run was killed
+  /// mid-send, and it is resolved as `failed` rather than retried — a reminder
+  /// that never arrives is a smaller harm than one that arrives twice.
+  ///
+  /// `cancelled` is OUR decision taken before the fire time — the task was
+  /// completed, reopened-and-closed, deleted, or the consultant disarmed it.
+  /// `skipped` is a decision taken AT the fire time (opted out, no address, the
+  /// cooldown): recorded rather than deleted, so "why did this candidate not get
+  /// the reminder" always has an answer.
+  status     String  @default("pending")
+  skipReason String?
+
+  /// What will actually be sent, frozen at arm time — see the model note.
+  /// WhatsApp: `name:language` plus its `{{n}}` values (`{}` for a template with
+  /// no variables). Email: the rendered subject and body.
+  templateName   String?
+  templateParams Json?
+  subject        String?
+  body           String?
+
+  /// Delivery bookkeeping. `providerMessageId` is Meta's wamid or the SMTP
+  /// message id — the handle a later delivery-status webhook matches on.
+  attempts          Int       @default(0)
+  sentAt            DateTime?
+  providerMessageId String?
+  lastError         String?
+
+  createdById String?
+  createdBy   User?    @relation("CrmTaskReminderCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  /// One reminder per task per channel. The drain is chunked and resumable, so
+  /// it WILL run again over a partly-sent batch; without this nothing stops a
+  /// candidate being messaged twice for the same task.
+  @@unique([taskId, channel])
+  /// The drain's own query: what is due to fire now.
+  @@index([status, fireAt])
+  /// The cooldown lookup: this lead's most recent send.
+  @@index([leadId, sentAt])
 }
 
 /// One BDE's end-of-day report for a single IST calendar day (the surface behind

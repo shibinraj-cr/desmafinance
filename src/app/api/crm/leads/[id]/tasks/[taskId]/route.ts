@@ -8,6 +8,13 @@ import { getCurrentUserAndPermissions } from "@/lib/permissions";
 import { getCrmAccess, canEditLead } from "@/lib/crm-rbac";
 import { recordLeadActivity, type CrmActivityType } from "@/lib/crm-activity";
 import { taskInclude, serializeTask, isActiveBde, requiresNextStepOnComplete } from "@/lib/crm-leads";
+import {
+  armTaskReminders,
+  cancelTaskReminders,
+  armedChannelsFor,
+  getTaskReminderConfig,
+  TASK_REMINDER_CHANNELS,
+} from "@/lib/crm-task-reminders-engine";
 
 export const dynamic = "force-dynamic";
 
@@ -22,6 +29,8 @@ const NextTaskSchema = z.object({
   priority: z.enum(["low", "normal", "high"]).optional(),
   assignedToId: z.string().nullable().optional(),
   note: z.string().trim().max(5000).nullable().optional(),
+  /** As on task creation: omitted means the admin's defaults, [] means none. */
+  reminderChannels: z.array(z.enum(TASK_REMINDER_CHANNELS)).optional(),
 });
 
 // PATCH /api/crm/leads/[id]/tasks/[taskId] — complete / reopen / edit fields
@@ -34,6 +43,13 @@ const PatchSchema = z.object({
   note: z.string().trim().max(5000).nullable().optional(),
   /** Next follow-up to schedule when this completion would otherwise leave an active lead with no open task. */
   nextTask: NextTaskSchema.optional(),
+  /**
+   * Re-arm this task's reminder on exactly these channels. OMITTED means "leave
+   * the reminder alone" — unlike creation, where omitting applies the defaults.
+   * An edit that does not mention reminders must not silently re-arm one the
+   * consultant deliberately turned off.
+   */
+  reminderChannels: z.array(z.enum(TASK_REMINDER_CHANNELS)).optional(),
 });
 
 export const PATCH = withApiHandler(async (req: Request, { params }: Ctx) => {
@@ -94,6 +110,7 @@ export const PATCH = withApiHandler(async (req: Request, { params }: Ctx) => {
   // Status transition (complete / reopen) — tracked as its own activity.
   let statusActivity: { type: CrmActivityType; summary: string } | null = null;
   const completing = data.status === "done" && task.status !== "done";
+  const reopening = data.status === "open" && task.status !== "open";
   if (data.status !== undefined && data.status !== task.status) {
     if (data.status === "done") {
       update.status = "done";
@@ -146,15 +163,49 @@ export const PATCH = withApiHandler(async (req: Request, { params }: Ctx) => {
     }
   }
 
-  if (Object.keys(update).length === 0) {
+  // A request that only re-arms the reminder changes no task field, so the
+  // shortcut has to let it through or un-ticking a channel would silently do
+  // nothing.
+  if (Object.keys(update).length === 0 && !data.reminderChannels) {
     return NextResponse.json({ task: serializeTask(task) });
   }
 
   // Complete (+ book the next task) in one transaction so an active lead is
   // never momentarily left with no open task.
+  const config = await getTaskReminderConfig();
+  const dueChanged = fieldChanges.includes("due date");
+
   const { updated, created } = await prisma.$transaction(async (tx) => {
-    const u = await tx.crmTask.update({ where: { id: params.taskId }, data: update, include: taskInclude });
+    const u = Object.keys(update).length
+      ? await tx.crmTask.update({ where: { id: params.taskId }, data: update, include: taskInclude })
+      : task;
     const c = nextCreate ? await tx.crmTask.create({ data: nextCreate, include: taskInclude }) : null;
+
+    // Disarming happens HERE, beside the completion that made it unnecessary.
+    // If the two could drift apart the failure mode is a candidate being chased
+    // for something they have already done.
+    if (completing) {
+      await cancelTaskReminders(params.taskId, tx);
+    } else if (data.reminderChannels) {
+      await armTaskReminders({ taskId: params.taskId, channels: data.reminderChannels, actorId: userId, tx });
+    } else if (reopening || dueChanged) {
+      // Re-arm it the way it was: a moved due date re-times the same channels,
+      // and reopening a task restores the net it had before it was completed.
+      const previous = await armedChannelsFor(params.taskId, tx);
+      if (config.enabled && previous.length) {
+        await armTaskReminders({ taskId: params.taskId, channels: previous, actorId: userId, tx });
+      }
+    }
+
+    // The mandatory next task is a freshly created task and gets the defaults,
+    // exactly as it would from the composer.
+    if (c && config.enabled) {
+      const nextChannels = data.nextTask?.reminderChannels ?? config.defaultChannels;
+      if (nextChannels.length) {
+        await armTaskReminders({ taskId: c.id, channels: nextChannels, actorId: userId, tx });
+      }
+    }
+
     return { updated: u, created: c };
   });
 
@@ -187,8 +238,14 @@ export const PATCH = withApiHandler(async (req: Request, { params }: Ctx) => {
     });
   }
 
+  // Re-read rather than serializing `updated`: the reminder rows are rewritten
+  // AFTER the task inside the transaction above, so the copy captured there
+  // carries their pre-edit state and the row would render what the consultant
+  // just changed away from.
+  const fresh = await prisma.crmTask.findUnique({ where: { id: params.taskId }, include: taskInclude });
+
   return NextResponse.json({
-    task: serializeTask(updated),
+    task: serializeTask(fresh ?? updated),
     nextTask: created ? serializeTask(created) : undefined,
   });
 });

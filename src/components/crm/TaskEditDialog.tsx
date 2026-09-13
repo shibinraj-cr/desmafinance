@@ -2,6 +2,12 @@
 
 import { useEffect, useState } from "react";
 import { createPortal } from "react-dom";
+import {
+  CHANNEL_LABELS,
+  TASK_REMINDER_CHANNELS,
+  reminderStatusLabel,
+  type TaskReminderChannel,
+} from "@/lib/crm-task-reminders";
 
 /**
  * Edit an existing follow-up task in place (PATCH), instead of the old
@@ -33,11 +39,23 @@ export type TaskEditPayload = {
   priority: string;
   assignedToId: string | null;
   note: string | null;
+  /** Omitted when the task carries no reminders, so a plain edit leaves them alone. */
+  reminderChannels?: TaskReminderChannel[];
+};
+
+/** One armed reminder as the task row already reports it. */
+export type ReminderState = {
+  channel: string;
+  status: string;
+  fireAt: string;
+  sentAt: string | null;
+  skipReason: string | null;
 };
 
 export function TaskEditDialog({
   task,
   bdes,
+  reminders,
   busy = false,
   error,
   onCancel,
@@ -45,6 +63,14 @@ export function TaskEditDialog({
 }: {
   task: { subject: string; dueAt: string | null; priority: string; assignedToId: string | null; note: string | null };
   bdes: { userId: string; displayName: string }[];
+  /**
+   * This task's reminders, when the caller has them. No preview is offered here
+   * — unlike the create-time composer, Subject is free text, so a per-task-type
+   * template cannot be resolved for a system-generated subject. What CAN always
+   * be done is turn a channel off, which is the thing a consultant comes here
+   * for.
+   */
+  reminders?: ReminderState[];
   busy?: boolean;
   error?: string | null;
   onCancel: () => void;
@@ -56,6 +82,13 @@ export function TaskEditDialog({
   const [priority, setPriority] = useState(task.priority);
   const [assignee, setAssignee] = useState(task.assignedToId ?? "");
   const [note, setNote] = useState(task.note ?? "");
+  // Pre-ticked from what is actually armed. A sent reminder is a fact and is
+  // shown rather than offered as a checkbox — there is nothing left to decide.
+  const live = (reminders ?? []).filter((r) => r.status === "pending" || r.status === "sending");
+  const settled = (reminders ?? []).filter((r) => r.status === "sent" || r.status === "failed" || r.status === "skipped");
+  const [channels, setChannels] = useState<TaskReminderChannel[]>(
+    live.map((r) => r.channel as TaskReminderChannel),
+  );
 
   useEffect(() => setMounted(true), []);
   useEffect(() => {
@@ -75,6 +108,10 @@ export function TaskEditDialog({
       priority,
       assignedToId: assignee || null,
       note: note.trim() || null,
+      // Only sent when this task has reminders to speak for. Omitting it leaves
+      // them untouched, so an edit from a screen that knows nothing about
+      // reminders cannot silently disarm one.
+      ...(reminders ? { reminderChannels: channels } : {}),
     });
   }
 
@@ -139,6 +176,40 @@ export function TaskEditDialog({
             />
           </div>
         </div>
+
+        {reminders && (reminders.length > 0 || channels.length > 0) && (
+          <div className="rounded-lg border border-outline-variant bg-surface-container-low p-md space-y-xs">
+            <p className="text-caption font-semibold uppercase tracking-wider text-on-surface-variant">
+              Automatic reminder
+            </p>
+            {TASK_REMINDER_CHANNELS.map((c) => {
+              const done = settled.find((r) => r.channel === c);
+              if (done) {
+                return (
+                  <p key={c} className="text-label-sm text-on-surface-variant">
+                    {reminderStatusLabel(done)}
+                  </p>
+                );
+              }
+              return (
+                <label key={c} className="flex items-center gap-sm cursor-pointer text-label-sm text-on-surface">
+                  <input
+                    type="checkbox"
+                    checked={channels.includes(c)}
+                    onChange={() =>
+                      setChannels((prev) => (prev.includes(c) ? prev.filter((x) => x !== c) : [...prev, c]))
+                    }
+                    className="h-4 w-4 rounded border-outline-variant text-primary focus:ring-primary/30"
+                  />
+                  {CHANNEL_LABELS[c]}
+                </label>
+              );
+            })}
+            <p className="text-label-sm text-on-surface-variant">
+              Sent to the candidate the morning after the due date if this is still open.
+            </p>
+          </div>
+        )}
 
         {error && <p className="text-label-sm text-error">{error}</p>}
 

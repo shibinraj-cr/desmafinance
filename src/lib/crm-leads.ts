@@ -581,6 +581,13 @@ export function serializeActivity(
 // ── Tasks (per-lead follow-ups) ─────────────────────────────────────────────
 export const taskInclude = Prisma.validator<Prisma.CrmTaskInclude>()({
   assignedTo: { select: { id: true, username: true, leadPulseRole: { select: { displayName: true } } } },
+  // The armed auto-reminders, so a task row can say whether a candidate-facing
+  // message is still waiting behind it — the state nobody would otherwise see
+  // until it had already gone out.
+  reminders: {
+    select: { channel: true, status: true, fireAt: true, sentAt: true, skipReason: true },
+    orderBy: { channel: "asc" },
+  },
 });
 export type TaskWithRels = Prisma.CrmTaskGetPayload<{ include: typeof taskInclude }>;
 
@@ -595,6 +602,16 @@ export type TaskRow = {
   assignedToName: string | null;
   completedAt: string | null;
   createdAt: string;
+  reminders: TaskReminderRow[];
+};
+
+/** One armed auto-reminder, as the task row shows it. */
+export type TaskReminderRow = {
+  channel: string;
+  status: string;
+  fireAt: string;
+  sentAt: string | null;
+  skipReason: string | null;
 };
 
 export function serializeTask(t: TaskWithRels): TaskRow {
@@ -611,6 +628,13 @@ export function serializeTask(t: TaskWithRels): TaskRow {
       : null,
     completedAt: t.completedAt ? t.completedAt.toISOString() : null,
     createdAt: t.createdAt.toISOString(),
+    reminders: t.reminders.map((r) => ({
+      channel: r.channel,
+      status: r.status,
+      fireAt: r.fireAt.toISOString(),
+      sentAt: r.sentAt ? r.sentAt.toISOString() : null,
+      skipReason: r.skipReason,
+    })),
   };
 }
 
@@ -665,6 +689,12 @@ export const crmTaskListInclude = Prisma.validator<Prisma.CrmTaskInclude>()({
       status: { select: { label: true, color: true } },
     },
   },
+  // Same reason as taskInclude: the board is where an overdue task is worked, so
+  // it is where "a message is queued behind this one" has to be visible.
+  reminders: {
+    select: { channel: true, status: true, fireAt: true, sentAt: true, skipReason: true },
+    orderBy: { channel: "asc" },
+  },
 });
 export type CrmTaskWithRels = Prisma.CrmTaskGetPayload<{ include: typeof crmTaskListInclude }>;
 
@@ -680,6 +710,7 @@ export type CrmTaskListRow = {
   assignedToName: string | null;
   completedAt: string | null;
   createdAt: string;
+  reminders: TaskReminderRow[];
   lead: {
     id: string;
     candidateName: string;
@@ -705,6 +736,13 @@ export function serializeCrmTaskListRow(t: CrmTaskWithRels): CrmTaskListRow {
       : null,
     completedAt: t.completedAt ? t.completedAt.toISOString() : null,
     createdAt: t.createdAt.toISOString(),
+    reminders: t.reminders.map((r) => ({
+      channel: r.channel,
+      status: r.status,
+      fireAt: r.fireAt.toISOString(),
+      sentAt: r.sentAt ? r.sentAt.toISOString() : null,
+      skipReason: r.skipReason,
+    })),
     lead: {
       id: t.lead.id,
       candidateName: t.lead.candidateName,

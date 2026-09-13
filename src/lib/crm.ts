@@ -144,6 +144,25 @@ export const BULK_EMAIL_MERGE_FIELDS = [
 // composers, and the bulk composer. Server-only helpers (list/serialize against
 // the DB) live in `crm-message-templates.ts`.
 
+/**
+ * The task subjects a consultant may choose, as a closed list.
+ *
+ * Closed so subjects stay consistent enough to read cleanly on the board and in
+ * the tasks export — and, since auto-reminders key their per-type template
+ * overrides on this exact string, so that an admin configuring "Payment Request"
+ * is naming something that will actually match.
+ *
+ * Lives here rather than beside the composer because both the browser and the
+ * server need it, and `crm-leads.ts` imports prisma.
+ */
+export const TASK_TYPES = [
+  "Follow-up Call",
+  "WhatsApp Message",
+  "Document Request",
+  "Payment Request",
+] as const;
+export type TaskType = (typeof TASK_TYPES)[number];
+
 export type MessageChannel = "email" | "whatsapp";
 
 /** A saved CRM message template, serialized for the client. */

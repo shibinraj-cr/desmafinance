@@ -21,6 +21,8 @@ import {
 import { isEmailConfigured } from "@/lib/mailer";
 import { listMessageTemplates } from "@/lib/crm-message-templates";
 import { STUDY_ABROAD_EVENT } from "@/lib/crm-webhook";
+import { previewTaskReminders } from "@/lib/crm-task-reminders-engine";
+import { TASK_TYPES } from "@/lib/crm";
 import { LeadDetail } from "./client";
 
 export const dynamic = "force-dynamic";
@@ -154,6 +156,11 @@ export default async function LeadDetailPage({ params }: { params: { id: string 
       })) > 0,
   };
 
+  // What an auto-reminder would send for this lead, per task type. Computed
+  // here so the composer can show it before the consultant commits — arming is
+  // the only moment anybody looks at it.
+  const taskReminders = await previewTaskReminders(lead.id, TASK_TYPES);
+
   return (
     <>
       <TopBar
@@ -183,6 +190,7 @@ export default async function LeadDetailPage({ params }: { params: { id: string 
           emailConfigured={emailConfigured}
           templates={templates}
           studyAbroad={studyAbroad}
+          taskReminders={taskReminders}
           access={{
             isAdmin: access.isAdmin,
             canAssign: access.canAssign,
