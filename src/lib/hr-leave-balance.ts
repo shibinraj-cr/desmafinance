@@ -4,6 +4,28 @@ import { cycleMonthForDate, computeLateTags } from "./hr-data";
 
 const round2 = (n: number) => Math.round(n * 100) / 100;
 
+/** An attendance row as the leave ledger reads it. */
+export type LedgerDay = {
+  id: string;
+  date: Date;
+  status: string;
+  lateMinutes: number | null;
+  /// True when HR approved this half-day as PAID leave — see `isPaidHalfDay`.
+  halfPaid?: boolean | null;
+};
+
+/**
+ * A half-day HR granted as PAID leave. It is charged to the leave balance like
+ * a full-day LV and is NOT loss-of-pay, so every LOP calculation must skip it.
+ *
+ * Only an explicit `true` counts. A null `halfPaid` — every HD written before
+ * this existed, and every biometric-derived one — stays plain loss-of-pay,
+ * which is what HD has always meant.
+ */
+export function isPaidHalfDay(d: { status: string; halfPaid?: boolean | null }): boolean {
+  return d.status === "HD" && d.halfPaid === true;
+}
+
 /**
  * Loss-of-pay for a single cycle month from its attendance rows:
  *   A (absent) × 1  +  HD (half-day) × 0.5  +  AL (late-beyond-allowance) × 0.5
@@ -12,16 +34,16 @@ const round2 = (n: number) => Math.round(n * 100) / 100;
  * count it too or "Unpaid taken" understates the real deduction. `eligibleLce` is
  * the employee's half-hour concession (LCE eligibility). The LCE quota resets per
  * cycle month, so this must be called on one month's rows at a time.
+ *
+ * A half-day granted as PAID leave is excluded: it consumes leave balance
+ * instead, the same way a full-day LV does (see `paidHalfDays`).
  */
-export function cycleMonthLop(
-  days: { id: string; date: Date; status: string; lateMinutes: number | null }[],
-  eligibleLce: boolean,
-): number {
+export function cycleMonthLop(days: LedgerDay[], eligibleLce: boolean): number {
   let a = 0;
   let hd = 0;
   for (const d of days) {
     if (d.status === "A") a++;
-    else if (d.status === "HD") hd++;
+    else if (d.status === "HD" && !isPaidHalfDay(d)) hd++;
   }
   const { tags } = computeLateTags(days, eligibleLce);
   let al = 0;
@@ -38,7 +60,7 @@ export function cycleMonthLop(
  * `cycleMonthLop`, so the marked days always sum to `covered`.
  */
 export function paidLeaveCoveredByDay(
-  days: { id: string; date: Date; status: string; lateMinutes: number | null }[],
+  days: LedgerDay[],
   eligibleLce: boolean,
   covered: number,
 ): Map<string, number> {
@@ -46,7 +68,12 @@ export function paidLeaveCoveredByDay(
   if (covered <= 0) return paid;
   const { tags } = computeLateTags(days, eligibleLce);
   const lopDays = days
-    .filter((d) => d.status === "A" || d.status === "HD" || (d.status === "P" && tags.get(d.id) === "AL"))
+    .filter(
+      (d) =>
+        d.status === "A" ||
+        (d.status === "HD" && !isPaidHalfDay(d)) ||
+        (d.status === "P" && tags.get(d.id) === "AL"),
+    )
     .sort((a, b) => a.date.getTime() - b.date.getTime());
   let remaining = covered;
   for (const d of lopDays) {
@@ -75,8 +102,9 @@ export function paidLeaveCoveredByDay(
  *               the eligibility auto-accrual (`leavesPerPeriod`) for that month,
  *               summed over elapsed months + manual ledger adjustments
  *               (HrLeaveAccrual source 'manual' / 'expiry'),
- *   - used    = reviewed & decided paid leave in the calendar year, counting
- *               LV days as 1.0 and HD (half-day) as 0.5,
+ *   - used    = reviewed & decided paid leave in the calendar year: full-day
+ *               LV at 1.0, a half-day granted as PAID leave at 0.5, plus the
+ *               portion of loss-of-pay the monthly allocation covered,
  *   - balance = opening + accrued − used,
  * and persists it. Every write path that can change eligibility, a leave
  * decision, or an accrual now funnels through here, so all readers
@@ -155,13 +183,28 @@ export type LeaveLedgerRow = {
   label: string; // e.g. "Apr-2026"
   allocated: number; // paid-leave allocation for the month (HR override, else eligibility)
   accrued: number; // allocated + manual ledger adjustments that month
-  taken: number; // paid leave taken that month = explicit LV + paid-leave coverage of LOP
+  taken: number; // paid leave taken that month = explicit paid leave (LV + paid half-days) + coverage of LOP
   covered: number; // portion of `taken` that covered loss-of-pay (A/HD/AL) via the allocation
   unpaid: number; // loss-of-pay NOT covered by paid leave (LOP − covered)
   balance: number; // running carry-forward balance after this month
 };
 
 const MONTH_LABELS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+
+/**
+ * Days of explicit paid leave in `days`: a full-day LV counts 1, a half-day
+ * granted as paid leave counts 0.5. This is the amount charged straight to the
+ * balance, before any loss-of-pay coverage — the numerator both the ledger and
+ * the salary run treat as "leave the employee chose to take and was paid for".
+ */
+export function explicitPaidLeave(days: { status: string; halfPaid?: boolean | null }[]): number {
+  let total = 0;
+  for (const d of days) {
+    if (d.status === "LV") total += 1;
+    else if (isPaidHalfDay(d)) total += 0.5;
+  }
+  return round2(total);
+}
 
 /**
  * Month-wise leave ledger for `year`, keyed by **salary-cycle month** (26th of
@@ -215,7 +258,7 @@ export async function computeMonthlyLeaveLedger(
     // PRESENT rows, so late minutes on P days are needed to compute the true LOP.
     prisma.hrAttendanceDay.findMany({
       where: { employeeId, date: { gte: windowStart, lte: windowEnd } },
-      select: { id: true, date: true, status: true, lateMinutes: true },
+      select: { id: true, date: true, status: true, lateMinutes: true, halfPaid: true },
     }),
     prisma.employee.findUnique({ where: { id: employeeId }, select: { halfHourConcession: true } }),
   ]);
@@ -239,7 +282,8 @@ export async function computeMonthlyLeaveLedger(
   }
 
   // Bucket every day by cycle month, then compute that month's loss-of-pay
-  // (A + HD·0.5 + AL·0.5) and any explicit full-day paid leave (LV).
+  // (A + unpaid HD·0.5 + AL·0.5) and any explicit paid leave (LV = 1, a
+  // half-day granted as paid leave = 0.5).
   const eligibleLce = employee?.halfHourConcession ?? false;
   const daysByMonth = new Map<number, typeof days>();
   const lvByMonth = new Map<number, number>();
@@ -248,7 +292,10 @@ export async function computeMonthlyLeaveLedger(
     if (m < 1 || m > 12) continue;
     if (!daysByMonth.has(m)) daysByMonth.set(m, []);
     daysByMonth.get(m)!.push(d);
-    if (d.status === "LV") lvByMonth.set(m, (lvByMonth.get(m) ?? 0) + 1);
+    // Explicit paid leave: a full-day LV is 1, a half-day granted as paid
+    // leave is 0.5. Both are charged to the balance before LOP coverage.
+    const lv = d.status === "LV" ? 1 : isPaidHalfDay(d) ? 0.5 : 0;
+    if (lv > 0) lvByMonth.set(m, round2((lvByMonth.get(m) ?? 0) + lv));
   }
   const lopByMonth = new Map<number, number>();
   for (const [m, mdays] of daysByMonth) lopByMonth.set(m, cycleMonthLop(mdays, eligibleLce));
@@ -272,9 +319,9 @@ export async function computeMonthlyLeaveLedger(
     const lv = lvByMonth.get(m) ?? 0;
     const lop = lopByMonth.get(m) ?? 0;
     // Credit the month's accrual, then let the balance cover leave in priority
-    // order: explicit full-day paid leave (LV) first, then loss-of-pay
-    // (absence / half-day / late) up to whatever balance remains. Carry-forward:
-    // unused balance rolls into the next month.
+    // order: explicit paid leave (LV + paid half-days) first, then loss-of-pay
+    // (absence / unpaid half-day / late) up to whatever balance remains.
+    // Carry-forward: unused balance rolls into the next month.
     balance = round2(balance + accrued - lv);
     const covered = Math.min(Math.max(0, balance), lop);
     balance = round2(balance - covered);
@@ -333,7 +380,7 @@ export async function computeLeaveBalanceFor(
     // rows, so late minutes are needed for the true loss-of-pay.
     db.hrAttendanceDay.findMany({
       where: { employeeId, date: { gte: windowStart, lte: windowEnd } },
-      select: { id: true, date: true, status: true, lateMinutes: true },
+      select: { id: true, date: true, status: true, lateMinutes: true, halfPaid: true },
     }),
     db.employee.findUnique({ where: { id: employeeId }, select: { halfHourConcession: true } }),
   ]);
@@ -362,7 +409,8 @@ export async function computeLeaveBalanceFor(
   const [nowY, nowCycleM] = cycleMonthForDate(asOf).split("-").map(Number);
   const lastElapsed = year > nowY ? 0 : year < nowY ? 12 : nowCycleM;
 
-  // Per-cycle-month loss-of-pay (A + HD·0.5 + AL·0.5) and full-day paid leave (LV).
+  // Per-cycle-month loss-of-pay (A + unpaid HD·0.5 + AL·0.5) and explicit paid
+  // leave (LV = 1, a half-day granted as paid leave = 0.5).
   const eligibleLce = employee?.halfHourConcession ?? false;
   const daysByMonth = new Map<number, typeof days>();
   const lvByMonth = new Map<number, number>();
@@ -371,13 +419,16 @@ export async function computeLeaveBalanceFor(
     if (m < 1 || m > 12) continue;
     if (!daysByMonth.has(m)) daysByMonth.set(m, []);
     daysByMonth.get(m)!.push(d);
-    if (d.status === "LV") lvByMonth.set(m, (lvByMonth.get(m) ?? 0) + 1);
+    // Explicit paid leave: a full-day LV is 1, a half-day granted as paid
+    // leave is 0.5. Both are charged to the balance before LOP coverage.
+    const lv = d.status === "LV" ? 1 : isPaidHalfDay(d) ? 0.5 : 0;
+    if (lv > 0) lvByMonth.set(m, round2((lvByMonth.get(m) ?? 0) + lv));
   }
   const lopByMonth = new Map<number, number>();
   for (const [m, mdays] of daysByMonth) lopByMonth.set(m, cycleMonthLop(mdays, eligibleLce));
 
-  // Paid leave used = full-day paid leave (LV) + paid-leave coverage of
-  // loss-of-pay, applied month-by-month with carry-forward — the monthly
+  // Paid leave used = explicit paid leave (LV + paid half-days) + paid-leave
+  // coverage of loss-of-pay, applied month-by-month with carry-forward — the monthly
   // allocation covers the earliest absence / half-day / late-day up to the
   // balance available. A HD/AL is NOT charged in full: only the covered portion
   // (via the allocation) consumes the balance; the rest stays plain loss-of-pay.
@@ -441,7 +492,7 @@ export async function recomputeLeaveBalance(
 /**
  * Recompute every employee who could plausibly hold a balance for `year` —
  * those with an eligibility row, an existing balance row, or decided leave in
- * the year. Used to refresh the Leave Balances view (and after a bulk import)
+ * the year (LV and HD alike — a paid half-day consumes balance too). Used to refresh the Leave Balances view (and after a bulk import)
  * so the figures reflect current eligibility and the latest leave decisions
  * without waiting on the monthly accrual job.
  */

@@ -45,9 +45,10 @@ const Schema = z.object({
   finalOut: z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/).nullable().optional(),
   /// On approve: new status to write to the attendance day row.
   finalStatus: z.enum(["P", "HD", "REG"]).default("P"),
-  /// On approve of a FULL-day LEAVE request: paid leave (LV, deducts leave
-  /// balance) or unpaid / loss-of-pay (A). HR picks this at approval; defaults
-  /// to paid. Ignored for a half-day leave, which always resolves to HD.
+  /// On approve of a LEAVE request: paid (deducts the leave balance) or unpaid
+  /// / loss-of-pay. HR picks this at approval; defaults to paid. A full-day
+  /// leave writes it as the day's status (LV / A); a half-day leave writes it as
+  /// `halfPaid` on an HD day, charging 0.5 to the balance or docking 0.5 of pay.
   leaveStatus: z.enum(["LV", "A"]).default("LV"),
   /// On approve of a LEAVE request: which half was actually taken — "AM"
   /// (first half) / "PM" (second half), or null to approve it as a full day.
@@ -90,9 +91,11 @@ export async function PATCH(req: Request, { params }: { params: { id: string } }
       ? parsed.data.finalHalfSession
       : requestedHalf;
   const isHalfDayLeave = reg.requestType === "leave" && half !== null;
-  // A half-day leave always resolves to HD: half a day docked, met from the
-  // paid-leave allocation where the balance covers it. The paid/unpaid choice
-  // (LV vs A) is a FULL-day distinction and doesn't apply.
+  const isPaidLeave = parsed.data.leaveStatus === "LV";
+  // A half-day leave always resolves to the HD status — half a day, not a whole
+  // one. Paid vs unpaid rides on `halfPaid` instead of the status, because there
+  // is no half-day equivalent of the LV / A status pair: paid charges 0.5 to the
+  // leave balance (as LV does at 1.0), unpaid docks 0.5 of pay (as A does at 1.0).
   const leaveTargetStatus = isHalfDayLeave ? "HD" : parsed.data.leaveStatus;
 
   // A full-day leave can only be approved onto a no-punch day. If the day has a
@@ -192,11 +195,15 @@ export async function PATCH(req: Request, { params }: { params: { id: string } }
       // half-day leave and clear it otherwise, so a day that stops being a
       // half-day never keeps a stale half hanging off it.
       const dayHalfSession = targetStatus === "HD" ? half : null;
+      // Only a half-day LEAVE decision rules on pay. A punch correction that
+      // lands on HD carries no such ruling, so it stays null — plain 0.5-day
+      // loss-of-pay, which is what an undecided half-day has always been.
+      const dayHalfPaid = isHalfDayLeave && targetStatus === "HD" ? isPaidLeave : null;
       const leaveLabel = isHalfDayLeave
-        ? `Half-day leave (${halfSessionLabel(half)?.toLowerCase()})`
-        : parsed.data.leaveStatus === "A"
-          ? "Unpaid leave"
-          : "Paid leave";
+        ? `${isPaidLeave ? "Paid" : "Unpaid"} half-day leave (${halfSessionLabel(half)?.toLowerCase()})`
+        : isPaidLeave
+          ? "Paid leave"
+          : "Unpaid leave";
       const note = isLeave
         ? `${leaveLabel} approved · ${parsed.data.reviewNote ?? ""}`.trim()
         : `Regularized · ${parsed.data.reviewNote ?? ""}`.trim();
@@ -211,6 +218,7 @@ export async function PATCH(req: Request, { params }: { params: { id: string } }
             // so the half-day rule and audits don't read the stale value.
             workMinutes,
             halfSession: dayHalfSession,
+            halfPaid: dayHalfPaid,
             ...(isHalfDayLeave ? {} : { otMinutes: 0 }),
             ...(lateMinutes != null ? { lateMinutes } : {}),
             decidedById: userId ?? null,
@@ -247,6 +255,7 @@ export async function PATCH(req: Request, { params }: { params: { id: string } }
               outTime,
               workMinutes,
               halfSession: dayHalfSession,
+              halfPaid: dayHalfPaid,
               breakMinutes: null,
               otMinutes: 0,
               lateMinutes,
@@ -277,6 +286,7 @@ export async function PATCH(req: Request, { params }: { params: { id: string } }
           date: reg.date.toISOString().slice(0, 10),
           requestType: reg.requestType,
           halfSession: reg.requestType === "leave" ? half : null,
+          leaveStatus: reg.requestType === "leave" ? parsed.data.leaveStatus : null,
           reviewNote: parsed.data.reviewNote ?? null,
         },
       },

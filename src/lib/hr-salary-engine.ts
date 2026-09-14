@@ -169,6 +169,13 @@ export function calcLine(args: {
   professionalTax: number;
   daysPresent: number;
   daysHalfDay: number;
+  /**
+   * Of `daysHalfDay`, how many HR granted as PAID leave. Each is charged to the
+   * leave balance at 0.5 (exactly as a full-day LV is charged at 1.0) instead of
+   * being docked as loss-of-pay. Defaults to 0, which reproduces the previous
+   * behaviour where every half-day was pure loss-of-pay.
+   */
+  daysHalfDayPaid?: number;
   daysAbsent: number;
   daysPaidLeave: number;
   carriedBalanceBefore: number;
@@ -189,10 +196,19 @@ export function calcLine(args: {
   const gross = breakdown.gross;
   const dailyBasis = round2(gross / wd);
 
-  const paidCovered = Math.min(args.daysPaidLeave, Math.max(0, args.carriedBalanceBefore));
-  const paidUncovered = Math.max(0, args.daysPaidLeave - paidCovered);
+  // Explicit paid leave charged to the balance: full-day LV at 1.0 plus each
+  // paid half-day at 0.5. Anything the balance can't cover falls through to
+  // loss-of-pay, same as an over-drawn LV always has.
+  const halfDayPaid = Math.min(Math.max(0, args.daysHalfDayPaid ?? 0), args.daysHalfDay);
+  const paidLeaveDays = round2(args.daysPaidLeave + halfDayPaid * 0.5);
+  const paidCovered = Math.min(paidLeaveDays, Math.max(0, args.carriedBalanceBefore));
+  const paidUncovered = round2(Math.max(0, paidLeaveDays - paidCovered));
 
-  const lopBeforeCover = args.daysAbsent + paidUncovered + args.daysHalfDay * 0.5;
+  // Only the half-days NOT granted as paid leave are docked here — the paid ones
+  // are already accounted for above, and counting them twice would deduct 0.5
+  // day of pay for leave the employee was told they'd be paid for.
+  const lopBeforeCover =
+    args.daysAbsent + paidUncovered + (args.daysHalfDay - halfDayPaid) * 0.5;
   const lopCover = Math.min(Math.max(0, args.paidLeaveCoverForLop ?? 0), lopBeforeCover);
   const totalLeaveForLop = round2(lopBeforeCover - lopCover);
   // Paid days = working-days base − loss-of-pay. We derive attended days
@@ -240,10 +256,11 @@ export function calcLine(args: {
     ...breakdown,
     totalWorkingDays: wd,
     daysAttended,
-    // Paid leave = explicit full-day paid leave (LV) + loss-of-pay covered by the
-    // monthly paid-leave allocation this cycle. Absence / half-day counts stay raw
-    // (what actually happened); totalLeaveForLop is the net deduction after cover.
-    paidLeave: round2(args.daysPaidLeave + lopCover),
+    // Paid leave = explicit paid leave (full-day LV + paid half-days at 0.5) +
+    // loss-of-pay covered by the monthly paid-leave allocation this cycle.
+    // Absence / half-day counts stay raw (what actually happened);
+    // totalLeaveForLop is the net deduction after cover.
+    paidLeave: round2(paidLeaveDays + lopCover),
     unpaidLeave: round2(args.daysAbsent + paidUncovered),
     halfDayLeave: round2(args.daysHalfDay),
     totalLeaveForLop,
@@ -264,10 +281,21 @@ export function calcLine(args: {
   };
 }
 
-export function bucketAttendance(days: { status: string }[]) {
+/**
+ * Tally a cycle's attendance rows into the buckets `calcLine` needs.
+ *
+ * `daysHalfDay` is EVERY half-day (what actually happened, for the payslip).
+ * `daysHalfDayPaid` is the subset HR granted as paid leave — those are charged
+ * to the leave balance like a full-day LV rather than docked as loss-of-pay, so
+ * calcLine has to be able to tell them apart. Half-days with no such decision
+ * (null halfPaid — biometric-derived, or HR marked half-day without ruling on
+ * pay) are not in it, which is the historical behaviour of every HD row.
+ */
+export function bucketAttendance(days: { status: string; halfPaid?: boolean | null }[]) {
   let p = 0,
     a = 0,
     hd = 0,
+    hdPaid = 0,
     lv = 0;
   for (const d of days) {
     switch (d.status) {
@@ -281,21 +309,31 @@ export function bucketAttendance(days: { status: string }[]) {
         break;
       case "HD":
         hd++;
+        if (d.halfPaid === true) hdPaid++;
         break;
       case "LV":
         lv++;
         break;
     }
   }
-  return { daysPresent: p, daysAbsent: a, daysHalfDay: hd, daysPaidLeave: lv };
+  return {
+    daysPresent: p,
+    daysAbsent: a,
+    daysHalfDay: hd,
+    daysHalfDayPaid: hdPaid,
+    daysPaidLeave: lv,
+  };
 }
 
 /**
- * Full-day paid leave (LV) the canonical leave engine (hr-leave-balance.ts)
- * counts as "used" for `year` among the given attendance rows, for dates that
- * fall in that calendar year (attendance dates are stored at midnight UTC).
- * Half-days (HD) are NOT counted — they don't consume the leave balance (HD is
- * pure 0.5-day loss-of-pay), so they're not added back here either.
+ * Paid leave the canonical leave engine (hr-leave-balance.ts) counts as "used"
+ * for `year` among the given attendance rows, for dates that fall in that
+ * calendar year (attendance dates are stored at midnight UTC): a full-day LV at
+ * 1.0, and a half-day HR granted as PAID leave at 0.5.
+ *
+ * A half-day with no pay decision (null halfPaid) is NOT counted — it doesn't
+ * consume the leave balance (it's pure 0.5-day loss-of-pay), so there is nothing
+ * to add back for it.
  *
  * computeSalaryRun adds this back onto the stored leave balance: that balance is
  * already net of the cycle's own LV (the leave engine subtracts decided leave
@@ -304,13 +342,17 @@ export function bucketAttendance(days: { status: string }[]) {
  * `year` filter keeps the Dec→Jan cross-year cycle correct: December leave
  * belongs to the previous year's balance, not this one.
  */
-export function leaveUsedInYear(days: { date: Date; status: string }[], year: number): number {
+export function leaveUsedInYear(
+  days: { date: Date; status: string; halfPaid?: boolean | null }[],
+  year: number,
+): number {
   let used = 0;
   for (const d of days) {
     if (d.date.getUTCFullYear() !== year) continue;
     if (d.status === "LV") used += 1;
+    else if (d.status === "HD" && d.halfPaid === true) used += 0.5;
   }
-  return used;
+  return round2(used);
 }
 
 /**
@@ -422,18 +464,24 @@ export async function computeSalaryRun(monthKey: string, userId: string | null):
     const isOwner =
       isOwnerDesignation(e.designationRef?.name) || isOwnerDesignation(e.designation);
 
-    let buckets: { daysPresent: number; daysAbsent: number; daysHalfDay: number; daysPaidLeave: number };
+    let buckets: {
+      daysPresent: number;
+      daysAbsent: number;
+      daysHalfDay: number;
+      daysHalfDayPaid: number;
+      daysPaidLeave: number;
+    };
     // Present-but-late-beyond-allowance (AL) days are docked as half-days.
     let alHalfDays = 0;
     // Paid-leave days the balance can cover this cycle (passed to calcLine as
     // carriedBalanceBefore; see the per-calendar-year computation below).
     let carried = 0;
-    // Loss-of-pay (absence / half-day / late) covered by the monthly paid-leave
+    // Loss-of-pay (absence / unpaid half-day / late) covered by the monthly paid-leave
     // allocation this cycle — read from the canonical leave ledger so payroll and
     // the "Paid taken / Unpaid taken" ledger agree exactly.
     let lopCover = 0;
     if (isOwner) {
-      buckets = { daysPresent: 0, daysAbsent: 0, daysHalfDay: 0, daysPaidLeave: 0 };
+      buckets = { daysPresent: 0, daysAbsent: 0, daysHalfDay: 0, daysHalfDayPaid: 0, daysPaidLeave: 0 };
     } else {
       const attendance = await prisma.hrAttendanceDay.findMany({
         where: { employeeId: e.id, date: { gte: start, lte: end } },
@@ -446,10 +494,11 @@ export async function computeSalaryRun(monthKey: string, userId: string | null):
       const { tags } = computeLateTags(attendance, e.halfHourConcession);
       alHalfDays = countAlHalfDays(attendance, tags);
 
-      // Cover this cycle's paid leave (LV) against the balance as it stood
-      // BEFORE the cycle, computed PER CALENDAR YEAR. The canonical leave engine
-      // tracks balances by calendar year and deducts decided LV immediately, so
-      // we add this cycle's LV back to recover the pre-cycle balance. A cycle is
+      // Cover this cycle's paid leave — full-day LV at 1.0 plus each half-day
+      // granted as paid leave at 0.5 — against the balance as it stood BEFORE
+      // the cycle, computed PER CALENDAR YEAR. The canonical leave engine tracks
+      // balances by calendar year and deducts decided leave immediately, so we
+      // add this cycle's back to recover the pre-cycle balance. A cycle is
       // 26th→25th, so a January run straddles two years (Dec belongs to the
       // previous year's balance) — cover each year's leave against its own
       // balance, else December leave would be charged twice (#Dec→Jan fix).
@@ -467,7 +516,8 @@ export async function computeSalaryRun(monthKey: string, userId: string | null):
       if (startYear !== year) carried += await coverYear(startYear);
 
       // Paid-leave coverage of this cycle's loss-of-pay. The monthly allocation
-      // covers the earliest absence / half-day / late up to the balance available,
+      // covers the earliest absence / unpaid half-day / late up to the balance
+      // available,
       // carried forward month-to-month — exactly what the ledger computes for this
       // cycle month, so payroll matches the "Paid taken / Unpaid taken" ledger.
       const cycleMonthIdx = Number(monthKey.split("-")[1]);
@@ -499,6 +549,7 @@ export async function computeSalaryRun(monthKey: string, userId: string | null):
       ...buckets,
       // AL (late beyond allowance) present-days are treated as half-days.
       daysHalfDay: buckets.daysHalfDay + alHalfDays,
+      daysHalfDayPaid: buckets.daysHalfDayPaid,
       carriedBalanceBefore: carried,
       paidLeaveCoverForLop: lopCover,
       // "penalty"-category deductions reduce the salary before ESI/PF/PT.

@@ -15,3 +15,10 @@ ALTER TABLE "HrAttendanceRegularization" ADD COLUMN "halfSession" TEXT;
 -- inferred from lateMinutes / earlyOutMinutes instead (inferHdLeaveHalf). A
 -- declared half wins over that inference for the sandwich rule.
 ALTER TABLE "HrAttendanceDay" ADD COLUMN "halfSession" TEXT;
+
+-- Whether an approved half-day leave is PAID. NULL — the value every existing
+-- row takes — means "not decided as leave", which is precisely how HD has
+-- always behaved: a 0.5-day loss-of-pay the monthly allocation absorbs
+-- opportunistically. Only TRUE changes any figure (0.5 day charged to the leave
+-- balance instead, mirroring a full-day LV), so no backfill is needed or wanted.
+ALTER TABLE "HrAttendanceDay" ADD COLUMN "halfPaid" BOOLEAN;
