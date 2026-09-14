@@ -15,6 +15,8 @@ type GridCell = {
   late: number | null;
   remark: string | null;
   lateTag: LateTag;
+  /// "AM" / "PM" when an approved half-day leave declared which half.
+  halfSession: string | null;
   paid: number; // paid-leave portion of this day covered by the allocation (0 / 0.5 / 1)
 };
 /// Keys are ISO date strings (YYYY-MM-DD)
@@ -377,6 +379,11 @@ export function AttendanceClient({
                         ? [
                             `${d.iso} ${code}`,
                             missingPunch ? "⚠ punch missing" : null,
+                            c.halfSession === "AM"
+                              ? "first half off (approved)"
+                              : c.halfSession === "PM"
+                                ? "second half off (approved)"
+                                : null,
                             c.in && c.out ? `${c.in} → ${c.out}` : null,
                             c.work ? `work ${hhmm(c.work)}` : null,
                             c.ot ? `OT ${hhmm(c.ot)}` : null,

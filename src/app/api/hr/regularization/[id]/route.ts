@@ -7,8 +7,9 @@ import { recomputeLeaveBalance } from "@/lib/hr-leave-balance";
 import { applySandwichRule } from "@/lib/hr-sandwich";
 import { cycleWindowForMonth, cycleMonthForDate } from "@/lib/hr-data";
 import { resolveShiftForDate } from "@/lib/hr-shift";
-import { employeeForUser } from "@/lib/hr-me";
 import { leaveStatusBlockedByPunch } from "@/lib/hr-attendance-status";
+import { leaveDecisionBlockedReason } from "@/lib/hr-approval-routing";
+import { halfSessionLabel, isHalfSession } from "@/lib/hr-regularization";
 
 /** Minutes-since-midnight from an "HH:MM" string, or null. */
 function hhmmToMin(t: string | null): number | null {
@@ -44,9 +45,14 @@ const Schema = z.object({
   finalOut: z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/).nullable().optional(),
   /// On approve: new status to write to the attendance day row.
   finalStatus: z.enum(["P", "HD", "REG"]).default("P"),
-  /// On approve of a LEAVE request: paid leave (LV, deducts leave balance) or
-  /// unpaid / loss-of-pay (A). HR picks this at approval; defaults to paid.
+  /// On approve of a FULL-day LEAVE request: paid leave (LV, deducts leave
+  /// balance) or unpaid / loss-of-pay (A). HR picks this at approval; defaults
+  /// to paid. Ignored for a half-day leave, which always resolves to HD.
   leaveStatus: z.enum(["LV", "A"]).default("LV"),
+  /// On approve of a LEAVE request: which half was actually taken — "AM"
+  /// (first half) / "PM" (second half), or null to approve it as a full day.
+  /// Omit to honour what the employee asked for; send it to override them.
+  finalHalfSession: z.enum(["AM", "PM"]).nullable().optional(),
 });
 
 export async function PATCH(req: Request, { params }: { params: { id: string } }) {
@@ -65,30 +71,44 @@ export async function PATCH(req: Request, { params }: { params: { id: string } }
     return NextResponse.json({ error: "already decided" }, { status: 400 });
   }
 
-  // No self-approval: an approver cannot decide their own request. The HR queue
-  // already hides own requests, but enforce it server-side too (so Soumya's
-  // requests route only to admin, etc.). Admins with no linked employee are
-  // unaffected.
-  const approverEmp = userId ? await employeeForUser(userId) : null;
-  if (approverEmp && approverEmp.id === reg.employeeId) {
-    return NextResponse.json(
-      { error: "You can't approve your own request — it must be reviewed by another approver." },
-      { status: 403 },
-    );
-  }
+  // Approval routing: no self-approval, and an HR approver's own request is
+  // decidable only by the designated approver. The HR queue already hides both,
+  // but the queue is a convenience — this is the guard. See hr-approval-routing.
+  const blocked = await leaveDecisionBlockedReason({
+    approverUserId: userId,
+    perms,
+    employeeIds: [reg.employeeId],
+  });
+  if (blocked) return NextResponse.json({ error: blocked }, { status: 403 });
 
-  // A leave request can only be approved onto a no-punch day. If the day has a
+  // Which half the employee asked for, if any. HR may correct it at approval
+  // (`finalHalfSession`) — e.g. the punches show the afternoon was the missing
+  // half. A request with no half is a full-day leave, as before.
+  const requestedHalf = isHalfSession(reg.halfSession) ? reg.halfSession : null;
+  const half =
+    parsed.data.finalHalfSession !== undefined
+      ? parsed.data.finalHalfSession
+      : requestedHalf;
+  const isHalfDayLeave = reg.requestType === "leave" && half !== null;
+  // A half-day leave always resolves to HD: half a day docked, met from the
+  // paid-leave allocation where the balance covers it. The paid/unpaid choice
+  // (LV vs A) is a FULL-day distinction and doesn't apply.
+  const leaveTargetStatus = isHalfDayLeave ? "HD" : parsed.data.leaveStatus;
+
+  // A full-day leave can only be approved onto a no-punch day. If the day has a
   // punch, the employee was present — it's a worked day (P/HD), never paid leave
-  // (the same guardrail the decide route enforces).
-  if (parsed.data.decision === "approve" && reg.requestType === "leave" && reg.attendanceDayId) {
+  // (the same guardrail the decide route enforces). A HALF-day (HD) is the one
+  // leave shape that survives this check, which is exactly why a punched day can
+  // be claimed as a half-day and not as a whole one.
+  if (parsed.data.decision === "approve" && reg.requestType === "leave") {
     const day = await prisma.hrAttendanceDay.findUnique({
-      where: { id: reg.attendanceDayId },
+      where: { employeeId_date: { employeeId: reg.employeeId, date: reg.date } },
       select: { inTime: true, outTime: true },
     });
-    if (day && leaveStatusBlockedByPunch(parsed.data.leaveStatus, day.inTime, day.outTime)) {
+    if (day && leaveStatusBlockedByPunch(leaveTargetStatus, day.inTime, day.outTime)) {
       return NextResponse.json(
         {
-          error: `${reg.date.toISOString().slice(0, 10)} has a punch (${day.inTime ?? "—"}–${day.outTime ?? "—"}) — it's a worked day and can't be marked as leave. Use a punch correction instead.`,
+          error: `${reg.date.toISOString().slice(0, 10)} has a punch (${day.inTime ?? "—"}–${day.outTime ?? "—"}) — it's a worked day and can't be marked as full-day leave. Approve it as a half-day, or use a punch correction instead.`,
         },
         { status: 400 },
       );
@@ -133,17 +153,10 @@ export async function PATCH(req: Request, { params }: { params: { id: string } }
     });
     if (parsed.data.decision === "approve" && !isNote) {
       // Punch request → corrected punches resolve to the HR-chosen P/HD.
-      // Leave request → the day becomes paid leave (LV) or unpaid loss-of-pay
-      // (A), per HR's choice; no punch is involved.
+      // Full-day leave → paid leave (LV) or unpaid loss-of-pay (A), per HR's
+      // choice; no punch is involved.
+      // Half-day leave → HD, keeping whatever punches the day already has.
       const isLeave = reg.requestType === "leave";
-      const inTime = isLeave ? null : parsed.data.finalIn ?? reg.proposedIn ?? null;
-      const outTime = isLeave ? null : parsed.data.finalOut ?? reg.proposedOut ?? null;
-      const workMinutes = isLeave ? null : grossWorkMinutes(inTime, outTime);
-      const targetStatus = isLeave ? parsed.data.leaveStatus : parsed.data.finalStatus;
-      const leaveLabel = parsed.data.leaveStatus === "A" ? "Unpaid leave" : "Paid leave";
-      const note = isLeave
-        ? `${leaveLabel} approved · ${parsed.data.reviewNote ?? ""}`.trim()
-        : `Regularized · ${parsed.data.reviewNote ?? ""}`.trim();
       // Resolve the attendance row by its natural key (employeeId, date) — NOT
       // the stored `reg.attendanceDayId`. The eTimeOffice sync delete-and-
       // replaces the cycle window, so a request filed before a sync points at a
@@ -152,8 +165,41 @@ export async function PATCH(req: Request, { params }: { params: { id: string } }
       // `attendanceDayId` if it drifted.
       const existingDay = await tx.hrAttendanceDay.findUnique({
         where: { employeeId_date: { employeeId: reg.employee.id, date: reg.date } },
-        select: { id: true },
+        select: { id: true, inTime: true, outTime: true, workMinutes: true },
       });
+      // A half-day leave keeps the punches it already has — the employee worked
+      // the other half, so blanking the times would erase a real worked stretch
+      // (and with it the late/early-out signals the sandwich rule reads). Only a
+      // FULL-day leave clears them.
+      const clearPunches = isLeave && !isHalfDayLeave;
+      const inTime = isLeave
+        ? clearPunches
+          ? null
+          : (existingDay?.inTime ?? null)
+        : parsed.data.finalIn ?? reg.proposedIn ?? null;
+      const outTime = isLeave
+        ? clearPunches
+          ? null
+          : (existingDay?.outTime ?? null)
+        : parsed.data.finalOut ?? reg.proposedOut ?? null;
+      const workMinutes = isLeave
+        ? clearPunches
+          ? null
+          : (existingDay?.workMinutes ?? null)
+        : grossWorkMinutes(inTime, outTime);
+      const targetStatus = isLeave ? leaveTargetStatus : parsed.data.finalStatus;
+      // A declared half is only meaningful on an HD day. Write it through on a
+      // half-day leave and clear it otherwise, so a day that stops being a
+      // half-day never keeps a stale half hanging off it.
+      const dayHalfSession = targetStatus === "HD" ? half : null;
+      const leaveLabel = isHalfDayLeave
+        ? `Half-day leave (${halfSessionLabel(half)?.toLowerCase()})`
+        : parsed.data.leaveStatus === "A"
+          ? "Unpaid leave"
+          : "Paid leave";
+      const note = isLeave
+        ? `${leaveLabel} approved · ${parsed.data.reviewNote ?? ""}`.trim()
+        : `Regularized · ${parsed.data.reviewNote ?? ""}`.trim();
       if (existingDay) {
         await tx.hrAttendanceDay.update({
           where: { id: existingDay.id },
@@ -164,7 +210,8 @@ export async function PATCH(req: Request, { params }: { params: { id: string } }
             // Rederive worked minutes from the corrected punches (OT folded in)
             // so the half-day rule and audits don't read the stale value.
             workMinutes,
-            otMinutes: 0,
+            halfSession: dayHalfSession,
+            ...(isHalfDayLeave ? {} : { otMinutes: 0 }),
             ...(lateMinutes != null ? { lateMinutes } : {}),
             decidedById: userId ?? null,
             decidedAt: now,
@@ -199,6 +246,7 @@ export async function PATCH(req: Request, { params }: { params: { id: string } }
               inTime,
               outTime,
               workMinutes,
+              halfSession: dayHalfSession,
               breakMinutes: null,
               otMinutes: 0,
               lateMinutes,
@@ -227,6 +275,8 @@ export async function PATCH(req: Request, { params }: { params: { id: string } }
         metadata: {
           employeeId: reg.employee.id,
           date: reg.date.toISOString().slice(0, 10),
+          requestType: reg.requestType,
+          halfSession: reg.requestType === "leave" ? half : null,
           reviewNote: parsed.data.reviewNote ?? null,
         },
       },

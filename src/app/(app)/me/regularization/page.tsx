@@ -4,7 +4,12 @@ import { getCurrentUserAndPermissions } from "@/lib/permissions";
 import { employeeForUser } from "@/lib/hr-me";
 import { TopBar } from "@/components/TopBar";
 import { Section } from "@/components/Cards";
-import { REGULARIZATION_REASONS, REGULARIZATION_WINDOW_WORKING_DAYS } from "@/lib/hr-regularization";
+import {
+  REGULARIZATION_REASONS,
+  REGULARIZATION_WINDOW_WORKING_DAYS,
+  halfSessionLabel,
+  suggestHalfSession,
+} from "@/lib/hr-regularization";
 import { cycleWindowForMonth, cycleMonthForDate, computeLateTags } from "@/lib/hr-data";
 import { RegularizationRequestClient } from "./client";
 
@@ -44,7 +49,17 @@ export default async function MyRegularizationPage({
     prisma.hrAttendanceDay.findMany({
       where: { employeeId: emp.id, date: { gte: start, lte: end } },
       orderBy: { date: "asc" },
-      select: { id: true, date: true, status: true, inTime: true, outTime: true, lateMinutes: true },
+      select: {
+        id: true,
+        date: true,
+        status: true,
+        inTime: true,
+        outTime: true,
+        lateMinutes: true,
+        // Drives which half to preselect on a half-day leave request: left
+        // early → the afternoon was the missing half.
+        earlyOutMinutes: true,
+      },
     }),
     // Days already covered by a live request (so they drop out of the to-do list).
     prisma.hrAttendanceRegularization.findMany({
@@ -103,6 +118,10 @@ export default async function MyRegularizationPage({
       out: d.outTime,
       lateMinutes: d.lateMinutes,
       kind,
+      // A punched day was worked, so only HALF of it can be claimed as leave —
+      // the full-day option is hidden for it (and rejected server-side).
+      punched: !!(d.inTime || d.outTime),
+      suggestedHalf: suggestHalfSession(d),
     }));
 
   const reasonLabel = Object.fromEntries(REGULARIZATION_REASONS.map((r) => [r.code, r.label]));
@@ -132,11 +151,14 @@ export default async function MyRegularizationPage({
             reasonType: r.reasonType,
             reasonLabel:
               r.requestType === "leave"
-                ? "Leave request"
+                ? halfSessionLabel(r.halfSession)
+                  ? `Half-day leave · ${halfSessionLabel(r.halfSession)}`
+                  : "Leave request (full day)"
                 : r.requestType === "note"
                   ? "Explanation on record"
                   : reasonLabel[r.reasonType] ?? r.reasonType,
             reason: r.reason,
+            halfSession: r.halfSession,
             proposedIn: r.proposedIn,
             proposedOut: r.proposedOut,
             status: r.status,

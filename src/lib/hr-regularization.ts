@@ -42,3 +42,48 @@ export const REGULARIZATION_REASONS = [
   { code: "forgot_punch", label: "Forgot to punch" },
   { code: "other", label: "Other" },
 ] as const;
+
+/**
+ * The two halves of a working day an employee can apply for separately.
+ *
+ * The codes deliberately match the "AM"/"PM" vocabulary the sandwich rule
+ * already speaks (`inferHdLeaveHalf`), so a DECLARED half and an INFERRED one
+ * are the same value and the bridging logic needs no translation layer.
+ *
+ * A half-day leave resolves the day to HD — a 0.5-day deduction that the
+ * monthly paid-leave allocation covers where the balance reaches it (see
+ * `cycleMonthLop` / `paidLeaveCoveredByDay`). That is also why HD is the only
+ * leave shape allowed on a day that already carries a punch: half a worked day
+ * can be docked, a whole one can't.
+ */
+export const HALF_SESSIONS = [
+  { code: "AM", label: "First half (morning)" },
+  { code: "PM", label: "Second half (afternoon)" },
+] as const;
+
+export type HalfSession = (typeof HALF_SESSIONS)[number]["code"];
+
+export function isHalfSession(v: unknown): v is HalfSession {
+  return v === "AM" || v === "PM";
+}
+
+/** "First half" / "Second half" for display, or null for a full day. */
+export function halfSessionLabel(code: string | null | undefined): string | null {
+  if (code === "AM") return "First half";
+  if (code === "PM") return "Second half";
+  return null;
+}
+
+/**
+ * The half an employee most likely wants off on an existing half-day row, used
+ * to preselect the radio. Arrived late → the morning is the missing half;
+ * left early → the afternoon is. Same reading as `inferHdLeaveHalf`, but it
+ * commits to "AM" when the punches are ambiguous rather than returning null —
+ * a preselected radio the employee can change beats an empty one.
+ */
+export function suggestHalfSession(d: {
+  lateMinutes: number | null;
+  earlyOutMinutes: number | null;
+}): HalfSession {
+  return (d.earlyOutMinutes ?? 0) > (d.lateMinutes ?? 0) ? "PM" : "AM";
+}

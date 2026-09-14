@@ -4,6 +4,7 @@ import { prisma } from "@/lib/prisma";
 import { getCurrentUserAndPermissions } from "@/lib/permissions";
 import { canApproveHr } from "@/lib/hr-rbac";
 import { recomputeLeaveBalance } from "@/lib/hr-leave-balance";
+import { leaveDecisionBlockedReason } from "@/lib/hr-approval-routing";
 
 const Schema = z.object({
   action: z.enum(["approve", "reject", "cancel"]),
@@ -22,6 +23,17 @@ export async function POST(req: Request, { params }: { params: { id: string } })
   if (lr.status !== "pending") {
     return NextResponse.json({ error: "already decided" }, { status: 400 });
   }
+
+  // Same approval routing as the regularization queue: no self-approval, and an
+  // HR approver's own request is decidable only by the designated approver.
+  // These HrLeaveRequest rows are the retired forward-dated leave flow, but the
+  // route is still live and reachable, so it gets the guard too.
+  const blocked = await leaveDecisionBlockedReason({
+    approverUserId: userId,
+    perms,
+    employeeIds: [lr.employeeId],
+  });
+  if (blocked) return NextResponse.json({ error: blocked }, { status: 403 });
   const status = parsed.data.action === "approve" ? "approved" : parsed.data.action === "reject" ? "rejected" : "cancelled";
   const updated = await prisma.hrLeaveRequest.update({
     where: { id: lr.id },

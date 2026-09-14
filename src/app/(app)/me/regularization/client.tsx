@@ -5,6 +5,9 @@ import { useRouter } from "next/navigation";
 import { Section } from "@/components/Cards";
 
 type RegReason = { code: string; label: string };
+type HalfSession = "AM" | "PM";
+type LeaveDuration = "full" | HalfSession;
+
 type ExceptionRow = {
   date: string;
   weekday: string;
@@ -13,6 +16,10 @@ type ExceptionRow = {
   out: string | null;
   lateMinutes: number | null;
   kind: "absent" | "incomplete" | "halfday" | "late";
+  /// A day with a punch was worked — only a half of it can be claimed as leave.
+  punched: boolean;
+  /// Which half to preselect, read from the punch deviations.
+  suggestedHalf: HalfSession;
 };
 type RegRow = {
   id: string;
@@ -21,6 +28,7 @@ type RegRow = {
   reasonType: string;
   reasonLabel: string;
   reason: string;
+  halfSession: string | null;
   proposedIn: string | null;
   proposedOut: string | null;
   status: string;
@@ -58,11 +66,18 @@ export function RegularizationRequestClient({
   const [ok, setOk] = useState<string | null>(null);
   // Which exception row is open, and for which request type.
   const [open, setOpen] = useState<{ date: string; type: "punch" | "leave" | "note" } | null>(null);
-  const [rowForm, setRowForm] = useState({ in: "", out: "", reason: "" });
+  const [rowForm, setRowForm] = useState({
+    in: "",
+    out: "",
+    reason: "",
+    duration: "full" as LeaveDuration,
+  });
   const [showManual, setShowManual] = useState(false);
   const [manual, setManual] = useState({
     date: new Date().toISOString().slice(0, 10),
+    requestType: "punch" as "punch" | "leave",
     reasonType: reasons[0]?.code ?? "missing_punch",
+    duration: "full" as LeaveDuration,
     reason: "",
     proposedIn: "",
     proposedOut: "",
@@ -72,9 +87,17 @@ export function RegularizationRequestClient({
     router.push(`/me/regularization?month=${m}`);
   }
 
-  function openRow(date: string, type: "punch" | "leave" | "note") {
+  function openRow(date: string, type: "punch" | "leave" | "note", x?: ExceptionRow) {
     setOpen({ date, type });
-    setRowForm({ in: "", out: "", reason: "" });
+    setRowForm({
+      in: "",
+      out: "",
+      reason: "",
+      // A punched day was worked, so it can only be claimed half at a time —
+      // start on the half the punches point at. An unpunched day defaults to
+      // the full day, which is what an absence usually is.
+      duration: x?.punched ? x.suggestedHalf : "full",
+    });
     setErr(null);
     setOk(null);
   }
@@ -116,7 +139,12 @@ export function RegularizationRequestClient({
     } else if (open.type === "note") {
       post({ date: open.date, requestType: "note", reason: rowForm.reason });
     } else {
-      post({ date: open.date, requestType: "leave", reason: rowForm.reason });
+      post({
+        date: open.date,
+        requestType: "leave",
+        reason: rowForm.reason,
+        halfSession: rowForm.duration === "full" ? null : rowForm.duration,
+      });
     }
   }
 
@@ -150,9 +178,11 @@ export function RegularizationRequestClient({
             {exceptions.map((x) => {
               const isOpen = open?.date === x.date;
               const badge = KIND_BADGE[x.kind];
-              // Half-day / late days already have punches → leave can't apply
-              // (a punched day can't be marked LV). Offer an on-record note.
-              const isPunched = x.kind === "halfday" || x.kind === "late";
+              // A punched day was worked, so a FULL-day leave can't apply to it
+              // — but half of it can, which is what a half-day leave request is
+              // for. Those days also keep the "Explain" option, for when the
+              // employee wants the reason on record without claiming leave.
+              const isPunched = x.punched;
               return (
                 <div key={x.date} className="rounded-lg border border-outline-variant p-sm">
                   <div className="flex flex-wrap items-center gap-sm">
@@ -171,7 +201,7 @@ export function RegularizationRequestClient({
                     )}
                     <div className="ml-auto flex gap-xs">
                       <button
-                        onClick={() => openRow(x.date, "punch")}
+                        onClick={() => openRow(x.date, "punch", x)}
                         className={
                           "px-sm py-xs rounded text-label-sm font-semibold " +
                           (isOpen && open?.type === "punch"
@@ -181,9 +211,20 @@ export function RegularizationRequestClient({
                       >
                         Punch fix
                       </button>
-                      {isPunched ? (
+                      <button
+                        onClick={() => openRow(x.date, "leave", x)}
+                        className={
+                          "px-sm py-xs rounded text-label-sm font-semibold " +
+                          (isOpen && open?.type === "leave"
+                            ? "bg-primary text-on-primary"
+                            : "bg-surface-container text-on-surface")
+                        }
+                      >
+                        {isPunched ? "Request half-day" : "Request leave"}
+                      </button>
+                      {isPunched && (
                         <button
-                          onClick={() => openRow(x.date, "note")}
+                          onClick={() => openRow(x.date, "note", x)}
                           className={
                             "px-sm py-xs rounded text-label-sm font-semibold " +
                             (isOpen && open?.type === "note"
@@ -192,18 +233,6 @@ export function RegularizationRequestClient({
                           }
                         >
                           Explain
-                        </button>
-                      ) : (
-                        <button
-                          onClick={() => openRow(x.date, "leave")}
-                          className={
-                            "px-sm py-xs rounded text-label-sm font-semibold " +
-                            (isOpen && open?.type === "leave"
-                              ? "bg-primary text-on-primary"
-                              : "bg-surface-container text-on-surface")
-                          }
-                        >
-                          Request leave
                         </button>
                       )}
                     </div>
@@ -230,6 +259,20 @@ export function RegularizationRequestClient({
                             />
                           </Field>
                         </div>
+                      )}
+                      {open?.type === "leave" && (
+                        <Field label="Duration">
+                          <DurationPicker
+                            value={rowForm.duration}
+                            onChange={(duration) => setRowForm({ ...rowForm, duration })}
+                            allowFullDay={!isPunched}
+                            note={
+                              isPunched
+                                ? `${x.in ?? "—"}–${x.out ?? "—"} is on record for this day, so you worked part of it — only a half-day can be claimed as leave.`
+                                : null
+                            }
+                          />
+                        </Field>
                       )}
                       <Field
                         label={
@@ -266,7 +309,9 @@ export function RegularizationRequestClient({
                           {busy
                             ? "Submitting…"
                             : open?.type === "leave"
-                              ? "Request leave"
+                              ? rowForm.duration === "full"
+                                ? "Request full-day leave"
+                                : `Request ${rowForm.duration === "AM" ? "first" : "second"}-half leave`
                               : open?.type === "note"
                                 ? "Submit explanation"
                                 : "Submit punch fix"}
@@ -301,43 +346,78 @@ export function RegularizationRequestClient({
                   className="w-full bg-surface-container border border-outline-variant rounded-lg px-sm py-xs"
                 />
               </Field>
-              <Field label="Issue">
+              <Field label="Request">
                 <select
-                  value={manual.reasonType}
-                  onChange={(e) => setManual({ ...manual, reasonType: e.target.value })}
+                  value={manual.requestType}
+                  onChange={(e) =>
+                    setManual({ ...manual, requestType: e.target.value as "punch" | "leave" })
+                  }
                   className="w-full bg-surface-container border border-outline-variant rounded-lg px-sm py-xs"
                 >
-                  {reasons.map((r) => (
-                    <option key={r.code} value={r.code}>
-                      {r.label}
-                    </option>
-                  ))}
+                  <option value="punch">Punch correction</option>
+                  <option value="leave">Leave</option>
                 </select>
               </Field>
-              <Field label="Correct In time">
-                <input
-                  type="time"
-                  value={manual.proposedIn}
-                  onChange={(e) => setManual({ ...manual, proposedIn: e.target.value })}
-                  className="w-full bg-surface-container border border-outline-variant rounded-lg px-sm py-xs"
-                />
-              </Field>
-              <Field label="Correct Out time">
-                <input
-                  type="time"
-                  value={manual.proposedOut}
-                  onChange={(e) => setManual({ ...manual, proposedOut: e.target.value })}
-                  className="w-full bg-surface-container border border-outline-variant rounded-lg px-sm py-xs"
-                />
-              </Field>
+              {manual.requestType === "leave" ? (
+                <div className="sm:col-span-2">
+                  <Field label="Duration">
+                    <DurationPicker
+                      value={manual.duration}
+                      onChange={(duration) => setManual({ ...manual, duration })}
+                      allowFullDay
+                      note={
+                        manual.duration === "full"
+                          ? "A full day can only be claimed on a day with no punch — if you worked part of it, pick a half instead."
+                          : null
+                      }
+                    />
+                  </Field>
+                </div>
+              ) : (
+                <>
+                  <Field label="Issue">
+                    <select
+                      value={manual.reasonType}
+                      onChange={(e) => setManual({ ...manual, reasonType: e.target.value })}
+                      className="w-full bg-surface-container border border-outline-variant rounded-lg px-sm py-xs"
+                    >
+                      {reasons.map((r) => (
+                        <option key={r.code} value={r.code}>
+                          {r.label}
+                        </option>
+                      ))}
+                    </select>
+                  </Field>
+                  <Field label="Correct In time">
+                    <input
+                      type="time"
+                      value={manual.proposedIn}
+                      onChange={(e) => setManual({ ...manual, proposedIn: e.target.value })}
+                      className="w-full bg-surface-container border border-outline-variant rounded-lg px-sm py-xs"
+                    />
+                  </Field>
+                  <Field label="Correct Out time">
+                    <input
+                      type="time"
+                      value={manual.proposedOut}
+                      onChange={(e) => setManual({ ...manual, proposedOut: e.target.value })}
+                      className="w-full bg-surface-container border border-outline-variant rounded-lg px-sm py-xs"
+                    />
+                  </Field>
+                </>
+              )}
               <div className="sm:col-span-2">
-                <Field label="Explanation">
+                <Field label={manual.requestType === "leave" ? "Reason for leave" : "Explanation"}>
                   <textarea
                     value={manual.reason}
                     onChange={(e) => setManual({ ...manual, reason: e.target.value })}
                     rows={2}
                     className="w-full bg-surface-container border border-outline-variant rounded-lg px-sm py-xs"
-                    placeholder="Briefly describe what happened (5+ characters)…"
+                    placeholder={
+                      manual.requestType === "leave"
+                        ? "e.g. sick leave for the afternoon (5+ characters)…"
+                        : "Briefly describe what happened (5+ characters)…"
+                    }
                   />
                 </Field>
               </div>
@@ -345,14 +425,23 @@ export function RegularizationRequestClient({
             <div className="mt-base flex justify-end">
               <button
                 onClick={() =>
-                  post({
-                    date: manual.date,
-                    requestType: "punch",
-                    reasonType: manual.reasonType,
-                    reason: manual.reason,
-                    proposedIn: manual.proposedIn || null,
-                    proposedOut: manual.proposedOut || null,
-                  })
+                  post(
+                    manual.requestType === "leave"
+                      ? {
+                          date: manual.date,
+                          requestType: "leave",
+                          reason: manual.reason,
+                          halfSession: manual.duration === "full" ? null : manual.duration,
+                        }
+                      : {
+                          date: manual.date,
+                          requestType: "punch",
+                          reasonType: manual.reasonType,
+                          reason: manual.reason,
+                          proposedIn: manual.proposedIn || null,
+                          proposedOut: manual.proposedOut || null,
+                        },
+                  )
                 }
                 disabled={busy || manual.reason.trim().length < 5}
                 className="px-md py-sm rounded-lg bg-primary text-on-primary font-semibold disabled:opacity-50"
@@ -400,7 +489,13 @@ export function RegularizationRequestClient({
                               : "bg-yellow-50 text-yellow-700")
                         }
                       >
-                        {r.requestType === "leave" ? "Leave" : r.requestType === "note" ? "Explain" : "Punch"}
+                        {r.requestType === "leave"
+                          ? r.halfSession
+                            ? `½ Leave · ${r.halfSession === "AM" ? "1st" : "2nd"}`
+                            : "Leave"
+                          : r.requestType === "note"
+                            ? "Explain"
+                            : "Punch"}
                       </span>
                     </td>
                     <td className="px-sm py-xs">
@@ -419,6 +514,65 @@ export function RegularizationRequestClient({
           </div>
         )}
       </Section>
+    </>
+  );
+}
+
+/**
+ * Full day / first half / second half, as three radios rather than a select —
+ * the whole point of the feature is that the two halves are applied for
+ * separately, and a collapsed dropdown hides that they're distinct choices.
+ *
+ * `allowFullDay` is false on a day that already carries a punch: it was worked,
+ * so only a half of it can be claimed (the API rejects the full day too).
+ */
+function DurationPicker({
+  value,
+  onChange,
+  allowFullDay,
+  note,
+}: {
+  value: LeaveDuration;
+  onChange: (v: LeaveDuration) => void;
+  allowFullDay: boolean;
+  note: string | null;
+}) {
+  const options: { code: LeaveDuration; label: string; hint: string }[] = [
+    { code: "full", label: "Full day", hint: "1 day" },
+    { code: "AM", label: "First half", hint: "morning · 0.5 day" },
+    { code: "PM", label: "Second half", hint: "afternoon · 0.5 day" },
+  ];
+  return (
+    <>
+      <div className="flex flex-wrap gap-xs">
+        {options
+          .filter((o) => allowFullDay || o.code !== "full")
+          .map((o) => (
+            <button
+              key={o.code}
+              type="button"
+              aria-pressed={value === o.code}
+              onClick={() => onChange(o.code)}
+              className={
+                "px-sm py-xs rounded-lg border text-label-sm text-left " +
+                (value === o.code
+                  ? "border-primary bg-primary text-on-primary font-semibold"
+                  : "border-outline-variant bg-surface-container text-on-surface")
+              }
+            >
+              {o.label}
+              <span
+                className={
+                  "block text-caption " +
+                  (value === o.code ? "text-on-primary/80" : "text-on-surface-variant")
+                }
+              >
+                {o.hint}
+              </span>
+            </button>
+          ))}
+      </div>
+      {note && <p className="text-caption text-on-surface-variant mt-xs">{note}</p>}
     </>
   );
 }

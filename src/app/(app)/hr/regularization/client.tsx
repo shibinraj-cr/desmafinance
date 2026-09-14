@@ -14,6 +14,8 @@ type RegRow = {
   reasonType: string;
   reasonLabel: string;
   reason: string;
+  /// "AM" / "PM" on a half-day leave request; null on a full-day one.
+  halfSession: string | null;
   proposedIn: string | null;
   proposedOut: string | null;
   status: string;
@@ -128,7 +130,13 @@ export function RegularizationReviewClient({
                               : "bg-yellow-50 text-yellow-700")
                         }
                       >
-                        {r.requestType === "leave" ? "Leave" : r.requestType === "note" ? "Explain" : "Punch"}
+                        {r.requestType === "leave"
+                          ? r.halfSession
+                            ? `½ Leave · ${r.halfSession === "AM" ? "1st" : "2nd"}`
+                            : "Leave"
+                          : r.requestType === "note"
+                            ? "Explain"
+                            : "Punch"}
                       </span>
                     </td>
                     <td className="px-sm py-sm">
@@ -220,6 +228,7 @@ export function RegularizationReviewClient({
                   finalOut: final.finalOut || null,
                   finalStatus: final.finalStatus,
                   leaveStatus: final.leaveStatus,
+                  finalHalfSession: final.finalHalfSession,
                 }),
               });
               if (!res.ok) {
@@ -254,6 +263,7 @@ function ApproveModal({
     finalOut: string;
     finalStatus: "P" | "HD" | "REG";
     leaveStatus: "LV" | "A";
+    finalHalfSession: "AM" | "PM" | null;
     reviewNote: string;
   }) => Promise<void>;
 }) {
@@ -262,35 +272,82 @@ function ApproveModal({
     finalOut: row.proposedOut ?? "",
     finalStatus: "P" as "P" | "HD" | "REG",
     leaveStatus: "LV" as "LV" | "A",
+    // Honour what the employee asked for; HR can change it below.
+    finalHalfSession: (row.halfSession === "AM" || row.halfSession === "PM"
+      ? row.halfSession
+      : null) as "AM" | "PM" | null,
     reviewNote: "",
   });
   const isLeave = row.requestType === "leave";
+  const isHalfDay = isLeave && v.finalHalfSession !== null;
   return (
     <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-md">
       <div className="bg-surface-container-lowest rounded-xl border border-outline-variant p-lg w-full max-w-md space-y-base">
-        <h3 className="text-h3">{isLeave ? "Approve leave request" : "Approve punch correction"}</h3>
+        <h3 className="text-h3">
+          {isLeave
+            ? isHalfDay
+              ? "Approve half-day leave"
+              : "Approve leave request"
+            : "Approve punch correction"}
+        </h3>
         <p className="text-label-sm text-on-surface-variant">
           {row.empCode} · {row.name} · {row.date} · {row.reasonLabel}
         </p>
         {isLeave ? (
-          <label className="block space-y-xs">
-            <span className="text-caption uppercase tracking-wider text-on-surface-variant">
-              Leave type
-            </span>
-            <select
-              value={v.leaveStatus}
-              onChange={(e) => setV({ ...v, leaveStatus: e.target.value as "LV" | "A" })}
-              className="w-full bg-surface-container border border-outline-variant rounded-lg px-sm py-xs"
-            >
-              <option value="LV">Paid leave (deducts leave balance)</option>
-              <option value="A">Unpaid — loss of pay</option>
-            </select>
-            <p className="text-caption text-on-surface-variant">
-              {v.leaveStatus === "LV"
-                ? `Marks ${row.date} as paid leave (LV), deducted from the employee's leave balance.`
-                : `Marks ${row.date} as unpaid leave / loss of pay (A).`}
-            </p>
-          </label>
+          <>
+            <label className="block space-y-xs">
+              <span className="text-caption uppercase tracking-wider text-on-surface-variant">
+                Duration
+              </span>
+              <select
+                value={v.finalHalfSession ?? "full"}
+                onChange={(e) =>
+                  setV({
+                    ...v,
+                    finalHalfSession:
+                      e.target.value === "full" ? null : (e.target.value as "AM" | "PM"),
+                  })
+                }
+                className="w-full bg-surface-container border border-outline-variant rounded-lg px-sm py-xs"
+              >
+                <option value="full">Full day</option>
+                <option value="AM">Half day — first half (morning)</option>
+                <option value="PM">Half day — second half (afternoon)</option>
+              </select>
+              <p className="text-caption text-on-surface-variant">
+                {row.halfSession
+                  ? `Employee applied for the ${row.halfSession === "AM" ? "first" : "second"} half.`
+                  : "Employee applied for the full day."}
+              </p>
+            </label>
+            {isHalfDay ? (
+              <p className="text-caption text-on-surface-variant bg-surface-container rounded-lg p-sm">
+                Marks {row.date} as a half-day (HD) — a 0.5-day deduction, met from
+                the employee&apos;s paid-leave allocation where the balance covers
+                it. Any punches on the day are kept, since the other half was
+                worked.
+              </p>
+            ) : (
+              <label className="block space-y-xs">
+                <span className="text-caption uppercase tracking-wider text-on-surface-variant">
+                  Leave type
+                </span>
+                <select
+                  value={v.leaveStatus}
+                  onChange={(e) => setV({ ...v, leaveStatus: e.target.value as "LV" | "A" })}
+                  className="w-full bg-surface-container border border-outline-variant rounded-lg px-sm py-xs"
+                >
+                  <option value="LV">Paid leave (deducts leave balance)</option>
+                  <option value="A">Unpaid — loss of pay</option>
+                </select>
+                <p className="text-caption text-on-surface-variant">
+                  {v.leaveStatus === "LV"
+                    ? `Marks ${row.date} as paid leave (LV), deducted from the employee's leave balance.`
+                    : `Marks ${row.date} as unpaid leave / loss of pay (A).`}
+                </p>
+              </label>
+            )}
+          </>
         ) : (
           <>
             <div className="grid grid-cols-2 gap-base">

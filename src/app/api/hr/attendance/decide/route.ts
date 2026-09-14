@@ -7,6 +7,7 @@ import { applySandwichRule } from "@/lib/hr-sandwich";
 import { cycleWindowForMonth, cycleMonthForDate } from "@/lib/hr-data";
 import { recomputeLeaveBalance } from "@/lib/hr-leave-balance";
 import { leaveStatusBlockedByPunch } from "@/lib/hr-attendance-status";
+import { leaveDecisionBlockedReason } from "@/lib/hr-approval-routing";
 
 const Schema = z.object({
   /// Either a single attendance-day id or a batch of ids.
@@ -39,6 +40,18 @@ export async function POST(req: Request) {
     select: { id: true, status: true, rawStatus: true, date: true, employeeId: true, inTime: true, outTime: true },
   });
   if (days.length === 0) return NextResponse.json({ error: "no matching days" }, { status: 404 });
+
+  // Approval routing. This route rewrites attendance statuses directly, so
+  // without the same guard the request flow carries, an HR Manager could mark
+  // their own absence as paid leave here and skip approval entirely — and two HR
+  // Managers could do it for each other. Reject the whole batch rather than
+  // silently skipping the offending days, so HR sees why. See hr-approval-routing.
+  const routingBlock = await leaveDecisionBlockedReason({
+    approverUserId: userId,
+    perms,
+    employeeIds: days.map((d) => d.employeeId),
+  });
+  if (routingBlock) return NextResponse.json({ error: routingBlock }, { status: 403 });
 
   const updates: { id: string; newStatus: string }[] = [];
   for (const d of days) {
@@ -100,6 +113,10 @@ export async function POST(req: Request) {
           decidedById: decision === "reset" ? null : userId,
           decidedAt: decision === "reset" ? null : now,
           decisionNote: decision === "reset" ? null : note ?? null,
+          // A declared half belongs to an approved half-day leave. Any decision
+          // taken here supersedes that, and `reset` hands the day back to the
+          // biometric feed entirely, so the half must not outlive either.
+          halfSession: null,
           // Lock the day so the eTimeOffice sync can't revert this manual
           // override. `reset` hands the day back to the biometric feed, so it
           // unlocks (letting future syncs manage it again).
