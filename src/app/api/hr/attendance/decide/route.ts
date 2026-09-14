@@ -13,8 +13,10 @@ const Schema = z.object({
   /// Either a single attendance-day id or a batch of ids.
   dayIds: z.array(z.string().min(1)).min(1).max(500),
   /// Decision codes (extended):
-  ///   paid        → mark as paid leave (status="LV")
-  ///   unpaid      → mark as unpaid leave (status="A")
+  ///   paid        → mark as paid leave (status="LV"; an existing HD stays HD
+  ///                 and is flagged halfPaid — half a day of paid leave)
+  ///   unpaid      → mark as unpaid leave (status="A"; an existing HD stays HD
+  ///                 and is flagged halfPaid=false — half a day of loss-of-pay)
   ///   half_day    → mark as half-day (status="HD")
   ///   on_duty     → on-duty (off-site work, counts as present, status="OD")
   ///   regularized → corrected via regularization workflow (status="REG", treated as P)
@@ -53,12 +55,22 @@ export async function POST(req: Request) {
   });
   if (routingBlock) return NextResponse.json({ error: routingBlock }, { status: 403 });
 
-  const updates: { id: string; newStatus: string }[] = [];
+  // `newHalfPaid` is the pay ruling on a half-day: true = 0.5 charged to the
+  // leave balance, false = 0.5 docked, null = no ruling (plain loss-of-pay,
+  // what an undecided HD has always been).
+  const updates: { id: string; newStatus: string; newHalfPaid: boolean | null }[] = [];
   for (const d of days) {
     let newStatus: string;
+    let newHalfPaid: boolean | null = null;
     switch (decision) {
       case "paid":
-        newStatus = "LV";
+        // An HD is HALF a day, so paying it means half a day of paid leave —
+        // not a full-day LV. Converting it would credit a whole day of leave
+        // the employee never took (and the punch guardrail blocks LV on a
+        // punched HD outright, leaving those with no way to be paid at all).
+        // Mirrors the "unpaid" case below.
+        newStatus = d.status === "HD" ? "HD" : "LV";
+        if (d.status === "HD") newHalfPaid = true;
         break;
       case "unpaid":
         // HD rows already carry a built-in 0.5-day LOP. "Unpaid" on an HD
@@ -66,8 +78,10 @@ export async function POST(req: Request) {
         // just recorded as a decision (no full-day conversion, so the 0.5 day
         // isn't doubled). Any other status becomes a full-day LOP (status A).
         newStatus = d.status === "HD" ? "HD" : "A";
+        if (d.status === "HD") newHalfPaid = false;
         break;
       case "half_day":
+        // A status ruling, not a pay one — halfPaid stays null.
         newStatus = "HD";
         break;
       case "on_duty":
@@ -81,7 +95,7 @@ export async function POST(req: Request) {
         newStatus = d.rawStatus ?? d.status;
         break;
     }
-    updates.push({ id: d.id, newStatus });
+    updates.push({ id: d.id, newStatus, newHalfPaid });
   }
 
   // Guardrail: a day with punch-ins is a worked day (P/HD) and can never be
@@ -117,6 +131,7 @@ export async function POST(req: Request) {
           // taken here supersedes that, and `reset` hands the day back to the
           // biometric feed entirely, so the half must not outlive either.
           halfSession: null,
+          halfPaid: u.newHalfPaid,
           // Lock the day so the eTimeOffice sync can't revert this manual
           // override. `reset` hands the day back to the biometric feed, so it
           // unlocks (letting future syncs manage it again).

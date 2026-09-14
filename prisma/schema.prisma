@@ -1457,6 +1457,18 @@ model HrAttendanceDay {
   decidedById     String?
   decidedBy       User?              @relation("HrLeaveDecider", fields: [decidedById], references: [id], onDelete: SetNull)
   decidedAt       DateTime?
+  /// Whether an approved half-day leave was granted as PAID leave.
+  ///   null  — not decided as leave: a biometric-derived HD, or one HR marked
+  ///           half-day without ruling on pay. Pure 0.5-day loss-of-pay that
+  ///           the monthly allocation absorbs opportunistically, earliest
+  ///           first. This is the historical behaviour of every HD row.
+  ///   true  — paid: the 0.5 day is charged against the leave balance and is
+  ///           NOT loss-of-pay, exactly as a full-day LV is.
+  ///   false — unpaid: the 0.5 day is loss-of-pay, same arithmetic as null but
+  ///           recorded as a deliberate decision rather than an absence of one.
+  /// Mirrors the LV / A choice HR already makes on a full-day leave. Only
+  /// `true` changes any figure, so existing rows are unaffected.
+  halfPaid        Boolean?
   /// Which half of an HD day was the leave — "AM" (first half) or "PM"
   /// (second half) — when the employee DECLARED it on an approved half-day
   /// leave request. Null on a biometric-derived HD, where the half is inferred

@@ -235,7 +235,27 @@ describe("bucketAttendance", () => {
         { status: "WO" }, // weekly off / unknown — ignored
       ],
     );
-    expect(buckets).toEqual({ daysPresent: 4, daysAbsent: 1, daysHalfDay: 2, daysPaidLeave: 1 });
+    expect(buckets).toEqual({
+      daysPresent: 4,
+      daysAbsent: 1,
+      daysHalfDay: 2,
+      // Neither HD carries a pay ruling, so neither is paid leave.
+      daysHalfDayPaid: 0,
+      daysPaidLeave: 1,
+    });
+  });
+
+  it("counts a half-day granted as PAID leave in its own bucket, and still in the HD total", () => {
+    const buckets = bucketAttendance([
+      { status: "HD", halfPaid: true },
+      { status: "HD", halfPaid: false },
+      { status: "HD", halfPaid: null },
+      { status: "HD" },
+    ]);
+    // daysHalfDay stays the raw count (what happened, for the payslip);
+    // daysHalfDayPaid is the subset charged to the leave balance instead.
+    expect(buckets.daysHalfDay).toBe(4);
+    expect(buckets.daysHalfDayPaid).toBe(1);
   });
 });
 
