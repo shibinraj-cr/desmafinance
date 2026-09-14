@@ -166,6 +166,37 @@ export const WA_BROADCAST_ENABLED_KEY = "wa_broadcast_enabled";
 /** Messages per drain run — the throttle that keeps us inside Meta's rate limits. */
 export const WA_BROADCAST_BATCH_KEY = "wa_broadcast_batch_size";
 
+/**
+ * Task auto-reminders (src/lib/crm-task-reminders-engine.ts) — the candidate-facing
+ * safety net behind an overdue CRM task. Managed on CRM → Settings by anyone who
+ * can author templates, since choosing the default wording IS the decision here.
+ *
+ * - ENABLED_KEY: "1" to arm new reminders and let the drain send them. Turning it
+ *   off stops the drain dead; reminders already armed stay pending rather than
+ *   being destroyed, so switching back on does not lose them.
+ * - WA_TEMPLATE_KEY: `name:language` of the default APPROVED WhatsApp template.
+ *   Deliberately not validated against the locally cached status — that cache is
+ *   only as fresh as the last sync, and gating on it would hide a template Meta
+ *   approved days ago. See the drain for who gets the final say (Meta does).
+ * - WA_VARS_KEY: JSON, WhatsApp `{{n}}` slot → merge token, e.g. {"1": "first_name"}.
+ *   Empty today (the approved `task_follow_up` has no variables); it exists so
+ *   moving to a variables-carrying UTILITY template is a settings change.
+ * - EMAIL_TEMPLATE_KEY: CrmMessageTemplate id (channel `email`).
+ * - OVERRIDES_KEY: JSON, task subject → { waTemplate, emailTemplateId }, so a
+ *   payment chase can read differently from a document request.
+ * - COOLDOWN_KEY: hours between automated reminders to the SAME candidate,
+ *   default 24. The guard against a lead with four overdue tasks getting four
+ *   messages in one morning.
+ * - CHANNELS_KEY: comma-separated channels ticked by default in the composer.
+ */
+export const CRM_TASK_REMINDER_ENABLED_KEY = "crm_task_reminder_enabled";
+export const CRM_TASK_REMINDER_WA_TEMPLATE_KEY = "crm_task_reminder_wa_template";
+export const CRM_TASK_REMINDER_WA_VARS_KEY = "crm_task_reminder_wa_variables";
+export const CRM_TASK_REMINDER_EMAIL_TEMPLATE_KEY = "crm_task_reminder_email_template_id";
+export const CRM_TASK_REMINDER_OVERRIDES_KEY = "crm_task_reminder_overrides";
+export const CRM_TASK_REMINDER_COOLDOWN_KEY = "crm_task_reminder_cooldown_hours";
+export const CRM_TASK_REMINDER_CHANNELS_KEY = "crm_task_reminder_default_channels";
+
 export async function getSetting(key: string): Promise<string | null> {
   const row = await prisma.appSetting.findUnique({ where: { key }, select: { value: true } });
   return row?.value ?? null;

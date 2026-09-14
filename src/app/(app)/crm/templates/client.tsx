@@ -6,6 +6,7 @@ import { useRouter } from "next/navigation";
 import Link from "next/link";
 import { WhatsAppTemplateAccessCard } from "./whatsapp-access";
 import { WhatsAppMetaTemplates } from "./whatsapp-meta";
+import { TaskRemindersCard } from "./task-reminders";
 import { specFromMergeBody } from "@/lib/wa/template-spec";
 import {
   CRM_TEMPLATE_MERGE_FIELDS,
@@ -97,6 +98,10 @@ export function MessageTemplatesClient({ templates }: { templates: MessageTempla
           .
         </span>
       </div>
+
+      {/* Auto-reminders span both channels, so they sit above the channel tabs
+          rather than inside either one. */}
+      <TaskRemindersCard />
 
       {/* Channel tabs */}
       <div className="inline-flex rounded-lg border border-outline-variant overflow-hidden">

@@ -4,15 +4,17 @@ import { Fragment, useCallback, useEffect, useMemo, useState } from "react";
 import { createPortal } from "react-dom";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
-import type { LeadRow, NoteRow, ActivityRow, TaskRow } from "@/lib/crm-leads";
+import type { LeadRow, NoteRow, ActivityRow, TaskRow, TaskReminderRow } from "@/lib/crm-leads";
 import { isActionOnlyStatus } from "@/lib/crm-leads";
-import { buildLeadMergeVars, fillTemplate, LEAD_TEMPERATURES, type MessageTemplateDTO } from "@/lib/crm";
+import { buildLeadMergeVars, fillTemplate, LEAD_TEMPERATURES, TASK_TYPES, type MessageTemplateDTO } from "@/lib/crm";
 import { ageFromDob } from "@/lib/age";
 import { COUNTRIES, countryCodeFor } from "@/lib/countries";
 import { MultiSelect } from "@/components/MultiSelect";
 import { StatusPill, TemperaturePill, type StatusOpt, type Opt, type BdeOpt } from "../client";
 import { EnrollCelebration } from "@/components/EnrollCelebration";
 import { NextStepDialog, type NextStepPayload } from "@/components/crm/NextStepDialog";
+import { TaskReminderFields, type TaskReminderPreviewDTO } from "@/components/crm/TaskReminderFields";
+import { reminderStatusLabel, type TaskReminderChannel } from "@/lib/crm-task-reminders";
 import { WaComposer, type WaTemplateOpt } from "@/components/crm/WaComposer";
 import { WaAttachment } from "@/components/crm/WaAttachment";
 import { statusTooltip } from "@/lib/wa/status-label";
@@ -237,6 +239,7 @@ export function LeadDetail({
   templates,
   access,
   studyAbroad,
+  taskReminders,
 }: {
   lead: LeadRow;
   notes: NoteRow[];
@@ -249,6 +252,7 @@ export function LeadDetail({
   templates: MessageTemplateDTO[];
   access: DetailAccess;
   studyAbroad: { eligible: boolean; alreadySent: boolean };
+  taskReminders: TaskReminderPreviewDTO;
 }) {
   const [tab, setTab] = useState<"overview" | "tasks" | "whatsapp" | "history">("overview");
   const [comm, setComm] = useState<null | "email" | "whatsapp" | "call">(null);
@@ -363,6 +367,7 @@ export function LeadDetail({
           canEdit={canEdit}
           bdes={masters.bdes}
           defaultAssigneeId={lead.assignedTo?.id ?? null}
+          reminders={taskReminders}
         />
       )}
 
@@ -2324,6 +2329,7 @@ function TasksPanel({
   canEdit,
   bdes,
   defaultAssigneeId,
+  reminders,
 }: {
   leadId: string;
   leadName: string;
@@ -2331,6 +2337,7 @@ function TasksPanel({
   canEdit: boolean;
   bdes: BdeOpt[];
   defaultAssigneeId: string | null;
+  reminders: TaskReminderPreviewDTO;
 }) {
   const open = tasks.filter((t) => t.status === "open");
   const done = tasks.filter((t) => t.status === "done");
@@ -2345,7 +2352,7 @@ function TasksPanel({
       </div>
 
       {canEdit ? (
-        <TaskComposer leadId={leadId} bdes={bdes} defaultAssigneeId={defaultAssigneeId} />
+        <TaskComposer leadId={leadId} bdes={bdes} defaultAssigneeId={defaultAssigneeId} reminders={reminders} />
       ) : (
         <p className="text-label-sm text-on-surface-variant inline-flex items-center gap-xs">
           <span className="material-symbols-outlined" style={{ fontSize: 16 }}>
@@ -2382,18 +2389,16 @@ function TasksPanel({
   );
 }
 
-// Fixed task types for the lead task composer — a closed list keeps subjects
-// consistent so they read cleanly on the board and in the tasks export.
-const TASK_TYPES = ["Follow-up Call", "WhatsApp Message", "Document Request", "Payment Request"] as const;
-
 function TaskComposer({
   leadId,
   bdes,
   defaultAssigneeId,
+  reminders,
 }: {
   leadId: string;
   bdes: BdeOpt[];
   defaultAssigneeId: string | null;
+  reminders: TaskReminderPreviewDTO;
 }) {
   const router = useRouter();
   const [subject, setSubject] = useState("");
@@ -2402,6 +2407,18 @@ function TaskComposer({
   const [assignee, setAssignee] = useState(defaultAssigneeId ?? "");
   const [note, setNote] = useState("");
   const [busy, setBusy] = useState(false);
+  // Ticked by default — the tasks that get forgotten are precisely the ones
+  // nobody stopped to configure. Unavailable channels are filtered out so the
+  // request never asks for a send that was never going to happen.
+  const [reminderChannels, setReminderChannels] = useState<TaskReminderChannel[]>(
+    reminders.defaultChannels,
+  );
+
+  const availableForType = useMemo(() => {
+    const forType = reminders.byTaskType[subject];
+    if (!forType) return [] as TaskReminderChannel[];
+    return reminderChannels.filter((c) => forType[c]?.available);
+  }, [reminders, subject, reminderChannels]);
 
   async function add() {
     if (!subject.trim() || busy) return;
@@ -2415,6 +2432,7 @@ function TaskComposer({
         priority,
         assignedToId: assignee || null,
         note: note.trim() || null,
+        reminderChannels: availableForType,
       }),
     });
     setBusy(false);
@@ -2423,6 +2441,7 @@ function TaskComposer({
       setDue("");
       setPriority("normal");
       setNote("");
+      setReminderChannels(reminders.defaultChannels);
       router.refresh();
     }
   }
@@ -2466,11 +2485,66 @@ function TaskComposer({
         rows={2}
         className="w-full px-md py-sm rounded-lg border border-outline-variant bg-surface-container-lowest focus:border-primary focus:ring-2 focus:ring-primary/20 outline-none transition text-body-md resize-y"
       />
+      {due ? (
+        <TaskReminderFields
+          preview={reminders}
+          taskType={subject}
+          dueDate={due}
+          selected={reminderChannels}
+          onChange={setReminderChannels}
+        />
+      ) : (
+        reminders.enabled &&
+        !!subject && (
+          // Without a due date there is no moment to fire at, so the net cannot
+          // be armed at all — said here rather than discovered by its absence.
+          <p className="text-label-sm text-on-surface-variant inline-flex items-center gap-xs">
+            <span className="material-symbols-outlined" style={{ fontSize: 16 }} aria-hidden>
+              info
+            </span>
+            Set a due date to have the candidate reminded automatically if this isn’t done.
+          </p>
+        )
+      )}
+
       <div className="flex justify-end">
         <button type="button" disabled={!subject.trim() || busy} onClick={add} className={primaryBtn + " h-9"}>
           {busy ? "Adding…" : "Add task"}
         </button>
       </div>
+    </div>
+  );
+}
+
+/**
+ * Where this task's auto-reminders stand.
+ *
+ * Only the states worth a line get one. A pending reminder is the useful case —
+ * it tells a consultant a message is queued behind them, which is the whole
+ * point of arming it — and `sent` / `skipped` / `failed` are worth showing
+ * because someone will ask why a candidate did or did not hear from us.
+ * `cancelled` is silent: it is the ordinary outcome of doing the job.
+ */
+function TaskReminderNote({ reminders }: { reminders: TaskReminderRow[] }) {
+  const shown = reminders.filter((r) => r.status !== "cancelled");
+  if (shown.length === 0) return null;
+
+  return (
+    <div className="mt-xs flex flex-col gap-[2px]">
+      {shown.map((r) => (
+        <span
+          key={r.channel}
+          className={
+            "inline-flex items-center gap-xs text-label-sm " +
+            (r.status === "failed" ? "text-error" : "text-on-surface-variant")
+          }
+        >
+          <span className="material-symbols-outlined" style={{ fontSize: 14 }} aria-hidden>
+            {r.status === "sent" ? "mark_email_read" : r.status === "failed" ? "error" : "schedule_send"}
+          </span>
+          {reminderStatusLabel(r)}
+        </span>
+      ))}
     </div>
   );
 }
@@ -2583,6 +2657,7 @@ function TaskItem({
         <TaskEditDialog
           task={{ subject: task.subject, dueAt: task.dueAt, priority: task.priority, assignedToId: task.assignedToId, note: task.note }}
           bdes={bdes}
+          reminders={task.reminders}
           busy={editBusy}
           error={editError}
           onCancel={() => {
@@ -2627,6 +2702,7 @@ function TaskItem({
           )}
         </div>
         {task.note && <p className="mt-xs text-label-sm text-on-surface-variant whitespace-pre-wrap">{task.note}</p>}
+        <TaskReminderNote reminders={task.reminders} />
       </div>
       {canEdit && (
         <span className="flex items-center gap-xs flex-shrink-0">

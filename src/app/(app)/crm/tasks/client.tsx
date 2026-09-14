@@ -9,6 +9,7 @@ import { listParam, applyFilterPatch } from "@/lib/filter-params";
 import { DEFAULT_STATUS_COLOR } from "@/lib/crm";
 import { NextStepDialog, type NextStepPayload } from "@/components/crm/NextStepDialog";
 import { TaskEditDialog, type TaskEditPayload } from "@/components/crm/TaskEditDialog";
+import { reminderStatusLabel } from "@/lib/crm-task-reminders";
 
 export type BdeOpt = { userId: string; displayName: string; username: string; role: string };
 export type TasksAccess = { isAdmin: boolean; isBde: boolean; userId: string };
@@ -283,6 +284,7 @@ export function TasksBoard({
             note: editingTask.note,
           }}
           bdes={bdes}
+          reminders={editingTask.reminders}
           busy={editBusy}
           error={editError}
           onCancel={() => {
@@ -511,6 +513,23 @@ export function TasksBoard({
                           </span>
                         </div>
                         {t.note && <span className="block text-label-sm text-on-surface-variant truncate">{t.note}</span>}
+                        {/* A queued candidate-facing message is the one thing on
+                            this row that acts on its own — worth a line where
+                            the task is actually worked. `cancelled` is silent:
+                            it is the ordinary result of doing the job. */}
+                        {t.reminders
+                          .filter((r) => r.status !== "cancelled")
+                          .map((r) => (
+                            <span
+                              key={r.channel}
+                              className={
+                                "block text-label-sm truncate " +
+                                (r.status === "failed" ? "text-error" : "text-on-surface-variant")
+                              }
+                            >
+                              {reminderStatusLabel(r)}
+                            </span>
+                          ))}
                       </Td>
                       <Td className="whitespace-nowrap font-semibold">
                         <Link href={`/crm/leads/${t.lead.id}`} className="text-on-surface hover:text-primary hover:underline">
