@@ -131,7 +131,10 @@ export function TaskRemindersCard() {
     );
   }
 
+  const dirty = JSON.stringify(form) !== JSON.stringify(data.config);
+
   function patch(next: Partial<TaskReminderConfig>) {
+    setNote(null);
     setForm((f) => (f ? { ...f, ...next } : f));
   }
 
@@ -151,6 +154,7 @@ export function TaskRemindersCard() {
     }
     const d = await r.json();
     setForm(d.config);
+    setData((prev) => (prev ? { ...prev, config: d.config } : prev));
     setNote("Saved.");
   }
 
@@ -175,15 +179,24 @@ export function TaskRemindersCard() {
           </p>
         </div>
         <span className="flex items-center gap-sm flex-shrink-0">
+          {dirty && (
+            <span className="px-sm h-7 inline-flex items-center rounded-full text-label-sm font-semibold border border-error/40 bg-error/5 text-error">
+              Unsaved
+            </span>
+          )}
+          {/* Reads the SAVED config, never the form. Reflecting unsaved state
+              here made ticking the box flip the pill to "On", so the card looked
+              saved when nothing had been persisted — and the feature stayed off
+              with no sign of it. */}
           <span
             className={
               "px-sm h-7 inline-flex items-center rounded-full text-label-sm font-semibold border " +
-              (form.enabled
+              (data.config.enabled
                 ? "bg-primary/10 text-primary border-primary/30"
                 : "bg-surface-container-high text-on-surface-variant border-outline-variant")
             }
           >
-            {form.enabled ? "On" : "Off"}
+            {data.config.enabled ? "On" : "Off"}
           </span>
           <span className="material-symbols-outlined text-on-surface-variant" style={{ fontSize: 20 }} aria-hidden>
             {open ? "expand_less" : "expand_more"}
@@ -403,8 +416,11 @@ export function TaskRemindersCard() {
 
           <div className="flex items-center justify-end gap-md pt-md border-t border-outline-variant">
             {note && <span className="text-label-sm text-on-surface-variant">{note}</span>}
-            <button type="button" onClick={save} disabled={busy} className={primaryBtn + " h-9"}>
-              {busy ? "Saving…" : "Save"}
+            {dirty && !note && (
+              <span className="text-label-sm text-error">Nothing here takes effect until you save.</span>
+            )}
+            <button type="button" onClick={save} disabled={busy || !dirty} className={primaryBtn + " h-9"}>
+              {busy ? "Saving…" : dirty ? "Save" : "Saved"}
             </button>
           </div>
         </div>
