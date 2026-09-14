@@ -42,6 +42,7 @@ import {
   CRM_TASK_REMINDER_OVERRIDES_KEY,
   CRM_TASK_REMINDER_COOLDOWN_KEY,
   CRM_TASK_REMINDER_CHANNELS_KEY,
+  CRM_TASK_REMINDER_CONSULTANTS_KEY,
 } from "./app-settings";
 import {
   reminderFireAt,
@@ -52,6 +53,7 @@ import {
   buildTaskMergeVars,
   fillTemplateSlots,
   parseTaskReminderConfig,
+  isConsultantEnrolled,
   TASK_REMINDER_CHANNELS,
   type TaskReminderChannel,
   type TaskReminderConfig,
@@ -84,22 +86,40 @@ const STRANDED_AFTER_MS = 15 * 60_000;
 // ── Configuration ─────────────────────────────────────────────────────────────
 
 export async function getTaskReminderConfig(): Promise<TaskReminderConfig> {
-  const [enabled, waTemplate, waVariables, emailTemplateId, overrides, cooldownHours, defaultChannels] =
-    await Promise.all([
-      getSetting(CRM_TASK_REMINDER_ENABLED_KEY).catch(() => null),
-      getSetting(CRM_TASK_REMINDER_WA_TEMPLATE_KEY).catch(() => null),
-      getSetting(CRM_TASK_REMINDER_WA_VARS_KEY).catch(() => null),
-      getSetting(CRM_TASK_REMINDER_EMAIL_TEMPLATE_KEY).catch(() => null),
-      getSetting(CRM_TASK_REMINDER_OVERRIDES_KEY).catch(() => null),
-      getSetting(CRM_TASK_REMINDER_COOLDOWN_KEY).catch(() => null),
-      getSetting(CRM_TASK_REMINDER_CHANNELS_KEY).catch(() => null),
-    ]);
+  const [
+    enabled,
+    waTemplate,
+    waVariables,
+    emailTemplateId,
+    overrides,
+    cooldownHours,
+    defaultChannels,
+    consultantIds,
+  ] = await Promise.all([
+    getSetting(CRM_TASK_REMINDER_ENABLED_KEY).catch(() => null),
+    getSetting(CRM_TASK_REMINDER_WA_TEMPLATE_KEY).catch(() => null),
+    getSetting(CRM_TASK_REMINDER_WA_VARS_KEY).catch(() => null),
+    getSetting(CRM_TASK_REMINDER_EMAIL_TEMPLATE_KEY).catch(() => null),
+    getSetting(CRM_TASK_REMINDER_OVERRIDES_KEY).catch(() => null),
+    getSetting(CRM_TASK_REMINDER_COOLDOWN_KEY).catch(() => null),
+    getSetting(CRM_TASK_REMINDER_CHANNELS_KEY).catch(() => null),
+    getSetting(CRM_TASK_REMINDER_CONSULTANTS_KEY).catch(() => null),
+  ]);
 
   // The parsing itself is pure and lives beside the rest of the rules; this
   // function is only the read. A hand-edited setting that no longer parses falls
   // back to its default and is logged rather than taking the feature down.
   return parseTaskReminderConfig(
-    { enabled, waTemplate, waVariables, emailTemplateId, overrides, cooldownHours, defaultChannels },
+    {
+      enabled,
+      waTemplate,
+      waVariables,
+      emailTemplateId,
+      overrides,
+      cooldownHours,
+      defaultChannels,
+      consultantIds,
+    },
     (key, value) => logger.warn("crm_task_reminder_setting_unparseable", { key, value: value.slice(0, 200) }),
   );
 }
@@ -112,6 +132,7 @@ const TASK_WITH_LEAD = {
   dueAt: true,
   status: true,
   leadId: true,
+  assignedToId: true,
   lead: {
     select: {
       id: true,
@@ -211,6 +232,22 @@ export async function armTaskReminders(opts: {
   }
 
   const config = await getTaskReminderConfig();
+
+  // The allow-list, checked before anything is armed. A consultant who is not
+  // enrolled gets no reminders on their tasks at all, and any already armed are
+  // stood down — removing someone from the list has to take effect on the tasks
+  // they already booked, not just future ones.
+  if (!isConsultantEnrolled(config, task.assignedToId)) {
+    await db.crmTaskReminder.updateMany({
+      where: { taskId: opts.taskId, status: "pending" },
+      data: { status: "cancelled" },
+    });
+    for (const channel of opts.channels) {
+      result.skipped.push({ channel, reason: "consultant_not_enrolled" });
+    }
+    return result;
+  }
+
   const templates = resolveTemplates(config, task.subject);
   const vars = mergeVarsFor(task);
   const wanted = new Set(opts.channels);
@@ -344,6 +381,13 @@ export type ChannelPreview = {
 export type TaskReminderPreview = {
   enabled: boolean;
   defaultChannels: TaskReminderChannel[];
+  /**
+   * The enrolled consultants. Sent to the browser because the composer's
+   * "Assign to" dropdown can change who the task belongs to, so whether a
+   * reminder is possible is a question only the client can answer as it is
+   * being filled in.
+   */
+  consultantIds: string[];
   /** Task type → what each channel would send for it. */
   byTaskType: Record<string, Record<TaskReminderChannel, ChannelPreview>>;
 };
@@ -387,6 +431,7 @@ export async function previewTaskReminders(
   const empty: TaskReminderPreview = {
     enabled: config.enabled,
     defaultChannels: config.defaultChannels,
+    consultantIds: config.consultantIds,
     byTaskType: {},
   };
   if (!lead || !config.enabled) return empty;
@@ -713,6 +758,13 @@ async function evaluate(reminder: DueReminder, now: Date, config: TaskReminderCo
   // A drain that has been down for days should not message people about last
   // week's tasks.
   if (now.getTime() - reminder.fireAt.getTime() > STALE_AFTER_MS) return { kind: "cancel" };
+
+  // Re-checked here and not merely trusted from arm time: a task can be
+  // reassigned after it is armed, and an admin can withdraw a consultant from
+  // the list at any point. Either way the message must not go out.
+  if (!isConsultantEnrolled(config, task.assignedToId)) {
+    return { kind: "skip", reason: "consultant_not_enrolled" };
+  }
 
   // A LOST lead is never chased. Deliberately only `lost`: a won or enrolled
   // candidate still legitimately owes documents and payments, and those are

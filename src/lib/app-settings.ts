@@ -196,6 +196,13 @@ export const CRM_TASK_REMINDER_EMAIL_TEMPLATE_KEY = "crm_task_reminder_email_tem
 export const CRM_TASK_REMINDER_OVERRIDES_KEY = "crm_task_reminder_overrides";
 export const CRM_TASK_REMINDER_COOLDOWN_KEY = "crm_task_reminder_cooldown_hours";
 export const CRM_TASK_REMINDER_CHANNELS_KEY = "crm_task_reminder_default_channels";
+/**
+ * Comma-separated user ids of the consultants whose tasks may send automatic
+ * reminders. AN ALLOW-LIST: empty means NOBODY, so switching the feature on
+ * cannot start messaging every consultant's candidates at once. Matched against
+ * the TASK's assignee — see `consultantIds` in src/lib/crm-task-reminders.ts.
+ */
+export const CRM_TASK_REMINDER_CONSULTANTS_KEY = "crm_task_reminder_consultants";
 
 export async function getSetting(key: string): Promise<string | null> {
   const row = await prisma.appSetting.findUnique({ where: { key }, select: { value: true } });

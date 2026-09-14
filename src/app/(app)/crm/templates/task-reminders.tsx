@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useState } from "react";
+import { MultiSelect } from "@/components/MultiSelect";
 import {
   CHANNEL_LABELS,
   TASK_REMINDER_CHANNELS,
@@ -39,6 +40,7 @@ type WaTpl = {
 };
 type EmailTpl = { id: string; name: string; subject: string | null; body: string };
 type MergeField = { token: string; label: string; sample: string };
+type Bde = { userId: string; displayName: string; username: string; role: string };
 
 type Payload = {
   config: TaskReminderConfig;
@@ -47,6 +49,7 @@ type Payload = {
   emailTemplates: EmailTpl[];
   taskTypes: string[];
   mergeFields: MergeField[];
+  bdes: Bde[];
 };
 
 const card = "bg-surface-container-lowest border border-outline-variant rounded-xl shadow-sm";
@@ -221,6 +224,52 @@ export function TaskRemindersCard() {
               </span>
             </span>
           </label>
+
+          {/* ── Who it runs for ──────────────────────────────────────── */}
+          <section className="space-y-sm">
+            <h4 className="text-label-md font-semibold text-on-surface">Consultants</h4>
+            <p className="text-label-sm text-on-surface-variant">
+              Reminders are sent only for tasks assigned to these consultants. Nobody selected means no
+              reminders go out at all — the feature stays inert however it is configured below.
+            </p>
+            <div className="flex flex-wrap items-center gap-sm">
+              <MultiSelect
+                options={data.bdes.map((b) => ({ value: b.userId, label: b.displayName, hint: b.role.toUpperCase() }))}
+                selected={form.consultantIds}
+                onChange={(next) => patch({ consultantIds: next })}
+                placeholder="No consultants selected"
+                title="Consultants whose tasks send automatic reminders"
+                icon="group"
+                searchable
+              />
+              <button
+                type="button"
+                onClick={() => patch({ consultantIds: data.bdes.map((b) => b.userId) })}
+                className="h-9 px-md rounded-lg border border-outline-variant text-label-sm font-semibold text-on-surface-variant hover:bg-surface-container-low transition"
+              >
+                Select all
+              </button>
+              {form.consultantIds.length > 0 && (
+                <button
+                  type="button"
+                  onClick={() => patch({ consultantIds: [] })}
+                  className="h-9 px-md rounded-lg border border-outline-variant text-label-sm font-semibold text-on-surface-variant hover:bg-surface-container-low transition"
+                >
+                  Clear
+                </button>
+              )}
+            </div>
+            {form.consultantIds.length === 0 ? (
+              <Warning tone="warn">
+                No consultant is selected, so no reminder will ever be sent. Pick at least one.
+              </Warning>
+            ) : (
+              <p className="text-label-sm text-on-surface-variant">
+                {form.consultantIds.length} of {data.bdes.length} consultants. This is a fixed list — someone
+                who joins later is not added automatically, so revisit it when the team changes.
+              </p>
+            )}
+          </section>
 
           {/* ── WhatsApp ─────────────────────────────────────────────── */}
           <section className="space-y-sm">

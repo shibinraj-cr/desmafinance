@@ -38,6 +38,8 @@ export type ChannelPreviewDTO = {
 export type TaskReminderPreviewDTO = {
   enabled: boolean;
   defaultChannels: TaskReminderChannel[];
+  /** Consultants whose tasks may send reminders. Empty means nobody. */
+  consultantIds: string[];
   byTaskType: Record<string, Record<TaskReminderChannel, ChannelPreviewDTO>>;
 };
 
@@ -45,6 +47,7 @@ export function TaskReminderFields({
   preview,
   taskType,
   dueDate,
+  assigneeId,
   selected,
   onChange,
 }: {
@@ -53,6 +56,12 @@ export function TaskReminderFields({
   taskType: string;
   /** The `YYYY-MM-DD` from the form, used to fill `{due_date}` live. */
   dueDate: string;
+  /**
+   * Who the task will belong to once saved. Reminders run per consultant, and
+   * the composer's "Assign to" can change this while the form is open — so the
+   * answer has to follow the dropdown rather than be settled on the server.
+   */
+  assigneeId: string | null;
   selected: TaskReminderChannel[];
   onChange: (next: TaskReminderChannel[]) => void;
 }) {
@@ -74,6 +83,24 @@ export function TaskReminderFields({
   if (!preview.enabled) return null;
   // No task type chosen yet — there is nothing to preview and nothing to arm.
   if (!taskType || !channels) return null;
+
+  // The consultant gate. Said plainly rather than by showing two disabled
+  // boxes: the reason is about who the task belongs to, and the fix is an admin
+  // one, so a consultant hunting a missing email address would be looking in
+  // entirely the wrong place.
+  if (!assigneeId || !preview.consultantIds.includes(assigneeId)) {
+    return (
+      <p className="text-label-sm text-on-surface-variant inline-flex items-start gap-xs">
+        <span className="material-symbols-outlined flex-shrink-0" style={{ fontSize: 16 }} aria-hidden>
+          info
+        </span>
+        <span>
+          No automatic reminder: this task’s consultant isn’t set up for them. An admin can enable it under
+          CRM → Templates → Task auto-reminders.
+        </span>
+      </p>
+    );
+  }
 
   function toggle(channel: TaskReminderChannel) {
     onChange(selected.includes(channel) ? selected.filter((c) => c !== channel) : [...selected, channel]);

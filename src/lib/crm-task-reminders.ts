@@ -104,7 +104,8 @@ export type ReminderSkipReason =
   | "cooldown"
   | "lead_closed"
   | "not_configured"
-  | "email_quota";
+  | "email_quota"
+  | "consultant_not_enrolled";
 
 export const SKIP_REASON_LABELS: Record<ReminderSkipReason, string> = {
   no_phone: "No usable phone number on the lead.",
@@ -115,6 +116,7 @@ export const SKIP_REASON_LABELS: Record<ReminderSkipReason, string> = {
   lead_closed: "The lead was marked lost.",
   not_configured: "No default template is configured for this channel.",
   email_quota: "The daily email quota is exhausted.",
+  consultant_not_enrolled: "This task's consultant is not set up for automatic reminders.",
 };
 
 /** The lead facts a skip decision is made from. */
@@ -205,6 +207,20 @@ export type TaskReminderConfig = {
   cooldownHours: number;
   /** Channels ticked by default in the composer. */
   defaultChannels: TaskReminderChannel[];
+  /**
+   * The consultants whose tasks may send automatic reminders, by user id.
+   *
+   * AN ALLOW-LIST, AND EMPTY MEANS NOBODY. The opposite reading — empty means
+   * everybody — would make switching the master toggle on start messaging the
+   * candidates of every consultant in the company at once, which is not a thing
+   * anybody should be able to do by accident. It also matches how template
+   * access already works (see wa/template-access.ts: default is deny).
+   *
+   * Matched against the TASK's assignee rather than the lead's owner: the
+   * reminder exists because that person did not do the task, so they are the one
+   * whose candidates it speaks to.
+   */
+  consultantIds: string[];
 };
 
 export const EMPTY_CONFIG: TaskReminderConfig = {
@@ -215,6 +231,7 @@ export const EMPTY_CONFIG: TaskReminderConfig = {
   overrides: {},
   cooldownHours: DEFAULT_COOLDOWN_HOURS,
   defaultChannels: ["whatsapp", "email"],
+  consultantIds: [],
 };
 
 /** The seven AppSetting values this feature is configured by, as stored. */
@@ -226,6 +243,7 @@ export type RawTaskReminderSettings = {
   overrides: string | null;
   cooldownHours: string | null;
   defaultChannels: string | null;
+  consultantIds: string | null;
 };
 
 function parseJsonRecord<T>(raw: string | null, onBadJson?: (raw: string) => void): T | null {
@@ -271,6 +289,12 @@ export function parseTaskReminderConfig(
     // An unset list means "both", not "none" — the feature has its own on/off
     // switch, and a blank list would make it inert while appearing enabled.
     defaultChannels: picked.length ? picked : [...TASK_REMINDER_CHANNELS],
+    // Unlike defaultChannels, an unset list here means NOBODY — see the field
+    // note. Switching the feature on must not silently enrol everyone.
+    consultantIds: (raw.consultantIds ?? "")
+      .split(",")
+      .map((id) => id.trim())
+      .filter(Boolean),
   };
 }
 
@@ -323,15 +347,39 @@ export function availableChannels(
   config: TaskReminderConfig,
   taskSubject: string,
   lead: ReminderLeadFacts,
+  assigneeId?: string | null,
 ): Record<TaskReminderChannel, { available: boolean; reason: ReminderSkipReason | null }> {
   const templates = resolveTemplates(config, taskSubject);
   const out = {} as Record<TaskReminderChannel, { available: boolean; reason: ReminderSkipReason | null }>;
+  // Enrolment is a property of the consultant, not the channel, so it closes
+  // both at once and is checked first — "this consultant is not set up" is the
+  // useful thing to say, not "no email address".
+  const enrolled = assigneeId === undefined || isConsultantEnrolled(config, assigneeId);
   for (const channel of TASK_REMINDER_CHANNELS) {
     const configured = channel === "whatsapp" ? templates.waTemplate : templates.emailTemplateId;
-    const reason = !configured ? "not_configured" : skipReasonForChannel(channel, lead);
+    const reason = !enrolled
+      ? "consultant_not_enrolled"
+      : !configured
+        ? "not_configured"
+        : skipReasonForChannel(channel, lead);
     out[channel] = { available: reason === null, reason };
   }
   return out;
+}
+
+/**
+ * May this task's consultant send automatic reminders?
+ *
+ * A task with no assignee is never eligible: the routes fall back to the lead's
+ * owner or the creator when one is not given, but by the time a reminder fires
+ * there is either an assignee on the row or nobody to speak for it.
+ */
+export function isConsultantEnrolled(
+  config: TaskReminderConfig,
+  assigneeId: string | null | undefined,
+): boolean {
+  if (!assigneeId) return false;
+  return config.consultantIds.includes(assigneeId);
 }
 
 // ── Merge fields ──────────────────────────────────────────────────────────────
