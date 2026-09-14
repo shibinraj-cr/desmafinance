@@ -56,6 +56,41 @@ describe("requiresNextStepOnComplete — mandatory next step on an active lead",
       }),
     ).toBe(true);
   });
+
+  it("exempts ANY parked stage — a centralised-marketing lead needs no manual follow-up", () => {
+    expect(
+      requiresNextStepOnComplete({
+        completing: true,
+        leadKind: "active",
+        remainingOpenTasks: 0,
+        statusCode: "centralised_marketing",
+        parked: true,
+      }),
+    ).toBe(false);
+  });
+
+  it("lets the parked flag win over the legacy code carve-out in both directions", () => {
+    // An un-parked Re-marketing stage goes back to needing a next step…
+    expect(
+      requiresNextStepOnComplete({
+        completing: true,
+        leadKind: "active",
+        remainingOpenTasks: 0,
+        statusCode: "re_marketing",
+        parked: false,
+      }),
+    ).toBe(true);
+    // …and an unknown stage that is parked is exempt.
+    expect(
+      requiresNextStepOnComplete({
+        completing: true,
+        leadKind: "active",
+        remainingOpenTasks: 0,
+        statusCode: "some_new_stage",
+        parked: true,
+      }),
+    ).toBe(false);
+  });
 });
 
 describe("resolveAssigneeFilter", () => {

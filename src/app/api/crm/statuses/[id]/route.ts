@@ -18,6 +18,9 @@ const PatchSchema = z.object({
   displayOrder: z.number().int().min(0).optional(),
   color: z.string().trim().max(20).nullable().optional(),
   isDefault: z.boolean().optional(),
+  // A parked stage never nags on the Team Activity attention list and never
+  // forces a next-step task — see CrmLeadStatus.parked / crm-team.ts.
+  parked: z.boolean().optional(),
   active: z.boolean().optional(),
 });
 
@@ -38,6 +41,7 @@ export const PATCH = withApiHandler(async (req: Request, { params }: Ctx) => {
   if (d.displayOrder !== undefined) update.displayOrder = d.displayOrder;
   if (d.color !== undefined) update.color = d.color;
   if (d.active !== undefined) update.active = d.active;
+  if (d.parked !== undefined) update.parked = d.parked;
   if (d.code !== undefined && d.code.toLowerCase() !== existing.code) {
     const code = d.code.toLowerCase();
     const clash = await prisma.crmLeadStatus.findUnique({ where: { code } });

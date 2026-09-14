@@ -2406,6 +2406,13 @@ model CrmLeadStatus {
   color        String?
   // The status new leads start in. Exactly one row should have this true.
   isDefault    Boolean  @default(false)
+  // A "parked" stage is a deliberate resting state (centralised marketing /
+  // re-marketing): its leads are nurtured centrally on their own cadence, not
+  // worked day-to-day by a BDE. Parked stages never nag on the Team Activity
+  // attention list (no SLA breach / stuck / abandoned / no-next-step) and never
+  // force a follow-up task when the last open task is completed. Admin-togglable
+  // from /crm/settings so a new parked stage needs no code change.
+  parked       Boolean  @default(false)
   active       Boolean  @default(true)
   createdAt    DateTime @default(now())
   updatedAt    DateTime @updatedAt

@@ -683,14 +683,17 @@ export function serializeTask(t: TaskWithRels): TaskRow {
  * accompanied by a new follow-up when ALL of these hold:
  *   - it is a completion (not a reopen or a plain field edit),
  *   - the lead is still ACTIVE (won/lost leads need no further action),
- *   - the lead is NOT in Re-marketing, and
+ *   - the lead's stage is NOT parked, and
  *   - no other open task remains once this one is done.
  *
- * Re-marketing is exempt because that stage is nurtured by the automated drip
- * campaign (crm-remarketing), so the "never idle" guarantee is met by the
- * campaign, not a manual task — a BDE can close the last task without booking a
- * follow-up. `statusCode` is optional so any caller that doesn't pass it keeps
- * the original behaviour.
+ * A parked stage (`CrmLeadStatus.parked` — Re-marketing, Centralised Marketing,
+ * anything an admin ticks in `/crm/settings`) is exempt because those leads are
+ * nurtured centrally on their own cadence — by the automated drip campaign
+ * (crm-remarketing) or the marketing desk — so the "never idle" guarantee is met
+ * there, not by a BDE's manual task. A BDE can close the last task without
+ * booking a follow-up. Both inputs are optional: `parked` is the real flag,
+ * `statusCode` keeps the original Re-marketing carve-out for callers that only
+ * have the code, and a caller that passes neither keeps the original behaviour.
  *
  * Enforced in the task-complete route; pure so the exact exemptions are testable.
  */
@@ -699,8 +702,9 @@ export function requiresNextStepOnComplete(opts: {
   leadKind: string; // 'active' | 'won' | 'lost'
   remainingOpenTasks: number; // open tasks on the lead EXCLUDING the one being completed
   statusCode?: string;
+  parked?: boolean;
 }): boolean {
-  if (opts.statusCode === REMARKETING_STATUS_CODE) return false;
+  if (opts.parked ?? opts.statusCode === REMARKETING_STATUS_CODE) return false;
   return opts.completing && opts.leadKind === "active" && opts.remainingOpenTasks === 0;
 }
 

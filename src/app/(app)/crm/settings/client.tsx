@@ -17,6 +17,7 @@ type StatusRow = {
   displayOrder: number;
   color: string | null;
   isDefault: boolean;
+  parked: boolean;
   active: boolean;
   leadCount: number;
 };
@@ -148,7 +149,12 @@ function StatusEditor({ statuses }: { statuses: StatusRow[] }) {
       <div className="flex items-center justify-between px-lg py-md border-b border-outline-variant">
         <div>
           <h3 className="text-h3 text-on-surface">Lead statuses</h3>
-          <p className="text-label-sm text-on-surface-variant">Pipeline stages & dispositions shown on the stage bar.</p>
+          <p className="text-label-sm text-on-surface-variant">
+            Pipeline stages &amp; dispositions shown on the stage bar. A <span className="font-semibold">parked</span> stage
+            (centralised marketing / re-marketing) is nurtured centrally: its leads never appear on the Team Activity
+            attention list — no SLA, stuck, abandoned or no-next-step flag — and completing their last task never forces a
+            follow-up.
+          </p>
         </div>
         <NewStatusButton />
       </div>
@@ -162,6 +168,7 @@ function StatusEditor({ statuses }: { statuses: StatusRow[] }) {
               <Th className="text-left">Kind</Th>
               <Th className="text-left">Colour</Th>
               <Th className="text-left">Default</Th>
+              <Th className="text-left">Parked</Th>
               <Th className="text-left">Active</Th>
               <Th className="text-right">Actions</Th>
             </tr>
@@ -291,6 +298,23 @@ function StatusRowView({ status }: { status: StatusRow }) {
         <button
           type="button"
           disabled={busy}
+          onClick={() => patch({ parked: !status.parked })}
+          className={status.parked ? "text-accent" : "text-on-surface-variant hover:text-accent"}
+          title={
+            status.parked
+              ? "Parked — no SLA / attention flags, no mandatory next-step task. Click to un-park."
+              : "Click to park: no SLA / attention flags, no mandatory next-step task."
+          }
+        >
+          <span className="material-symbols-outlined" style={{ fontSize: 20 }}>
+            {status.parked ? "local_parking" : "remove"}
+          </span>
+        </button>
+      </Td>
+      <Td>
+        <button
+          type="button"
+          disabled={busy}
           onClick={() => patch({ active: !status.active })}
           className="text-on-surface-variant hover:text-accent"
           title={status.active ? "Deactivate" : "Activate"}
@@ -357,7 +381,7 @@ function NewStatusButton() {
   const [mounted, setMounted] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [form, setForm] = useState({ code: "", label: "", kind: "active", displayOrder: 0, color: "", isDefault: false });
+  const [form, setForm] = useState({ code: "", label: "", kind: "active", displayOrder: 0, color: "", isDefault: false, parked: false });
 
   useEffect(() => setMounted(true), []);
 
@@ -376,7 +400,7 @@ function NewStatusButton() {
       setError(statusErrors[d.error ?? ""] ?? "Failed to create.");
       return;
     }
-    setForm({ code: "", label: "", kind: "active", displayOrder: 0, color: "", isDefault: false });
+    setForm({ code: "", label: "", kind: "active", displayOrder: 0, color: "", isDefault: false, parked: false });
     setOpen(false);
     router.refresh();
   }
@@ -441,6 +465,20 @@ function NewStatusButton() {
               <label className="flex items-center gap-xs text-body-md">
                 <input type="checkbox" checked={form.isDefault} onChange={(e) => setForm({ ...form, isDefault: e.target.checked })} />
                 Make this the default status for new leads
+              </label>
+              <label className="flex items-start gap-xs text-body-md">
+                <input
+                  type="checkbox"
+                  className="mt-[3px]"
+                  checked={form.parked}
+                  onChange={(e) => setForm({ ...form, parked: e.target.checked })}
+                />
+                <span>
+                  Parked stage
+                  <span className="block text-label-sm text-on-surface-variant">
+                    Nurtured centrally — no SLA or attention flags, and no mandatory next-step task.
+                  </span>
+                </span>
               </label>
               <div className="flex justify-end gap-base">
                 <button type="button" className={secondaryBtn} disabled={busy} onClick={() => setOpen(false)}>
