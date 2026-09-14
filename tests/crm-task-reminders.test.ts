@@ -12,6 +12,7 @@ import {
   EMPTY_CONFIG,
   DEFAULT_COOLDOWN_HOURS,
   parseTaskReminderConfig,
+  isConsultantEnrolled,
   type TaskReminderConfig,
   type ReminderLeadFacts,
   type RawTaskReminderSettings,
@@ -276,6 +277,7 @@ describe("parseTaskReminderConfig", () => {
     overrides: null,
     cooldownHours: null,
     defaultChannels: null,
+    consultantIds: null,
     ...over,
   });
 
@@ -286,6 +288,7 @@ describe("parseTaskReminderConfig", () => {
         overrides: '{"Payment Request":{"emailTemplateId":"tmpl_pay"}}',
         cooldownHours: "48",
         defaultChannels: "whatsapp",
+        consultantIds: "usr_1,usr_2",
       }),
     );
     expect(c).toEqual({
@@ -296,6 +299,7 @@ describe("parseTaskReminderConfig", () => {
       overrides: { "Payment Request": { emailTemplateId: "tmpl_pay" } },
       cooldownHours: 48,
       defaultChannels: ["whatsapp"],
+      consultantIds: ["usr_1", "usr_2"],
     });
   });
 
@@ -364,5 +368,72 @@ describe("reminderStatusLabel — in-flight", () => {
         skipReason: null,
       }),
     ).toBe("Email reminder sending now");
+  });
+});
+
+describe("isConsultantEnrolled", () => {
+  const enrolled = (ids: string[]) => ({ ...EMPTY_CONFIG, enabled: true, consultantIds: ids });
+
+  it("allows only the listed consultants", () => {
+    const c = enrolled(["usr_a", "usr_b"]);
+    expect(isConsultantEnrolled(c, "usr_a")).toBe(true);
+    expect(isConsultantEnrolled(c, "usr_b")).toBe(true);
+    expect(isConsultantEnrolled(c, "usr_c")).toBe(false);
+  });
+
+  // The decision that matters most: an empty list must mean NOBODY. Read the
+  // other way, switching the master toggle on would start messaging every
+  // consultant's candidates at once.
+  it("treats an empty list as nobody, not everybody", () => {
+    expect(isConsultantEnrolled(enrolled([]), "usr_a")).toBe(false);
+  });
+
+  it("never enrols an unassigned task", () => {
+    const c = enrolled(["usr_a"]);
+    expect(isConsultantEnrolled(c, null)).toBe(false);
+    expect(isConsultantEnrolled(c, undefined)).toBe(false);
+    expect(isConsultantEnrolled(c, "")).toBe(false);
+  });
+});
+
+describe("availableChannels — consultant gate", () => {
+  const base = {
+    ...EMPTY_CONFIG,
+    enabled: true,
+    waTemplate: "task_follow_up:en",
+    emailTemplateId: "tmpl_email_1",
+    consultantIds: ["usr_a"],
+  };
+  const reachable: ReminderLeadFacts = {
+    phoneE164: "+919876543210",
+    email: "c@example.com",
+    whatsappOptedOutAt: null,
+    whatsappUndeliverableAt: null,
+  };
+
+  it("opens both channels for an enrolled consultant", () => {
+    const out = availableChannels(base, "Follow-up Call", reachable, "usr_a");
+    expect(out.whatsapp.available).toBe(true);
+    expect(out.email.available).toBe(true);
+  });
+
+  it("closes both channels for a consultant who is not enrolled", () => {
+    const out = availableChannels(base, "Follow-up Call", reachable, "usr_z");
+    expect(out.whatsapp).toEqual({ available: false, reason: "consultant_not_enrolled" });
+    expect(out.email).toEqual({ available: false, reason: "consultant_not_enrolled" });
+  });
+
+  // Enrolment is about the consultant, not the channel, so it is the useful
+  // thing to report — "no email address" would send someone hunting the wrong bug.
+  it("reports enrolment ahead of a lead-level problem", () => {
+    const out = availableChannels(base, "Follow-up Call", { ...reachable, email: null }, "usr_z");
+    expect(out.email.reason).toBe("consultant_not_enrolled");
+  });
+
+  it("skips the gate entirely when no assignee is supplied", () => {
+    // Callers that genuinely have no assignee in hand (the settings preview)
+    // still get the template/lead answers rather than a blanket refusal.
+    const out = availableChannels(base, "Follow-up Call", reachable);
+    expect(out.whatsapp.available).toBe(true);
   });
 });

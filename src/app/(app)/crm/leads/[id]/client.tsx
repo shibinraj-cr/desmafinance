@@ -380,6 +380,7 @@ export function LeadDetail({
           canEdit={canEdit}
           bdes={masters.bdes}
           defaultAssigneeId={lead.assignedTo?.id ?? null}
+          currentUserId={access.userId}
           reminders={taskReminders}
         />
       )}
@@ -2563,6 +2564,7 @@ function TasksPanel({
   canEdit,
   bdes,
   defaultAssigneeId,
+  currentUserId,
   reminders,
 }: {
   leadId: string;
@@ -2571,9 +2573,16 @@ function TasksPanel({
   canEdit: boolean;
   bdes: BdeOpt[];
   defaultAssigneeId: string | null;
+  currentUserId: string | null;
   reminders: TaskReminderPreviewDTO;
 }) {
   const open = tasks.filter((t) => t.status === "open");
+  // The next-step dialog books a task for the lead's owner (or, unassigned, the
+  // person completing it) — the same fallback the PATCH route applies. Whether
+  // THAT person is enrolled decides if the dialog may offer reminders at all.
+  const nextStepAssignee = defaultAssigneeId || currentUserId;
+  const nextStepEnrolled =
+    reminders.enabled && !!nextStepAssignee && reminders.consultantIds.includes(nextStepAssignee);
   const done = tasks.filter((t) => t.status === "done");
 
   return (
@@ -2586,7 +2595,13 @@ function TasksPanel({
       </div>
 
       {canEdit ? (
-        <TaskComposer leadId={leadId} bdes={bdes} defaultAssigneeId={defaultAssigneeId} reminders={reminders} />
+        <TaskComposer
+          leadId={leadId}
+          bdes={bdes}
+          defaultAssigneeId={defaultAssigneeId}
+          currentUserId={currentUserId}
+          reminders={reminders}
+        />
       ) : (
         <p className="text-label-sm text-on-surface-variant inline-flex items-center gap-xs">
           <span className="material-symbols-outlined" style={{ fontSize: 16 }}>
@@ -2603,7 +2618,16 @@ function TasksPanel({
         ) : (
           <ul className="space-y-base">
             {open.map((t) => (
-              <TaskItem key={t.id} leadId={leadId} leadName={leadName} task={t} canEdit={canEdit} bdes={bdes} reminders={reminders} />
+              <TaskItem
+                key={t.id}
+                leadId={leadId}
+                leadName={leadName}
+                task={t}
+                canEdit={canEdit}
+                bdes={bdes}
+                reminders={reminders}
+                nextStepEnrolled={nextStepEnrolled}
+              />
             ))}
           </ul>
         )}
@@ -2614,7 +2638,16 @@ function TasksPanel({
           <div className="text-label-sm uppercase tracking-wider text-on-surface-variant">Completed</div>
           <ul className="space-y-base">
             {done.map((t) => (
-              <TaskItem key={t.id} leadId={leadId} leadName={leadName} task={t} canEdit={canEdit} bdes={bdes} reminders={reminders} />
+              <TaskItem
+                key={t.id}
+                leadId={leadId}
+                leadName={leadName}
+                task={t}
+                canEdit={canEdit}
+                bdes={bdes}
+                reminders={reminders}
+                nextStepEnrolled={nextStepEnrolled}
+              />
             ))}
           </ul>
         </div>
@@ -2627,11 +2660,14 @@ function TaskComposer({
   leadId,
   bdes,
   defaultAssigneeId,
+  currentUserId,
   reminders,
 }: {
   leadId: string;
   bdes: BdeOpt[];
   defaultAssigneeId: string | null;
+  /** Falls to the creator when the lead is unassigned — as the API does. */
+  currentUserId: string | null;
   reminders: TaskReminderPreviewDTO;
 }) {
   const router = useRouter();
@@ -2648,11 +2684,17 @@ function TaskComposer({
     reminders.defaultChannels,
   );
 
+  // Mirrors the create route's own fallback: an explicit pick, else the lead's
+  // owner, else the creator. Getting this wrong would show a reminder for a task
+  // that ends up belonging to somebody who is not enrolled.
+  const effectiveAssignee = assignee || defaultAssigneeId || currentUserId;
+  const enrolled = !!effectiveAssignee && reminders.consultantIds.includes(effectiveAssignee);
+
   const availableForType = useMemo(() => {
     const forType = reminders.byTaskType[subject];
-    if (!forType) return [] as TaskReminderChannel[];
+    if (!forType || !enrolled) return [] as TaskReminderChannel[];
     return reminderChannels.filter((c) => forType[c]?.available);
-  }, [reminders, subject, reminderChannels]);
+  }, [reminders, subject, reminderChannels, enrolled]);
 
   async function add() {
     if (!subject.trim() || busy) return;
@@ -2724,6 +2766,7 @@ function TaskComposer({
           preview={reminders}
           taskType={subject}
           dueDate={due}
+          assigneeId={effectiveAssignee}
           selected={reminderChannels}
           onChange={setReminderChannels}
         />
@@ -2790,6 +2833,7 @@ function TaskItem({
   leadName,
   bdes,
   reminders,
+  nextStepEnrolled,
 }: {
   leadId: string;
   task: TaskRow;
@@ -2797,6 +2841,8 @@ function TaskItem({
   leadName?: string | null;
   bdes: BdeOpt[];
   reminders: TaskReminderPreviewDTO;
+  /** Whether the consultant the next task would go to may send reminders. */
+  nextStepEnrolled: boolean;
 }) {
   const router = useRouter();
   const [busy, setBusy] = useState(false);
@@ -2880,7 +2926,7 @@ function TaskItem({
       {showNext && (
         <NextStepDialog
           leadName={leadName}
-          reminders={{ enabled: reminders.enabled, defaultChannels: reminders.defaultChannels }}
+          reminders={{ enabled: nextStepEnrolled, defaultChannels: reminders.defaultChannels }}
           busy={busy}
           error={nextError}
           onCancel={() => {

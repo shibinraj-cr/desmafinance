@@ -109,7 +109,11 @@ export default async function TasksPage({ searchParams }: { searchParams: SP }) 
           bdes={bdes}
           counts={counts}
           access={accessProps}
-          reminders={{ enabled: reminderConfig.enabled, defaultChannels: reminderConfig.defaultChannels }}
+          reminders={{
+            enabled: reminderConfig.enabled,
+            defaultChannels: reminderConfig.defaultChannels,
+            consultantIds: reminderConfig.consultantIds,
+          }}
         />
       </div>
     </>

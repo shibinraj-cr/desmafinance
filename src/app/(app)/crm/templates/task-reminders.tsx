@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useState } from "react";
+import { MultiSelect } from "@/components/MultiSelect";
 import {
   CHANNEL_LABELS,
   TASK_REMINDER_CHANNELS,
@@ -39,6 +40,7 @@ type WaTpl = {
 };
 type EmailTpl = { id: string; name: string; subject: string | null; body: string };
 type MergeField = { token: string; label: string; sample: string };
+type Bde = { userId: string; displayName: string; username: string; role: string };
 
 type Payload = {
   config: TaskReminderConfig;
@@ -47,6 +49,7 @@ type Payload = {
   emailTemplates: EmailTpl[];
   taskTypes: string[];
   mergeFields: MergeField[];
+  bdes: Bde[];
 };
 
 const card = "bg-surface-container-lowest border border-outline-variant rounded-xl shadow-sm";
@@ -69,10 +72,26 @@ export function TaskRemindersCard() {
   const [open, setOpen] = useState(false);
   const [busy, setBusy] = useState(false);
   const [note, setNote] = useState<string | null>(null);
+  const [loadError, setLoadError] = useState<string | null>(null);
 
   const load = useCallback(async () => {
+    setLoadError(null);
     const r = await fetch("/api/crm/task-reminders/settings").catch(() => null);
-    if (!r?.ok) return;
+    if (!r) {
+      setLoadError("Couldn’t reach the server.");
+      return;
+    }
+    if (!r.ok) {
+      // Said out loud rather than swallowed. This card is the ONLY way to turn
+      // the feature on, so a silent failure here looks identical to the feature
+      // not existing — and leaves an admin with nothing to act on.
+      setLoadError(
+        r.status === 403
+          ? "You don’t have permission to manage templates, so these settings are hidden."
+          : `Couldn’t load these settings (HTTP ${r.status}).`,
+      );
+      return;
+    }
     const d: Payload = await r.json();
     setData(d);
     setForm(d.config);
@@ -88,9 +107,37 @@ export function TaskRemindersCard() {
   );
   const waSlots = useMemo(() => slotsIn(chosenWa?.body ?? null), [chosenWa]);
 
-  if (!data || !form) return null;
+  // Never render nothing. An invisible card is indistinguishable from a missing
+  // feature, and this is where the feature is switched on.
+  if (!data || !form) {
+    return (
+      <div className={card + " p-lg"}>
+        <h3 className="text-h3 text-on-surface flex items-center gap-xs">
+          <span className="material-symbols-outlined text-primary" style={{ fontSize: 20 }} aria-hidden>
+            shield
+          </span>
+          Task auto-reminders
+        </h3>
+        <p className="mt-xs text-body-sm text-on-surface-variant">
+          {loadError ?? "Loading…"}
+        </p>
+        {loadError && (
+          <button
+            type="button"
+            onClick={() => void load()}
+            className="mt-sm h-9 px-lg rounded-lg border border-outline-variant text-label-sm font-semibold text-on-surface-variant hover:bg-surface-container-low transition"
+          >
+            Try again
+          </button>
+        )}
+      </div>
+    );
+  }
+
+  const dirty = JSON.stringify(form) !== JSON.stringify(data.config);
 
   function patch(next: Partial<TaskReminderConfig>) {
+    setNote(null);
     setForm((f) => (f ? { ...f, ...next } : f));
   }
 
@@ -110,6 +157,7 @@ export function TaskRemindersCard() {
     }
     const d = await r.json();
     setForm(d.config);
+    setData((prev) => (prev ? { ...prev, config: d.config } : prev));
     setNote("Saved.");
   }
 
@@ -134,15 +182,24 @@ export function TaskRemindersCard() {
           </p>
         </div>
         <span className="flex items-center gap-sm flex-shrink-0">
+          {dirty && (
+            <span className="px-sm h-7 inline-flex items-center rounded-full text-label-sm font-semibold border border-error/40 bg-error/5 text-error">
+              Unsaved
+            </span>
+          )}
+          {/* Reads the SAVED config, never the form. Reflecting unsaved state
+              here made ticking the box flip the pill to "On", so the card looked
+              saved when nothing had been persisted — and the feature stayed off
+              with no sign of it. */}
           <span
             className={
               "px-sm h-7 inline-flex items-center rounded-full text-label-sm font-semibold border " +
-              (form.enabled
+              (data.config.enabled
                 ? "bg-primary/10 text-primary border-primary/30"
                 : "bg-surface-container-high text-on-surface-variant border-outline-variant")
             }
           >
-            {form.enabled ? "On" : "Off"}
+            {data.config.enabled ? "On" : "Off"}
           </span>
           <span className="material-symbols-outlined text-on-surface-variant" style={{ fontSize: 20 }} aria-hidden>
             {open ? "expand_less" : "expand_more"}
@@ -167,6 +224,52 @@ export function TaskRemindersCard() {
               </span>
             </span>
           </label>
+
+          {/* ── Who it runs for ──────────────────────────────────────── */}
+          <section className="space-y-sm">
+            <h4 className="text-label-md font-semibold text-on-surface">Consultants</h4>
+            <p className="text-label-sm text-on-surface-variant">
+              Reminders are sent only for tasks assigned to these consultants. Nobody selected means no
+              reminders go out at all — the feature stays inert however it is configured below.
+            </p>
+            <div className="flex flex-wrap items-center gap-sm">
+              <MultiSelect
+                options={data.bdes.map((b) => ({ value: b.userId, label: b.displayName, hint: b.role.toUpperCase() }))}
+                selected={form.consultantIds}
+                onChange={(next) => patch({ consultantIds: next })}
+                placeholder="No consultants selected"
+                title="Consultants whose tasks send automatic reminders"
+                icon="group"
+                searchable
+              />
+              <button
+                type="button"
+                onClick={() => patch({ consultantIds: data.bdes.map((b) => b.userId) })}
+                className="h-9 px-md rounded-lg border border-outline-variant text-label-sm font-semibold text-on-surface-variant hover:bg-surface-container-low transition"
+              >
+                Select all
+              </button>
+              {form.consultantIds.length > 0 && (
+                <button
+                  type="button"
+                  onClick={() => patch({ consultantIds: [] })}
+                  className="h-9 px-md rounded-lg border border-outline-variant text-label-sm font-semibold text-on-surface-variant hover:bg-surface-container-low transition"
+                >
+                  Clear
+                </button>
+              )}
+            </div>
+            {form.consultantIds.length === 0 ? (
+              <Warning tone="warn">
+                No consultant is selected, so no reminder will ever be sent. Pick at least one.
+              </Warning>
+            ) : (
+              <p className="text-label-sm text-on-surface-variant">
+                {form.consultantIds.length} of {data.bdes.length} consultants. This is a fixed list — someone
+                who joins later is not added automatically, so revisit it when the team changes.
+              </p>
+            )}
+          </section>
 
           {/* ── WhatsApp ─────────────────────────────────────────────── */}
           <section className="space-y-sm">
@@ -362,8 +465,11 @@ export function TaskRemindersCard() {
 
           <div className="flex items-center justify-end gap-md pt-md border-t border-outline-variant">
             {note && <span className="text-label-sm text-on-surface-variant">{note}</span>}
-            <button type="button" onClick={save} disabled={busy} className={primaryBtn + " h-9"}>
-              {busy ? "Saving…" : "Save"}
+            {dirty && !note && (
+              <span className="text-label-sm text-error">Nothing here takes effect until you save.</span>
+            )}
+            <button type="button" onClick={save} disabled={busy || !dirty} className={primaryBtn + " h-9"}>
+              {busy ? "Saving…" : dirty ? "Save" : "Saved"}
             </button>
           </div>
         </div>

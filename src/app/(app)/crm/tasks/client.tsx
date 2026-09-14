@@ -115,7 +115,7 @@ export function TasksBoard({
   bdes: BdeOpt[];
   counts: TaskCounts;
   access: TasksAccess;
-  reminders: { enabled: boolean; defaultChannels: TaskReminderChannel[] };
+  reminders: { enabled: boolean; defaultChannels: TaskReminderChannel[]; consultantIds: string[] };
 }) {
   const router = useRouter();
   const pathname = usePathname();
@@ -266,7 +266,15 @@ export function TasksBoard({
     <div className="space-y-md">
       {pendingComplete && (
         <NextStepDialog
-          reminders={reminders}
+          reminders={{
+            // The replacement task goes to this lead's owner (or, unassigned, to
+            // whoever is completing it) — so that is whose enrolment decides
+            // whether reminders can be offered here.
+            enabled:
+              reminders.enabled &&
+              reminders.consultantIds.includes(pendingComplete.lead.assignedToId || access.userId || ""),
+            defaultChannels: reminders.defaultChannels,
+          }}
           leadName={pendingComplete.lead.candidateName}
           busy={nextBusy}
           error={nextError}
