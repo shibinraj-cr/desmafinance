@@ -72,6 +72,15 @@ export const MODULES: AppModule[] = [
       { href: "/finance/revenue", label: "Revenue", icon: "payments", group: "MONEY IN" },
       { href: "/finance/collection-plan", label: "Collection Plan", icon: "schedule_send", group: "MONEY IN" },
       { href: "/finance/expenses", label: "Expenses", icon: "receipt_long", group: "MONEY OUT" },
+      {
+        // A child route of /finance/expenses on purpose: anyone whose role
+        // already grants the Expense Tracker prefix-matches into this, so the
+        // same money is never visible on one page and withheld on the other.
+        href: "/finance/expenses/matrix",
+        label: "FY Matrix",
+        icon: "grid_on",
+        group: "MONEY OUT",
+      },
       { href: "/finance/cashflow", label: "Cash Flow", icon: "account_balance", group: "MONEY OUT" },
       { href: "/finance/daily-tracker", label: "Daily Tracker", icon: "edit_calendar", group: "OPERATIONS" },
       { href: "/finance/parties", label: "Parties", icon: "groups", group: "OPERATIONS" },

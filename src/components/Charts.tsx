@@ -255,3 +255,64 @@ export function CashflowDualLine({
     </ResponsiveContainer>
   );
 }
+
+/**
+ * One fiscal year's monthly spend against the same months a year earlier.
+ *
+ * Deliberately not the `MonthlyRevenueExpenseBars` gold/espresso pairing: that
+ * pair means "money in vs money out" everywhere else in Finance, and reusing
+ * it here would suggest a comparison this chart is not making. Gold and clay
+ * are checked for colour-vision separation (ΔE 19.9 deutan, 19.9 normal) and
+ * every posted bar is labelled, so the series never rest on hue alone.
+ */
+export function FyComparisonBars({
+  data,
+  currentName,
+  priorName,
+  showPrior,
+}: {
+  data: { month: string; current: number | null; prior: number | null }[];
+  currentName: string;
+  priorName: string;
+  showPrior: boolean;
+}) {
+  const labelFormatter = (v: number) =>
+    typeof v === "number" && Math.abs(v) >= 1_00_000 ? `${(v / 1_00_000).toFixed(1)}L` : "";
+
+  return (
+    <ResponsiveContainer width="100%" height={300}>
+      <BarChart data={data} margin={{ top: 25, right: 10, left: 0, bottom: 10 }}>
+        <CartesianGrid strokeDasharray="3 3" stroke="#e1e2e9" vertical={false} />
+        <XAxis
+          dataKey="month"
+          tick={{ fontSize: 12, fill: "#424751" }}
+          axisLine={false}
+          tickLine={false}
+        />
+        <YAxis
+          tick={{ fontSize: 12, fill: "#424751" }}
+          axisLine={false}
+          tickLine={false}
+          tickFormatter={lakhFormatter}
+        />
+        <Tooltip
+          formatter={(v: number) => inr(v)}
+          cursor={{ fill: "#f2f3fa" }}
+        />
+        <Legend wrapperStyle={{ fontSize: 12 }} />
+        {showPrior && (
+          <Bar dataKey="prior" name={priorName} fill="#A45A2A" radius={[4, 4, 0, 0]} />
+        )}
+        <Bar dataKey="current" name={currentName} fill="#C9A019" radius={[4, 4, 0, 0]}>
+          <LabelList
+            dataKey="current"
+            position="top"
+            formatter={labelFormatter}
+            fill="#7E6510"
+            style={{ fontSize: 10, fontWeight: 600 }}
+          />
+        </Bar>
+      </BarChart>
+    </ResponsiveContainer>
+  );
+}

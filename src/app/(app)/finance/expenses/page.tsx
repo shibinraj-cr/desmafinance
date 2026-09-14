@@ -1,3 +1,4 @@
+import Link from "next/link";
 import { redirect } from "next/navigation";
 import { getCurrentUserPermissions } from "@/lib/permissions";
 import { canSeePage } from "@/lib/rbac";
@@ -66,7 +67,17 @@ export default async function ExpensesPage({
         </section>
         <section className="grid grid-cols-1 lg:grid-cols-12 gap-gutter">
           <div className="lg:col-span-7">
-            <Section title="Top Spend Categories">
+            <Section
+              title="Top Spend Categories"
+              action={
+                <Link
+                  href="/finance/expenses/matrix"
+                  className="text-label-sm font-semibold text-accent hover:underline"
+                >
+                  FY matrix →
+                </Link>
+              }
+            >
               {breakdown.length ? <HorizontalBars data={breakdown.slice(0, 8)} /> : <Empty>No expenses yet.</Empty>}
             </Section>
           </div>
