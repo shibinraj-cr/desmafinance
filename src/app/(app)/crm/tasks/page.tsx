@@ -13,6 +13,7 @@ import {
   crmTaskAssigneeScope,
   REINQUIRY_TASK_SUBJECT_NEEDLE,
 } from "@/lib/crm-leads";
+import { getTaskReminderConfig } from "@/lib/crm-task-reminders-engine";
 import { TasksBoard } from "./client";
 
 export const dynamic = "force-dynamic";
@@ -91,6 +92,10 @@ export default async function TasksPage({ searchParams }: { searchParams: SP }) 
     reinquiry: reinquiryCount,
   };
   const accessProps = { isAdmin: access.isAdmin, isBde: access.isBde, userId };
+  // Completing a lead's last open task forces the next-step dialog, which arms a
+  // reminder on the follow-up it books. The board has to know the defaults so
+  // that dialog can say so rather than doing it behind the consultant.
+  const reminderConfig = await getTaskReminderConfig();
 
   return (
     <>
@@ -104,6 +109,7 @@ export default async function TasksPage({ searchParams }: { searchParams: SP }) 
           bdes={bdes}
           counts={counts}
           access={accessProps}
+          reminders={{ enabled: reminderConfig.enabled, defaultChannels: reminderConfig.defaultChannels }}
         />
       </div>
     </>

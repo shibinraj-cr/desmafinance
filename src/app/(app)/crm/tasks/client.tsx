@@ -9,7 +9,7 @@ import { listParam, applyFilterPatch } from "@/lib/filter-params";
 import { DEFAULT_STATUS_COLOR } from "@/lib/crm";
 import { NextStepDialog, type NextStepPayload } from "@/components/crm/NextStepDialog";
 import { TaskEditDialog, type TaskEditPayload } from "@/components/crm/TaskEditDialog";
-import { reminderStatusLabel } from "@/lib/crm-task-reminders";
+import { reminderStatusLabel, type TaskReminderChannel } from "@/lib/crm-task-reminders";
 
 export type BdeOpt = { userId: string; displayName: string; username: string; role: string };
 export type TasksAccess = { isAdmin: boolean; isBde: boolean; userId: string };
@@ -106,6 +106,7 @@ export function TasksBoard({
   bdes,
   counts,
   access,
+  reminders,
 }: {
   tasks: CrmTaskListRow[];
   total: number;
@@ -114,6 +115,7 @@ export function TasksBoard({
   bdes: BdeOpt[];
   counts: TaskCounts;
   access: TasksAccess;
+  reminders: { enabled: boolean; defaultChannels: TaskReminderChannel[] };
 }) {
   const router = useRouter();
   const pathname = usePathname();
@@ -264,6 +266,7 @@ export function TasksBoard({
     <div className="space-y-md">
       {pendingComplete && (
         <NextStepDialog
+          reminders={reminders}
           leadName={pendingComplete.lead.candidateName}
           busy={nextBusy}
           error={nextError}
