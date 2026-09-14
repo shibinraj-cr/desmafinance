@@ -219,6 +219,11 @@ export function WealthClient({
   }, [personalOnly, snapshot, bridge, outflow, today]);
 
   const totals = view.totals;
+  // Cover-only policies are holdings, but they add nothing to the corpus — so
+  // they must not be counted beside the corpus figure.
+  const corpusHoldings = view.holdings.filter(
+    (h) => ASSET_CLASS_META[h.assetClass]?.countsToCorpus,
+  ).length;
   const businessCount =
     snapshot.holdings.filter((h) => h.scope === "business").length +
     snapshot.liabilities.filter((l) => l.scope === "business").length;
@@ -338,7 +343,7 @@ export function WealthClient({
           value={inrCompact(totals.corpus)}
           hero
           tone="primary"
-          hint={`${view.holdings.length} holding${view.holdings.length === 1 ? "" : "s"} across ${view.allocation.filter((a) => a.key !== "gold").length} classes`}
+          hint={`${corpusHoldings} holding${corpusHoldings === 1 ? "" : "s"} across ${view.allocation.filter((a) => a.key !== "gold").length} classes`}
         />
         <KpiCard
           label="Gold vault"
@@ -841,6 +846,30 @@ function GoldVault({
 }) {
   const [rate, setRate] = useState(String(snapshot.gold.ratePerGram || ""));
   const [saving, setSaving] = useState(false);
+  // Categories start collapsed: 50 pieces listed flat is a scroll box nobody
+  // reads, and the category totals are what the card is for.
+  const [expanded, setExpanded] = useState<Set<string>>(new Set());
+
+  function toggle(category: string) {
+    setExpanded((prev) => {
+      const next = new Set(prev);
+      if (next.has(category)) next.delete(category);
+      else next.add(category);
+      return next;
+    });
+  }
+
+  const byCategory = useMemo(() => {
+    const map = new Map<string, GoldItemRow[]>();
+    for (const g of snapshot.gold.items) {
+      if (!map.has(g.category)) map.set(g.category, []);
+      map.get(g.category)!.push(g);
+    }
+    for (const list of map.values()) list.sort((a, b) => b.grams - a.grams);
+    return map;
+  }, [snapshot.gold.items]);
+
+  const scheduled = snapshot.gold.items.filter((g) => g.dueOn).length;
 
   const parsed = Number(rate);
   const liveRate = Number.isFinite(parsed) && parsed > 0 ? parsed : snapshot.gold.ratePerGram;
@@ -897,49 +926,91 @@ function GoldVault({
         <p className="text-body-md text-on-surface-variant py-md text-center">Nothing in the vault yet.</p>
       ) : (
         <div className="divide-y divide-outline-variant">
-          {snapshot.gold.byCategory.map((c) => (
-            <div key={c.category} className="py-sm grid grid-cols-[minmax(0,1fr)_64px_96px] items-center gap-sm">
-              <div>
-                <span className="text-body-md">{c.category}</span>
-                <div
-                  className="h-[5px] rounded-full bg-amber-700/80 mt-xs"
-                  style={{ width: `${Math.max(4, (c.grams / maxGrams) * 100)}%` }}
-                />
+          {snapshot.gold.byCategory.map((c) => {
+            const open = expanded.has(c.category);
+            const pieces = byCategory.get(c.category) ?? [];
+            return (
+              <div key={c.category}>
+                <button
+                  type="button"
+                  onClick={() => toggle(c.category)}
+                  aria-expanded={open}
+                  className="w-full text-left py-sm grid grid-cols-[20px_minmax(0,1fr)_64px_96px] items-center gap-sm hover:bg-surface-container-low rounded"
+                >
+                  <span
+                    className="material-symbols-outlined text-on-surface-variant transition-transform"
+                    style={{ fontSize: 20, transform: open ? "rotate(90deg)" : undefined }}
+                    aria-hidden="true"
+                  >
+                    chevron_right
+                  </span>
+                  <span>
+                    <span className="text-body-md">{c.category}</span>
+                    <span className="text-caption text-on-surface-variant ml-xs">
+                      {pieces.length} piece{pieces.length === 1 ? "" : "s"}
+                    </span>
+                    <span
+                      className="block h-[5px] rounded-full bg-amber-700/80 mt-xs"
+                      style={{ width: `${Math.max(4, (c.grams / maxGrams) * 100)}%` }}
+                    />
+                  </span>
+                  <span className="text-caption text-on-surface-variant text-right tabular-nums">
+                    {c.grams} g
+                  </span>
+                  <span className="text-body-md font-semibold text-right tabular-nums">
+                    {inrCompact(c.grams * liveRate)}
+                  </span>
+                </button>
+
+                {open && (
+                  <ul className="pb-sm">
+                    {pieces.map((g) => (
+                      <li key={g.id}>
+                        <button
+                          type="button"
+                          onClick={() => onEdit(g)}
+                          className="w-full text-left pl-[28px] pr-sm py-xs grid grid-cols-[minmax(0,1fr)_56px_28px] items-center gap-sm rounded hover:bg-primary-fixed/20"
+                        >
+                          <span className="min-w-0">
+                            <span className="block truncate text-body-md">{g.name}</span>
+                            {(g.dueOn || g.holderLabel !== "Self") && (
+                              <span className="block text-caption text-on-surface-variant truncate">
+                                {[
+                                  g.holderLabel !== "Self" ? g.holderLabel : null,
+                                  g.dueOn ? `due ${prettyDate(g.dueOn)}` : null,
+                                ]
+                                  .filter(Boolean)
+                                  .join(" · ")}
+                              </span>
+                            )}
+                          </span>
+                          <span className="text-body-md text-right tabular-nums">{g.grams} g</span>
+                          <span
+                            className="material-symbols-outlined text-on-surface-variant justify-self-end"
+                            style={{ fontSize: 16 }}
+                            aria-hidden="true"
+                          >
+                            edit
+                          </span>
+                        </button>
+                      </li>
+                    ))}
+                  </ul>
+                )}
               </div>
-              <span className="text-caption text-on-surface-variant text-right tabular-nums">{c.grams} g</span>
-              <span className="text-body-md font-semibold text-right tabular-nums">
-                {inrCompact(c.grams * liveRate)}
-              </span>
-            </div>
-          ))}
+            );
+          })}
         </div>
       )}
 
-      {snapshot.gold.items.some((g) => g.dueOn) && (
+      {snapshot.gold.items.length > 0 && (
         <p className="mt-md text-caption text-on-surface-variant">
-          {snapshot.gold.items.filter((g) => g.dueOn).length} scheme instalment(s) carry a delivery date.
+          Open a category to edit any piece.
+          {scheduled > 0 &&
+            ` ${scheduled} scheme instalment${scheduled === 1 ? "" : "s"} carr${scheduled === 1 ? "ies" : "y"} a delivery date.`}
         </p>
       )}
 
-      {snapshot.gold.items.length > 0 && (
-        <details className="mt-md">
-          <summary className="text-label-sm text-accent cursor-pointer">Every piece</summary>
-          <div className="mt-sm divide-y divide-outline-variant max-h-64 overflow-y-auto">
-            {snapshot.gold.items.map((g) => (
-              <button
-                key={g.id}
-                type="button"
-                onClick={() => onEdit(g)}
-                className="w-full text-left py-xs flex items-center gap-sm hover:bg-surface-container-low"
-              >
-                <span className="flex-1 truncate text-body-md">{g.name}</span>
-                <span className="text-caption text-on-surface-variant">{g.category}</span>
-                <span className="tabular-nums text-body-md w-16 text-right">{g.grams} g</span>
-              </button>
-            ))}
-          </div>
-        </details>
-      )}
     </Card>
   );
 }
