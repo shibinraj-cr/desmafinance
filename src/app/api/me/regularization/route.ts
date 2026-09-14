@@ -8,6 +8,7 @@ import {
   REGULARIZATION_WINDOW_WORKING_DAYS,
   isWithinRegularizationWindow,
 } from "@/lib/hr-regularization";
+import { hasPunch } from "@/lib/hr-attendance-status";
 
 const TIME_RE = /^([01]\d|2[0-3]):[0-5]\d$/;
 const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
@@ -22,6 +23,10 @@ const Schema = z.object({
   requestType: z.enum(["punch", "leave", "note"]).default("punch"),
   reasonType: z.string().max(40).optional(),
   reason: z.string().min(5).max(500),
+  // Leave requests only: "AM" = first half, "PM" = second half, null/absent =
+  // the whole day. A half-day request resolves to HD on approval (0.5-day
+  // deduction) rather than LV.
+  halfSession: z.enum(["AM", "PM"]).nullable().optional(),
   proposedIn: z.string().regex(TIME_RE).nullable().optional(),
   proposedOut: z.string().regex(TIME_RE).nullable().optional(),
   attachmentUrl: z.string().url().nullable().optional(),
@@ -67,6 +72,9 @@ export async function POST(req: Request) {
   }
   const proposedIn = isLeave || isNote ? null : parsed.data.proposedIn ?? null;
   const proposedOut = isLeave || isNote ? null : parsed.data.proposedOut ?? null;
+  // Only a leave request carries a half — a punch fix restores the real times
+  // and a note changes nothing, so neither has a half to ask for.
+  const halfSession = isLeave ? parsed.data.halfSession ?? null : null;
   const date = new Date(parsed.data.date);
   const inWindow = await isWithinRegularizationWindow(date);
   if (!inWindow) {
@@ -81,8 +89,21 @@ export async function POST(req: Request) {
   // Find the related attendance row if it exists.
   const day = await prisma.hrAttendanceDay.findUnique({
     where: { employeeId_date: { employeeId: emp.id, date } },
-    select: { id: true },
+    select: { id: true, inTime: true, outTime: true },
   });
+
+  // A day with a punch was worked, so only HALF of it can be claimed as leave —
+  // the same rule the approval routes enforce (`leaveStatusBlockedByPunch`).
+  // Reject the full-day request here rather than letting it sit in the queue
+  // until HR discovers it can't be applied.
+  if (isLeave && !halfSession && day && hasPunch(day.inTime, day.outTime)) {
+    return NextResponse.json(
+      {
+        error: `${parsed.data.date} has a punch (${day.inTime ?? "—"}–${day.outTime ?? "—"}), so it's a worked day. Request a half-day instead, or file a punch correction if the punch is wrong.`,
+      },
+      { status: 400 },
+    );
+  }
 
   // Prevent duplicate pending requests for the same date.
   const existing = await prisma.hrAttendanceRegularization.findFirst({
@@ -103,6 +124,7 @@ export async function POST(req: Request) {
       requestType: parsed.data.requestType,
       reasonType,
       reason: parsed.data.reason,
+      halfSession,
       proposedIn,
       proposedOut,
       attachmentUrl: parsed.data.attachmentUrl ?? null,
@@ -121,6 +143,7 @@ export async function POST(req: Request) {
         date: parsed.data.date,
         requestType: parsed.data.requestType,
         reasonType,
+        halfSession,
       },
     },
   });

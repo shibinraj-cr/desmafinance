@@ -1457,6 +1457,14 @@ model HrAttendanceDay {
   decidedById     String?
   decidedBy       User?              @relation("HrLeaveDecider", fields: [decidedById], references: [id], onDelete: SetNull)
   decidedAt       DateTime?
+  /// Which half of an HD day was the leave — "AM" (first half) or "PM"
+  /// (second half) — when the employee DECLARED it on an approved half-day
+  /// leave request. Null on a biometric-derived HD, where the half is inferred
+  /// from the punch deviations instead (see `inferHdLeaveHalf`). A declared
+  /// half always wins over that inference, so the sandwich rule brackets the
+  /// direction the employee actually asked for rather than guessing from
+  /// late/early-out minutes. Cleared by the `reset` decision.
+  halfSession     String?
   /// True when this day carries an authoritative HR MANUAL override — a
   /// regularization approval or a decide/override action — that the biometric
   /// eTimeOffice sync must NOT delete, replace, or recompute. Sandwich-rule
@@ -1860,6 +1868,13 @@ model HrAttendanceRegularization {
   /// For note requests: 'explain'.
   reasonType      String
   reason          String
+  /// LEAVE requests only: which half of the day is being applied for — "AM"
+  /// (first half) or "PM" (second half). Null = a full-day leave request.
+  /// Approving a half-day leave resolves the day to HD (a 0.5-day deduction,
+  /// met from the paid-leave allocation where the balance covers it) instead of
+  /// LV, so it is the one leave shape allowed on a day that already has a
+  /// punch. Always null on punch / note requests.
+  halfSession     String?
   proposedIn      String?
   proposedOut     String?
   /// Optional uploaded artefact (e.g. screenshot URL).

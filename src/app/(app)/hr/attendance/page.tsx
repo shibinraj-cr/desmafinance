@@ -93,6 +93,8 @@ export default async function HrAttendancePage({
         late: number | null;
         remark: string | null;
         lateTag: LateTag;
+        /// "AM" / "PM" when an approved half-day leave declared which half.
+        halfSession: string | null;
         paid: number; // paid-leave portion of this day covered by the allocation (0 / 0.5 / 1)
       }
     >
@@ -124,6 +126,7 @@ export default async function HrAttendancePage({
       late: d.lateMinutes,
       remark: d.remark,
       lateTag,
+      halfSession: d.halfSession,
       paid: 0,
     };
     summary[d.employeeId] ??= { P: 0, HD: 0, A: 0, WO: 0, HL: 0, LV: 0, LCE: 0, AL: 0, PL: 0 };

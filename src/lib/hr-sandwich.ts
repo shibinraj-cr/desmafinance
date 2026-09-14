@@ -39,6 +39,10 @@ export type SandwichDay = {
   status: string;
   lateMinutes: number | null;
   earlyOutMinutes: number | null;
+  /// "AM" / "PM" when the employee DECLARED the half on an approved half-day
+  /// leave request. Absent or null on a biometric-derived HD, where the half
+  /// falls back to the punch inference below.
+  halfSession?: string | null;
 };
 
 /**
@@ -74,18 +78,26 @@ export async function getActiveSandwichPolicy(employeeId: string) {
 }
 
 /**
- * Infer which half of a half-day (HD) was the leave, from punch
- * deviations. Arrived late (lateMinutes dominates) → the morning is
- * missing → "AM" (1st half). Left early (earlyOutMinutes dominates) →
- * the afternoon is missing → "PM" (2nd half). When we genuinely can't
- * tell (both zero/equal — e.g. came late *and* left early), return null;
- * such a day is treated as bridging both directions so the rule errs
- * toward enforcement rather than silently skipping a sandwich.
+ * Which half of a half-day (HD) was the leave.
+ *
+ * A half the employee DECLARED on an approved half-day leave request wins
+ * outright — it is a reviewed statement of which half they were away, so there
+ * is nothing to infer. Bridging the wrong direction off a punch guess would
+ * flip a week-off to LOP against an approval that says otherwise.
+ *
+ * Otherwise infer it from punch deviations. Arrived late (lateMinutes
+ * dominates) → the morning is missing → "AM" (1st half). Left early
+ * (earlyOutMinutes dominates) → the afternoon is missing → "PM" (2nd half).
+ * When we genuinely can't tell (both zero/equal — e.g. came late *and* left
+ * early), return null; such a day is treated as bridging both directions so the
+ * rule errs toward enforcement rather than silently skipping a sandwich.
  */
 export function inferHdLeaveHalf(d: {
   lateMinutes: number | null;
   earlyOutMinutes: number | null;
+  halfSession?: string | null;
 }): "AM" | "PM" | null {
+  if (d.halfSession === "AM" || d.halfSession === "PM") return d.halfSession;
   const late = d.lateMinutes ?? 0;
   const eo = d.earlyOutMinutes ?? 0;
   if (late > eo) return "AM";
@@ -225,7 +237,7 @@ export async function applySandwichRule(args: {
   const days = await prisma.hrAttendanceDay.findMany({
     where: { employeeId, date: { gte: windowStart, lte: windowEnd } },
     orderBy: { date: "asc" },
-    select: { id: true, date: true, status: true, rawStatus: true, decisionNote: true, lateMinutes: true, earlyOutMinutes: true },
+    select: { id: true, date: true, status: true, rawStatus: true, decisionNote: true, lateMinutes: true, earlyOutMinutes: true, halfSession: true },
   });
   if (days.length === 0) {
     return { flipped: [], policyApplied: { departmentId: policy.departmentId, maxGapDays: policy.maxGapDays } };

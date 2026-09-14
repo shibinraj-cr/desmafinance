@@ -2,10 +2,13 @@ import { redirect } from "next/navigation";
 import { prisma } from "@/lib/prisma";
 import { getCurrentUserAndPermissions } from "@/lib/permissions";
 import { isHrUser, canApproveHr } from "@/lib/hr-rbac";
-import { employeeForUser } from "@/lib/hr-me";
+import {
+  reviewQueueScope,
+  canApproveHrApproverRequests,
+} from "@/lib/hr-approval-routing";
 import { TopBar } from "@/components/TopBar";
 import { Section } from "@/components/Cards";
-import { REGULARIZATION_REASONS } from "@/lib/hr-regularization";
+import { REGULARIZATION_REASONS, halfSessionLabel } from "@/lib/hr-regularization";
 import { RegularizationReviewClient } from "./client";
 
 export const dynamic = "force-dynamic";
@@ -31,10 +34,12 @@ export default async function RegularizationReviewPage({
   }
 
   const status = searchParams?.status ?? "pending";
-  // Routing / no self-approval: an approver never sees their OWN requests, so
-  // Soumya's requests route only to admin, and everyone else's to Soumya + admin.
-  const myEmp = userId ? await employeeForUser(userId) : null;
-  const notMine = myEmp ? { employeeId: { not: myEmp.id } } : {};
+  // Approval routing: an approver never sees their OWN requests, and an HR
+  // approver's requests are shown only to the designated approver — so an HR
+  // Manager's leave routes to the owner, and everyone else's to HR + the owner.
+  // The API route enforces the same rule. See hr-approval-routing.
+  const notMine = await reviewQueueScope(userId, perms);
+  const isDesignated = await canApproveHrApproverRequests(userId, perms);
 
   const [requests, counts] = await Promise.all([
     prisma.hrAttendanceRegularization.findMany({
@@ -55,7 +60,7 @@ export default async function RegularizationReviewPage({
     <>
       <TopBar
         title="Attendance Corrections"
-        subtitle={`Approve punch, leave & explanation requests · Pending ${tally.pending ?? 0} · Approved ${tally.approved ?? 0} · Rejected ${tally.rejected ?? 0}`}
+        subtitle={`Approve punch, leave & explanation requests · Pending ${tally.pending ?? 0} · Approved ${tally.approved ?? 0} · Rejected ${tally.rejected ?? 0}${isDesignated ? "" : " · HR approvers' own requests route to the designated approver"}`}
       />
       <div className="p-margin space-y-lg">
         <RegularizationReviewClient
@@ -70,11 +75,14 @@ export default async function RegularizationReviewPage({
             reasonType: r.reasonType,
             reasonLabel:
               r.requestType === "leave"
-                ? "Leave request"
+                ? halfSessionLabel(r.halfSession)
+                  ? `Half-day leave · ${halfSessionLabel(r.halfSession)}`
+                  : "Leave request (full day)"
                 : r.requestType === "note"
                   ? "Explanation (no change)"
                   : reasonLabel[r.reasonType] ?? r.reasonType,
             reason: r.reason,
+            halfSession: r.halfSession,
             proposedIn: r.proposedIn,
             proposedOut: r.proposedOut,
             status: r.status,
