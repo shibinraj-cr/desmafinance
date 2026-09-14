@@ -1,0 +1,13 @@
+-- Whether an approved half-day leave is PAID.
+--
+-- Deliberately its OWN migration rather than an edit to 20260914100000: that
+-- one has already been applied in production, and changing an applied
+-- migration's contents changes its checksum, which makes `prisma migrate
+-- deploy` abort the whole deploy rather than run anything.
+--
+-- NULL — the value every existing row takes — means "not decided as leave",
+-- which is precisely how HD has always behaved: a 0.5-day loss-of-pay the
+-- monthly allocation absorbs opportunistically. Only TRUE changes any figure
+-- (0.5 day charged to the leave balance instead, mirroring a full-day LV), so
+-- no backfill is needed or wanted.
+ALTER TABLE "HrAttendanceDay" ADD COLUMN "halfPaid" BOOLEAN;

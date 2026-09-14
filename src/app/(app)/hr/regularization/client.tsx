@@ -320,32 +320,38 @@ function ApproveModal({
                   : "Employee applied for the full day."}
               </p>
             </label>
-            {isHalfDay ? (
-              <p className="text-caption text-on-surface-variant bg-surface-container rounded-lg p-sm">
-                Marks {row.date} as a half-day (HD) — a 0.5-day deduction, met from
-                the employee&apos;s paid-leave allocation where the balance covers
-                it. Any punches on the day are kept, since the other half was
-                worked.
-              </p>
-            ) : (
-              <label className="block space-y-xs">
-                <span className="text-caption uppercase tracking-wider text-on-surface-variant">
-                  Leave type
-                </span>
-                <select
-                  value={v.leaveStatus}
-                  onChange={(e) => setV({ ...v, leaveStatus: e.target.value as "LV" | "A" })}
-                  className="w-full bg-surface-container border border-outline-variant rounded-lg px-sm py-xs"
-                >
-                  <option value="LV">Paid leave (deducts leave balance)</option>
-                  <option value="A">Unpaid — loss of pay</option>
-                </select>
-                <p className="text-caption text-on-surface-variant">
-                  {v.leaveStatus === "LV"
+            <label className="block space-y-xs">
+              <span className="text-caption uppercase tracking-wider text-on-surface-variant">
+                Leave type
+              </span>
+              <select
+                value={v.leaveStatus}
+                onChange={(e) => setV({ ...v, leaveStatus: e.target.value as "LV" | "A" })}
+                className="w-full bg-surface-container border border-outline-variant rounded-lg px-sm py-xs"
+              >
+                <option value="LV">
+                  {isHalfDay
+                    ? "Paid — deducts 0.5 day from leave balance"
+                    : "Paid leave (deducts leave balance)"}
+                </option>
+                <option value="A">
+                  {isHalfDay ? "Unpaid — 0.5 day loss of pay" : "Unpaid — loss of pay"}
+                </option>
+              </select>
+              <p className="text-caption text-on-surface-variant">
+                {isHalfDay
+                  ? v.leaveStatus === "LV"
+                    ? `Marks ${row.date} as a half-day (HD) and charges 0.5 day to the employee's leave balance — no loss of pay.`
+                    : `Marks ${row.date} as a half-day (HD) with 0.5 day of loss of pay. The monthly paid-leave allocation can still absorb it if the balance reaches it, exactly as an absence is absorbed.`
+                  : v.leaveStatus === "LV"
                     ? `Marks ${row.date} as paid leave (LV), deducted from the employee's leave balance.`
                     : `Marks ${row.date} as unpaid leave / loss of pay (A).`}
-                </p>
-              </label>
+              </p>
+            </label>
+            {isHalfDay && (
+              <p className="text-caption text-on-surface-variant bg-surface-container rounded-lg p-sm">
+                Any punches on the day are kept, since the other half was worked.
+              </p>
             )}
           </>
         ) : (
