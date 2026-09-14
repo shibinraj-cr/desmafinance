@@ -16,6 +16,7 @@ import {
   CRM_TASK_REMINDER_OVERRIDES_KEY,
   CRM_TASK_REMINDER_COOLDOWN_KEY,
   CRM_TASK_REMINDER_CHANNELS_KEY,
+  CRM_TASK_REMINDER_CONSULTANTS_KEY,
 } from "@/lib/app-settings";
 import {
   getTaskReminderConfig,
@@ -23,6 +24,7 @@ import {
   TASK_REMINDER_MERGE_FIELDS,
 } from "@/lib/crm-task-reminders-engine";
 import { TASK_TYPES } from "@/lib/crm";
+import { getAssignableBdes } from "@/lib/crm-leads";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -40,7 +42,7 @@ export const GET = withApiHandler(async () => {
   if (!userId || !perms) throw unauthorized();
   if (!(await getCrmAccess(userId, perms)).canManageTemplates) throw forbidden();
 
-  const [config, wa, emailTemplates] = await Promise.all([
+  const [config, wa, emailTemplates, bdes] = await Promise.all([
     getTaskReminderConfig(),
     listWaTemplates(),
     prisma.crmMessageTemplate.findMany({
@@ -48,6 +50,7 @@ export const GET = withApiHandler(async () => {
       select: { id: true, name: true, subject: true, body: true },
       orderBy: { name: "asc" },
     }),
+    getAssignableBdes(),
   ]);
 
   return NextResponse.json({
@@ -70,6 +73,10 @@ export const GET = withApiHandler(async () => {
     emailTemplates,
     taskTypes: TASK_TYPES,
     mergeFields: TASK_REMINDER_MERGE_FIELDS,
+    // The roster the allow-list is chosen from — active L1/L2 only, the same
+    // set the task composer's "Assign to" offers, so a consultant can never be
+    // enrolled for tasks they cannot be given.
+    bdes,
   });
 });
 
@@ -89,6 +96,8 @@ const PutSchema = z.object({
   // reminders for a month.
   cooldownHours: z.number().int().min(0).max(168),
   defaultChannels: z.array(z.enum(TASK_REMINDER_CHANNELS)),
+  /** Allow-list of consultant user ids; empty means nobody. */
+  consultantIds: z.array(z.string().trim().min(1).max(60)).max(500),
 });
 
 export const PUT = withApiHandler(async (req: Request) => {
@@ -106,6 +115,7 @@ export const PUT = withApiHandler(async (req: Request) => {
     setSetting(CRM_TASK_REMINDER_OVERRIDES_KEY, JSON.stringify(data.overrides), userId),
     setSetting(CRM_TASK_REMINDER_COOLDOWN_KEY, String(data.cooldownHours), userId),
     setSetting(CRM_TASK_REMINDER_CHANNELS_KEY, data.defaultChannels.join(","), userId),
+    setSetting(CRM_TASK_REMINDER_CONSULTANTS_KEY, data.consultantIds.join(","), userId),
   ]);
 
   // Worth an audit entry: this decides what every candidate receives when a
@@ -122,6 +132,10 @@ export const PUT = withApiHandler(async (req: Request) => {
       emailTemplateId: data.emailTemplateId,
       cooldownHours: data.cooldownHours,
       defaultChannels: data.defaultChannels,
+      // Recorded by id AND count: who may message candidates automatically is
+      // the most consequential field on this screen.
+      consultantIds: data.consultantIds,
+      consultantCount: data.consultantIds.length,
       overrides: Object.keys(data.overrides),
     },
   });
