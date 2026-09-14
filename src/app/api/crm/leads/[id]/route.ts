@@ -189,13 +189,14 @@ export const PATCH = withApiHandler(async (req: Request, { params }: Ctx) => {
     // Enrolled leads have a Party record / LeadPulsePipeline row / Finance TransactionDraft /
     // Operations project already created off the back of enrollment. Leaving "enrolled" via the
     // plain status picker would desync the CRM's own display from those systems of record without
-    // unwinding any of it, so it's blocked here entirely — undoing an enrollment needs a dedicated
-    // action, not this endpoint. Note this guard is intentionally specific to "enrolled": leaving
+    // unwinding any of it, so it's blocked here entirely — undoing an enrollment goes through the
+    // dedicated Un-enroll action (POST /api/crm/leads/[id]/unenroll, src/lib/crm-unenroll.ts), not
+    // this endpoint. Note this guard is intentionally specific to "enrolled": leaving
     // "duplicate" (un-flagging a false positive) and "pipeline" (no linked records) via this picker
     // are both fine and must keep working.
     if (existing.status.code === "enrolled") {
       throw badRequest(
-        "This lead is Enrolled — its status can't be changed from here. Undoing an enrollment needs a dedicated action.",
+        "This lead is Enrolled — its status can't be changed from here. Use the Un-enroll action on the lead's Deal card, which also reverses the closed-won tick, the revenue draft and the operations project.",
         "cannot_leave_enrolled",
       );
     }

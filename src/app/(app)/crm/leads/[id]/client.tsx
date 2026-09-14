@@ -42,6 +42,12 @@ export type DetailAccess = {
   canSeeWhatsApp: boolean;
   /** BDE or CRM admin — may create leads, so may re-enroll an existing candidate. */
   canCreateLeads: boolean;
+  /**
+   * Admin / supervisor / CRM-admin — may undo an accidental enrollment. A tier
+   * above `canEdit`, because un-enrolling reaches into Finance, Marketing
+   * numbers and Operations. See CrmAccess.canUnenroll.
+   */
+  canUnenroll: boolean;
   userId: string;
 };
 
@@ -127,6 +133,7 @@ const ACTIVITY_ICON: Record<string, string> = {
   TASK_DELETED: "delete",
   DEAL_UPDATED: "handshake",
   ENROLLED: "verified",
+  UNENROLLED: "undo",
   REVENUE_DRAFTED: "request_quote",
 };
 
@@ -351,7 +358,13 @@ export function LeadDetail({
               <Timeline lead={lead} notes={notes} timeline={timeline} canEdit={canEdit} access={access} />
             </div>
             <div className="lg:col-span-1 space-y-lg">
-              <DealCard lead={lead} masters={masters} canEdit={canEdit} canReEnroll={access.canCreateLeads} />
+              <DealCard
+                lead={lead}
+                masters={masters}
+                canEdit={canEdit}
+                canReEnroll={access.canCreateLeads}
+                canUnenroll={access.canUnenroll}
+              />
               <AssignmentCard lead={lead} masters={masters} canAssign={access.canAssign} />
               <LeadInfoCard lead={lead} masters={masters} canEdit={canEdit} />
             </div>
@@ -528,7 +541,7 @@ function StageBar({ lead, statuses, canEdit }: { lead: LeadRow; statuses: Status
             }
             title={
               lockedByEnrollment
-                ? "Lead is Enrolled — its status can't be changed from here"
+                ? "Lead is Enrolled — use Un-enroll on the Deal card to undo it"
                 : locked
                   ? `${s.label} is set by an action (Set deal), not the status picker`
                   : canEdit
@@ -733,7 +746,8 @@ function SummaryCard({ lead, masters, canEdit }: { lead: LeadRow; masters: Detai
               // Leaving "enrolled" from the plain picker would desync the CRM's display from those
               // systems of record with no unwinding, so the field is locked instead of editable
               // (the API rejects the change server-side too — this is belt and suspenders).
-              // Undoing an enrollment needs a dedicated action, not this form.
+              // Undoing an enrollment needs the dedicated Un-enroll action on the Deal card
+              // (src/lib/crm-unenroll.ts), which unwinds all of it, not this form.
               <div
                 className={`${inputCls} flex items-center gap-xs bg-surface-container-low text-on-surface-variant cursor-not-allowed`}
                 aria-disabled="true"
@@ -741,7 +755,7 @@ function SummaryCard({ lead, masters, canEdit }: { lead: LeadRow; masters: Detai
                 <span className="material-symbols-outlined" style={{ fontSize: 16 }}>
                   lock
                 </span>
-                <span className="text-body-md">Enrolled — status can&rsquo;t be changed here</span>
+                <span className="text-body-md">Enrolled — use &ldquo;Un-enroll&rdquo; on the Deal card</span>
               </div>
             ) : (
               <select className={inputCls} value={draft.statusId} onChange={(e) => setDraft({ ...draft, statusId: e.target.value })}>
@@ -1080,16 +1094,20 @@ function DealCard({
   masters,
   canEdit,
   canReEnroll,
+  canUnenroll,
 }: {
   lead: LeadRow;
   masters: DetailMasters;
   canEdit: boolean;
   /** Any consultant (BDE/CRM admin) — may enroll this candidate in a further service. */
   canReEnroll: boolean;
+  /** Admin / supervisor / CRM-admin — may undo an accidental enrollment. */
+  canUnenroll: boolean;
 }) {
   const router = useRouter();
   const [modal, setModal] = useState<null | "deal" | "enroll">(null);
   const [reopenOpen, setReopenOpen] = useState(false);
+  const [unenrollOpen, setUnenrollOpen] = useState(false);
   const [celebrateName, setCelebrateName] = useState<string | null>(null);
   const isEnrolled = lead.status.code === "enrolled";
   const hasDeal = lead.expectedValue != null || lead.expectedCloseDate != null;
@@ -1155,21 +1173,39 @@ function DealCard({
         </div>
       )}
 
-      {/* Re-enrollment: a candidate whose service is done comes back for another.
-          Opens a follow-up lead for the second service (worked + enrolled via the
-          normal flow). Available to any consultant, not just this lead's owner. */}
-      {isEnrolled && canReEnroll && (
-        <div className="pt-xs">
-          <button
-            type="button"
-            className={secondaryBtn + " h-9 inline-flex items-center gap-xs"}
-            onClick={() => setReopenOpen(true)}
-          >
-            <span className="material-symbols-outlined" style={{ fontSize: 18 }}>
-              replay
-            </span>
-            Reopen for another service
-          </button>
+      {/* Post-enrollment actions. */}
+      {isEnrolled && (canReEnroll || canUnenroll) && (
+        <div className="pt-xs flex flex-wrap items-center gap-base">
+          {/* Re-enrollment: a candidate whose service is done comes back for another.
+              Opens a follow-up lead for the second service (worked + enrolled via the
+              normal flow). Available to any consultant, not just this lead's owner. */}
+          {canReEnroll && (
+            <button
+              type="button"
+              className={secondaryBtn + " h-9 inline-flex items-center gap-xs"}
+              onClick={() => setReopenOpen(true)}
+            >
+              <span className="material-symbols-outlined" style={{ fontSize: 18 }}>
+                replay
+              </span>
+              Reopen for another service
+            </button>
+          )}
+          {/* The "dedicated action" the status picker and the lead PATCH API both
+              point at: an enrollment recorded in Finance / Marketing / Operations
+              can only be left through an undo that unwinds all three. */}
+          {canUnenroll && (
+            <button
+              type="button"
+              className={secondaryBtn + " h-9 inline-flex items-center gap-xs text-red-700 border-red-200 hover:bg-red-50"}
+              onClick={() => setUnenrollOpen(true)}
+            >
+              <span className="material-symbols-outlined" style={{ fontSize: 18 }}>
+                undo
+              </span>
+              Un-enroll
+            </button>
+          )}
         </div>
       )}
 
@@ -1182,6 +1218,18 @@ function DealCard({
           onEnrolled={(name) => {
             setModal(null);
             setCelebrateName(name);
+          }}
+        />
+      )}
+
+      {unenrollOpen && (
+        <UnenrollModal
+          lead={lead}
+          masters={masters}
+          onClose={() => setUnenrollOpen(false)}
+          onDone={() => {
+            setUnenrollOpen(false);
+            router.refresh();
           }}
         />
       )}
@@ -1209,6 +1257,192 @@ function DealCard({
         />
       )}
     </div>
+  );
+}
+
+// Undo an accidental enrollment. Enrolling wrote across Finance (a revenue
+// draft), Marketing (a closed-won tick in the owner's month) and Operations (a
+// project with its full step list), so this dialog fetches a server-computed
+// plan first and shows exactly what will be reversed, what is deliberately kept,
+// and — when the money has already moved past the draft stage — why it refuses.
+function UnenrollModal({
+  lead,
+  masters,
+  onClose,
+  onDone,
+}: {
+  lead: LeadRow;
+  masters: DetailMasters;
+  onClose: () => void;
+  onDone: () => void;
+}) {
+  type Plan = {
+    candidateName: string;
+    serviceName: string | null;
+    enrolledValue: number | null;
+    enrolledAt: string | null;
+    blockers: { code: string; message: string }[];
+    warnings: { code: string; message: string }[];
+    effects: string[];
+    retained: string[];
+  };
+  const [plan, setPlan] = useState<Plan | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [acknowledged, setAcknowledged] = useState(false);
+  const [reason, setReason] = useState("");
+
+  // Statuses the lead may land in — the same filter the status picker uses, so
+  // "Pipeline" / "Enrolled" / "Duplicate" (set by their own actions) never show.
+  const targets = useMemo(() => masters.statuses.filter((st) => !isActionOnlyStatus(st.code)), [masters.statuses]);
+  const [statusId, setStatusId] = useState(
+    () => targets.find((st) => st.code === "follow_up")?.id ?? targets[0]?.id ?? "",
+  );
+
+  useEffect(() => {
+    let live = true;
+    (async () => {
+      try {
+        const res = await fetch(`/api/crm/leads/${lead.id}/unenroll`, { cache: "no-store" });
+        const j = await res.json().catch(() => null);
+        if (!live) return;
+        if (!res.ok) setError(j?.message || j?.error || "Couldn't work out what this enrollment created.");
+        else setPlan(j.plan as Plan);
+      } catch {
+        if (live) setError("Couldn't reach the server.");
+      } finally {
+        if (live) setLoading(false);
+      }
+    })();
+    return () => {
+      live = false;
+    };
+  }, [lead.id]);
+
+  const blocked = !!plan && plan.blockers.length > 0;
+  const needsAck = !!plan && plan.warnings.length > 0;
+
+  async function submit() {
+    if (!statusId) return setError("Pick the status to move the lead to.");
+    setBusy(true);
+    setError(null);
+    const res = await fetch(`/api/crm/leads/${lead.id}/unenroll`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ toStatusId: statusId, reason: reason.trim() || null, acknowledge: acknowledged }),
+    });
+    if (!res.ok) {
+      const j = await res.json().catch(() => null);
+      setBusy(false);
+      return setError(j?.message || j?.error || "Couldn't undo the enrollment.");
+    }
+    setBusy(false);
+    onDone();
+  }
+
+  return (
+    <Modal title="Undo enrollment" onClose={onClose} busy={busy}>
+      {loading ? (
+        <p className="text-body-sm text-on-surface-variant">Working out what this enrollment created…</p>
+      ) : (
+        <div className="space-y-md">
+          {plan && (
+            <p className="text-body-sm text-on-surface-variant">
+              <b>{plan.candidateName}</b>
+              {plan.serviceName ? ` · ${plan.serviceName}` : ""}
+              {plan.enrolledValue != null ? ` · ₹${plan.enrolledValue.toLocaleString("en-IN")}` : ""}
+              {plan.enrolledAt ? ` · enrolled ${new Date(plan.enrolledAt).toLocaleDateString("en-IN")}` : ""}
+            </p>
+          )}
+
+          {plan?.blockers.map((b) => (
+            <p key={b.code} className="text-body-sm text-red-700 bg-red-50 border border-red-200 rounded-lg p-md">
+              {b.message}
+            </p>
+          ))}
+
+          {!blocked && plan && plan.effects.length > 0 && (
+            <div>
+              <span className="block text-label-sm text-on-surface-variant mb-xs">This will reverse</span>
+              <ul className="text-body-sm text-on-surface space-y-xs list-disc pl-lg">
+                {plan.effects.map((e) => (
+                  <li key={e}>{e}</li>
+                ))}
+              </ul>
+            </div>
+          )}
+
+          {!blocked &&
+            plan?.warnings.map((w) => (
+              <label
+                key={w.code}
+                className="flex items-start gap-xs text-body-sm text-amber-900 bg-amber-50 border border-amber-200 rounded-lg p-md cursor-pointer"
+              >
+                <input
+                  type="checkbox"
+                  className="mt-[3px]"
+                  checked={acknowledged}
+                  onChange={(e) => setAcknowledged(e.target.checked)}
+                />
+                <span>{w.message}</span>
+              </label>
+            ))}
+
+          {!blocked && plan && plan.retained.length > 0 && (
+            <div>
+              <span className="block text-label-sm text-on-surface-variant mb-xs">Left as it is</span>
+              <ul className="text-body-sm text-on-surface-variant space-y-xs list-disc pl-lg">
+                {plan.retained.map((r) => (
+                  <li key={r}>{r}</li>
+                ))}
+              </ul>
+            </div>
+          )}
+
+          {!blocked && (
+            <>
+              <Field label="Move the lead to">
+                <select className={inputCls} value={statusId} onChange={(e) => setStatusId(e.target.value)}>
+                  {targets.map((st) => (
+                    <option key={st.id} value={st.id}>
+                      {st.label}
+                    </option>
+                  ))}
+                </select>
+              </Field>
+              <Field label="Reason (optional)">
+                <input
+                  className={inputCls}
+                  value={reason}
+                  onChange={(e) => setReason(e.target.value)}
+                  placeholder="e.g. enrolled by mistake — candidate is still deciding"
+                  maxLength={500}
+                />
+              </Field>
+            </>
+          )}
+
+          {error && <p className="text-body-sm text-red-600">{error}</p>}
+
+          <div className="flex justify-end gap-base">
+            <button type="button" className={secondaryBtn} disabled={busy} onClick={onClose}>
+              {blocked ? "Close" : "Cancel"}
+            </button>
+            {!blocked && (
+              <button
+                type="button"
+                className={primaryBtn}
+                disabled={busy || !plan || (needsAck && !acknowledged)}
+                onClick={submit}
+              >
+                {busy ? "Undoing…" : "Undo enrollment"}
+              </button>
+            )}
+          </div>
+        </div>
+      )}
+    </Modal>
   );
 }
 

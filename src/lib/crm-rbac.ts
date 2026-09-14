@@ -125,6 +125,14 @@ export type CrmAccess = {
    */
   canViewHistory: boolean;
   canManageSettings: boolean;
+  /**
+   * Undo an enrollment (src/lib/crm-unenroll.ts). A tier above `canEditLead`:
+   * un-enrolling discards a Finance revenue draft, removes a BDE's closed-won
+   * tick from the month's Actual, and removes or cancels an Operations project —
+   * so the owning consultant must not be able to quietly reverse their own
+   * numbers. System admins, Lead Pulse supervisors and the CRM-admin tier only.
+   */
+  canUnenroll: boolean;
 };
 
 export async function getCrmAccess(
@@ -173,6 +181,7 @@ export async function getCrmAccess(
     canAssign: canAssignLeads,
     canViewHistory: canViewLeadHistory,
     canManageSettings: canManageCrm,
+    canUnenroll: admin || isSupervisor || canManageCrm,
   };
 }
 

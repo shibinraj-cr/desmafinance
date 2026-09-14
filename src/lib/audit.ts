@@ -14,7 +14,11 @@ type AuditAction =
   | "REJECT"
   | "DRAFT_CREATE"
   | "DRAFT_UPDATE"
-  | "DRAFT_DISCARD";
+  | "DRAFT_DISCARD"
+  // CRM: an enrollment reversed through the dedicated Un-enroll action
+  // (src/lib/crm-unenroll.ts) — it discards a revenue draft, so it belongs in
+  // the same audit trail Finance reads.
+  | "CRM_UNENROLL";
 
 export async function recordAudit(opts: {
   entityType: string;

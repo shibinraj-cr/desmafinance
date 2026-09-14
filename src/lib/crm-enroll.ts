@@ -286,9 +286,10 @@ async function findOrCreateParty(tx: Prisma.TransactionClient, lead: LeadCore, o
  * that lead must put its deal back in the forecast.
  *
  * Deliberately never touches a `closed_won` row: an enrollment is only ever
- * un-done by Enroll / Set deal (which reverse the daily close properly), not by
- * a status edit. Best-effort — a mirror failure must not fail the status change
- * the consultant actually asked for.
+ * un-done by Set deal or the dedicated Un-enroll action (src/lib/crm-unenroll.ts),
+ * both of which reverse the daily close properly — never by a status edit.
+ * Best-effort — a mirror failure must not fail the status change the consultant
+ * actually asked for.
  */
 export async function syncPipelineToLeadStatus(args: { leadId: string; toCode: string }): Promise<void> {
   try {
