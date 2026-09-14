@@ -62,7 +62,7 @@ export const PATCH = withApiHandler(async (req: Request, { params }: Ctx) => {
     where: { id: params.taskId },
     include: {
       ...taskInclude,
-      lead: { select: { id: true, assignedToId: true, status: { select: { kind: true, code: true } } } },
+      lead: { select: { id: true, assignedToId: true, status: { select: { kind: true, code: true, parked: true } } } },
     },
   });
   if (!task || task.leadId !== params.id) throw notFound();
@@ -140,6 +140,7 @@ export const PATCH = withApiHandler(async (req: Request, { params }: Ctx) => {
         leadKind: task.lead.status.kind,
         remainingOpenTasks,
         statusCode: task.lead.status.code,
+        parked: task.lead.status.parked,
       })
     ) {
       if (!data.nextTask) {

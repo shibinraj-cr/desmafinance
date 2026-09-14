@@ -225,6 +225,22 @@ describe("attentionFlags — combined bucket classification", () => {
     expect(attentionFlags({ ...base, statusCode: "re_marketing" }).flagged).toBe(false);
     expect(attentionFlags({ ...base, statusCode: "follow_up" }).flagged).toBe(true);
   });
+
+  it("parks ANY stage carrying the flag — centralised marketing never reaches the list", () => {
+    const base = { lastTouchAt: ago(40), stuckSince: ago(40), hasOpenTask: false, nextTaskDueAt: null, now };
+    const f = attentionFlags({ ...base, statusCode: "centralised_marketing", parked: true });
+    expect(f).toMatchObject({ slaBreached: false, abandoned: false, noNextStep: false, stuck: false, flagged: false });
+    // Display fields still computed, exactly as for the legacy parked status.
+    expect(f.daysSinceTouch).toBeGreaterThan(ABANDONED_DAYS);
+  });
+
+  it("the parked flag wins over the legacy code list in both directions", () => {
+    const base = { lastTouchAt: ago(40), stuckSince: ago(40), hasOpenTask: false, nextTaskDueAt: null, now };
+    // Un-parked in settings → Re-marketing nags again.
+    expect(attentionFlags({ ...base, statusCode: "re_marketing", parked: false }).flagged).toBe(true);
+    // Parked in settings → an ordinary stage stops nagging.
+    expect(attentionFlags({ ...base, statusCode: "follow_up", parked: true }).flagged).toBe(false);
+  });
 });
 
 describe("hasUpcomingTask", () => {

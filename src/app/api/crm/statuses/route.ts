@@ -32,6 +32,9 @@ const CreateSchema = z.object({
   displayOrder: z.number().int().min(0).default(0),
   color: z.string().trim().max(20).nullable().optional(),
   isDefault: z.boolean().default(false),
+  // A parked stage never nags on the Team Activity attention list and never
+  // forces a next-step task — see CrmLeadStatus.parked / crm-team.ts.
+  parked: z.boolean().default(false),
   active: z.boolean().default(true),
 });
 
@@ -57,6 +60,7 @@ export const POST = withApiHandler(async (req: Request) => {
         displayOrder: d.displayOrder,
         color: d.color ?? null,
         isDefault: d.isDefault,
+        parked: d.parked,
         active: d.active,
       },
     });

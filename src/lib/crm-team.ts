@@ -25,9 +25,12 @@
  *     is exempt from the SLA-breach and stuck-in-stage buckets: a planned, not-yet-
  *     lapsed next step means the consultant is on it. Abandoned and no-next-step
  *     are unaffected. See {@link hasUpcomingTask} / {@link attentionFlags}.
- *   - A *parked* status ({@link PARKED_STATUS_CODES}, e.g. `re_marketing`) is a
- *     deliberate slow-drip resting state that never appears on the attention list
- *     at all — every bucket is cleared for it, not just the SLA one.
+ *   - A *parked* stage (`CrmLeadStatus.parked`, e.g. Re-marketing / Centralised
+ *     Marketing) is a deliberate slow-drip resting state that never appears on the
+ *     attention list at all — every bucket is cleared for it, not just the SLA one.
+ *     The flag is admin-editable in `/crm/settings`, so parking the next stage is
+ *     a checkbox, not a deploy; {@link PARKED_STATUS_CODES} is only the fallback
+ *     for callers that don't carry the flag.
  */
 import { Prisma } from "@prisma/client";
 import { prisma } from "./prisma";
@@ -41,10 +44,11 @@ import { CRM_TEAM_LEAD_PAGE } from "./crm-rbac";
  * Per active-status SLA: a lead untouched for MORE than this many days is
  * "breaching" its stage SLA. Keyed by `CrmLeadStatus.code`. Active statuses not
  * listed here are not SLA-monitored. Won/lost statuses are excluded by
- * construction — only `kind = 'active'` leads are ever classified. `re_marketing`
- * is deliberately absent because it is fully PARKED (see
- * {@link PARKED_STATUS_CODES}): it never appears on the attention list at all,
- * not merely SLA-exempt.
+ * construction — only `kind = 'active'` leads are ever classified. Parked stages
+ * (`CrmLeadStatus.parked`, e.g. Re-marketing / Centralised Marketing) are
+ * deliberately absent because they are fully PARKED: they never appear on the
+ * attention list at all, not merely SLA-exempt. A stage added here later still
+ * yields to `parked` — {@link attentionFlags} clears every bucket first.
  */
 export const SLA_THRESHOLD_DAYS: Record<string, number> = {
   not_yet_started: 1,
@@ -54,15 +58,24 @@ export const SLA_THRESHOLD_DAYS: Record<string, number> = {
 };
 
 /**
- * Active statuses that are a deliberate long-horizon "parked" resting state: a
- * lead here is being slow-drip nurtured/revived on its own cadence, not actively
- * worked, so it must NEVER surface on the attention/flagged list — no SLA breach,
- * stuck-in-stage, abandoned, or no-next-step nag. `re_marketing` is the
- * revive-on-re-inquiry bucket; parking it stops a wall of dormant nurture leads
- * from drowning the leads that actually need a consultant today. Enforced in
- * {@link attentionFlags}, which clears every bucket for these statuses.
+ * FALLBACK parked-status codes, used only when a caller can't supply the lead's
+ * `CrmLeadStatus.parked` flag. The flag on the status row is the real source of
+ * truth (admin-editable in `/crm/settings`); this set just keeps the original
+ * `re_marketing` behaviour for any call site — or unit test — that passes a bare
+ * status code.
+ *
+ * A parked stage is a deliberate long-horizon resting state: the lead is being
+ * slow-drip nurtured centrally on its own cadence, not actively worked, so it must
+ * NEVER surface on the attention/flagged list — no SLA breach, stuck-in-stage,
+ * abandoned, or no-next-step nag, and no mandatory follow-up task when its last
+ * open task is completed (see `requiresNextStepOnComplete`). Parking stops a wall
+ * of dormant nurture leads from drowning the leads that actually need a consultant
+ * today. Enforced in {@link attentionFlags}, which clears every bucket for them.
  */
 export const PARKED_STATUS_CODES: ReadonlySet<string> = new Set(["re_marketing"]);
+
+/** Prisma filter for the leads a parked stage must never contribute to. */
+export const NOT_PARKED_ACTIVE_STATUS: Prisma.CrmLeadStatusWhereInput = { kind: "active", parked: false };
 
 /** Any active lead untouched this long is "abandoned" regardless of stage. */
 export const ABANDONED_DAYS = 30;
@@ -182,14 +195,17 @@ export type AttentionFlags = {
  * suppressed by an upcoming task — a lead untouched for a month, or with no task
  * at all, still needs a look regardless of anything scheduled.
  *
- * The one exception is a PARKED status ({@link PARKED_STATUS_CODES}, e.g.
- * `re_marketing`): a deliberate slow-drip resting state clears EVERY bucket
- * (including abandoned and no-next-step), so it never appears on the attention
- * list. `slaDays` / `daysSinceTouch` / `daysInStage` are still reported for
- * display, but no bucket flag fires.
+ * The one exception is a PARKED stage (`parked`, e.g. Re-marketing / Centralised
+ * Marketing): a deliberate slow-drip resting state clears EVERY bucket (including
+ * abandoned and no-next-step), so it never appears on the attention list.
+ * `slaDays` / `daysSinceTouch` / `daysInStage` are still reported for display, but
+ * no bucket flag fires. Pass the lead's `CrmLeadStatus.parked` flag; when it is
+ * omitted the legacy {@link PARKED_STATUS_CODES} code list decides instead.
  */
 export function attentionFlags(opts: {
   statusCode: string;
+  /** The status's `parked` flag. Omitted → falls back to {@link PARKED_STATUS_CODES}. */
+  parked?: boolean;
   lastTouchAt: Date;
   stuckSince: Date;
   hasOpenTask: boolean;
@@ -199,9 +215,10 @@ export function attentionFlags(opts: {
 }): AttentionFlags {
   const v = classifyStaleness({ statusCode: opts.statusCode, lastTouchAt: opts.lastTouchAt, now: opts.now });
   const daysInStage = ageInDays(opts.now, opts.stuckSince);
-  // A parked status (e.g. re_marketing) is a deliberate resting state and never
-  // nags: clear every bucket regardless of age, stage time, or task state.
-  const parked = PARKED_STATUS_CODES.has(opts.statusCode);
+  // A parked stage (e.g. Re-marketing, Centralised Marketing) is a deliberate
+  // resting state and never nags: clear every bucket regardless of age, stage
+  // time, or task state.
+  const parked = opts.parked ?? PARKED_STATUS_CODES.has(opts.statusCode);
   const upcoming = hasUpcomingTask(opts.nextTaskDueAt, opts.now);
   const stuck = !parked && daysInStage > STUCK_DAYS && !upcoming;
   const slaBreached = !parked && v.breached && !upcoming;
@@ -498,7 +515,7 @@ type ActiveLeadLite = {
   candidateName: string;
   assignedToId: string | null;
   createdAt: Date;
-  status: { code: string; label: string; color: string | null };
+  status: { code: string; parked: boolean; label: string; color: string | null };
 };
 
 /** Assemble the full Team Activity payload for one scope + date range. */
@@ -544,7 +561,7 @@ export async function getTeamActivity(opts: {
         assignedAt: true,
         createdAt: true,
         importBatch: { select: { createdAt: true } },
-        status: { select: { code: true, label: true, color: true } },
+        status: { select: { code: true, parked: true, label: true, color: true } },
       },
     }),
     // Open re-inquiry follow-up tasks, per assignee (subject rule shared with the task board).
@@ -759,6 +776,7 @@ export async function getTeamActivity(opts: {
     const stuckSince = statusChangeByLead.get(l.id) ?? l.createdAt;
     const f = attentionFlags({
       statusCode: l.status.code,
+      parked: l.status.parked,
       lastTouchAt,
       stuckSince,
       hasOpenTask: leadsWithOpenTask.has(l.id),
@@ -922,7 +940,7 @@ export async function getAttentionQueue(opts: {
       assignedAt: true,
       createdAt: true,
       importBatch: { select: { createdAt: true } },
-      status: { select: { code: true, label: true, color: true } },
+      status: { select: { code: true, parked: true, label: true, color: true } },
     },
   });
 
@@ -968,6 +986,7 @@ export async function getAttentionQueue(opts: {
     const stuckSince = statusChangeByLead.get(l.id) ?? l.createdAt;
     const f = attentionFlags({
       statusCode: l.status.code,
+      parked: l.status.parked,
       lastTouchAt: lastTouch ?? l.createdAt,
       stuckSince,
       hasOpenTask: openTaskLeads.has(l.id),
@@ -1066,9 +1085,9 @@ async function taskLeadQueue(opts: {
     where: {
       ...opts.taskWhere,
       assignedToId: ownerIds.length ? assignedToIn(ownerIds) : { in: ids },
-      // A task on an enrolled/lost lead, or a deliberately-parked re-marketing
-      // lead, isn't a follow-up gap — same "never nags" rule as attentionFlags.
-      lead: { status: { kind: "active", code: { notIn: [...PARKED_STATUS_CODES] } } },
+      // A task on an enrolled/lost lead, or a lead in a deliberately-parked
+      // stage, isn't a follow-up gap — same "never nags" rule as attentionFlags.
+      lead: { status: NOT_PARKED_ACTIVE_STATUS },
     },
     select: {
       dueAt: true,
@@ -1078,7 +1097,7 @@ async function taskLeadQueue(opts: {
           id: true,
           candidateName: true,
           assignedToId: true,
-          status: { select: { code: true, label: true, color: true } },
+          status: { select: { code: true, parked: true, label: true, color: true } },
         },
       },
     },
@@ -1144,9 +1163,9 @@ export async function getFirstResponseGapQueue(opts: {
 
   const leadsRaw = await prisma.lead.findMany({
     where: {
-      // Same "never nags" rule as attentionFlags: a parked (re-marketing) lead
-      // is a deliberate resting state, not a first-response gap.
-      status: { kind: "active", code: { notIn: [...PARKED_STATUS_CODES] } },
+      // Same "never nags" rule as attentionFlags: a lead in a parked stage is a
+      // deliberate resting state, not a first-response gap.
+      status: NOT_PARKED_ACTIVE_STATUS,
       assignedToId: ownerIds.length ? assignedToIn(ownerIds) : { in: ids },
     },
     select: {
@@ -1155,7 +1174,7 @@ export async function getFirstResponseGapQueue(opts: {
       assignedToId: true,
       assignedAt: true,
       importBatch: { select: { createdAt: true } },
-      status: { select: { code: true, label: true, color: true } },
+      status: { select: { code: true, parked: true, label: true, color: true } },
     },
   });
   const owned = leadsRaw.filter((l) =>

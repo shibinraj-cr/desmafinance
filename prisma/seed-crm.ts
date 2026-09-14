@@ -14,11 +14,25 @@ const prisma = new PrismaClient();
 // 'lost' are terminal pills. `pipeline` and `enrolled` are set ONLY by the
 // Set-deal / Enroll actions (see ACTION_ONLY_STATUS_CODES) — never the manual
 // dropdown. `duplicate` is kept for the importer's dedup flagging.
-const STATUSES = [
+//
+// `parked` = a deliberate resting stage nurtured centrally on its own cadence:
+// no SLA/attention nags and no mandatory next-step task (see crm-team.ts). Set
+// on CREATE only — like `active`, an admin's toggle in /crm/settings must
+// survive a re-seed.
+const STATUSES: Array<{
+  code: string;
+  label: string;
+  kind: string;
+  displayOrder: number;
+  color: string;
+  isDefault: boolean;
+  parked?: boolean;
+}> = [
   { code: "not_yet_started", label: "Not Yet Started", kind: "active", displayOrder: 0, color: "#9aa0a6", isDefault: true },
   { code: "qualify", label: "Qualify", kind: "active", displayOrder: 1, color: "#3b82f6", isDefault: false },
   { code: "follow_up", label: "Follow-Up", kind: "active", displayOrder: 2, color: "#f59e0b", isDefault: false },
-  { code: "re_marketing", label: "Re-marketing", kind: "active", displayOrder: 3, color: "#a855f7", isDefault: false },
+  { code: "re_marketing", label: "Re-marketing", kind: "active", displayOrder: 3, color: "#a855f7", isDefault: false, parked: true },
+  { code: "centralised_marketing", label: "Centralised Marketing", kind: "active", displayOrder: 4, color: "#0ea5e9", isDefault: false, parked: true },
   { code: "pipeline", label: "Pipeline", kind: "active", displayOrder: 4, color: "#6366f1", isDefault: false },
   { code: "enrolled", label: "Enrolled", kind: "won", displayOrder: 5, color: "#16a34a", isDefault: false },
   { code: "already_processing_elsewhere", label: "Already Processing Elsewhere", kind: "lost", displayOrder: 6, color: "#64748b", isDefault: false },
@@ -49,7 +63,7 @@ async function main() {
         color: s.color,
         isDefault: s.isDefault,
       },
-      create: { ...s, active: true },
+      create: { ...s, parked: s.parked ?? false, active: true },
     });
     console.log(`  ✓ ${s.label}`);
   }
