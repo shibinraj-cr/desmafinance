@@ -69,10 +69,26 @@ export function TaskRemindersCard() {
   const [open, setOpen] = useState(false);
   const [busy, setBusy] = useState(false);
   const [note, setNote] = useState<string | null>(null);
+  const [loadError, setLoadError] = useState<string | null>(null);
 
   const load = useCallback(async () => {
+    setLoadError(null);
     const r = await fetch("/api/crm/task-reminders/settings").catch(() => null);
-    if (!r?.ok) return;
+    if (!r) {
+      setLoadError("Couldn’t reach the server.");
+      return;
+    }
+    if (!r.ok) {
+      // Said out loud rather than swallowed. This card is the ONLY way to turn
+      // the feature on, so a silent failure here looks identical to the feature
+      // not existing — and leaves an admin with nothing to act on.
+      setLoadError(
+        r.status === 403
+          ? "You don’t have permission to manage templates, so these settings are hidden."
+          : `Couldn’t load these settings (HTTP ${r.status}).`,
+      );
+      return;
+    }
     const d: Payload = await r.json();
     setData(d);
     setForm(d.config);
@@ -88,7 +104,32 @@ export function TaskRemindersCard() {
   );
   const waSlots = useMemo(() => slotsIn(chosenWa?.body ?? null), [chosenWa]);
 
-  if (!data || !form) return null;
+  // Never render nothing. An invisible card is indistinguishable from a missing
+  // feature, and this is where the feature is switched on.
+  if (!data || !form) {
+    return (
+      <div className={card + " p-lg"}>
+        <h3 className="text-h3 text-on-surface flex items-center gap-xs">
+          <span className="material-symbols-outlined text-primary" style={{ fontSize: 20 }} aria-hidden>
+            shield
+          </span>
+          Task auto-reminders
+        </h3>
+        <p className="mt-xs text-body-sm text-on-surface-variant">
+          {loadError ?? "Loading…"}
+        </p>
+        {loadError && (
+          <button
+            type="button"
+            onClick={() => void load()}
+            className="mt-sm h-9 px-lg rounded-lg border border-outline-variant text-label-sm font-semibold text-on-surface-variant hover:bg-surface-container-low transition"
+          >
+            Try again
+          </button>
+        )}
+      </div>
+    );
+  }
 
   function patch(next: Partial<TaskReminderConfig>) {
     setForm((f) => (f ? { ...f, ...next } : f));
