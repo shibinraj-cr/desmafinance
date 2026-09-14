@@ -271,3 +271,52 @@ export async function expenseMatrix(
     postedMonths: postedMonthCount(fy, now),
   });
 }
+
+/**
+ * The visible grid as CSV, in whole rupees rather than the lakh the screen
+ * shows — a spreadsheet wants the figure, not the rendering. Months that have
+ * not begun stay empty cells, so a sum in Excel matches the FY-to-date column
+ * instead of quietly counting zeros.
+ */
+export function matrixToCsv({
+  matrix,
+  fyName,
+  priorFyName,
+  monthLabels,
+}: {
+  matrix: ExpenseMatrix;
+  fyName: string;
+  priorFyName: string;
+  monthLabels: string[];
+}): string {
+  const head = [
+    "Category",
+    ...monthLabels,
+    `${fyName} to date`,
+    ...(matrix.hasPrior ? [`${priorFyName} same period`, "Change %"] : []),
+  ];
+
+  const body = matrix.rows.map((r) => [
+    r.name,
+    ...r.months.map((v) => (v === null ? "" : String(v))),
+    String(r.total),
+    ...(matrix.hasPrior
+      ? [r.priorTotal === null ? "" : String(r.priorTotal), r.changePct === null ? "" : String(r.changePct)]
+      : []),
+  ]);
+
+  const total = [
+    "Total",
+    ...matrix.monthTotals.map((v) => (v === null ? "" : String(v))),
+    String(matrix.total),
+    ...(matrix.hasPrior
+      ? [
+          matrix.priorTotal === null ? "" : String(matrix.priorTotal),
+          matrix.changePct === null ? "" : String(matrix.changePct),
+        ]
+      : []),
+  ];
+
+  const escape = (v: string) => (/[",\n]/.test(v) ? `"${v.replace(/"/g, '""')}"` : v);
+  return [head, ...body, total].map((row) => row.map(escape).join(",")).join("\n");
+}

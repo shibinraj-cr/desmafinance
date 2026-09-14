@@ -6,7 +6,7 @@ import { Section } from "@/components/Cards";
 import { FyComparisonBars } from "@/components/Charts";
 import { inr, inrFull } from "@/lib/format";
 import { FY_MONTH_SHORT, fyLabel } from "@/lib/fiscal-year";
-import { changeOn, type ExpenseMatrix, type MatrixRow } from "@/lib/expense-matrix";
+import { changeOn, matrixToCsv, type ExpenseMatrix, type MatrixRow } from "@/lib/expense-matrix";
 
 /**
  * Single-hue gold ramp for the heat cells: magnitude is one quantity, so it
@@ -131,6 +131,18 @@ export function ExpenseMatrixView({
                 { value: "off", label: "Off" },
               ]}
             />
+            <button
+              type="button"
+              onClick={() =>
+                downloadCsv(
+                  `expense-matrix-${fyName.replace(/\s+/g, "-").toLowerCase()}.csv`,
+                  matrixToCsv({ matrix, fyName, priorFyName, monthLabels }),
+                )
+              }
+              className="h-9 px-md rounded-lg border border-outline-variant text-label-sm font-semibold hover:border-primary transition"
+            >
+              Export CSV
+            </button>
           </div>
         }
       >
@@ -520,6 +532,19 @@ function heatColour(value: number, scale: number): string | undefined {
   const ratio = value / scale;
   if (ratio <= 0.02) return undefined;
   return HEAT[Math.min(HEAT.length - 1, Math.floor(ratio * HEAT.length))];
+}
+
+function downloadCsv(filename: string, csv: string) {
+  // A BOM so Excel reads the rupee figures — and any non-ASCII category — as UTF-8.
+  const blob = new Blob(["\uFEFF" + csv], { type: "text/csv;charset=utf-8;" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(url);
 }
 
 /** Grid figures are in lakh throughout — a column of full rupee amounts is

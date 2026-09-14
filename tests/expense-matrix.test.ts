@@ -24,6 +24,7 @@ import {
   buildExpenseMatrix,
   changeOn,
   matrixHighlights,
+  matrixToCsv,
   type ExpenseCell,
 } from "@/lib/expense-matrix";
 
@@ -228,5 +229,63 @@ describe("matrixHighlights", () => {
   it("has nothing to say about an empty year", () => {
     const m = buildExpenseMatrix({ fy: 2027, current: [], prior: null, postedMonths: 0 });
     expect(matrixHighlights(m)).toEqual({ peak: null, mover: null });
+  });
+});
+
+describe("matrixToCsv", () => {
+  const matrix = buildExpenseMatrix({
+    fy: 2026,
+    current: [...cells("Salary", { 0: 100, 1: 200 }), ...cells("Taxes, duties", { 0: 50 })],
+    prior: [...cells("Salary", { 0: 80, 1: 90 }), ...cells("Taxes, duties", { 0: 40 })],
+    postedMonths: 2,
+  });
+  const csv = matrixToCsv({
+    matrix,
+    fyName: "FY 2026-27",
+    priorFyName: "FY 2025-26",
+    monthLabels: fyMonthLabels(2026),
+  });
+  const lines = csv.split("\n");
+
+  it("heads the columns with the months the grid shows", () => {
+    expect(lines[0].startsWith("Category,Apr-26,May-26,")).toBe(true);
+    expect(lines[0].endsWith("FY 2026-27 to date,FY 2025-26 same period,Change %")).toBe(true);
+  });
+
+  it("exports whole rupees, not the lakh on screen", () => {
+    expect(lines[1].startsWith("Salary,100,200,")).toBe(true);
+  });
+
+  it("leaves months that have not begun empty so a spreadsheet sum still ties", () => {
+    const salary = lines[1].split(",");
+    expect(salary.slice(3, 13).every((c) => c === "")).toBe(true);
+    expect(salary[13]).toBe("300"); // FY to date
+  });
+
+  it("quotes a category containing a comma", () => {
+    expect(csv).toContain('"Taxes, duties"');
+  });
+
+  it("ends on a total row that matches the grid", () => {
+    const total = lines[lines.length - 1].split(",");
+    expect(total[0]).toBe("Total");
+    expect(total[13]).toBe(String(matrix.total));
+  });
+
+  it("drops the comparison columns entirely when there is no prior year", () => {
+    const solo = buildExpenseMatrix({
+      fy: 2026,
+      current: cells("Salary", { 0: 100 }),
+      prior: null,
+      postedMonths: 1,
+    });
+    const head = matrixToCsv({
+      matrix: solo,
+      fyName: "FY 2026-27",
+      priorFyName: "FY 2025-26",
+      monthLabels: fyMonthLabels(2026),
+    }).split("\n")[0];
+    expect(head.endsWith("FY 2026-27 to date")).toBe(true);
+    expect(head).not.toContain("Change %");
   });
 });
