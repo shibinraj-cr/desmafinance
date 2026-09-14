@@ -29,6 +29,9 @@ export const CRM_ACTIVITY_TYPES = [
   "TASK_DELETED",
   "DEAL_UPDATED",
   "ENROLLED",
+  // The dedicated undo for an enrollment (src/lib/crm-unenroll.ts) — reverses the
+  // closed-won tick, the revenue draft and the operations project.
+  "UNENROLLED",
   "REVENUE_DRAFTED",
   "OPS_PROJECT_CREATED",
   // Re-marketing nurturing campaign (src/lib/crm-remarketing.ts).

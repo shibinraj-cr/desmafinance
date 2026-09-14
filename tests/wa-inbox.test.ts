@@ -26,6 +26,7 @@ function access(over: Partial<CrmAccess> = {}): CrmAccess {
     canAssign: false,
     canViewHistory: false,
     canManageSettings: false,
+    canUnenroll: false,
     ...over,
   };
 }
