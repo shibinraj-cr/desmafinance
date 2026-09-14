@@ -44,6 +44,7 @@
     "db:seed-sop": "tsx prisma/seed-sop.ts",
     "db:seed-sop-demo": "tsx prisma/seed-sop.ts --demo",
     "db:grant-sop-pages": "tsx prisma/grant-sop-pages.ts",
+    "db:verify-sop": "tsx prisma/verify-sop-lifecycle.ts",
     "db:seed-ahpra-oba-template": "tsx prisma/seed-ahpra-oba-template.ts",
     "db:seed-ahpra-oba-template:dry": "tsx prisma/seed-ahpra-oba-template.ts --dry-run",
     "db:seed-from-excel": "tsx prisma/seed-from-excel.ts",

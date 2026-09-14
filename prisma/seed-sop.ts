@@ -361,10 +361,30 @@ async function seedDemoSop() {
   console.log("   Take it through Request review → Approve → Publish to exercise the full lifecycle.");
 }
 
+/**
+ * The production endpoint. Categories are master data and are safe to seed
+ * anywhere; the DEMO SOP is not — it burns a SOP number permanently, and
+ * numbers are never reissued. So only `--demo` is guarded.
+ */
+const PROD_HOST_FRAGMENT = "ep-orange-brook-aqmaow18";
+
 async function main() {
   await seedCategories();
-  if (process.argv.includes("--demo")) await seedDemoSop();
-  else console.log("demo SOP: not requested (pass --demo to create it)");
+
+  if (!process.argv.includes("--demo")) {
+    console.log("demo SOP: not requested (pass --demo to create it)");
+    return;
+  }
+  if ((process.env.DATABASE_URL ?? "").includes(PROD_HOST_FRAGMENT)) {
+    console.error(
+      "\nREFUSING to create the demo SOP: DATABASE_URL is the production database.\n" +
+        "The demo SOP permanently consumes a SOP number. Run it against a scratch\n" +
+        "branch instead:  DATABASE_URL=\"postgresql://…\" npm run db:seed-sop-demo",
+    );
+    process.exitCode = 1;
+    return;
+  }
+  await seedDemoSop();
 }
 
 main()
