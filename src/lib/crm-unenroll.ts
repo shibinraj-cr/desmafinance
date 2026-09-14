@@ -29,7 +29,7 @@ import { recordLeadActivity } from "./crm-activity";
 import { recordOpsActivity } from "./ops-activity";
 import { recordAudit } from "./audit";
 import { syncPipelineToLeadStatus } from "./crm-enroll";
-import { isActionOnlyStatus } from "./crm-leads";
+import { canUnenrollInto } from "./crm-leads";
 
 /**
  * How close (ms) a row's `createdAt` must be to the ENROLLED activity for us to
@@ -359,10 +359,11 @@ export async function unenrollLead(args: UnenrollArgs): Promise<UnenrollResult> 
     select: { id: true, code: true, label: true, active: true },
   });
   if (!target || !target.active) throw badRequest("Pick an active status to move the lead to.", "invalid_status");
-  // Un-enrolling into "Pipeline"/"Enrolled"/"Duplicate" would just re-create the
-  // desync this action exists to fix — those are set by their own actions.
-  if (isActionOnlyStatus(target.code)) {
-    throw badRequest(`"${target.label}" is set by its own action — pick a working status such as Follow-Up.`, "action_only_status");
+  // "Pipeline" is allowed on purpose — the deal survives the undo, so that is
+  // where a previously-enrolled lead belongs. Only "Enrolled" (the state we are
+  // leaving) and "Duplicate" are refused; see UNENROLL_FORBIDDEN_STATUS_CODES.
+  if (!canUnenrollInto(target.code)) {
+    throw badRequest(`A lead can't be un-enrolled into "${target.label}".`, "forbidden_status");
   }
 
   const opsUntouched =

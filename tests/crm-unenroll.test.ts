@@ -187,15 +187,30 @@ describe("unenrollLead — refusals", () => {
     expect(prisma.$transaction).not.toHaveBeenCalled();
   });
 
-  it("refuses to land the lead in an action-only status", async () => {
-    setup();
+  it("allows Pipeline as a landing status even though it is action-only", async () => {
+    // Un-enrolling IS the action that puts a lead back in Pipeline: the deal
+    // survives and its pipeline row returns to `open`, so refusing this would
+    // force an accidentally-enrolled deal out of the forecast entirely.
+    const tx = setup();
     fn(prisma.crmLeadStatus.findUnique).mockResolvedValue({
       id: "st-pipe",
       code: "pipeline",
       label: "Pipeline",
       active: true,
     });
-    await expect(run({ toStatusId: "st-pipe" })).rejects.toMatchObject({ code: "action_only_status" });
+    const res = await run({ toStatusId: "st-pipe" });
+    expect(tx.lead.update).toHaveBeenCalledWith({ where: { id: "lead1" }, data: { statusId: "st-pipe" } });
+    expect(res.toStatusLabel).toBe("Pipeline");
+  });
+
+  it.each([
+    ["enrolled", "Enrolled"],
+    ["duplicate", "Duplicate"],
+  ])("refuses to land the lead back in %s", async (code, label) => {
+    setup();
+    fn(prisma.crmLeadStatus.findUnique).mockResolvedValue({ id: "st-x", code, label, active: true });
+    await expect(run({ toStatusId: "st-x" })).rejects.toMatchObject({ code: "forbidden_status" });
+    expect(prisma.$transaction).not.toHaveBeenCalled();
   });
 
   it("refuses an inactive / unknown target status", async () => {
