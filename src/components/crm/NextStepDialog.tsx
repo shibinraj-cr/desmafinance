@@ -2,6 +2,8 @@
 
 import { useEffect, useState } from "react";
 import { createPortal } from "react-dom";
+import { TASK_TYPES } from "@/lib/crm";
+import { CHANNEL_LABELS, TASK_REMINDER_CHANNELS, type TaskReminderChannel } from "@/lib/crm-task-reminders";
 
 /**
  * "Schedule the next step" dialog shown when a consultant completes the last
@@ -11,9 +13,6 @@ import { createPortal } from "react-dom";
  * priority); the caller sends it as `nextTask` alongside `{ status: "done" }` so
  * completion and the new task land atomically.
  */
-
-// Mirrors the lead composer's closed subject list so tasks read consistently.
-const TASK_TYPES = ["Follow-up Call", "WhatsApp Message", "Document Request", "Payment Request"] as const;
 
 const inputCls =
   "w-full h-9 px-md rounded-lg border border-outline-variant bg-surface-container-lowest text-on-surface text-label-sm focus:border-primary focus:ring-2 focus:ring-primary/30 outline-none transition";
@@ -27,16 +26,35 @@ function tomorrowISO(): string {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
 }
 
-export type NextStepPayload = { subject: string; dueAt: string | null; priority: string; note: string | null };
+export type NextStepPayload = {
+  subject: string;
+  dueAt: string | null;
+  priority: string;
+  note: string | null;
+  /** Omitted when reminders are off, so the server keeps its own defaults. */
+  reminderChannels?: TaskReminderChannel[];
+};
 
 export function NextStepDialog({
   leadName,
+  reminders,
   busy = false,
   error,
   onCancel,
   onSubmit,
 }: {
   leadName?: string | null;
+  /**
+   * The auto-reminder defaults, when the caller knows them.
+   *
+   * This dialog is NOT optional — it appears because the consultant completed a
+   * lead's last open task — and it defaults the due date to tomorrow. Without
+   * this block a consultant would book a follow-up and, with it, a WhatsApp
+   * message and an email to the candidate, having never been told. Saying so is
+   * the difference between a safety net and something going out behind their
+   * back.
+   */
+  reminders?: { enabled: boolean; defaultChannels: TaskReminderChannel[] };
   busy?: boolean;
   error?: string | null;
   onCancel: () => void;
@@ -47,6 +65,7 @@ export function NextStepDialog({
   const [due, setDue] = useState<string>(tomorrowISO());
   const [priority, setPriority] = useState("normal");
   const [note, setNote] = useState("");
+  const [channels, setChannels] = useState<TaskReminderChannel[]>(reminders?.defaultChannels ?? []);
 
   useEffect(() => setMounted(true), []);
   useEffect(() => {
@@ -60,7 +79,17 @@ export function NextStepDialog({
 
   function submit() {
     if (!subject.trim() || busy) return;
-    onSubmit({ subject: subject.trim(), dueAt: due || null, priority, note: note.trim() || null });
+    onSubmit({
+      subject: subject.trim(),
+      dueAt: due || null,
+      priority,
+      note: note.trim() || null,
+      // Only sent when this screen actually showed the choice. Omitting it lets
+      // the server apply its defaults, which is right for a caller that has not
+      // been taught about reminders — but wrong here, where the consultant saw
+      // the boxes and may have unticked them.
+      ...(reminders?.enabled ? { reminderChannels: due ? channels : [] } : {}),
+    });
   }
 
   return createPortal(
@@ -121,6 +150,31 @@ export function NextStepDialog({
             />
           </div>
         </div>
+
+        {reminders?.enabled && due && (
+          <div className="rounded-lg border border-outline-variant bg-surface-container-low p-md space-y-xs">
+            <p className="text-caption font-semibold uppercase tracking-wider text-on-surface-variant">
+              If this isn’t done in time
+            </p>
+            <p className="text-label-sm text-on-surface-variant">
+              The candidate is messaged automatically the morning after the due date. Completing the task
+              cancels it.
+            </p>
+            {TASK_REMINDER_CHANNELS.map((c) => (
+              <label key={c} className="flex items-center gap-sm cursor-pointer text-label-sm text-on-surface">
+                <input
+                  type="checkbox"
+                  checked={channels.includes(c)}
+                  onChange={() =>
+                    setChannels((prev) => (prev.includes(c) ? prev.filter((x) => x !== c) : [...prev, c]))
+                  }
+                  className="h-4 w-4 rounded border-outline-variant text-primary focus:ring-primary/30"
+                />
+                {CHANNEL_LABELS[c]}
+              </label>
+            ))}
+          </div>
+        )}
 
         {error && <p className="text-label-sm text-error">{error}</p>}
 

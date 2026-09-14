@@ -2369,7 +2369,7 @@ function TasksPanel({
         ) : (
           <ul className="space-y-base">
             {open.map((t) => (
-              <TaskItem key={t.id} leadId={leadId} leadName={leadName} task={t} canEdit={canEdit} bdes={bdes} />
+              <TaskItem key={t.id} leadId={leadId} leadName={leadName} task={t} canEdit={canEdit} bdes={bdes} reminders={reminders} />
             ))}
           </ul>
         )}
@@ -2380,7 +2380,7 @@ function TasksPanel({
           <div className="text-label-sm uppercase tracking-wider text-on-surface-variant">Completed</div>
           <ul className="space-y-base">
             {done.map((t) => (
-              <TaskItem key={t.id} leadId={leadId} leadName={leadName} task={t} canEdit={canEdit} bdes={bdes} />
+              <TaskItem key={t.id} leadId={leadId} leadName={leadName} task={t} canEdit={canEdit} bdes={bdes} reminders={reminders} />
             ))}
           </ul>
         </div>
@@ -2555,12 +2555,14 @@ function TaskItem({
   canEdit,
   leadName,
   bdes,
+  reminders,
 }: {
   leadId: string;
   task: TaskRow;
   canEdit: boolean;
   leadName?: string | null;
   bdes: BdeOpt[];
+  reminders: TaskReminderPreviewDTO;
 }) {
   const router = useRouter();
   const [busy, setBusy] = useState(false);
@@ -2644,6 +2646,7 @@ function TaskItem({
       {showNext && (
         <NextStepDialog
           leadName={leadName}
+          reminders={{ enabled: reminders.enabled, defaultChannels: reminders.defaultChannels }}
           busy={busy}
           error={nextError}
           onCancel={() => {
