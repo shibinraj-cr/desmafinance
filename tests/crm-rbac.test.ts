@@ -14,6 +14,7 @@ vi.mock("@/lib/lead-pulse-rbac", () => ({
   })),
 }));
 
+import { getLeadPulseAccess } from "@/lib/lead-pulse-rbac";
 import {
   canEditLead,
   getCrmAccess,
@@ -49,6 +50,7 @@ function access(partial: Partial<CrmAccess>): CrmAccess {
     canCreateLeads: false,
     canBulkImport: false,
     canBulkEmail: false,
+    canBulkStatus: false,
     canAssign: false,
     canViewHistory: false,
     canManageSettings: false,
@@ -133,5 +135,59 @@ describe("getCrmAccess narrow capability markers", () => {
     const a = await getCrmAccess("u1", perms([], true));
     expect(a.canAssign).toBe(true);
     expect(a.canViewHistory).toBe(true);
+  });
+});
+
+describe("canBulkStatus (bulk stage change on the Leads list)", () => {
+  /** Swap the stubbed Lead Pulse role for the next getCrmAccess call only. */
+  function nextLeadPulseRole(role: "l1" | "l2" | "supervisor") {
+    vi.mocked(getLeadPulseAccess).mockResolvedValueOnce({
+      role,
+      displayName: "Test BDE",
+      canSupervise: role === "supervisor",
+      canSubmitEntries: role !== "supervisor",
+      desfinAdmin: false,
+    });
+  }
+
+  it("is granted to system admins", async () => {
+    const a = await getCrmAccess("u1", perms([], true));
+    expect(a.canBulkStatus).toBe(true);
+  });
+
+  it("is granted to a Lead Pulse supervisor — the Marketing Admin case", async () => {
+    nextLeadPulseRole("supervisor");
+    const a = await getCrmAccess("u1", perms(["/marketing/lead-pulse"]));
+    expect(a.isSupervisor).toBe(true);
+    expect(a.canBulkStatus).toBe(true);
+    // Without promoting them to the CRM-admin tier (import / bulk email / settings).
+    expect(a.canManageCrm).toBe(false);
+    expect(a.canBulkEmail).toBe(false);
+  });
+
+  it("is withheld from a BDE, who may only edit their own leads", async () => {
+    nextLeadPulseRole("l2");
+    const a = await getCrmAccess("u1", perms([]));
+    expect(a.isBde).toBe(true);
+    expect(a.canBulkStatus).toBe(false);
+  });
+
+  it("is withheld from a CRM admin who can't edit an unassigned lead one at a time", async () => {
+    const a = await getCrmAccess("u1", perms(["/crm/settings"]));
+    expect(a.canBulkEmail).toBe(true);
+    // They can bulk-email, but they're neither admin nor supervisor, so
+    // canEditLead already refuses them an unassigned lead — bulk must too.
+    expect(a.canBulkStatus).toBe(false);
+    expect(canEditLead(a, { assignedToId: null }, "u1")).toBe(false);
+  });
+
+  it("never reaches further than canEditLead's edit-any arm", async () => {
+    for (const a of [
+      await getCrmAccess("u1", perms([], true)),
+      await getCrmAccess("u1", perms(["/crm/settings"])),
+      await getCrmAccess("u1", perms([CRM_ASSIGN_PAGE])),
+    ]) {
+      if (a.canBulkStatus) expect(canEditLead(a, { assignedToId: "someone-else" }, "u1")).toBe(true);
+    }
   });
 });

@@ -103,6 +103,17 @@ export type CrmAccess = {
   /** Send a bulk email to many leads at once (CRM-admin, like bulk import). */
   canBulkEmail: boolean;
   /**
+   * Move MANY leads to a new pipeline stage in one action (the Leads list's
+   * bulk "Change stage"). Deliberately the same population as "may edit ANY
+   * lead's status" — system admins and Lead Pulse supervisors (which is what
+   * the Marketing Admin role is) — so bulk is a faster path to a power the
+   * user already has, never a new one. In particular a BDE never gets it: they
+   * may only edit leads assigned to them, so a bulk sweep isn't theirs to make.
+   * Note this is NOT `canManageCrm`: a role granted /crm/settings without
+   * supervisor rights can't edit an unassigned lead one at a time either.
+   */
+  canBulkStatus: boolean;
+  /**
    * Assign / reassign leads to consultants. True for full CRM admins and for any
    * role granted the {@link CRM_ASSIGN_PAGE} marker — so a sales-team lead can
    * re-distribute leads without CRM import/bulk-email/settings powers.
@@ -157,6 +168,8 @@ export async function getCrmAccess(
     canCreateLeads: canManageCrm || isBde,
     canBulkImport: canManageCrm,
     canBulkEmail: canManageCrm,
+    // Mirrors canEditLead's "may edit any lead" arm exactly (admin | supervisor).
+    canBulkStatus: admin || isSupervisor,
     canAssign: canAssignLeads,
     canViewHistory: canViewLeadHistory,
     canManageSettings: canManageCrm,

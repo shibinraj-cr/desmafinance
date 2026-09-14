@@ -13,6 +13,8 @@ import {
   dueDateRange,
   requiresNextStepOnComplete,
   crmTaskFollowAssignmentWhere,
+  bulkStageSkipReason,
+  isActionOnlyStatus,
 } from "@/lib/crm-leads";
 
 describe("requiresNextStepOnComplete — mandatory next step on an active lead", () => {
@@ -406,5 +408,38 @@ describe("crmTaskAssigneeScope", () => {
   it("narrows to the picked consultants", () => {
     expect(crmTaskAssigneeScope(["u1"])).toEqual({ assignedToId: "u1" });
     expect(crmTaskAssigneeScope(["u1", "u2"])).toEqual({ assignedToId: { in: ["u1", "u2"] } });
+  });
+});
+
+describe("bulkStageSkipReason — what a bulk stage change may move", () => {
+  const lead = (statusId: string, code: string) => ({ statusId, status: { code } });
+
+  it("moves a lead sitting on a different stage", () => {
+    expect(bulkStageSkipReason(lead("s1", "follow_up"), "s2")).toBeNull();
+  });
+
+  it("skips a lead already on the target stage", () => {
+    expect(bulkStageSkipReason(lead("s2", "follow_up"), "s2")).toBe("unchanged");
+  });
+
+  it("never moves an Enrolled lead — its finance/Ops records own that stage", () => {
+    expect(bulkStageSkipReason(lead("s9", "enrolled"), "s2")).toBe("enrolled");
+  });
+
+  it("reports Enrolled ahead of unchanged, so the reason is the blocking one", () => {
+    // An enrolled lead targeted AT the enrolled stage is blocked either way;
+    // saying "already there" would wrongly imply the picker could move it.
+    expect(bulkStageSkipReason(lead("s9", "enrolled"), "s9")).toBe("enrolled");
+  });
+
+  it("leaves the other action-only stages movable, matching the PATCH route", () => {
+    // `pipeline` (Set deal) and `duplicate` (importer flag) are only blocked as
+    // a TARGET (isActionOnlyStatus); a lead may legitimately be moved OFF them.
+    expect(bulkStageSkipReason(lead("s3", "pipeline"), "s2")).toBeNull();
+    expect(bulkStageSkipReason(lead("s4", "duplicate"), "s2")).toBeNull();
+    expect(isActionOnlyStatus("pipeline")).toBe(true);
+    expect(isActionOnlyStatus("duplicate")).toBe(true);
+    expect(isActionOnlyStatus("enrolled")).toBe(true);
+    expect(isActionOnlyStatus("follow_up")).toBe(false);
   });
 });

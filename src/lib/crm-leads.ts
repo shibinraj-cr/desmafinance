@@ -411,6 +411,28 @@ export function isActionOnlyStatus(code: string | null | undefined): boolean {
   return !!code && (ACTION_ONLY_STATUS_CODES as readonly string[]).includes(code);
 }
 
+/**
+ * Why a lead swept up in a bulk stage change can't be moved — `null` when it
+ * can. Data rules only: the caller still has to check that the actor may edit
+ * the lead at all. Kept here (not inline in the route) so the bulk path and the
+ * single-lead PATCH can't drift apart on what "movable" means.
+ */
+export type BulkStageSkip = "enrolled" | "unchanged";
+
+export function bulkStageSkipReason(
+  lead: { statusId: string; status: { code: string } },
+  targetStatusId: string,
+): BulkStageSkip | null {
+  // Enrolled is owned by the records enrollment created (Party, pipeline row,
+  // finance draft, Ops project). Leaving it needs a dedicated undo action, so no
+  // stage picker — single or bulk — ever moves it.
+  if (lead.status.code === "enrolled") return "enrolled";
+  // Already there: a no-op, not a change. Keeps a broad sweep from writing a
+  // timeline entry (and bumping lastActivityAt) for leads nothing happened to.
+  if (lead.statusId === targetStatusId) return "unchanged";
+  return null;
+}
+
 /** The status new leads start in: the explicit default, else the first active by order. */
 export async function resolveDefaultStatus() {
   const def = await prisma.crmLeadStatus.findFirst({
