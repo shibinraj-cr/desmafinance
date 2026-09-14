@@ -5,7 +5,7 @@ import { createPortal } from "react-dom";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
 import type { LeadRow, NoteRow, ActivityRow, TaskRow, TaskReminderRow } from "@/lib/crm-leads";
-import { isActionOnlyStatus } from "@/lib/crm-leads";
+import { isActionOnlyStatus, canUnenrollInto } from "@/lib/crm-leads";
 import { buildLeadMergeVars, fillTemplate, LEAD_TEMPERATURES, TASK_TYPES, type MessageTemplateDTO } from "@/lib/crm";
 import { ageFromDob } from "@/lib/age";
 import { COUNTRIES, countryCodeFor } from "@/lib/countries";
@@ -1294,11 +1294,17 @@ function UnenrollModal({
   const [acknowledged, setAcknowledged] = useState(false);
   const [reason, setReason] = useState("");
 
-  // Statuses the lead may land in — the same filter the status picker uses, so
-  // "Pipeline" / "Enrolled" / "Duplicate" (set by their own actions) never show.
-  const targets = useMemo(() => masters.statuses.filter((st) => !isActionOnlyStatus(st.code)), [masters.statuses]);
+  // Statuses the lead may land in. Unlike the ordinary status picker this DOES
+  // offer "Pipeline", and prefers it: the deal survives the undo (its pipeline
+  // row goes back to `open`), so a previously-enrolled lead belongs back in the
+  // forecast rather than dropped to a generic working status.
+  const targets = useMemo(() => masters.statuses.filter((st) => canUnenrollInto(st.code)), [masters.statuses]);
   const [statusId, setStatusId] = useState(
-    () => targets.find((st) => st.code === "follow_up")?.id ?? targets[0]?.id ?? "",
+    () =>
+      targets.find((st) => st.code === "pipeline")?.id ??
+      targets.find((st) => st.code === "follow_up")?.id ??
+      targets[0]?.id ??
+      "",
   );
 
   useEffect(() => {
@@ -1411,6 +1417,10 @@ function UnenrollModal({
                     </option>
                   ))}
                 </select>
+                <span className="block text-label-sm text-on-surface-variant mt-xs">
+                  The deal itself survives the undo, so <b>Pipeline</b> is usually right — the lead goes back to being a
+                  live deal in the forecast. Pick a working status instead if the candidate has actually gone cold.
+                </span>
               </Field>
               <Field label="Reason (optional)">
                 <input

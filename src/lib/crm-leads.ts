@@ -412,6 +412,24 @@ export function isActionOnlyStatus(code: string | null | undefined): boolean {
 }
 
 /**
+ * Statuses an Un-enroll (src/lib/crm-unenroll.ts) may NOT move a lead into.
+ *
+ * Note this is deliberately narrower than {@link ACTION_ONLY_STATUS_CODES}:
+ * "Pipeline" IS a valid landing state even though it is action-only, because
+ * un-enrolling is precisely the action that puts a lead back there. The deal
+ * survives the undo — the LeadPulsePipeline row goes from `closed_won` back to
+ * `open` — so a lead that had a deal belongs in Pipeline, not dropped to a
+ * generic working status. Only "enrolled" (the state being left) and
+ * "duplicate" (set by the importer's dedup flagging, nothing to do with deals)
+ * are off-limits.
+ */
+export const UNENROLL_FORBIDDEN_STATUS_CODES = ["enrolled", "duplicate"] as const;
+
+export function canUnenrollInto(code: string | null | undefined): boolean {
+  return !!code && !(UNENROLL_FORBIDDEN_STATUS_CODES as readonly string[]).includes(code);
+}
+
+/**
  * Why a lead swept up in a bulk stage change can't be moved — `null` when it
  * can. Data rules only: the caller still has to check that the actor may edit
  * the lead at all. Kept here (not inline in the route) so the bulk path and the
@@ -424,8 +442,8 @@ export function bulkStageSkipReason(
   targetStatusId: string,
 ): BulkStageSkip | null {
   // Enrolled is owned by the records enrollment created (Party, pipeline row,
-  // finance draft, Ops project). Leaving it needs a dedicated undo action, so no
-  // stage picker — single or bulk — ever moves it.
+  // finance draft, Ops project). Leaving it needs the dedicated Un-enroll
+  // action, so no stage picker — single or bulk — ever moves it.
   if (lead.status.code === "enrolled") return "enrolled";
   // Already there: a no-op, not a change. Keeps a broad sweep from writing a
   // timeline entry (and bumping lastActivityAt) for leads nothing happened to.
