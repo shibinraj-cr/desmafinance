@@ -12,6 +12,8 @@ import {
 } from "@/lib/aggregations";
 import { parsePeriod, periodLabel, rangeFor } from "@/lib/period";
 import { DateFilter } from "@/components/DateFilter";
+import { PaymentModeFilter } from "@/components/PaymentModeFilter";
+import { listParam } from "@/lib/filter-params";
 import { prisma } from "@/lib/prisma";
 
 export const dynamic = "force-dynamic";
@@ -28,7 +30,9 @@ const PAGE = "/finance/revenue";
 export default async function RevenuePage({
   searchParams,
 }: {
-  searchParams: { period?: string; from?: string; to?: string };
+  // `mode` is the payment-mode multi-select — one value or several, written
+  // as repeated query keys.
+  searchParams: { period?: string; from?: string; to?: string; mode?: string | string[] };
 }) {
   const perms = await getCurrentUserPermissions();
   if (!perms) redirect("/login");
@@ -36,6 +40,15 @@ export default async function RevenuePage({
 
   const period = parsePeriod(searchParams);
   const range = rangeFor(period);
+  const modes = listParam(searchParams.mode);
+
+  // The GST tile is the intersection of its own Axis/HDFC rule with whatever
+  // the user has picked, so the whole page reads off one filter: pick Axis
+  // only and the tile drops HDFC; pick modes that carry no GST at all (RCS,
+  // Cash) and it correctly shows nothing.
+  const gstModes = modes.length
+    ? GST_TAXABLE_MODES.filter((m) => modes.includes(m))
+    : [...GST_TAXABLE_MODES];
 
   // GST liability now honours the same period filter as the rest of the
   // page — supervisors can flip to a different month / quarter / FY and
@@ -43,16 +56,16 @@ export default async function RevenuePage({
   //   - paymentMode must be one of GST_TAXABLE_MODES (Axis / HDFC), AND
   //   - expDom = 'DOM' (Domestic). Exports are GST-exempt for this team.
   const [totals, series, byCat, topRev, gstAgg] = await Promise.all([
-    totalsByType(range),
-    monthlySeries(range),
-    revenueByCategory(range),
-    topRevenueServices(8, range),
+    totalsByType(range, modes),
+    monthlySeries(range, modes),
+    revenueByCategory(range, modes),
+    topRevenueServices(8, range, modes),
     prisma.transaction.aggregate({
       where: {
         deletedAt: null,
         type: "Revenue",
         expDom: "DOM",
-        paymentMode: { in: [...GST_TAXABLE_MODES] },
+        paymentMode: { in: gstModes },
         ...(range.from || range.to
           ? {
               date: {
@@ -74,12 +87,26 @@ export default async function RevenuePage({
   const last = series[series.length - 1];
   const prev = series[series.length - 2];
   const mom = prev?.revenue ? Math.round(((last.revenue - prev.revenue) / prev.revenue) * 100) : 0;
+  // An empty chart under an active mode filter is a filter result, not an
+  // empty ledger — say which it is.
+  const emptyMsg = modes.length
+    ? `No revenue in ${modes.join(", ")} for this period.`
+    : "No revenue yet.";
   const activeMonths = series.filter((s) => s.revenue > 0).length;
   const ytdAvg = activeMonths ? totals.revenue / activeMonths : 0;
 
   return (
     <>
-      <TopBar title="Revenue Analysis" subtitle={periodLabel(period)} action={<DateFilter />} />
+      <TopBar
+        title="Revenue Analysis"
+        subtitle={modes.length ? `${periodLabel(period)} · ${modes.join(", ")}` : periodLabel(period)}
+        action={
+          <>
+            <PaymentModeFilter />
+            <DateFilter />
+          </>
+        }
+      />
       <div className="p-margin space-y-lg">
         <section className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-5 gap-gutter">
           <KpiCard
@@ -88,9 +115,11 @@ export default async function RevenuePage({
             tone="danger"
             hero
             hint={
-              gstCount > 0
-                ? `From ${gstCount} DOM bank-mode receipt${gstCount === 1 ? "" : "s"} totalling ₹${Math.round(gstGross).toLocaleString("en-IN")} (Axis + HDFC, GST-inclusive @ 18%; EXP excluded)`
-                : "No DOM revenue in Axis Bank / HDFC Bank for this period yet."
+              gstModes.length === 0
+                ? "No GST-bearing mode in the filter — GST is only charged on Axis Bank / HDFC Bank receipts."
+                : gstCount > 0
+                  ? `From ${gstCount} DOM bank-mode receipt${gstCount === 1 ? "" : "s"} totalling ₹${Math.round(gstGross).toLocaleString("en-IN")} (${gstModes.join(" + ")}, GST-inclusive @ 18%; EXP excluded)`
+                  : `No DOM revenue in ${gstModes.join(" / ")} for this period yet.`
             }
           />
           <KpiCard label="Total Revenue" value={totals.revenue} tone="primary" hero />
@@ -105,7 +134,7 @@ export default async function RevenuePage({
         <section className="grid grid-cols-1 lg:grid-cols-12 gap-gutter">
           <div className="lg:col-span-7">
             <Section title="Top Services">
-              {topRev.length ? <HorizontalBars data={topRev} /> : <Empty>No revenue yet.</Empty>}
+              {topRev.length ? <HorizontalBars data={topRev} /> : <Empty>{emptyMsg}</Empty>}
             </Section>
           </div>
           <div className="lg:col-span-5">
@@ -113,7 +142,7 @@ export default async function RevenuePage({
               {byCat.length ? (
                 <CategoryDonut data={byCat} centerTotal={totals.revenue} centerLabel="Total" />
               ) : (
-                <Empty>No revenue yet.</Empty>
+                <Empty>{emptyMsg}</Empty>
               )}
             </Section>
           </div>

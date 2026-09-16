@@ -1,5 +1,6 @@
 import { prisma } from "./prisma";
 import type { Range } from "./period";
+import { listParam, oneOf } from "./filter-params";
 
 export type MonthBucket = { month: string; revenue: number; expense: number; net: number };
 
@@ -23,9 +24,18 @@ function num(d: { toString(): string } | number | null | undefined): number {
   return typeof d === "number" ? d : Number(d.toString());
 }
 
-function activeWhere(range?: Range) {
+/**
+ * Shared `where` for every dashboard aggregate: live rows only, narrowed by
+ * the period and — where the caller passes one — by the payment-mode
+ * multi-select. `modes` is the raw repeated `?mode=` param, so it takes the
+ * same shape the pages read out of `searchParams`; an empty list means "all
+ * modes" rather than "no modes".
+ */
+function activeWhere(range?: Range, modes?: string[]) {
+  const picked = listParam(modes);
   return {
     deletedAt: null,
+    ...(picked.length ? { paymentMode: oneOf(picked) } : {}),
     ...(range?.from || range?.to
       ? {
           date: {
@@ -37,10 +47,10 @@ function activeWhere(range?: Range) {
   };
 }
 
-export async function totalsByType(range?: Range) {
+export async function totalsByType(range?: Range, modes?: string[]) {
   const rows = await prisma.transaction.groupBy({
     by: ["type"],
-    where: activeWhere(range),
+    where: activeWhere(range, modes),
     _sum: { amount: true },
   });
   let revenue = 0;
@@ -53,10 +63,10 @@ export async function totalsByType(range?: Range) {
   return { revenue, expense, net: revenue - expense };
 }
 
-export async function monthlySeries(range?: Range): Promise<MonthBucket[]> {
+export async function monthlySeries(range?: Range, modes?: string[]): Promise<MonthBucket[]> {
   const rows = await prisma.transaction.groupBy({
     by: ["month", "type"],
-    where: activeWhere(range),
+    where: activeWhere(range, modes),
     _sum: { amount: true },
   });
   const map = new Map<string, MonthBucket>();
@@ -71,10 +81,10 @@ export async function monthlySeries(range?: Range): Promise<MonthBucket[]> {
   return Array.from(map.values());
 }
 
-export async function topRevenueServices(limit = 6, range?: Range) {
+export async function topRevenueServices(limit = 6, range?: Range, modes?: string[]) {
   const rows = await prisma.transaction.groupBy({
     by: ["subItem"],
-    where: { ...activeWhere(range), type: "Revenue" },
+    where: { ...activeWhere(range, modes), type: "Revenue" },
     _sum: { amount: true },
   });
   return rows
@@ -126,10 +136,10 @@ export async function expenseBreakdown(limit = 8, range?: Range) {
     .slice(0, limit);
 }
 
-export async function revenueByCategory(range?: Range) {
+export async function revenueByCategory(range?: Range, modes?: string[]) {
   const rows = await prisma.transaction.groupBy({
     by: ["category"],
-    where: { ...activeWhere(range), type: "Revenue" },
+    where: { ...activeWhere(range, modes), type: "Revenue" },
     _sum: { amount: true },
   });
   return rows
