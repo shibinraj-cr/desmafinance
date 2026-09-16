@@ -21,6 +21,7 @@ import {
   totalsByType,
   monthlySeries,
   expenseBreakdown,
+  revenueByCategory,
   topRevenueServices,
   paymentModeMix,
 } from "@/lib/aggregations";
@@ -121,5 +122,63 @@ describe("paymentModeMix", () => {
     expect(hdfc).toEqual({ mode: "HDFC Bank", inflow: 1000, outflow: 400 });
     const axis = r.find((m) => m.mode === "Axis Bank")!;
     expect(axis).toEqual({ mode: "Axis Bank", inflow: 300, outflow: 0 });
+  });
+});
+
+describe("payment-mode narrowing", () => {
+  it("leaves paymentMode out of the where clause when nothing is picked", async () => {
+    mockedGroupBy.mockResolvedValueOnce([]);
+    await totalsByType(undefined, []);
+    expect(mockedGroupBy.mock.calls[0][0].where).not.toHaveProperty("paymentMode");
+  });
+
+  it("uses a bare equality for a single mode", async () => {
+    mockedGroupBy.mockResolvedValueOnce([]);
+    await totalsByType(undefined, ["Axis Bank"]);
+    expect(mockedGroupBy.mock.calls[0][0].where).toMatchObject({ paymentMode: "Axis Bank" });
+  });
+
+  it("uses an IN for several modes", async () => {
+    mockedGroupBy.mockResolvedValueOnce([]);
+    await monthlySeries(undefined, ["Axis Bank", "HDFC Bank", "RCS"]);
+    expect(mockedGroupBy.mock.calls[0][0].where).toMatchObject({
+      paymentMode: { in: ["Axis Bank", "HDFC Bank", "RCS"] },
+    });
+  });
+
+  it("narrows the revenue-only aggregates alongside their type filter", async () => {
+    mockedGroupBy.mockResolvedValueOnce([]);
+    await revenueByCategory(undefined, ["RCS"]);
+    expect(mockedGroupBy.mock.calls[0][0].where).toMatchObject({
+      type: "Revenue",
+      paymentMode: "RCS",
+      deletedAt: null,
+    });
+
+    mockedGroupBy.mockResolvedValueOnce([]);
+    await topRevenueServices(8, undefined, ["RCS", "Cash"]);
+    expect(mockedGroupBy.mock.calls[1][0].where).toMatchObject({
+      type: "Revenue",
+      paymentMode: { in: ["RCS", "Cash"] },
+    });
+  });
+
+  it("combines the mode filter with the period range", async () => {
+    mockedGroupBy.mockResolvedValueOnce([]);
+    const from = new Date("2026-04-01T00:00:00Z");
+    const to = new Date("2026-07-01T00:00:00Z");
+    await totalsByType({ from, to }, ["HDFC Bank"]);
+    expect(mockedGroupBy.mock.calls[0][0].where).toMatchObject({
+      paymentMode: "HDFC Bank",
+      date: { gte: from, lt: to },
+    });
+  });
+
+  it("de-dupes and trims the raw query values", async () => {
+    mockedGroupBy.mockResolvedValueOnce([]);
+    await totalsByType(undefined, [" Axis Bank ", "Axis Bank", "", "RCS"]);
+    expect(mockedGroupBy.mock.calls[0][0].where).toMatchObject({
+      paymentMode: { in: ["Axis Bank", "RCS"] },
+    });
   });
 });
