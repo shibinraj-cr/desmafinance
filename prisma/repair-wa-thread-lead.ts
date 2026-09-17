@@ -31,7 +31,7 @@
  * this repo is public — so rows are identified by id and stage code.
  */
 import { PrismaClient } from "@prisma/client";
-import { pickThreadLead, DUPLICATE_STATUS_CODE } from "../src/lib/wa/thread-lead";
+import { pickThreadLead, DUPLICATE_STATUS_CODE, type ThreadLeadCandidate } from "../src/lib/wa/thread-lead";
 
 const prisma = new PrismaClient();
 
@@ -78,25 +78,46 @@ async function main() {
     cursor = page[page.length - 1].id;
     scanned += page.length;
 
-    for (const conv of page) {
-      const leads = await prisma.lead.findMany({
-        where: { OR: [{ phoneE164: conv.phoneE164 }, { altPhoneE164: conv.phoneE164 }] },
-        select: {
-          id: true,
-          assignedToId: true,
-          createdAt: true,
-          status: { select: { code: true } },
-        },
-      });
+    // Every lead on this page's numbers in ONE query, then grouped in memory.
+    // Asking per thread is the obvious shape and the wrong one: it is a query
+    // per conversation against a remote database, which on a real inbox is
+    // thousands of round trips and minutes of silence.
+    const phones = [...new Set(page.map((c) => c.phoneE164))];
+    const pageLeads = await prisma.lead.findMany({
+      where: { OR: [{ phoneE164: { in: phones } }, { altPhoneE164: { in: phones } }] },
+      select: {
+        id: true,
+        assignedToId: true,
+        createdAt: true,
+        phoneE164: true,
+        altPhoneE164: true,
+        status: { select: { code: true } },
+      },
+    });
 
-      const picked = pickThreadLead(
-        leads.map((l) => ({
-          id: l.id,
-          assignedToId: l.assignedToId,
-          statusCode: l.status?.code ?? null,
-          createdAt: l.createdAt,
-        })),
-      );
+    // A lead is filed under BOTH its numbers — a candidate reaching us on the
+    // alternate number is no less that lead's. `wanted` keeps a lead whose other
+    // number belongs to some thread outside this page from creating a stray key.
+    const wanted = new Set(phones);
+    const byPhone = new Map<string, ThreadLeadCandidate[]>();
+    for (const l of pageLeads) {
+      const candidate: ThreadLeadCandidate = {
+        id: l.id,
+        assignedToId: l.assignedToId,
+        statusCode: l.status?.code ?? null,
+        createdAt: l.createdAt,
+      };
+      for (const phone of new Set([l.phoneE164, l.altPhoneE164])) {
+        if (!phone || !wanted.has(phone)) continue;
+        const bucket = byPhone.get(phone);
+        if (bucket) bucket.push(candidate);
+        else byPhone.set(phone, [candidate]);
+      }
+    }
+
+    for (const conv of page) {
+      const leads = byPhone.get(conv.phoneE164) ?? [];
+      const picked = pickThreadLead(leads);
 
       // No lead on this number at all. Left alone deliberately: the thread still
       // holds the candidate's messages, and inventing a link would be worse than
@@ -113,13 +134,16 @@ async function main() {
         fromLeadId: conv.leadId,
         fromStatus: conv.lead?.status?.code ?? null,
         toLeadId: picked.id,
-        toStatus: leads.find((l) => l.id === picked.id)?.status?.code ?? null,
+        toStatus: picked.statusCode,
         claimsOwner: conv.assignedToId ? null : picked.assignedToId,
       });
     }
+
+    // Progress, because the alternative on a big inbox is a header and silence.
+    log(`  …scanned ${scanned} thread(s), ${moves.length} to re-point so far`);
   }
 
-  log(`  scanned ${scanned} thread(s); ${orphaned} have no lead on their number (left as-is)\n`);
+  log(`\n  scanned ${scanned} thread(s); ${orphaned} have no lead on their number (left as-is)\n`);
 
   if (moves.length === 0) {
     log("  nothing to re-point — every thread is already on its best lead.");
