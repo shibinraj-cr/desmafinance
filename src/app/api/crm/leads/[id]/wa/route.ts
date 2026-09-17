@@ -6,6 +6,7 @@ import { getCurrentUserAndPermissions } from "@/lib/permissions";
 import { getCrmAccess, canEditLead } from "@/lib/crm-rbac";
 import { isSessionOpen, markConversationRead } from "@/lib/wa/mirror";
 import { canViewConversation } from "@/lib/wa/access";
+import { leadOwnersForPhone } from "@/lib/wa/identity";
 import { getWaProvider } from "@/lib/wa/registry";
 import { filterTemplatesFor, leadPulseRoleOf, loadTemplateGrants, templateKey } from "@/lib/wa/template-access";
 
@@ -44,20 +45,26 @@ export const GET = withApiHandler(async (_req: Request, { params }: { params: { 
   });
   if (!lead) throw notFound();
 
-  // A thread is found by its link first and by number second: a conversation
-  // that started before the lead existed is linked on the next inbound message,
-  // but the number match makes it readable immediately.
+  // A thread is found by its link first and by NUMBER second — including a
+  // number whose thread is bound to a different lead.
   //
-  // The number match is restricted to UNLINKED threads, which matters because a
-  // number legitimately maps to several leads here — re-enrollment copies
-  // phoneE164 onto a brand-new lead for the second service, and the mirror binds
-  // the thread to exactly one of them. Without the `leadId: null` guard, opening
-  // the other lead would show a conversation that belongs to a different record.
+  // That match used to be restricted to unlinked threads, on the reasoning that
+  // one number maps to several leads (re-enrollment, an import filed twice) and
+  // the other lead's tab should not show "a conversation that belongs to a
+  // different record". In practice those rows are the same person: the mirror
+  // binds the thread to the OLDEST lead on the number, which for an imported
+  // candidate is routinely the parked duplicate, so the guard hid the thread
+  // from the one lead anybody was working and offered "start a conversation"
+  // that could only 409. One number is one candidate and one thread; showing it
+  // on each of their leads is the honest rendering of that.
+  //
+  // Permission is unaffected — it is decided below, per consultant, not by which
+  // lead the mirror happened to bind.
   const conversation = await prisma.waConversation.findFirst({
     where: {
       OR: [
         { leadId: lead.id },
-        ...(lead.phoneE164 ? [{ phoneE164: lead.phoneE164, leadId: null }] : []),
+        ...(lead.phoneE164 ? [{ phoneE164: lead.phoneE164 }] : []),
       ],
     },
     orderBy: { lastMessageAt: "desc" },
@@ -146,7 +153,12 @@ export const GET = withApiHandler(async (_req: Request, { params }: { params: { 
     conversation &&
     !canViewConversation(
       access,
-      { leadAssignedToId: lead.assignedToId, conversationAssignedToId: conversation.assignedToId },
+      {
+        // Owners across the whole identity group, so a consultant who owns this
+        // lead is not refused the thread because the mirror bound it elsewhere.
+        leadOwnerIds: await leadOwnersForPhone(conversation.phoneE164),
+        conversationAssignedToId: conversation.assignedToId,
+      },
       userId,
     )
   ) {

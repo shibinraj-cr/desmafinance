@@ -6,6 +6,7 @@ import { unauthorized, forbidden, notFound } from "@/lib/http-error";
 import { getCurrentUserAndPermissions } from "@/lib/permissions";
 import { getCrmAccess } from "@/lib/crm-rbac";
 import { canActOnConversation } from "@/lib/wa/access";
+import { leadOwnersForPhone } from "@/lib/wa/identity";
 import { sendWaMessage, WA_MAX_TEXT_LENGTH } from "@/lib/wa/send";
 
 export const dynamic = "force-dynamic";
@@ -42,14 +43,16 @@ export const POST = withApiHandler(async (req: Request, { params }: { params: { 
 
   const conversation = await prisma.waConversation.findUnique({
     where: { id: params.id },
-    select: { id: true, assignedToId: true, lead: { select: { assignedToId: true } } },
+    select: { id: true, phoneE164: true, assignedToId: true, lead: { select: { assignedToId: true } } },
   });
   if (!conversation) throw notFound();
 
   const canAct = canActOnConversation(
     access,
     {
-      leadAssignedToId: conversation.lead?.assignedToId ?? null,
+      // Every consultant owning a lead on this number — a thread bound to a
+      // parked duplicate must not lock out whoever works the live lead.
+      leadOwnerIds: await leadOwnersForPhone(conversation.phoneE164),
       conversationAssignedToId: conversation.assignedToId,
       hasLead: !!conversation.lead,
     },

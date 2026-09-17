@@ -101,18 +101,18 @@ describe("conversation visibility", () => {
     });
   });
 
-  it("counts a thread as theirs when either the lead or the thread is theirs", () => {
+  it("counts a thread as theirs when any lead on the number, or the thread, is theirs", () => {
     const bde = access({ isBde: true });
-    expect(canViewConversation(bde, { leadAssignedToId: "u1", conversationAssignedToId: null }, "u1")).toBe(true);
+    expect(canViewConversation(bde, { leadOwnerIds: ["u1"], conversationAssignedToId: null }, "u1")).toBe(true);
     // A stranger's first message has no lead but can be handed to someone.
-    expect(canViewConversation(bde, { leadAssignedToId: null, conversationAssignedToId: "u1" }, "u1")).toBe(true);
+    expect(canViewConversation(bde, { leadOwnerIds: [], conversationAssignedToId: "u1" }, "u1")).toBe(true);
   });
 
   it("keeps a consultant out of someone else's conversation", () => {
     const bde = access({ isBde: true });
-    expect(canViewConversation(bde, { leadAssignedToId: "u2", conversationAssignedToId: "u2" }, "u1")).toBe(false);
+    expect(canViewConversation(bde, { leadOwnerIds: ["u2"], conversationAssignedToId: "u2" }, "u1")).toBe(false);
     // Unowned by anyone is still not theirs to read.
-    expect(canViewConversation(bde, { leadAssignedToId: null, conversationAssignedToId: null }, "u1")).toBe(false);
+    expect(canViewConversation(bde, { leadOwnerIds: [], conversationAssignedToId: null }, "u1")).toBe(false);
   });
 });
 

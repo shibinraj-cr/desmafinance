@@ -7,6 +7,7 @@ import { getCurrentUserAndPermissions } from "@/lib/permissions";
 import { getCrmAccess } from "@/lib/crm-rbac";
 import { isSessionOpen, markConversationRead } from "@/lib/wa/mirror";
 import { canActOnConversation, canAssignConversation, canViewConversation } from "@/lib/wa/access";
+import { leadOwnersForPhone } from "@/lib/wa/identity";
 import { findLeadDuplicates } from "@/lib/crm-leads";
 import { assignLeadTo } from "@/lib/crm-assign";
 
@@ -108,16 +109,17 @@ export const GET = withApiHandler(async (_req: Request, { params }: { params: { 
   });
   if (!conversation) throw notFound();
 
+  // Who owns this candidate — read across every lead on the number, not just
+  // the one the thread is bound to. See src/lib/wa/identity.ts.
+  const leadOwnerIds = await leadOwnersForPhone(conversation.phoneE164);
+
   // A consultant may only open a thread that is theirs. notFound rather than
   // forbidden: whether a conversation exists for some other candidate is itself
   // information they are not entitled to.
   if (
     !canViewConversation(
       access,
-      {
-        leadAssignedToId: conversation.lead?.assignedToId ?? null,
-        conversationAssignedToId: conversation.assignedToId,
-      },
+      { leadOwnerIds, conversationAssignedToId: conversation.assignedToId },
       userId,
     )
   ) {
@@ -127,7 +129,7 @@ export const GET = withApiHandler(async (_req: Request, { params }: { params: { 
   const canAct = canActOnConversation(
     access,
     {
-      leadAssignedToId: conversation.lead?.assignedToId ?? null,
+      leadOwnerIds,
       conversationAssignedToId: conversation.assignedToId,
       hasLead: !!conversation.lead,
     },
@@ -265,12 +267,18 @@ export const PATCH = withApiHandler(async (req: Request, { params }: { params: {
 
   const conversation = await prisma.waConversation.findUnique({
     where: { id: params.id },
-    select: { id: true, leadId: true, assignedToId: true, lead: { select: { assignedToId: true } } },
+    select: {
+      id: true,
+      leadId: true,
+      phoneE164: true,
+      assignedToId: true,
+      lead: { select: { assignedToId: true } },
+    },
   });
   if (!conversation) throw notFound();
 
   const actor = {
-    leadAssignedToId: conversation.lead?.assignedToId ?? null,
+    leadOwnerIds: await leadOwnersForPhone(conversation.phoneE164),
     conversationAssignedToId: conversation.assignedToId,
     hasLead: !!conversation.lead,
   };
