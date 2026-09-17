@@ -36,6 +36,7 @@ import {
   WA_PROVIDER_KEY,
 } from "../app-settings";
 import { isOptOutMessage, type WaInboundMessage } from "./inbound";
+import { pickThreadLead } from "./thread-lead";
 import { renderTemplatePreview } from "./cloud-provider";
 import type { WaProviderKey } from "./provider";
 
@@ -109,29 +110,48 @@ export type WaIngestSummary = {
  * the alternate number they gave us — `phoneMatchKeys` exists for the same
  * reason on the import path.
  *
- * OLDEST lead wins, and that is a deliberate product decision, not an artefact
- * of the query. One number can map to several leads here (re-enrollment creates
- * a new lead per service), but a number has exactly one WhatsApp thread, so the
- * thread must pick one. Binding to the oldest matches how a re-inquiry folds
- * onto the canonical record rather than the newest duplicate, and it never
- * moves — the conversation stays attached to the same lead for its whole life.
+ * The whole set is read and ranked by pickThreadLead rather than ordered in the
+ * query, because the rule is not expressible as an `orderBy`: a lead flagged
+ * `duplicate` loses to a real one whatever its age. It used to be a plain
+ * "oldest wins", which for an imported candidate bound the thread to the row the
+ * importer had marked as a copy — leaving the inbox's context rail answering
+ * "Stage: Duplicate" for a live conversation. The set is small (the leads
+ * sharing one number, typically one to four) and both columns are indexed.
  *
- * The known cost, accepted: for a re-enrolled candidate the inbox's context rail
- * shows the original lead, which is usually already closed, rather than the
- * service the consultant is currently working. Binding to the most recently
- * active lead would fix the rail but make the link move as leads change, which
- * loses stable attribution. Stability was chosen.
+ * The link is RE-RESOLVED on every inbound message — the upsert below rewrites
+ * `leadId` — so improving this rule re-points existing threads as their
+ * candidates write in, without a migration. The repair script
+ * (prisma/repair-wa-thread-lead.ts) exists for the threads that are idle.
  *
- * This choice does NOT affect consent or de-duplication: opt-out is stamped
- * across every lead sharing the number, and broadcasts claim numbers rather than
- * leads, both independent of which lead the thread points at.
+ * This choice does NOT affect consent, de-duplication, or who may reply:
+ * opt-out is stamped across every lead sharing the number, broadcasts claim
+ * numbers rather than leads, and permission is decided across every lead on the
+ * number — all independent of which lead the thread points at.
  */
 async function findLeadByPhone(phoneE164: string) {
-  return prisma.lead.findFirst({
+  const leads = await prisma.lead.findMany({
     where: { OR: [{ phoneE164 }, { altPhoneE164: phoneE164 }] },
-    orderBy: { createdAt: "asc" },
-    select: { id: true, assignedToId: true },
+    select: {
+      id: true,
+      assignedToId: true,
+      createdAt: true,
+      status: { select: { code: true } },
+    },
   });
+
+  const picked = pickThreadLead(
+    leads.map((l) => ({
+      id: l.id,
+      assignedToId: l.assignedToId,
+      statusCode: l.status?.code ?? null,
+      createdAt: l.createdAt,
+    })),
+  );
+  if (!picked) return null;
+
+  // Back to the shape every caller here expects — the picker's extra fields are
+  // only the ranking key.
+  return { id: picked.id, assignedToId: picked.assignedToId };
 }
 
 /**
