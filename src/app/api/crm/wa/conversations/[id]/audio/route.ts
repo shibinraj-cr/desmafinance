@@ -5,6 +5,7 @@ import { unauthorized, forbidden, notFound, badRequest } from "@/lib/http-error"
 import { getCurrentUserAndPermissions } from "@/lib/permissions";
 import { getCrmAccess } from "@/lib/crm-rbac";
 import { canActOnConversation } from "@/lib/wa/access";
+import { leadOwnersForPhone } from "@/lib/wa/identity";
 import { sendWaVoiceNote } from "@/lib/wa/send";
 import { remuxToOggOpus, remuxFailureMessage, WA_VOICE_MIME } from "@/lib/wa/audio-remux";
 import { logger } from "@/lib/logger";
@@ -49,14 +50,14 @@ export const POST = withApiHandler(async (req: Request, { params }: { params: { 
 
   const conversation = await prisma.waConversation.findUnique({
     where: { id: params.id },
-    select: { id: true, assignedToId: true, lead: { select: { assignedToId: true } } },
+    select: { id: true, phoneE164: true, assignedToId: true, lead: { select: { assignedToId: true } } },
   });
   if (!conversation) throw notFound();
 
   const canAct = canActOnConversation(
     access,
     {
-      leadAssignedToId: conversation.lead?.assignedToId ?? null,
+      leadOwnerIds: await leadOwnersForPhone(conversation.phoneE164),
       conversationAssignedToId: conversation.assignedToId,
       hasLead: !!conversation.lead,
     },

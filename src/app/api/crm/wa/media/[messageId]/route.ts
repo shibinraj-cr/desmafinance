@@ -4,6 +4,7 @@ import { unauthorized, forbidden, notFound } from "@/lib/http-error";
 import { getCurrentUserAndPermissions } from "@/lib/permissions";
 import { getCrmAccess } from "@/lib/crm-rbac";
 import { canViewConversation } from "@/lib/wa/access";
+import { leadOwnersForPhone } from "@/lib/wa/identity";
 import { getWaProvider } from "@/lib/wa/registry";
 import type { WaMediaStream } from "@/lib/wa/provider";
 import { logger } from "@/lib/logger";
@@ -46,7 +47,7 @@ export const GET = withApiHandler(async (req: Request, { params }: { params: { m
       mediaMime: true,
       fileName: true,
       conversation: {
-        select: { assignedToId: true, lead: { select: { assignedToId: true } } },
+        select: { phoneE164: true, assignedToId: true, lead: { select: { assignedToId: true } } },
       },
     },
   });
@@ -55,7 +56,7 @@ export const GET = withApiHandler(async (req: Request, { params }: { params: { m
   const visible = canViewConversation(
     access,
     {
-      leadAssignedToId: message.conversation.lead?.assignedToId ?? null,
+      leadOwnerIds: await leadOwnersForPhone(message.conversation.phoneE164),
       conversationAssignedToId: message.conversation.assignedToId,
     },
     userId,

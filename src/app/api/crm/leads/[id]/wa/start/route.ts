@@ -6,6 +6,7 @@ import { unauthorized, forbidden, notFound, badRequest } from "@/lib/http-error"
 import { getCurrentUserAndPermissions } from "@/lib/permissions";
 import { getCrmAccess, canEditLead } from "@/lib/crm-rbac";
 import { canViewConversation } from "@/lib/wa/access";
+import { leadOwnersForPhone } from "@/lib/wa/identity";
 import { findOrCreateConversationForLead } from "@/lib/wa/mirror";
 import { sendWaMessage, WA_MAX_TEXT_LENGTH } from "@/lib/wa/send";
 
@@ -72,11 +73,14 @@ export const POST = withApiHandler(async (req: Request, { params }: { params: { 
   // anything is sent into it.
   const row = await prisma.waConversation.findUnique({
     where: { id: conv.conversationId },
-    select: { assignedToId: true },
+    select: { phoneE164: true, assignedToId: true },
   });
   const viewable = canViewConversation(
     access,
-    { leadAssignedToId: lead.assignedToId, conversationAssignedToId: row?.assignedToId ?? null },
+    {
+      leadOwnerIds: await leadOwnersForPhone(row?.phoneE164 ?? lead.phoneE164),
+      conversationAssignedToId: row?.assignedToId ?? null,
+    },
     userId,
   );
   if (!viewable) throw forbidden();

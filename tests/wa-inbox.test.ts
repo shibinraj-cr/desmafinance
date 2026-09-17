@@ -5,7 +5,7 @@ import {
   normalizeInboxFilter,
   WA_INBOX_FILTERS,
 } from "@/lib/wa/inbox";
-import { canActOnConversation, canAssignConversation } from "@/lib/wa/access";
+import { canActOnConversation, canAssignConversation, canViewConversation } from "@/lib/wa/access";
 import type { CrmAccess } from "@/lib/crm-rbac";
 
 /** Minimal CrmAccess; each test overrides only the flags it cares about. */
@@ -171,10 +171,10 @@ describe("isAwaitingReply", () => {
 });
 
 describe("canActOnConversation", () => {
-  const linkedToOther = { leadAssignedToId: "u2", conversationAssignedToId: null, hasLead: true };
-  const linkedToMe = { leadAssignedToId: "u1", conversationAssignedToId: null, hasLead: true };
+  const linkedToOther = { leadOwnerIds: ["u2"], conversationAssignedToId: null, hasLead: true };
+  const linkedToMe = { leadOwnerIds: ["u1"], conversationAssignedToId: null, hasLead: true };
 
-  it("defers to the lead's own edit rule when the thread is linked", () => {
+  it("applies the lead's own edit rule when the thread is linked", () => {
     expect(canActOnConversation(access({ isBde: true }), linkedToMe, "u1")).toBe(true);
     expect(canActOnConversation(access({ isBde: true }), linkedToOther, "u1")).toBe(false);
   });
@@ -184,35 +184,85 @@ describe("canActOnConversation", () => {
     expect(canActOnConversation(access({ isSupervisor: true }), linkedToOther, "u1")).toBe(true);
   });
 
+  // The bug this rule exists for: the mirror binds a thread to the OLDEST lead
+  // on the number, which for a Meta-imported candidate is the parked duplicate
+  // nobody owns — leaving the consultant who owns the live lead read-only on
+  // their own candidate's thread, with the 24-hour window running down.
+  it("lets the consultant act when ANY lead on the number is theirs", () => {
+    const boundToUnownedDuplicate = {
+      leadOwnerIds: ["u1"],
+      conversationAssignedToId: null,
+      hasLead: true,
+    };
+    expect(canActOnConversation(access({ isBde: true }), boundToUnownedDuplicate, "u1")).toBe(true);
+  });
+
+  it("still keeps a consultant out when every lead on the number is someone else's", () => {
+    const conv = { leadOwnerIds: ["u2", "u3"], conversationAssignedToId: null, hasLead: true };
+    expect(canActOnConversation(access({ isBde: true }), conv, "u1")).toBe(false);
+  });
+
+  // The whole identity group unassigned is not an invitation: a linked thread
+  // belongs to the pipeline, and claiming it is an assignment, not a reply.
+  it("does not open a linked thread to any BDE just because nobody owns the leads", () => {
+    const conv = { leadOwnerIds: [], conversationAssignedToId: null, hasLead: true };
+    expect(canActOnConversation(access({ isBde: true }), conv, "u1")).toBe(false);
+    expect(canActOnConversation(access({ isAdmin: true }), conv, "u1")).toBe(true);
+  });
+
+  // Deliberately NOT trusted on a linked thread: it is derived from the last
+  // assignment on the number, while the leads are the record of ownership.
+  it("ignores the conversation's own assignee on a linked thread", () => {
+    const conv = { leadOwnerIds: ["u2"], conversationAssignedToId: "u1", hasLead: true };
+    expect(canActOnConversation(access({ isBde: true }), conv, "u1")).toBe(false);
+  });
+
   it("gives an UNLINKED assigned thread to its assignee", () => {
-    const conv = { leadAssignedToId: null, conversationAssignedToId: "u1", hasLead: false };
+    const conv = { leadOwnerIds: [], conversationAssignedToId: "u1", hasLead: false };
     expect(canActOnConversation(access({ isBde: true }), conv, "u1")).toBe(true);
   });
 
   it("keeps another consultant out of an unlinked thread that is already owned", () => {
-    const conv = { leadAssignedToId: null, conversationAssignedToId: "u2", hasLead: false };
+    const conv = { leadOwnerIds: [], conversationAssignedToId: "u2", hasLead: false };
     expect(canActOnConversation(access({ isBde: true }), conv, "u1")).toBe(false);
   });
 
   // A stranger's first message has no lead and no owner. Locking it to admins
   // would leave exactly the messages the inbox exists to catch sitting unanswered.
   it("lets any BDE pick up an unlinked, unassigned thread", () => {
-    const conv = { leadAssignedToId: null, conversationAssignedToId: null, hasLead: false };
+    const conv = { leadOwnerIds: [], conversationAssignedToId: null, hasLead: false };
     expect(canActOnConversation(access({ isBde: true }), conv, "u1")).toBe(true);
   });
 
   it("does not let a non-BDE CRM viewer act on that same thread", () => {
-    const conv = { leadAssignedToId: null, conversationAssignedToId: null, hasLead: false };
+    const conv = { leadOwnerIds: [], conversationAssignedToId: null, hasLead: false };
     expect(canActOnConversation(access({ isCrmTeamLead: true }), conv, "u1")).toBe(false);
+  });
+});
+
+describe("canViewConversation", () => {
+  it("shows the thread to a consultant who owns any lead on the number", () => {
+    const conv = { leadOwnerIds: ["u2", "u1"], conversationAssignedToId: "u2" };
+    expect(canViewConversation(access({ isBde: true }), conv, "u1")).toBe(true);
+  });
+
+  it("keeps a consultant out of a thread for a candidate who is not theirs", () => {
+    const conv = { leadOwnerIds: ["u2"], conversationAssignedToId: "u2" };
+    expect(canViewConversation(access({ isBde: true }), conv, "u1")).toBe(false);
+  });
+
+  it("lets oversight roles read the whole desk", () => {
+    const conv = { leadOwnerIds: ["u2"], conversationAssignedToId: "u2" };
+    expect(canViewConversation(access({ isCrmTeamLead: true }), conv, "u1")).toBe(true);
   });
 });
 
 describe("canAssignConversation", () => {
   /** An unowned thread: no lead, nobody assigned. */
-  const unowned = { leadAssignedToId: null, conversationAssignedToId: null, hasLead: false };
+  const unowned = { leadOwnerIds: [], conversationAssignedToId: null, hasLead: false };
 
   it("lets anyone with the assign capability hand a thread over", () => {
-    const conv = { leadAssignedToId: null, conversationAssignedToId: "u2", hasLead: false };
+    const conv = { leadOwnerIds: [], conversationAssignedToId: "u2", hasLead: false };
     expect(canAssignConversation(access({ canAssign: true }), conv, "u3", "u1")).toBe(true);
   });
 
@@ -221,7 +271,7 @@ describe("canAssignConversation", () => {
   });
 
   it("does NOT let a BDE take a thread that already has an owner", () => {
-    const conv = { leadAssignedToId: null, conversationAssignedToId: "u2", hasLead: false };
+    const conv = { leadOwnerIds: [], conversationAssignedToId: "u2", hasLead: false };
     expect(canAssignConversation(access({ isBde: true }), conv, "u1", "u1")).toBe(false);
   });
 
@@ -229,22 +279,29 @@ describe("canAssignConversation", () => {
     expect(canAssignConversation(access({ isBde: true }), unowned, "u2", "u1")).toBe(false);
   });
 
-  // The conversation's own assignedToId is copied from the lead only when the
-  // thread is created and never backfilled, so "conversation unassigned" does
-  // not mean "unowned" — the lead has to be checked too, or a BDE could quietly
-  // pull a colleague's candidate onto themselves.
+  // A conversation's own assignedToId can be null on a thread that is plainly
+  // somebody's, so "conversation unassigned" does not mean "unowned" — the leads
+  // have to be checked too, or a BDE could quietly pull a colleague's candidate
+  // onto themselves.
   it("does NOT let a BDE claim a thread whose LEAD belongs to another consultant", () => {
-    const conv = { leadAssignedToId: "u2", conversationAssignedToId: null, hasLead: true };
+    const conv = { leadOwnerIds: ["u2"], conversationAssignedToId: null, hasLead: true };
+    expect(canAssignConversation(access({ isBde: true }), conv, "u1", "u1")).toBe(false);
+  });
+
+  // Read across the group: one unowned duplicate row must not make a candidate
+  // who plainly belongs to a colleague look unclaimed.
+  it("does NOT let a BDE claim a thread when a SIBLING lead on the number is owned", () => {
+    const conv = { leadOwnerIds: ["u2"], conversationAssignedToId: null, hasLead: true };
     expect(canAssignConversation(access({ isBde: true }), conv, "u1", "u1")).toBe(false);
   });
 
   it("still lets a BDE claim a thread whose lead is theirs but unassigned on the conversation", () => {
-    const conv = { leadAssignedToId: "u1", conversationAssignedToId: null, hasLead: true };
+    const conv = { leadOwnerIds: ["u1"], conversationAssignedToId: null, hasLead: true };
     expect(canAssignConversation(access({ isBde: true }), conv, "u1", "u1")).toBe(true);
   });
 
   it("still lets a BDE claim a lead-linked thread nobody owns", () => {
-    const conv = { leadAssignedToId: null, conversationAssignedToId: null, hasLead: true };
+    const conv = { leadOwnerIds: [], conversationAssignedToId: null, hasLead: true };
     expect(canAssignConversation(access({ isBde: true }), conv, "u1", "u1")).toBe(true);
   });
 });
