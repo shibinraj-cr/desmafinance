@@ -30,10 +30,18 @@ export function RegularizationReviewClient({
   canDecide,
   status,
   requests,
+  basePath = "/hr/regularization",
+  emptyLabel,
 }: {
   canDecide: boolean;
   status: string;
   requests: RegRow[];
+  /// Route the status tabs link back to. The Leave Requests page renders this
+  /// same queue filtered to leave, so the tabs must stay on whichever page the
+  /// approver opened.
+  basePath?: string;
+  /// What this queue holds, for the empty state ("No pending leave requests").
+  emptyLabel?: string;
 }) {
   const router = useRouter();
   const [busyId, setBusyId] = useState<string | null>(null);
@@ -80,7 +88,7 @@ export function RegularizationReviewClient({
             {STATUSES.map((s) => (
               <Link
                 key={s}
-                href={`/hr/regularization?status=${s}`}
+                href={`${basePath}?status=${s}`}
                 className={`px-sm py-xs rounded-lg text-label-sm capitalize ${s === status ? "bg-primary text-on-primary font-semibold" : "bg-surface-container text-on-surface-variant"}`}
               >
                 {s}
@@ -90,7 +98,9 @@ export function RegularizationReviewClient({
         }
       >
         {requests.length === 0 ? (
-          <p className="py-lg text-center text-on-surface-variant">No {status} requests.</p>
+          <p className="py-lg text-center text-on-surface-variant">
+            No {status} {emptyLabel ?? "requests"}.
+          </p>
         ) : (
           <div className="overflow-x-auto">
             <table className="w-full text-label-sm">
