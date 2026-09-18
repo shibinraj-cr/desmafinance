@@ -75,6 +75,7 @@ export default async function RegularizationReviewPage({
             empCode: r.employee.empCode,
             name: r.employee.name,
             date: r.date.toISOString().slice(0, 10),
+            toDate: r.toDate ? r.toDate.toISOString().slice(0, 10) : null,
             requestType: r.requestType,
             reasonType: r.reasonType,
             reasonLabel:

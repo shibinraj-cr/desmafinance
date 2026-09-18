@@ -11,6 +11,7 @@ import { leaveStatusBlockedByPunch } from "@/lib/hr-attendance-status";
 import { leaveDecisionBlockedReason } from "@/lib/hr-approval-routing";
 import { halfSessionLabel, isHalfSession } from "@/lib/hr-regularization";
 import { notifyRequestDecided } from "@/lib/hr-request-notify";
+import { businessDaysBetween } from "@/lib/hr-me";
 
 /** Minutes-since-midnight from an "HH:MM" string, or null. */
 function hhmmToMin(t: string | null): number | null {
@@ -26,7 +27,10 @@ function hhmmToMin(t: string | null): number | null {
  * and the half-day rule / audits read stale minutes (e.g. Sivapriya 20 Apr
  * 2026 kept workMinutes=121 from the old 15:31 punch after correction to 09:00).
  */
-function grossWorkMinutes(inTime: string | null, outTime: string | null): number | null {
+function grossWorkMinutes(
+  inTime: string | null,
+  outTime: string | null,
+): number | null {
   if (!inTime || !outTime) return null;
   const toMin = (t: string) => {
     const m = t.match(/^(\d{1,2}):(\d{2})$/);
@@ -42,8 +46,16 @@ const Schema = z.object({
   decision: z.enum(["approve", "reject", "clarify"]),
   reviewNote: z.string().max(500).nullable().optional(),
   /// On approve: HR may override the proposed times before applying.
-  finalIn: z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/).nullable().optional(),
-  finalOut: z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/).nullable().optional(),
+  finalIn: z
+    .string()
+    .regex(/^([01]\d|2[0-3]):[0-5]\d$/)
+    .nullable()
+    .optional(),
+  finalOut: z
+    .string()
+    .regex(/^([01]\d|2[0-3]):[0-5]\d$/)
+    .nullable()
+    .optional(),
   /// On approve: new status to write to the attendance day row.
   finalStatus: z.enum(["P", "HD", "REG"]).default("P"),
   /// On approve of a LEAVE request: paid (deducts the leave balance) or unpaid
@@ -57,12 +69,19 @@ const Schema = z.object({
   finalHalfSession: z.enum(["AM", "PM"]).nullable().optional(),
 });
 
-export async function PATCH(req: Request, { params }: { params: { id: string } }) {
+export async function PATCH(
+  req: Request,
+  { params }: { params: { id: string } },
+) {
   const { perms, userId } = await getCurrentUserAndPermissions();
-  if (!canApproveHr(perms)) return NextResponse.json({ error: "forbidden" }, { status: 403 });
+  if (!canApproveHr(perms))
+    return NextResponse.json({ error: "forbidden" }, { status: 403 });
   const parsed = Schema.safeParse(await req.json());
   if (!parsed.success) {
-    return NextResponse.json({ error: "invalid", issues: parsed.error.issues }, { status: 400 });
+    return NextResponse.json(
+      { error: "invalid", issues: parsed.error.issues },
+      { status: 400 },
+    );
   }
   const reg = await prisma.hrAttendanceRegularization.findUnique({
     where: { id: params.id },
@@ -105,14 +124,25 @@ export async function PATCH(req: Request, { params }: { params: { id: string } }
   // leave shape that survives this check, which is exactly why a punched day can
   // be claimed as a half-day and not as a whole one.
   if (parsed.data.decision === "approve" && reg.requestType === "leave") {
-    const day = await prisma.hrAttendanceDay.findUnique({
-      where: { employeeId_date: { employeeId: reg.employeeId, date: reg.date } },
-      select: { inTime: true, outTime: true },
+    // Check every day the approval would touch, not just the first, and name
+    // them all so HR can fix the range in one pass.
+    const days = await prisma.hrAttendanceDay.findMany({
+      where: {
+        employeeId: reg.employeeId,
+        date: { gte: reg.date, lte: reg.toDate ?? reg.date },
+      },
+      select: { date: true, inTime: true, outTime: true },
     });
-    if (day && leaveStatusBlockedByPunch(leaveTargetStatus, day.inTime, day.outTime)) {
+    const blocked = days.filter((d) =>
+      leaveStatusBlockedByPunch(leaveTargetStatus, d.inTime, d.outTime),
+    );
+    if (blocked.length > 0) {
+      const list = blocked
+        .map((d) => d.date.toISOString().slice(0, 10))
+        .join(", ");
       return NextResponse.json(
         {
-          error: `${reg.date.toISOString().slice(0, 10)} has a punch (${day.inTime ?? "—"}–${day.outTime ?? "—"}) — it's a worked day and can't be marked as full-day leave. Approve it as a half-day, or use a punch correction instead.`,
+          error: `${list} ${blocked.length === 1 ? "has a punch — it's a worked day and can't" : "have punches — they're worked days and can't"} be marked as full-day leave. Approve as a half-day, or use a punch correction instead.`,
         },
         { status: 400 },
       );
@@ -123,6 +153,15 @@ export async function PATCH(req: Request, { params }: { params: { id: string } }
   // approval acknowledges the reason but must NOT touch the attendance day — the
   // day stays as-is (HD / late penalty retained). Only the request row is updated.
   const isNote = reg.requestType === "note";
+
+  // A leave request may span a range (planned leave). Approval fans it out to
+  // one attendance write per WORKING day — Sundays and holidays inside the
+  // range are not leave and are never charged. Every other request type covers
+  // its single date, exactly as before.
+  const targetDates =
+    reg.requestType === "leave" && reg.toDate
+      ? await businessDaysBetween(reg.date, reg.toDate)
+      : [reg.date];
 
   const now = new Date();
   const newStatus =
@@ -140,7 +179,10 @@ export async function PATCH(req: Request, { params }: { params: { id: string } }
     const inMin = hhmmToMin(parsed.data.finalIn ?? reg.proposedIn ?? null);
     if (inMin != null) {
       const shift = await resolveShiftForDate(reg.employee.id, reg.date);
-      const startMin = reg.date.getUTCDay() === 6 ? 9 * 60 : hhmmToMin(shift?.startTime ?? null);
+      const startMin =
+        reg.date.getUTCDay() === 6
+          ? 9 * 60
+          : hhmmToMin(shift?.startTime ?? null);
       if (startMin != null) lateMinutes = Math.max(0, inMin - startMin);
     }
   }
@@ -161,118 +203,133 @@ export async function PATCH(req: Request, { params }: { params: { id: string } }
       // choice; no punch is involved.
       // Half-day leave → HD, keeping whatever punches the day already has.
       const isLeave = reg.requestType === "leave";
-      // Resolve the attendance row by its natural key (employeeId, date) — NOT
-      // the stored `reg.attendanceDayId`. The eTimeOffice sync delete-and-
-      // replaces the cycle window, so a request filed before a sync points at a
-      // day id that no longer exists (dangling FK → the old `update where id`
-      // threw P2025 and rolled the approval back). Look it up fresh, and re-link
-      // `attendanceDayId` if it drifted.
-      const existingDay = await tx.hrAttendanceDay.findUnique({
-        where: { employeeId_date: { employeeId: reg.employee.id, date: reg.date } },
-        select: { id: true, inTime: true, outTime: true, workMinutes: true },
-      });
-      // A half-day leave keeps the punches it already has — the employee worked
-      // the other half, so blanking the times would erase a real worked stretch
-      // (and with it the late/early-out signals the sandwich rule reads). Only a
-      // FULL-day leave clears them.
-      const clearPunches = isLeave && !isHalfDayLeave;
-      const inTime = isLeave
-        ? clearPunches
-          ? null
-          : (existingDay?.inTime ?? null)
-        : parsed.data.finalIn ?? reg.proposedIn ?? null;
-      const outTime = isLeave
-        ? clearPunches
-          ? null
-          : (existingDay?.outTime ?? null)
-        : parsed.data.finalOut ?? reg.proposedOut ?? null;
-      const workMinutes = isLeave
-        ? clearPunches
-          ? null
-          : (existingDay?.workMinutes ?? null)
-        : grossWorkMinutes(inTime, outTime);
-      const targetStatus = isLeave ? leaveTargetStatus : parsed.data.finalStatus;
-      // A declared half is only meaningful on an HD day. Write it through on a
-      // half-day leave and clear it otherwise, so a day that stops being a
-      // half-day never keeps a stale half hanging off it.
-      const dayHalfSession = targetStatus === "HD" ? half : null;
-      // Only a half-day LEAVE decision rules on pay. A punch correction that
-      // lands on HD carries no such ruling, so it stays null — plain 0.5-day
-      // loss-of-pay, which is what an undecided half-day has always been.
-      const dayHalfPaid = isHalfDayLeave && targetStatus === "HD" ? isPaidLeave : null;
-      const leaveLabel = isHalfDayLeave
-        ? `${isPaidLeave ? "Paid" : "Unpaid"} half-day leave (${halfSessionLabel(half)?.toLowerCase()})`
-        : isPaidLeave
-          ? "Paid leave"
-          : "Unpaid leave";
-      const note = isLeave
-        ? `${leaveLabel} approved · ${parsed.data.reviewNote ?? ""}`.trim()
-        : `Regularized · ${parsed.data.reviewNote ?? ""}`.trim();
-      if (existingDay) {
-        await tx.hrAttendanceDay.update({
-          where: { id: existingDay.id },
-          data: {
-            status: targetStatus,
-            inTime,
-            outTime,
-            // Rederive worked minutes from the corrected punches (OT folded in)
-            // so the half-day rule and audits don't read the stale value.
-            workMinutes,
-            halfSession: dayHalfSession,
-            halfPaid: dayHalfPaid,
-            ...(isHalfDayLeave ? {} : { otMinutes: 0 }),
-            ...(lateMinutes != null ? { lateMinutes } : {}),
-            decidedById: userId ?? null,
-            decidedAt: now,
-            decisionNote: note,
-            // Lock so the next sync can't revert this approved correction.
-            locked: true,
+      // One write per covered working day. A single-date request loops once, so
+      // the behaviour of every pre-existing request is unchanged.
+      for (const targetDate of targetDates) {
+        // `attendanceDayId` on the request points at its anchor (start) day only.
+        const isAnchorDay = targetDate.getTime() === reg.date.getTime();
+        // Resolve the attendance row by its natural key (employeeId, date) — NOT
+        // the stored `reg.attendanceDayId`. The eTimeOffice sync delete-and-
+        // replaces the cycle window, so a request filed before a sync points at a
+        // day id that no longer exists (dangling FK → the old `update where id`
+        // threw P2025 and rolled the approval back). Look it up fresh, and re-link
+        // `attendanceDayId` if it drifted.
+        const existingDay = await tx.hrAttendanceDay.findUnique({
+          where: {
+            employeeId_date: { employeeId: reg.employee.id, date: targetDate },
           },
+          select: { id: true, inTime: true, outTime: true, workMinutes: true },
         });
-        if (reg.attendanceDayId !== existingDay.id) {
-          await tx.hrAttendanceRegularization.update({
-            where: { id: params.id },
-            data: { attendanceDayId: existingDay.id },
-          });
-        }
-      } else {
-        // No attendance row for this date. Use the most recent upload as parent
-        // so HrAttendanceUpload aggregations still work; if there are
-        // no uploads at all, skip the day-row write and surface a
-        // soft warning.
-        const upload = await tx.hrAttendanceUpload.findFirst({
-          orderBy: { uploadedAt: "desc" },
-          select: { id: true },
-        });
-        if (upload) {
-          const created = await tx.hrAttendanceDay.create({
+        // A half-day leave keeps the punches it already has — the employee worked
+        // the other half, so blanking the times would erase a real worked stretch
+        // (and with it the late/early-out signals the sandwich rule reads). Only a
+        // FULL-day leave clears them.
+        const clearPunches = isLeave && !isHalfDayLeave;
+        const inTime = isLeave
+          ? clearPunches
+            ? null
+            : (existingDay?.inTime ?? null)
+          : (parsed.data.finalIn ?? reg.proposedIn ?? null);
+        const outTime = isLeave
+          ? clearPunches
+            ? null
+            : (existingDay?.outTime ?? null)
+          : (parsed.data.finalOut ?? reg.proposedOut ?? null);
+        const workMinutes = isLeave
+          ? clearPunches
+            ? null
+            : (existingDay?.workMinutes ?? null)
+          : grossWorkMinutes(inTime, outTime);
+        const targetStatus = isLeave
+          ? leaveTargetStatus
+          : parsed.data.finalStatus;
+        // A declared half is only meaningful on an HD day. Write it through on a
+        // half-day leave and clear it otherwise, so a day that stops being a
+        // half-day never keeps a stale half hanging off it.
+        const dayHalfSession = targetStatus === "HD" ? half : null;
+        // Only a half-day LEAVE decision rules on pay. A punch correction that
+        // lands on HD carries no such ruling, so it stays null — plain 0.5-day
+        // loss-of-pay, which is what an undecided half-day has always been.
+        const dayHalfPaid =
+          isHalfDayLeave && targetStatus === "HD" ? isPaidLeave : null;
+        const leaveLabel = isHalfDayLeave
+          ? `${isPaidLeave ? "Paid" : "Unpaid"} half-day leave (${halfSessionLabel(half)?.toLowerCase()})`
+          : isPaidLeave
+            ? "Paid leave"
+            : "Unpaid leave";
+        const note = isLeave
+          ? `${leaveLabel} approved · ${parsed.data.reviewNote ?? ""}`.trim()
+          : `Regularized · ${parsed.data.reviewNote ?? ""}`.trim();
+        if (existingDay) {
+          await tx.hrAttendanceDay.update({
+            where: { id: existingDay.id },
             data: {
-              uploadId: upload.id,
-              employeeId: reg.employee.id,
-              date: reg.date,
               status: targetStatus,
-              rawStatus: "REG",
               inTime,
               outTime,
+              // Rederive worked minutes from the corrected punches (OT folded in)
+              // so the half-day rule and audits don't read the stale value.
               workMinutes,
               halfSession: dayHalfSession,
               halfPaid: dayHalfPaid,
-              breakMinutes: null,
-              otMinutes: 0,
-              lateMinutes,
-              earlyOutMinutes: null,
-              remark: isLeave ? `${leaveLabel} (regularization)` : `Regularized · ${reg.reasonType}`,
+              ...(isHalfDayLeave ? {} : { otMinutes: 0 }),
+              ...(lateMinutes != null ? { lateMinutes } : {}),
               decidedById: userId ?? null,
               decidedAt: now,
-              decisionNote: parsed.data.reviewNote ?? null,
+              decisionNote: note,
               // Lock so the next sync can't revert this approved correction.
               locked: true,
             },
           });
-          await tx.hrAttendanceRegularization.update({
-            where: { id: params.id },
-            data: { attendanceDayId: created.id },
+          if (isAnchorDay && reg.attendanceDayId !== existingDay.id) {
+            await tx.hrAttendanceRegularization.update({
+              where: { id: params.id },
+              data: { attendanceDayId: existingDay.id },
+            });
+          }
+        } else {
+          // No attendance row for this date. Use the most recent upload as parent
+          // so HrAttendanceUpload aggregations still work; if there are
+          // no uploads at all, skip the day-row write and surface a
+          // soft warning.
+          const upload = await tx.hrAttendanceUpload.findFirst({
+            orderBy: { uploadedAt: "desc" },
+            select: { id: true },
           });
+          if (upload) {
+            const created = await tx.hrAttendanceDay.create({
+              data: {
+                uploadId: upload.id,
+                employeeId: reg.employee.id,
+                date: targetDate,
+                status: targetStatus,
+                rawStatus: "REG",
+                inTime,
+                outTime,
+                workMinutes,
+                halfSession: dayHalfSession,
+                halfPaid: dayHalfPaid,
+                breakMinutes: null,
+                otMinutes: 0,
+                lateMinutes,
+                earlyOutMinutes: null,
+                remark: isLeave
+                  ? `${leaveLabel} (regularization)`
+                  : `Regularized · ${reg.reasonType}`,
+                decidedById: userId ?? null,
+                decidedAt: now,
+                decisionNote: parsed.data.reviewNote ?? null,
+                // Lock so the next sync can't revert this approved correction.
+                locked: true,
+              },
+            });
+            if (isAnchorDay) {
+              await tx.hrAttendanceRegularization.update({
+                where: { id: params.id },
+                data: { attendanceDayId: created.id },
+              });
+            }
+          }
         }
       }
     }
@@ -285,9 +342,15 @@ export async function PATCH(req: Request, { params }: { params: { id: string } }
         metadata: {
           employeeId: reg.employee.id,
           date: reg.date.toISOString().slice(0, 10),
+          toDate: reg.toDate ? reg.toDate.toISOString().slice(0, 10) : null,
+          daysApplied:
+            parsed.data.decision === "approve" && !isNote
+              ? targetDates.length
+              : 0,
           requestType: reg.requestType,
           halfSession: reg.requestType === "leave" ? half : null,
-          leaveStatus: reg.requestType === "leave" ? parsed.data.leaveStatus : null,
+          leaveStatus:
+            reg.requestType === "leave" ? parsed.data.leaveStatus : null,
           reviewNote: parsed.data.reviewNote ?? null,
         },
       },
@@ -306,9 +369,24 @@ export async function PATCH(req: Request, { params }: { params: { id: string } }
     // dissolve a sandwich bracket — re-reconcile the employee's cycle. This
     // both flips newly-sandwiched WO/HL and reverts prior flips that no longer
     // apply (e.g. a punch fix turning an absence anchor into Present).
-    const { start, end } = cycleWindowForMonth(cycleMonthForDate(reg.date));
-    await applySandwichRule({ employeeId: reg.employee.id, windowStart: start, windowEnd: end, actorUserId: userId ?? null });
-    await recomputeLeaveBalance(reg.employee.id, reg.date.getUTCFullYear());
+    // A range can straddle cycle months and even calendar years, so reconcile
+    // each one it touches rather than only the start date's.
+    const cycleMonths = [
+      ...new Set(targetDates.map((d) => cycleMonthForDate(d))),
+    ];
+    for (const monthKey of cycleMonths) {
+      const { start, end } = cycleWindowForMonth(monthKey);
+      await applySandwichRule({
+        employeeId: reg.employee.id,
+        windowStart: start,
+        windowEnd: end,
+        actorUserId: userId ?? null,
+      });
+    }
+    const years = [...new Set(targetDates.map((d) => d.getUTCFullYear()))];
+    for (const year of years) {
+      await recomputeLeaveBalance(reg.employee.id, year);
+    }
   }
 
   // Tell the employee what was decided — including, on an approved leave,

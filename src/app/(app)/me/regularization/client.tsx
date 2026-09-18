@@ -24,6 +24,8 @@ type ExceptionRow = {
 type RegRow = {
   id: string;
   date: string;
+  /// Last day of a multi-day leave; null when it covers `date` alone.
+  toDate: string | null;
   requestType: string;
   reasonType: string;
   reasonLabel: string;
@@ -102,6 +104,11 @@ export function RegularizationRequestClient({
     setOk(null);
   }
 
+  // Planned leave — a date range, usually in the future. It cannot hang off the
+  // attendance grid above: a day you have not worked yet has no attendance row,
+  // which is exactly why leave could only ever be requested after the fact.
+  const [plan, setPlan] = useState({ from: "", to: "", reason: "" });
+
   async function post(body: Record<string, unknown>) {
     setBusy(true);
     setErr(null);
@@ -116,6 +123,7 @@ export function RegularizationRequestClient({
       if (!res.ok) throw new Error(data.error ?? "Failed");
       setOk("Request submitted — it's been sent to HR for approval.");
       setOpen(null);
+      setPlan({ from: "", to: "", reason: "" });
       setManual((m) => ({ ...m, reason: "", proposedIn: "", proposedOut: "" }));
       router.refresh();
     } catch (e) {
@@ -150,6 +158,58 @@ export function RegularizationRequestClient({
 
   return (
     <>
+      <Section title="Apply for leave">
+        <p className="text-caption text-on-surface-variant mb-sm">
+          For leave you are planning — today or any day ahead. Pick a single date or a range;
+          Sundays and holidays inside a range are not counted as leave. To account for a past
+          absence, use the day-by-day list below instead.
+        </p>
+        <div className="flex flex-wrap items-end gap-sm">
+          <label className="flex flex-col gap-xs">
+            <span className="text-caption text-on-surface-variant">From</span>
+            <input
+              type="date"
+              value={plan.from}
+              onChange={(e) => setPlan({ ...plan, from: e.target.value })}
+              className="px-sm py-xs rounded border border-outline-variant bg-surface text-label-sm"
+            />
+          </label>
+          <label className="flex flex-col gap-xs">
+            <span className="text-caption text-on-surface-variant">To (optional)</span>
+            <input
+              type="date"
+              value={plan.to}
+              min={plan.from || undefined}
+              onChange={(e) => setPlan({ ...plan, to: e.target.value })}
+              className="px-sm py-xs rounded border border-outline-variant bg-surface text-label-sm"
+            />
+          </label>
+          <label className="flex flex-col gap-xs flex-1 min-w-[220px]">
+            <span className="text-caption text-on-surface-variant">Reason</span>
+            <input
+              value={plan.reason}
+              onChange={(e) => setPlan({ ...plan, reason: e.target.value })}
+              placeholder="Why you need the leave"
+              className="px-sm py-xs rounded border border-outline-variant bg-surface text-label-sm"
+            />
+          </label>
+          <button
+            disabled={busy || !plan.from || plan.reason.trim().length < 5}
+            onClick={() =>
+              post({
+                date: plan.from,
+                toDate: plan.to && plan.to !== plan.from ? plan.to : null,
+                requestType: "leave",
+                reason: plan.reason,
+              })
+            }
+            className="px-md py-xs rounded bg-primary text-on-primary font-bold disabled:opacity-50"
+          >
+            Request leave
+          </button>
+        </div>
+      </Section>
+
       <Section title="Attendance to review">
         <div className="flex flex-wrap items-center gap-sm mb-base">
           <button onClick={() => gotoMonth(prevMonth)} className="px-sm py-sm rounded border border-outline-variant">←</button>
@@ -477,7 +537,8 @@ export function RegularizationRequestClient({
                     <td className="px-sm py-xs text-on-surface-variant">
                       {new Date(r.createdAt).toLocaleString("en-IN", { hour12: false })}
                     </td>
-                    <td className="px-sm py-xs">{r.date}</td>
+                    <td className="px-sm py-xs">{r.date}
+                      {r.toDate && r.toDate !== r.date ? ` → ${r.toDate}` : ""}</td>
                     <td className="px-sm py-xs">
                       <span
                         className={

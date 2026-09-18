@@ -10,6 +10,8 @@ type RegRow = {
   empCode: string;
   name: string;
   date: string;
+  /// Last day of a multi-day leave; null when the request covers `date` alone.
+  toDate: string | null;
   requestType: string;
   reasonType: string;
   reasonLabel: string;
@@ -128,7 +130,10 @@ export function RegularizationReviewClient({
                       <br />
                       {r.name}
                     </td>
-                    <td className="px-sm py-sm">{r.date}</td>
+                    <td className="px-sm py-sm whitespace-nowrap">
+                      {r.date}
+                      {r.toDate && r.toDate !== r.date ? ` → ${r.toDate}` : ""}
+                    </td>
                     <td className="px-sm py-sm">
                       <span
                         className={
