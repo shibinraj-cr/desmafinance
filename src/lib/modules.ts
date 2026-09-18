@@ -362,6 +362,7 @@ export const MODULES: AppModule[] = [
       { href: "/hr/org-chart", label: "Org Chart", icon: "account_tree", group: "PEOPLE" },
       { href: "/hr/birthdays", label: "Birthday Calendar", icon: "cake", group: "PEOPLE" },
       { href: "/hr/leave", label: "Leave Requests", icon: "event_busy", group: "LEAVE" },
+      { href: "/hr/leave-calendar", label: "Leave Calendar", icon: "calendar_month", group: "LEAVE" },
       { href: "/hr/leave-balances", label: "Leave Balances", icon: "savings", group: "LEAVE" },
       { href: "/hr/leave-eligibility", label: "Leave Eligibility", icon: "auto_awesome", group: "LEAVE" },
       { href: "/hr/sandwich-policy", label: "Sandwich Policy", icon: "rule_settings", group: "LEAVE" },
