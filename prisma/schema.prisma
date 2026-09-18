@@ -1868,6 +1868,16 @@ model HrAttendanceRegularization {
   /// no attendance row was uploaded yet for this date.
   attendanceDayId String?
   date            DateTime  @db.Date
+  /// LEAVE requests only: the LAST day of a multi-day leave. Null means the
+  /// request covers `date` alone, which is every request filed before planned
+  /// leave existed and every punch / note request.
+  ///
+  /// A planned leave is ONE row the approver decides once; approval fans it out
+  /// to a per-day attendance write across the working days in [date, toDate].
+  /// Storing it as a range rather than N rows keeps the approver's queue
+  /// readable (one entry per absence, not one per day) and lets the employee
+  /// withdraw the whole thing in one action.
+  toDate          DateTime? @db.Date
   /// What the employee is asking for:
   ///   'punch' → correct a missing/wrong punch (approval → P/HD)
   ///   'leave' → mark an absence as paid leave (approval → LV)

@@ -147,6 +147,7 @@ export default async function MyRegularizationPage({
           requests={allRequests.map((r) => ({
             id: r.id,
             date: r.date.toISOString().slice(0, 10),
+            toDate: r.toDate ? r.toDate.toISOString().slice(0, 10) : null,
             requestType: r.requestType,
             reasonType: r.reasonType,
             reasonLabel:
