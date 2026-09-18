@@ -1,9 +1,20 @@
 import { prisma } from "./prisma";
 
-// TEMPORARY (testing): widened to 90 to allow regularizing much older
-// discrepancies during testing. Revert to 3 when done.
-/** Working days excluding Sundays + holidays. */
-export const REGULARIZATION_WINDOW_WORKING_DAYS = 90;
+/**
+ * How far BACK a request about a past date may reach, in working days
+ * (Sundays and HR holidays excluded).
+ *
+ * Was left at 90 with a "TEMPORARY (testing) … revert to 3" note, almost
+ * certainly in response to employees finding they could not file for older
+ * dates. That was treating the wrong cause: the blocker was the sync deleting
+ * the attendance rows the apply form is built from, not this window.
+ *
+ * Settable per deployment without a code change; the default is the policy
+ * value agreed with the business.
+ */
+export const REGULARIZATION_WINDOW_WORKING_DAYS = Number(
+  process.env.HR_REGULARIZATION_WINDOW_DAYS ?? 10,
+);
 
 /**
  * Return true if `today - discrepancyDate` is within the

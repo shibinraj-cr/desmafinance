@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { Section } from "@/components/Cards";
@@ -295,6 +295,32 @@ function ApproveModal({
   });
   const isLeave = row.requestType === "leave";
   const isHalfDay = isLeave && v.finalHalfSession !== null;
+
+  // What this approval will ALSO do. The sandwich rule converts the week-offs
+  // and holidays between two leave anchors to unpaid absence, and until now
+  // that happened silently after the dialog closed.
+  const [preview, setPreview] = useState<{
+    flips: { date: string; from: string; to: string }[];
+    coveredDays: number;
+  } | null>(null);
+  useEffect(() => {
+    if (!isLeave) return;
+    let cancelled = false;
+    const q = new URLSearchParams({
+      leaveStatus: v.leaveStatus,
+      half: v.finalHalfSession ?? "null",
+    });
+    fetch(`/api/hr/regularization/${row.id}/preview?${q}`)
+      .then((r) => (r.ok ? r.json() : null))
+      .then((j) => {
+        if (!cancelled && j) setPreview(j);
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, [isLeave, row.id, v.leaveStatus, v.finalHalfSession]);
+
   return (
     <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-md">
       <div className="bg-surface-container-lowest rounded-xl border border-outline-variant p-lg w-full max-w-md space-y-base">
@@ -422,6 +448,34 @@ function ApproveModal({
             className="w-full bg-surface-container border border-outline-variant rounded-lg px-sm py-xs"
           />
         </label>
+        {isLeave && preview && (preview.flips.length > 0 || preview.coveredDays > 1) && (
+          <div className="rounded-lg border border-outline-variant bg-surface-container p-sm space-y-xs">
+            {preview.coveredDays > 1 && (
+              <p className="text-label-sm">
+                This approval covers <strong>{preview.coveredDays} working days</strong>.
+              </p>
+            )}
+            {preview.flips.length > 0 && (
+              <>
+                <p className="text-label-sm font-semibold text-amber-800">
+                  It will also convert {preview.flips.length} day
+                  {preview.flips.length === 1 ? "" : "s"} to unpaid absence:
+                </p>
+                <ul className="text-caption text-on-surface-variant list-disc pl-lg">
+                  {preview.flips.map((f) => (
+                    <li key={f.date}>
+                      {f.date} · {f.from} → {f.to}
+                    </li>
+                  ))}
+                </ul>
+                <p className="text-caption text-on-surface-variant">
+                  The sandwich rule counts week-offs and holidays between two leave days as
+                  leave too, so they are docked as loss of pay.
+                </p>
+              </>
+            )}
+          </div>
+        )}
         <div className="flex justify-end gap-sm pt-sm">
           <button
             type="button"

@@ -1,6 +1,7 @@
 import { redirect } from "next/navigation";
 import { prisma } from "@/lib/prisma";
 import { getCurrentUserAndPermissions } from "@/lib/permissions";
+import { recomputeLeaveBalance } from "@/lib/hr-leave-balance";
 import { employeeForUser } from "@/lib/hr-me";
 import { TopBar } from "@/components/TopBar";
 import { Section } from "@/components/Cards";
@@ -130,6 +131,12 @@ export default async function MyRegularizationPage({
   const nextMonth = mStr === 12 ? `${yStr + 1}-01` : `${yStr}-${String(mStr + 1).padStart(2, "0")}`;
   const cycleLabel = `${start.toLocaleDateString("en-IN", { day: "2-digit", month: "short", timeZone: "UTC" })} → ${end.toLocaleDateString("en-IN", { day: "2-digit", month: "short", year: "numeric", timeZone: "UTC" })}`;
 
+  // Show the employee what they actually have before they apply. Recomputed
+  // rather than read from the stored row, which only refreshes on a decision.
+  const leaveBalance = await recomputeLeaveBalance(emp.id, new Date().getUTCFullYear())
+    .then((b) => b.balance)
+    .catch(() => null);
+
   return (
     <>
       <TopBar
@@ -138,6 +145,7 @@ export default async function MyRegularizationPage({
       />
       <div className="p-margin space-y-lg">
         <RegularizationRequestClient
+          leaveBalance={leaveBalance}
           reasons={REGULARIZATION_REASONS as unknown as { code: string; label: string }[]}
           monthKey={monthKey}
           prevMonth={prevMonth}
