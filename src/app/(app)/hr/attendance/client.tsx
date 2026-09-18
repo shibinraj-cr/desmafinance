@@ -7,6 +7,8 @@ import { Section } from "@/components/Cards";
 type EmployeeLite = { id: string; empCode: string; name: string; lateEligible: boolean };
 type LateTag = "LCE" | "AL" | null;
 type GridCell = {
+  /// HrAttendanceDay id — the handle POST /api/hr/attendance/decide works on.
+  id: string;
   status: string;
   in: string | null;
   out: string | null;
@@ -24,6 +26,23 @@ type GridCell = {
 };
 /// Keys are ISO date strings (YYYY-MM-DD)
 type Grid = Record<string, Record<string, GridCell>>;
+
+/**
+ * The decisions POST /api/hr/attendance/decide accepts, in the order HR reaches
+ * for them. The route has always supported all six (and batches of up to 500
+ * days); until now nothing in the product called it, so an absence could only
+ * become paid leave if the employee happened to file a regularization request.
+ */
+const DECISIONS = [
+  { code: "paid", label: "Paid leave", hint: "Marks the day LV — deducted from the leave balance, no loss of pay. An existing half-day stays HD and is flagged paid." },
+  { code: "unpaid", label: "Unpaid (LOP)", hint: "Marks the day A — loss of pay. An existing half-day stays HD with 0.5 day docked." },
+  { code: "half_day", label: "Half day", hint: "Marks the day HD." },
+  { code: "on_duty", label: "On duty", hint: "Off-site work — counts as present (OD)." },
+  { code: "regularized", label: "Regularized", hint: "Corrected via the regularization workflow (REG, treated as present)." },
+  { code: "reset", label: "Reset to biometric", hint: "Reverts to the original biometric status, discarding this decision." },
+] as const;
+
+type DecisionCode = (typeof DECISIONS)[number]["code"];
 type Summary = Record<
   string,
   { P: number; HD: number; A: number; WO: number; HL: number; LV: number; LCE: number; AL: number; PL: number }
@@ -81,6 +100,7 @@ export function AttendanceClient({
   nextMonth,
   cycleLabel,
   dateCells,
+  canDecide,
   canUpload,
   uploads,
   employees,
@@ -96,6 +116,7 @@ export function AttendanceClient({
   cycleLabel: string;
   dateCells: DateCell[];
   canUpload: boolean;
+  canDecide: boolean;
   uploads: Upload[];
   employees: EmployeeLite[];
   grid: Grid;
@@ -117,6 +138,58 @@ export function AttendanceClient({
   } | null>(null);
 
   const [syncing, setSyncing] = useState(false);
+
+  // Cell selection for the decide action. Keyed by HrAttendanceDay id, with the
+  // label kept alongside so the action bar can say what is about to change
+  // without walking the grid again.
+  const [picked, setPicked] = useState<Map<string, string>>(new Map());
+  const [note, setNote] = useState("");
+  const [deciding, setDeciding] = useState(false);
+  const [decideMsg, setDecideMsg] = useState<{ msg: string; tone: "ok" | "err" } | null>(null);
+
+  function toggleCell(dayId: string, label: string) {
+    setDecideMsg(null);
+    setPicked((prev) => {
+      const next = new Map(prev);
+      if (next.has(dayId)) next.delete(dayId);
+      else next.set(dayId, label);
+      return next;
+    });
+  }
+
+  async function applyDecision(decision: DecisionCode) {
+    if (deciding || picked.size === 0) return;
+    setDeciding(true);
+    setDecideMsg(null);
+    try {
+      const res = await fetch("/api/hr/attendance/decide", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          dayIds: [...picked.keys()],
+          decision,
+          note: note.trim() || null,
+        }),
+      });
+      const j = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        // The route refuses a batch as a whole when it contains the approver's
+        // own day, or an HR approver's day they may not decide — surface that
+        // reason rather than a generic failure.
+        setDecideMsg({ msg: j.error || "decision failed", tone: "err" });
+        return;
+      }
+      const label = DECISIONS.find((d) => d.code === decision)?.label ?? decision;
+      setDecideMsg({ msg: `${label} applied to ${picked.size} day(s).`, tone: "ok" });
+      setPicked(new Map());
+      setNote("");
+      start(() => router.refresh());
+    } catch {
+      setDecideMsg({ msg: "decision failed", tone: "err" });
+    } finally {
+      setDeciding(false);
+    }
+  }
 
   async function onSync() {
     if (syncing) return;
@@ -410,6 +483,11 @@ export function AttendanceClient({
                           : c?.lateTag === "AL"
                             ? "bg-red-200 text-red-900"
                             : "";
+                      // A cell is actionable only when it has a day row behind
+                      // it — there is nothing to decide on a date the employee
+                      // has no record for.
+                      const selectable = canDecide && !!c;
+                      const isPicked = !!c && picked.has(c.id);
                       return (
                         <td
                           key={d.iso}
@@ -419,11 +497,28 @@ export function AttendanceClient({
                           }
                         >
                           <div
-                            title={tip}
+                            title={selectable ? `${tip} · click to select` : tip}
+                            role={selectable ? "button" : undefined}
+                            tabIndex={selectable ? 0 : undefined}
+                            aria-pressed={selectable ? isPicked : undefined}
+                            aria-label={selectable ? `${e.name} ${d.iso} ${code}` : undefined}
+                            onClick={selectable ? () => toggleCell(c!.id, `${e.empCode} ${d.iso}`) : undefined}
+                            onKeyDown={
+                              selectable
+                                ? (ev) => {
+                                    if (ev.key === "Enter" || ev.key === " ") {
+                                      ev.preventDefault();
+                                      toggleCell(c!.id, `${e.empCode} ${d.iso}`);
+                                    }
+                                  }
+                                : undefined
+                            }
                             className={
                               "flex flex-col items-stretch justify-start rounded text-[9px] font-bold leading-tight w-11 mx-auto " +
                               tone +
-                              (missingPunch ? " ring-2 ring-orange-500" : "")
+                              (missingPunch ? " ring-2 ring-orange-500" : "") +
+                              (selectable ? " cursor-pointer" : "") +
+                              (isPicked ? " outline outline-2 outline-offset-1 outline-primary" : "")
                             }
                           >
                             <span className="text-center text-[10px] py-[1px] border-b border-current/10">
@@ -533,6 +628,22 @@ export function AttendanceClient({
             </tbody>
           </table>
         </div>
+        {canDecide && (
+          <p className="text-caption text-on-surface-variant mt-md">
+            Click any day to select it — pick as many as you like, across employees, then choose
+            what to record. A decision applies to the whole selection at once.
+          </p>
+        )}
+        {decideMsg && (
+          <p
+            className={
+              "text-label-sm mt-sm font-semibold " +
+              (decideMsg.tone === "ok" ? "text-green-700" : "text-red-700")
+            }
+          >
+            {decideMsg.msg}
+          </p>
+        )}
         <p className="text-caption text-on-surface-variant mt-md">
           Cycle starts {dateCells[0]?.iso} · ends {dateCells[dateCells.length - 1]?.iso}. A
           highlighted column boundary marks the calendar-month rollover. Legend:{" "}
@@ -556,6 +667,56 @@ export function AttendanceClient({
           eligibility enabled.
         </p>
       </Section>
+
+      {/* Decide bar — appears only with a live selection, pinned to the bottom so
+          it stays reachable while scrolling a wide cycle grid. */}
+      {canDecide && picked.size > 0 && (
+        <div className="fixed inset-x-0 bottom-0 z-40 border-t border-outline-variant bg-surface/95 backdrop-blur px-margin py-md shadow-lg">
+          <div className="flex flex-wrap items-center gap-sm">
+            <span className="text-label-sm font-bold whitespace-nowrap">
+              {picked.size} day{picked.size === 1 ? "" : "s"} selected
+            </span>
+            <button
+              onClick={() => setPicked(new Map())}
+              className="text-label-sm underline text-on-surface-variant"
+            >
+              Clear
+            </button>
+            <input
+              value={note}
+              onChange={(ev) => setNote(ev.target.value)}
+              placeholder="Note (optional) — recorded on every selected day"
+              className="flex-1 min-w-[200px] px-sm py-xs rounded border border-outline-variant bg-surface text-label-sm"
+            />
+            <div className="flex flex-wrap gap-xs">
+              {DECISIONS.map((dec) => (
+                <button
+                  key={dec.code}
+                  disabled={deciding}
+                  title={dec.hint}
+                  onClick={() => applyDecision(dec.code)}
+                  className={
+                    "px-sm py-xs rounded text-label-sm font-bold disabled:opacity-50 " +
+                    (dec.code === "paid"
+                      ? "bg-purple-600 text-white"
+                      : dec.code === "unpaid"
+                        ? "bg-red-600 text-white"
+                        : dec.code === "reset"
+                          ? "bg-surface-container text-on-surface-variant"
+                          : "bg-primary text-on-primary")
+                  }
+                >
+                  {dec.label}
+                </button>
+              ))}
+            </div>
+          </div>
+          <p className="text-caption text-on-surface-variant mt-xs">
+            {[...picked.values()].slice(0, 6).join(", ")}
+            {picked.size > 6 ? ` +${picked.size - 6} more` : ""}
+          </p>
+        </div>
+      )}
     </>
   );
 }
