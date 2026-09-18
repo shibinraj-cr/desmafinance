@@ -46,6 +46,7 @@ const KIND_BADGE: Record<ExceptionRow["kind"], { label: string; cls: string }> =
 };
 
 export function RegularizationRequestClient({
+  leaveBalance,
   reasons,
   monthKey,
   prevMonth,
@@ -61,6 +62,9 @@ export function RegularizationRequestClient({
   cycleLabel: string;
   exceptions: ExceptionRow[];
   requests: RegRow[];
+  /// Paid-leave days currently available, so the employee is not applying
+  /// blind. Null when no eligibility is configured for them.
+  leaveBalance: number | null;
 }) {
   const router = useRouter();
   const [busy, setBusy] = useState(false);
@@ -107,7 +111,7 @@ export function RegularizationRequestClient({
   // Planned leave — a date range, usually in the future. It cannot hang off the
   // attendance grid above: a day you have not worked yet has no attendance row,
   // which is exactly why leave could only ever be requested after the fact.
-  const [plan, setPlan] = useState({ from: "", to: "", reason: "" });
+  const [plan, setPlan] = useState({ from: "", to: "", reason: "", attachmentUrl: "" });
 
   async function withdraw(id: string) {
     if (!confirm("Withdraw this request? The dates become free to request again.")) return;
@@ -174,7 +178,7 @@ export function RegularizationRequestClient({
       if (!res.ok) throw new Error(data.error ?? "Failed");
       setOk("Request submitted — it's been sent to HR for approval.");
       setOpen(null);
-      setPlan({ from: "", to: "", reason: "" });
+      setPlan({ from: "", to: "", reason: "", attachmentUrl: "" });
       setManual((m) => ({ ...m, reason: "", proposedIn: "", proposedOut: "" }));
       router.refresh();
     } catch (e) {
@@ -215,6 +219,15 @@ export function RegularizationRequestClient({
           Sundays and holidays inside a range are not counted as leave. To account for a past
           absence, use the day-by-day list below instead.
         </p>
+        {leaveBalance !== null && (
+          <p className="text-label-sm mb-sm">
+            Paid leave available: <strong>{leaveBalance.toFixed(1)} day{leaveBalance === 1 ? "" : "s"}</strong>.{" "}
+            <span className="text-on-surface-variant">
+              HR decides whether each approved day is paid or unpaid; anything beyond your
+              balance is loss of pay.
+            </span>
+          </p>
+        )}
         <div className="flex flex-wrap items-end gap-sm">
           <label className="flex flex-col gap-xs">
             <span className="text-caption text-on-surface-variant">From</span>
@@ -244,6 +257,15 @@ export function RegularizationRequestClient({
               className="px-sm py-xs rounded border border-outline-variant bg-surface text-label-sm"
             />
           </label>
+          <label className="flex flex-col gap-xs flex-1 min-w-[200px]">
+            <span className="text-caption text-on-surface-variant">Proof link (optional)</span>
+            <input
+              value={plan.attachmentUrl}
+              onChange={(e) => setPlan({ ...plan, attachmentUrl: e.target.value })}
+              placeholder="https://… medical certificate, etc."
+              className="px-sm py-xs rounded border border-outline-variant bg-surface text-label-sm"
+            />
+          </label>
           <button
             disabled={busy || !plan.from || plan.reason.trim().length < 5}
             onClick={() =>
@@ -252,6 +274,7 @@ export function RegularizationRequestClient({
                 toDate: plan.to && plan.to !== plan.from ? plan.to : null,
                 requestType: "leave",
                 reason: plan.reason,
+                attachmentUrl: plan.attachmentUrl.trim() || null,
               })
             }
             className="px-md py-xs rounded bg-primary text-on-primary font-bold disabled:opacity-50"
