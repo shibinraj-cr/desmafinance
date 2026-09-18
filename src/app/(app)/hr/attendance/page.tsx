@@ -99,6 +99,7 @@ export default async function HrAttendancePage({
         /// no such ruling exists (plain 0.5-day loss-of-pay).
         halfPaid: boolean | null;
         paid: number; // paid-leave portion of this day covered by the allocation (0 / 0.5 / 1)
+        id: string; // HrAttendanceDay id — the handle the decide action needs
       }
     >
   > = {};
@@ -121,6 +122,7 @@ export default async function HrAttendancePage({
     const lateTag = tagsByDayId.get(d.id) ?? null;
     grid[d.employeeId] ??= {};
     grid[d.employeeId][key] = {
+      id: d.id,
       status: d.status,
       in: d.inTime,
       out: d.outTime,
@@ -201,6 +203,7 @@ export default async function HrAttendancePage({
           cycleLabel={cycleLabel}
           dateCells={dateCells}
           canUpload={canApproveHr(perms)}
+          canDecide={canApproveHr(perms)}
           subscription={subscription}
           uploads={uploads.map((u) => ({
             id: u.id,
