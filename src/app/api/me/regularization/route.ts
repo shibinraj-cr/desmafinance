@@ -9,6 +9,7 @@ import {
   isWithinRegularizationWindow,
 } from "@/lib/hr-regularization";
 import { hasPunch } from "@/lib/hr-attendance-status";
+import { notifyRequestSubmitted } from "@/lib/hr-request-notify";
 
 const TIME_RE = /^([01]\d|2[0-3]):[0-5]\d$/;
 const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
@@ -146,6 +147,17 @@ export async function POST(req: Request) {
         halfSession,
       },
     },
+  });
+
+  // Tell whoever may decide it that a request is waiting. Best-effort and
+  // after the write, so a notification failure cannot lose the request.
+  await notifyRequestSubmitted({
+    employeeId: emp.id,
+    employeeName: emp.name,
+    requestType: parsed.data.requestType,
+    halfSession,
+    date,
+    reason: parsed.data.reason,
   });
 
   return NextResponse.json({ request: created });
