@@ -76,6 +76,10 @@ export async function POST(req: Request) {
     userId: userId ?? null,
     source: "etimeoffice",
     dateFloor: ATTENDANCE_API_CUTOVER,
+    // Replace only what was fetched. A narrow manual range (an HR user syncing
+    // "just last week") must not clear the rest of the cycle around it.
+    replaceFrom: fromDate,
+    replaceTo: toDate,
     warnings: fetched.warnings,
   });
 
