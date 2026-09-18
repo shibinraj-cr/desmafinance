@@ -8,7 +8,8 @@
  *   - Presence         45  (attended ÷ rostered, half-days count half; paid leave excluded)
  *   - Punctuality      30  (share of worked days late beyond the grace + LCE allowance — "AL")
  *   - Full-day         15  (share of worked days left early — the early-out signal)
- *   - Discipline       10  (missing-punch + regularisation incidents — a penalty band)
+ *   - Discipline       10  (missing punches + APPROVED PUNCH corrections — a penalty
+ *                          band; leave requests and explanations never count)
  *
  * This is deliberately NOT a re-derivation of pay: payroll already docks AL and
  * HD as loss-of-pay. The score is a behavioural summary for review, recognition
@@ -306,7 +307,7 @@ function scoreDiscipline(row: AttendanceScoreRow): AttScoreComponent {
   const insight =
     incidents === 0
       ? "Clean — punched in and out every day, no corrections needed."
-      : `${row.missingPunchDays} missing punch(es) and ${row.regRequests} correction(s) this period. Punching both in and out every day keeps this full.`;
+      : `${row.missingPunchDays} missing punch(es) and ${row.regRequests} approved punch correction(s) this period. Punching both in and out every day keeps this full. Leave requests never count here.`;
   return {
     key: "discipline",
     label: "Discipline",
@@ -316,7 +317,7 @@ function scoreDiscipline(row: AttendanceScoreRow): AttScoreComponent {
     detail,
     formula: `Discipline = clamp(1 − incidents ÷ cap, 0, 1) × ${max},  cap = max(${DISCIPLINE_CAP_FLOOR}, worked × ${pctStr(DISCIPLINE_CAP_RATE)})`,
     steps: [
-      { label: "Incidents", value: `${row.missingPunchDays} missing punch + ${row.regRequests} correction = ${incidents}` },
+      { label: "Incidents", value: `${row.missingPunchDays} missing punch + ${row.regRequests} approved punch correction = ${incidents}` },
       { label: "Cap", value: `max(${DISCIPLINE_CAP_FLOOR}, ${worked} × ${pctStr(DISCIPLINE_CAP_RATE)}) = ${pts(cap)}` },
       { label: "Earned", value: `(1 − ${incidents} ÷ ${pts(cap)}) × ${max} = ${pts(earned)}` },
     ],

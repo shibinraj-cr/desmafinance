@@ -189,3 +189,13 @@ describe("component calculation breakdown (drill-down popup)", () => {
     expect(disc.insight.length).toBeGreaterThan(0);
   });
 });
+
+describe("DISCIPLINE_INCIDENT_WHERE", () => {
+  it("counts only approved punch corrections as Discipline incidents", async () => {
+    const { DISCIPLINE_INCIDENT_WHERE } = await import("@/lib/hr-attendance-score-data");
+    // Widening either of these silently re-penalises employees for applying for
+    // leave (a leave request is a regularization row), for filing an
+    // explanation the product invites, and for requests HR rejected.
+    expect(DISCIPLINE_INCIDENT_WHERE).toEqual({ requestType: "punch", status: "approved" });
+  });
+});
