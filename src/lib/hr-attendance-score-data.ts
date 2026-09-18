@@ -25,6 +25,30 @@ import {
   type AttScoreComponent,
 } from "./hr-attendance-score";
 
+
+/**
+ * Which regularization rows count as a Discipline incident on the attendance
+ * scorecard: an APPROVED PUNCH correction, and nothing else.
+ *
+ * This used to be every row, unfiltered, which meant the score punished the
+ * exact behaviour the product asks for:
+ *   - a LEAVE application is a regularization row, so applying for leave cost
+ *     Discipline points — while the breakdown told the employee "punching both
+ *     in and out every day keeps this full";
+ *   - a NOTE is an explanation the product invites and which changes nothing on
+ *     approval, yet it was penalised;
+ *   - a REJECTED request still counted, so HR turning someone down left a mark
+ *     on their record.
+ *
+ * A missing punch is already counted once through `missingPunchDays`; counting
+ * only the approved correction keeps the honest path from costing twice as much
+ * as staying silent.
+ */
+export const DISCIPLINE_INCIDENT_WHERE = {
+  requestType: "punch",
+  status: "approved",
+} as const;
+
 /** Number of salary cycles the rolling score spans. */
 export const ROLLING_CYCLES = 3;
 
@@ -311,7 +335,7 @@ export async function loadAttendanceScorecard(cycleMonth: string): Promise<Atten
       },
     }),
     prisma.hrAttendanceRegularization.findMany({
-      where: { date: { gte: fetchStart, lte: end } },
+      where: { ...DISCIPLINE_INCIDENT_WHERE, date: { gte: fetchStart, lte: end } },
       select: { employeeId: true, date: true },
     }),
     loadScoreSignals({ date: { gte: fetchStart, lte: end } }),
@@ -388,7 +412,7 @@ export async function attendanceScoreForEmployee(
       },
     }),
     prisma.hrAttendanceRegularization.count({
-      where: { employeeId, date: { gte: start, lte: end } },
+      where: { ...DISCIPLINE_INCIDENT_WHERE, employeeId, date: { gte: start, lte: end } },
     }),
     loadScoreSignals({ employeeId, date: { gte: start, lte: end } }),
   ]);
@@ -439,7 +463,7 @@ export async function attendanceScoreTrend(
       },
     }),
     prisma.hrAttendanceRegularization.findMany({
-      where: { employeeId, date: { gte: start, lte: end } },
+      where: { ...DISCIPLINE_INCIDENT_WHERE, employeeId, date: { gte: start, lte: end } },
       select: { date: true },
     }),
     loadScoreSignals({ employeeId, date: { gte: start, lte: end } }),
