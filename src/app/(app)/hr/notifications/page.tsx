@@ -24,6 +24,10 @@ export default async function HrNotificationsPage() {
     );
   }
   const notifs = await prisma.hrNotification.findMany({
+    // Per-request notifications (leave/punch submitted + decided) also live in
+    // HrNotification, but they are point-to-point messages, not announcements —
+    // they would bury this page. They reach people through /me/notifications.
+    where: { kind: { notIn: ["request_submitted", "request_decided"] } },
     orderBy: { createdAt: "desc" },
     take: 50,
     include: {

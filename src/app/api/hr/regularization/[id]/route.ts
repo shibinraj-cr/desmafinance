@@ -10,6 +10,7 @@ import { resolveShiftForDate } from "@/lib/hr-shift";
 import { leaveStatusBlockedByPunch } from "@/lib/hr-attendance-status";
 import { leaveDecisionBlockedReason } from "@/lib/hr-approval-routing";
 import { halfSessionLabel, isHalfSession } from "@/lib/hr-regularization";
+import { notifyRequestDecided } from "@/lib/hr-request-notify";
 
 /** Minutes-since-midnight from an "HH:MM" string, or null. */
 function hhmmToMin(t: string | null): number | null {
@@ -309,6 +310,19 @@ export async function PATCH(req: Request, { params }: { params: { id: string } }
     await applySandwichRule({ employeeId: reg.employee.id, windowStart: start, windowEnd: end, actorUserId: userId ?? null });
     await recomputeLeaveBalance(reg.employee.id, reg.date.getUTCFullYear());
   }
+
+  // Tell the employee what was decided — including, on an approved leave,
+  // whether it was granted paid or unpaid, which affects their pay and was
+  // not visible to them anywhere before.
+  await notifyRequestDecided({
+    employeeId: reg.employee.id,
+    requestType: reg.requestType,
+    halfSession: half,
+    date: reg.date,
+    decision: parsed.data.decision,
+    leaveStatus: reg.requestType === "leave" ? parsed.data.leaveStatus : null,
+    reviewNote: parsed.data.reviewNote ?? null,
+  });
 
   return NextResponse.json({ ok: true, status: newStatus });
 }
