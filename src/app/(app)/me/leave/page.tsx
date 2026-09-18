@@ -5,7 +5,8 @@ import { TopBar } from "@/components/TopBar";
 import { Section } from "@/components/Cards";
 import { employeeForUser } from "@/lib/hr-me";
 import { isOwnerDesignation } from "@/lib/hr-salary-engine";
-import { computeMonthlyLeaveLedger } from "@/lib/hr-leave-balance";
+import { computeMonthlyLeaveLedger, recomputeLeaveBalance } from "@/lib/hr-leave-balance";
+import { halfSessionLabel } from "@/lib/hr-regularization";
 import { MyLeaveClient } from "./client";
 
 export const dynamic = "force-dynamic";
@@ -29,13 +30,21 @@ export default async function MyLeavePage() {
       </>
     );
   }
-  const requests = await prisma.hrLeaveRequest.findMany({
-    where: { employeeId: emp.id },
-    orderBy: { fromDate: "desc" },
+  // The employee's own leave requests. These used to be read from
+  // HrLeaveRequest, the retired table nothing writes to, so this list was empty
+  // even for someone who had just filed — they could not tell whether their
+  // request had landed. Read the live source instead.
+  const requests = await prisma.hrAttendanceRegularization.findMany({
+    where: { employeeId: emp.id, requestType: "leave" },
+    orderBy: { date: "desc" },
     take: 100,
-    include: { reviewedBy: { select: { username: true } } },
   });
-  const bal = emp.leaveBalances[0];
+  // Refresh before reading. The stored HrLeaveBalance row is only rewritten on
+  // a leave/attendance decision, so an employee with no recent activity saw a
+  // months-old headline sitting directly above a live ledger that disagreed
+  // with it. /hr/leave-balances already recomputes on load; this matches it.
+  const balanceYear = new Date().getUTCFullYear();
+  const bal = await recomputeLeaveBalance(emp.id, balanceYear);
   // Owners (MD / Director) have no leave — show history only, no apply form.
   const canApply = !(isOwnerDesignation(emp.designationRef?.name) || isOwnerDesignation(emp.designation));
   const ledgerYear = new Date().getUTCFullYear();
@@ -46,38 +55,38 @@ export default async function MyLeavePage() {
     <>
       <TopBar
         title="My Leave"
-        subtitle={
-          bal ? `Balance: ${Number(bal.balance).toFixed(1)} · Used: ${Number(bal.used).toFixed(1)}` : "No balance yet"
-        }
+        subtitle={`Balance: ${bal.balance.toFixed(1)} · Used: ${bal.used.toFixed(1)}`}
       />
       <div className="p-margin">
         <MyLeaveClient
           ledgerYear={ledgerYear}
           ledgerOpening={ledger.opening}
           ledger={ledger.rows}
-          balance={
-            bal
-              ? {
-                  year: bal.year,
-                  opening: Number(bal.opening),
-                  accrued: Number(bal.accrued),
-                  used: Number(bal.used),
-                  balance: Number(bal.balance),
-                }
-              : null
-          }
-          requests={requests.map((r) => ({
-            id: r.id,
-            fromDate: r.fromDate.toISOString().slice(0, 10),
-            toDate: r.toDate.toISOString().slice(0, 10),
-            days: Number(r.days),
-            leaveType: r.leaveType,
-            reason: r.reason,
-            status: r.status,
-            reviewedBy: r.reviewedBy?.username ?? null,
-            reviewedAt: r.reviewedAt ? r.reviewedAt.toISOString() : null,
-            reviewNote: r.reviewNote,
-          }))}
+          balance={{
+            year: balanceYear,
+            opening: bal.opening,
+            accrued: bal.accrued,
+            used: bal.used,
+            balance: bal.balance,
+          }}
+          requests={requests.map((r) => {
+            const iso = r.date.toISOString().slice(0, 10);
+            const half = halfSessionLabel(r.halfSession);
+            return {
+              id: r.id,
+              // A leave request covers a single date until multi-day requests
+              // land; from and to are the same day.
+              fromDate: iso,
+              toDate: iso,
+              days: r.halfSession ? 0.5 : 1,
+              leaveType: half ?? "Full day",
+              reason: r.reason,
+              status: r.status,
+              reviewedBy: null,
+              reviewedAt: r.reviewedAt ? r.reviewedAt.toISOString() : null,
+              reviewNote: r.reviewNote,
+            };
+          })}
         />
       </div>
     </>

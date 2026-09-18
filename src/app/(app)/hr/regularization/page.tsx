@@ -41,16 +41,19 @@ export default async function RegularizationReviewPage({
   const notMine = await reviewQueueScope(userId, perms);
   const isDesignated = await canApproveHrApproverRequests(userId, perms);
 
+  // Leave requests have their own page (/hr/leave) in the LEAVE group, where HR
+  // looks for them. This queue keeps punch corrections and explanations.
+  const kind = { requestType: { in: ["punch", "note"] } };
   const [requests, counts] = await Promise.all([
     prisma.hrAttendanceRegularization.findMany({
-      where: { status, ...notMine },
+      where: { status, ...kind, ...notMine },
       orderBy: { createdAt: "desc" },
       take: 500,
       include: { employee: { select: { empCode: true, name: true } } },
     }),
     prisma.hrAttendanceRegularization.groupBy({
       by: ["status"],
-      where: notMine,
+      where: { ...kind, ...notMine },
       _count: { _all: true },
     }),
   ]);
@@ -60,12 +63,13 @@ export default async function RegularizationReviewPage({
     <>
       <TopBar
         title="Attendance Corrections"
-        subtitle={`Approve punch, leave & explanation requests · Pending ${tally.pending ?? 0} · Approved ${tally.approved ?? 0} · Rejected ${tally.rejected ?? 0}${isDesignated ? "" : " · HR approvers' own requests route to the designated approver"}`}
+        subtitle={`Approve punch & explanation requests · Leave requests are on the Leave Requests page · Pending ${tally.pending ?? 0} · Approved ${tally.approved ?? 0} · Rejected ${tally.rejected ?? 0}${isDesignated ? "" : " · HR approvers' own requests route to the designated approver"}`}
       />
       <div className="p-margin space-y-lg">
         <RegularizationReviewClient
           canDecide={canApproveHr(perms)}
           status={status}
+          emptyLabel="correction requests"
           requests={requests.map((r) => ({
             id: r.id,
             empCode: r.employee.empCode,

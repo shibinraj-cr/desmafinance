@@ -52,7 +52,12 @@ export default async function HrDashboardPage() {
   const [activeEmployees, pendingLeaves, todayByStatus, deptBreakdown, empData, allBirthdays] =
     await Promise.all([
       prisma.employee.count({ where: { active: true } }),
-      prisma.hrLeaveRequest.count({ where: { status: "pending" } }),
+      // Live leave requests arrive as regularization rows of type "leave".
+      // This counted HrLeaveRequest, the retired table nothing writes to, so
+      // the tile read 0 while real requests waited in the queue.
+      prisma.hrAttendanceRegularization.count({
+        where: { status: "pending", requestType: "leave" },
+      }),
       prisma.hrAttendanceDay.groupBy({
         by: ["status"],
         where: { date: today },
