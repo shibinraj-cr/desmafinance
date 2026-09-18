@@ -180,7 +180,9 @@ export async function POST(req: Request) {
       ? `${clash.date.toISOString().slice(0, 10)} → ${clash.toDate.toISOString().slice(0, 10)}`
       : clash.date.toISOString().slice(0, 10);
     return NextResponse.json(
-      { error: `A request covering ${span} is already under review.` },
+      {
+        error: `A request covering ${span} is already under review. Withdraw or edit it from "My requests" below if you need to change the dates.`,
+      },
       { status: 409 },
     );
   }
