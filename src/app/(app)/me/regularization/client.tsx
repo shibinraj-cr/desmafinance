@@ -109,6 +109,57 @@ export function RegularizationRequestClient({
   // which is exactly why leave could only ever be requested after the fact.
   const [plan, setPlan] = useState({ from: "", to: "", reason: "" });
 
+  async function withdraw(id: string) {
+    if (!confirm("Withdraw this request? The dates become free to request again.")) return;
+    setBusy(true);
+    setErr(null);
+    setOk(null);
+    try {
+      const res = await fetch(`/api/me/regularization/${id}`, { method: "DELETE" });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error ?? "Failed");
+      setOk("Request withdrawn.");
+      router.refresh();
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : "Failed");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  /** Edit an open request, or answer HR's clarification and resubmit it. */
+  async function amend(id: string, currentReason: string, resubmitting: boolean) {
+    const reason = prompt(
+      resubmitting
+        ? "Answer HR's question — this sends the request back for review:"
+        : "Update the reason for this request:",
+      currentReason,
+    );
+    if (reason === null) return;
+    if (reason.trim().length < 5) {
+      setErr("Please give a reason of at least 5 characters.");
+      return;
+    }
+    setBusy(true);
+    setErr(null);
+    setOk(null);
+    try {
+      const res = await fetch(`/api/me/regularization/${id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ reason }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error ?? "Failed");
+      setOk(resubmitting ? "Sent back to HR for review." : "Request updated.");
+      router.refresh();
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : "Failed");
+    } finally {
+      setBusy(false);
+    }
+  }
+
   async function post(body: Record<string, unknown>) {
     setBusy(true);
     setErr(null);
@@ -529,6 +580,7 @@ export function RegularizationRequestClient({
                   <th className="px-sm py-xs text-left">Out</th>
                   <th className="px-sm py-xs text-left">Status</th>
                   <th className="px-sm py-xs text-left">HR note</th>
+                  <th className="px-sm py-xs text-left">Actions</th>
                 </tr>
               </thead>
               <tbody>
@@ -568,6 +620,28 @@ export function RegularizationRequestClient({
                       <StatusBadge status={r.status} />
                     </td>
                     <td className="px-sm py-xs text-on-surface-variant text-caption">{r.reviewNote ?? "—"}</td>
+                    <td className="px-sm py-xs whitespace-nowrap">
+                      {r.status === "pending" || r.status === "clarification" ? (
+                        <div className="flex gap-xs">
+                          <button
+                            disabled={busy}
+                            onClick={() => amend(r.id, r.reason, r.status === "clarification")}
+                            className="px-xs py-[2px] rounded bg-primary text-on-primary text-caption font-semibold disabled:opacity-50"
+                          >
+                            {r.status === "clarification" ? "Answer" : "Edit"}
+                          </button>
+                          <button
+                            disabled={busy}
+                            onClick={() => withdraw(r.id)}
+                            className="px-xs py-[2px] rounded bg-surface-container text-on-surface-variant text-caption font-semibold disabled:opacity-50"
+                          >
+                            Withdraw
+                          </button>
+                        </div>
+                      ) : (
+                        <span className="text-on-surface-variant">—</span>
+                      )}
+                    </td>
                   </tr>
                 ))}
               </tbody>
@@ -655,7 +729,9 @@ function StatusBadge({ status }: { status: string }) {
         ? "bg-red-100 text-red-800"
         : status === "clarification"
           ? "bg-yellow-100 text-yellow-800"
-          : "bg-blue-100 text-blue-800";
+          : status === "withdrawn"
+            ? "bg-surface-container text-on-surface-variant"
+            : "bg-blue-100 text-blue-800";
   return (
     <span className={`px-xs py-[1px] rounded text-caption font-semibold uppercase ${cls}`}>{status}</span>
   );

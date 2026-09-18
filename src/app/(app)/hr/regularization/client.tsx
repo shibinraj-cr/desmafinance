@@ -26,7 +26,7 @@ type RegRow = {
   reviewNote: string | null;
 };
 
-const STATUSES = ["pending", "clarification", "approved", "rejected"] as const;
+const STATUSES = ["pending", "clarification", "approved", "rejected", "withdrawn"] as const;
 
 export function RegularizationReviewClient({
   canDecide,
