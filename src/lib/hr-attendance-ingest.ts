@@ -95,6 +95,17 @@ export type IngestOptions = {
    * replace, the legacy behaviour).
    */
   dateFloor?: Date | null;
+  /**
+   * The date range the caller actually FETCHED, when it is narrower than the
+   * salary cycle. The delete-and-replace is confined to it, so a partial pull
+   * (the eTimeOffice sync's trailing lookback) can no longer wipe the rest of
+   * the cycle it lands in.
+   *
+   * Omit on the file-upload path: a month spreadsheet covers the whole cycle,
+   * so the full-window replace stays correct there.
+   */
+  replaceFrom?: Date | null;
+  replaceTo?: Date | null;
 };
 
 /**
@@ -104,6 +115,36 @@ export type IngestOptions = {
  */
 export function clampWindowStart(cycleStart: Date, dateFloor: Date | null | undefined): Date {
   return dateFloor && dateFloor > cycleStart ? dateFloor : cycleStart;
+}
+
+/**
+ * The window the replace (delete-and-recreate) is allowed to touch for one
+ * salary cycle: the cycle window, lifted to the date floor, then INTERSECTED
+ * with the range the caller actually fetched.
+ *
+ * The intersection is the point. The ingest was written for full-month
+ * spreadsheet uploads, where "replace the whole cycle" is exactly right, and
+ * then reused for the API sync's 10-day trailing pull — where it deleted ~30
+ * days and recreated ~10, silently destroying the rest of the cycle on every
+ * tick. Callers that fetch a partial range now say so, and only that range is
+ * replaced.
+ *
+ * Returns null when the fetched range lies entirely outside the cycle window,
+ * meaning there is nothing to replace for this cycle.
+ */
+export function resolveReplaceWindow(args: {
+  cycleStart: Date;
+  cycleEnd: Date;
+  dateFloor?: Date | null;
+  replaceFrom?: Date | null;
+  replaceTo?: Date | null;
+}): { start: Date; end: Date } | null {
+  const start = (() => {
+    const floored = clampWindowStart(args.cycleStart, args.dateFloor);
+    return args.replaceFrom && args.replaceFrom > floored ? args.replaceFrom : floored;
+  })();
+  const end = args.replaceTo && args.replaceTo < args.cycleEnd ? args.replaceTo : args.cycleEnd;
+  return start > end ? null : { start, end };
 }
 
 /** Drop any row dated strictly before the floor (never inserted or mutated). */
@@ -209,19 +250,6 @@ export async function ingestParsedAttendance(
     // Clamp the replace window to the floor: never delete/replace before it.
     const effStart = clampWindowStart(start, dateFloor);
 
-    // Replace any prior attendance days for this (clamped) window — idempotent
-    // re-import. With a floor, rows dated before it survive untouched.
-    //
-    // `locked: false` protects HR MANUAL overrides (approved regularizations,
-    // decide/override actions) from the delete-and-replace: a locked day is
-    // never deleted here, and the matching biometric row is dropped by the
-    // createMany `skipDuplicates` below (unique employeeId+date). Without this,
-    // every sync tick reverted approved regularizations to the raw biometric
-    // value. Sandwich flips are derived (unlocked) and re-run each sync.
-    await prisma.hrAttendanceDay.deleteMany({
-      where: { date: { gte: effStart, lte: end }, locked: false },
-    });
-
     // Pull holidays in the window so we can reclassify shift=X / no-punch rows
     // that fall on a known holiday → HL instead of A or WO.
     const holidayRows = await prisma.holiday.findMany({
@@ -308,6 +336,41 @@ export async function ingestParsedAttendance(
 
       if (!rangeStart || r.date < rangeStart) rangeStart = r.date;
       if (!rangeEnd || r.date > rangeEnd) rangeEnd = r.date;
+    }
+
+    // Replace prior attendance days — idempotent re-import. The window is the
+    // cycle, lifted to the floor and intersected with what this caller actually
+    // fetched (see resolveReplaceWindow): a 10-day pull replaces 10 days, not
+    // the whole cycle.
+    //
+    // Scoped to the employees present in THIS payload as well. An employee the
+    // feed omits (unmatched name, device offline, a filtered export) keeps the
+    // rows they already have rather than having them deleted and not restored —
+    // for payroll, stale data beats missing data, and the omission is reported
+    // through `unmatchedNames`.
+    //
+    // `locked: false` protects HR MANUAL overrides (approved regularizations,
+    // decide/override actions): a locked day is never deleted here, and the
+    // matching biometric row is dropped by the createMany `skipDuplicates`
+    // below (unique employeeId+date). Without this, every sync tick reverted
+    // approved regularizations to the raw biometric value. Sandwich flips are
+    // derived (unlocked) and re-run each sync.
+    const replaceWindow = resolveReplaceWindow({
+      cycleStart: start,
+      cycleEnd: end,
+      dateFloor,
+      replaceFrom: opts.replaceFrom,
+      replaceTo: opts.replaceTo,
+    });
+    const touchedEmployeeIds = [...new Set(dayRecords.map((d) => d.employeeId))];
+    if (replaceWindow && touchedEmployeeIds.length > 0) {
+      await prisma.hrAttendanceDay.deleteMany({
+        where: {
+          date: { gte: replaceWindow.start, lte: replaceWindow.end },
+          employeeId: { in: touchedEmployeeIds },
+          locked: false,
+        },
+      });
     }
 
     if (dayRecords.length > 0) {

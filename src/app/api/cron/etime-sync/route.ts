@@ -54,6 +54,11 @@ async function handle(req: Request): Promise<NextResponse> {
       userId: null,
       source: "etimeoffice",
       dateFloor: ATTENDANCE_API_CUTOVER,
+      // Only the range we actually pulled may be replaced — without this the
+      // ingest deletes the whole salary cycle the lookback lands in and puts
+      // back only these few days.
+      replaceFrom: fromDate,
+      replaceTo: today,
       warnings: fetched.warnings,
     });
     return NextResponse.json({
