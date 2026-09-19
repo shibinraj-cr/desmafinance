@@ -71,3 +71,53 @@ describe("job-description markdown", () => {
     expect(markdownToPlainText("a".repeat(50), 10)).toBe("aaaaaaaaa…");
   });
 });
+
+describe("pipe tables", () => {
+  it("parses a header, separator and body rows", () => {
+    const blocks = parseMarkdown(
+      ["| Code | Meaning |", "| --- | --- |", "| P | Present |", "| HD | Half day |"].join("\n"),
+    );
+    expect(blocks).toHaveLength(1);
+    const t = blocks[0] as Extract<(typeof blocks)[number], { type: "table" }>;
+    expect(t.type).toBe("table");
+    expect(t.header.map((c) => c.map((i) => i.value).join(""))).toEqual(["Code", "Meaning"]);
+    expect(t.rows).toHaveLength(2);
+    expect(t.rows[1]!.map((c) => c.map((i) => i.value).join(""))).toEqual(["HD", "Half day"]);
+  });
+
+  it("keeps inline formatting inside cells", () => {
+    const blocks = parseMarkdown(["| A | B |", "| --- | --- |", "| **bold** | x |"].join("\n"));
+    const t = blocks[0] as Extract<(typeof blocks)[number], { type: "table" }>;
+    expect(t.rows[0]![0]![0]).toEqual({ type: "bold", value: "bold" });
+  });
+
+  it("pads a ragged row so columns cannot shift", () => {
+    const blocks = parseMarkdown(["| A | B | C |", "| --- | --- | --- |", "| 1 | 2 |"].join("\n"));
+    const t = blocks[0] as Extract<(typeof blocks)[number], { type: "table" }>;
+    expect(t.rows[0]).toHaveLength(3);
+    expect(t.rows[0]![2]).toEqual([]);
+  });
+
+  it("accepts alignment markers in the separator", () => {
+    const blocks = parseMarkdown(["| A | B |", "| :--- | ---: |", "| 1 | 2 |"].join("\n"));
+    expect(blocks[0]!.type).toBe("table");
+  });
+
+  it("leaves a stray pipe in prose as a paragraph", () => {
+    // No separator row, so this must not become a table.
+    const blocks = parseMarkdown("Shift A | 09:00 - 17:30 is the standard day.");
+    expect(blocks[0]!.type).toBe("paragraph");
+  });
+
+  it("ignores a header with no body rows", () => {
+    const blocks = parseMarkdown(["| A | B |", "| --- | --- |"].join("\n"));
+    expect(blocks.every((b) => b.type !== "table")).toBe(true);
+  });
+
+  it("flattens a table for plain-text extraction", () => {
+    const text = markdownToPlainText(
+      ["| Code | Meaning |", "| --- | --- |", "| P | Present |"].join("\n"),
+    );
+    expect(text).toContain("P, Present");
+  });
+});

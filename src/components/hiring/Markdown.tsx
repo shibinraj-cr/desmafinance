@@ -45,6 +45,39 @@ export function Markdown({ source, className = "" }: { source: string | null; cl
             </Tag>
           );
         }
+        if (block.type === "table") {
+          return (
+            // Wide reference tables must scroll inside themselves rather than
+            // pushing the page sideways.
+            <div key={i} className="overflow-x-auto">
+              <table className="w-full text-body-md border-collapse">
+                <thead>
+                  <tr className="border-b border-outline-variant">
+                    {block.header.map((cell, c) => (
+                      <th
+                        key={c}
+                        className="text-left font-semibold text-on-surface py-xs pr-md align-top"
+                      >
+                        <Inlines content={cell} />
+                      </th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody>
+                  {block.rows.map((row, r) => (
+                    <tr key={r} className="border-b border-outline-variant last:border-0">
+                      {row.map((cell, c) => (
+                        <td key={c} className="py-xs pr-md align-top text-on-surface-variant">
+                          <Inlines content={cell} />
+                        </td>
+                      ))}
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          );
+        }
         return (
           <p key={i} className="text-body-md text-on-surface-variant leading-relaxed">
             <Inlines content={block.content} />

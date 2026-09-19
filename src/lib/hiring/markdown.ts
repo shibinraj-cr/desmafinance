@@ -8,8 +8,16 @@
  * pasted a description in from a web page.
  *
  * Supported: `##`/`###` headings, `-`/`*` bullet lists, `1.` numbered lists,
- * paragraphs, and inline `**bold**`, `*italic*`, `` `code` ``. Everything else
- * renders as plain text, which is the right failure mode for a job ad.
+ * pipe tables, paragraphs, and inline `**bold**`, `*italic*`, `` `code` ``.
+ * Everything else renders as plain text, which is the right failure mode for a
+ * job ad.
+ *
+ * Tables were added for HR policies, which are mostly reference material — a
+ * shift-timing or leave-code table read as a run of pipe characters is
+ * unreadable, and space-aligned plain text does not line up in the app's
+ * proportional font. A table needs a header row, a `| --- |` separator, and at
+ * least one body row; anything short of that falls through to paragraphs, so a
+ * stray pipe in prose cannot accidentally become a table.
  */
 
 export type Inline =
@@ -21,7 +29,8 @@ export type Inline =
 export type Block =
   | { type: "heading"; level: 2 | 3; content: Inline[] }
   | { type: "paragraph"; content: Inline[] }
-  | { type: "list"; ordered: boolean; items: Inline[][] };
+  | { type: "list"; ordered: boolean; items: Inline[][] }
+  | { type: "table"; header: Inline[][]; rows: Inline[][][] };
 
 export function parseMarkdown(src: string | null | undefined): Block[] {
   if (!src?.trim()) return [];
@@ -47,8 +56,57 @@ export function parseMarkdown(src: string | null | undefined): Block[] {
     }
   };
 
-  for (const line of lines) {
+  /** Split one `| a | b |` row into its cells, tolerating the outer pipes. */
+  const splitRow = (row: string): string[] =>
+    row
+      .trim()
+      .replace(/^\|/, "")
+      .replace(/\|$/, "")
+      .split("|")
+      .map((c) => c.trim());
+
+  /** A `| --- | :--: |` separator, which is what marks the line above as a header. */
+  const isSeparator = (row: string): boolean => {
+    const cells = splitRow(row);
+    return cells.length > 0 && cells.every((c) => /^:?-{3,}:?$/.test(c));
+  };
+
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i]!;
     const trimmed = line.trim();
+
+    // A table: header row, separator, then body rows until the block ends.
+    if (
+      trimmed.includes("|") &&
+      i + 1 < lines.length &&
+      isSeparator(lines[i + 1]!) &&
+      !isSeparator(trimmed)
+    ) {
+      const header = splitRow(trimmed);
+      const rows: string[][] = [];
+      let j = i + 2;
+      while (j < lines.length && lines[j]!.trim().includes("|")) {
+        const cells = splitRow(lines[j]!);
+        // Pad or trim to the header width so a ragged row cannot shift columns.
+        rows.push(
+          Array.from({ length: header.length }, (_, k) => cells[k] ?? ""),
+        );
+        j++;
+      }
+      if (rows.length > 0) {
+        flushParagraph();
+        flushList();
+        blocks.push({
+          type: "table",
+          header: header.map(parseInline),
+          // An empty cell carries no inline content at all, rather than an
+          // empty text node — a padded short row must render as nothing.
+          rows: rows.map((r) => r.map((c) => (c ? parseInline(c) : []))),
+        });
+        i = j - 1;
+        continue;
+      }
+    }
 
     if (!trimmed) {
       flushParagraph();
@@ -122,6 +180,13 @@ export function markdownToPlainText(src: string | null | undefined, maxLen = 300
   const text = blocks
     .map((b) => {
       if (b.type === "list") return b.items.map(inlineText).join(". ");
+      if (b.type === "table") {
+        // Flatten to "header: cell, cell" lines so a table still reads as prose
+        // in a meta description rather than vanishing.
+        return b.rows
+          .map((r) => r.map(inlineText).filter(Boolean).join(", "))
+          .join(". ");
+      }
       return inlineText(b.content);
     })
     .join(" ")

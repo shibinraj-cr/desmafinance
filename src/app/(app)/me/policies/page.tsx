@@ -5,6 +5,7 @@ import { TopBar } from "@/components/TopBar";
 import { Section } from "@/components/Cards";
 import { employeeForUser } from "@/lib/hr-me";
 import { SignClient } from "./sign-client";
+import { Markdown } from "@/components/hiring/Markdown";
 
 export const dynamic = "force-dynamic";
 
@@ -57,7 +58,11 @@ export default async function MePoliciesPage() {
                 )
               }
             >
-              <p className="text-on-surface-variant whitespace-pre-wrap mb-md">{p.body}</p>
+              {/* Policies are reference material — headings, lists and tables
+                  carry most of the meaning. Rendered through the in-house
+                  markdown subset (React elements, never an HTML string), so
+                  HR-authored copy cannot inject markup. */}
+              <Markdown source={p.body} className="mb-md" />
               {p.externalUrl && (
                 <a
                   href={p.externalUrl}
