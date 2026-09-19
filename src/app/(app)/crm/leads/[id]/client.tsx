@@ -6,7 +6,7 @@ import { useRouter } from "next/navigation";
 import Link from "next/link";
 import type { LeadRow, NoteRow, ActivityRow, TaskRow, TaskReminderRow } from "@/lib/crm-leads";
 import { isActionOnlyStatus, canUnenrollInto } from "@/lib/crm-leads";
-import { buildLeadMergeVars, fillTemplate, LEAD_TEMPERATURES, TASK_TYPES, isOtherQualification, qualificationText, QUALIFICATION_OTHER_MAX, daysInStatus, type MessageTemplateDTO } from "@/lib/crm";
+import { buildLeadMergeVars, DEFAULT_STATUS_COLOR, fillTemplate, LEAD_TEMPERATURES, TASK_TYPES, isOtherQualification, qualificationText, QUALIFICATION_OTHER_MAX, daysInStatus, type MessageTemplateDTO } from "@/lib/crm";
 import { ageFromDob } from "@/lib/age";
 import { COUNTRIES, countryCodeFor } from "@/lib/countries";
 import { MultiSelect } from "@/components/MultiSelect";
@@ -351,6 +351,7 @@ export function LeadDetail({
       {tab === "overview" && (
         <>
           <StageBar lead={lead} statuses={masters.statuses} canEdit={canEdit} />
+          <StatusBar lead={lead} subStatuses={masters.subStatuses} canEdit={canEdit} />
           <div className="grid grid-cols-1 lg:grid-cols-3 gap-lg">
             <div className="lg:col-span-1">
               <SummaryCard lead={lead} masters={masters} canEdit={canEdit} />
@@ -366,7 +367,6 @@ export function LeadDetail({
                 canReEnroll={access.canCreateLeads}
                 canUnenroll={access.canUnenroll}
               />
-              <StatusCard lead={lead} masters={masters} canEdit={canEdit} />
               <AssignmentCard lead={lead} masters={masters} canAssign={access.canAssign} />
               <LeadInfoCard lead={lead} masters={masters} canEdit={canEdit} />
             </div>
@@ -517,7 +517,7 @@ function StageBar({ lead, statuses, canEdit }: { lead: LeadRow; statuses: Status
         // stage button is locked too — the backend now rejects any statusId change away
         // from "enrolled" (see PATCH /api/crm/leads/[id]), and without this the buttons
         // for ordinary stages (Qualify, Follow-Up, ...) would stay clickable and silently
-        // no-op on that 400 with no feedback, same as the Status field in the Summary card.
+        // no-op on that 400 with no feedback, same as the Stage field in the Summary card.
         const lockedByEnrollment = lead.status.code === "enrolled";
         const locked = isActionOnlyStatus(s.code) || lockedByEnrollment;
         // Reached stages wear their stage colour; the current stage gets a
@@ -546,9 +546,9 @@ function StageBar({ lead, statuses, canEdit }: { lead: LeadRow; statuses: Status
               lockedByEnrollment
                 ? "Lead is Enrolled — use Un-enroll on the Deal card to undo it"
                 : locked
-                  ? `${s.label} is set by an action (Set deal), not the status picker`
+                  ? `${s.label} is set by an action (Set deal), not the stage picker`
                   : canEdit
-                    ? `Set status: ${s.label}`
+                    ? `Set stage: ${s.label}`
                     : s.label
             }
           >
@@ -585,6 +585,7 @@ function SummaryCard({ lead, masters, canEdit }: { lead: LeadRow; masters: Detai
     serviceId: lead.service?.id ?? "",
     qualificationId: lead.qualification?.id ?? "",
     qualificationOther: lead.qualificationOther ?? "",
+    subStatusId: lead.subStatus?.id ?? "",
     dob: lead.dob ?? "",
     country: lead.country ?? "",
     studyDestination: lead.studyDestination ?? "",
@@ -625,6 +626,7 @@ function SummaryCard({ lead, masters, canEdit }: { lead: LeadRow; masters: Detai
         // Always sent: the server clears it when the qualification is no longer
         // "Others", so a correction away from Others can't leave stale text.
         qualificationOther: isOtherQual ? draft.qualificationOther.trim() : null,
+        subStatusId: draft.subStatusId || null,
         dob: draft.dob,
         country: draft.country,
         studyDestination: isStudyAbroad ? draft.studyDestination : undefined,
@@ -800,6 +802,26 @@ function SummaryCard({ lead, masters, canEdit }: { lead: LeadRow; masters: Detai
               </select>
             )}
           </Field>
+          {/* The other axis. Stage is where they sit in the pipeline; Status is
+              what is actually happening — edited together, saved together. */}
+          <Field label="Status">
+            <select
+              className={inputCls}
+              value={draft.subStatusId}
+              onChange={(e) => setDraft({ ...draft, subStatusId: e.target.value })}
+            >
+              <option value="">—</option>
+              {groupedStatuses(masters.subStatuses).map(([group, rows]) => (
+                <optgroup key={group} label={group || "Other"}>
+                  {rows.map((r) => (
+                    <option key={r.id} value={r.id}>
+                      {r.label}
+                    </option>
+                  ))}
+                </optgroup>
+              ))}
+            </select>
+          </Field>
           <Field label="Temperature">
             <select className={inputCls} value={draft.temperature} onChange={(e) => setDraft({ ...draft, temperature: e.target.value })}>
               <option value="">— Unrated</option>
@@ -828,6 +850,7 @@ function SummaryCard({ lead, masters, canEdit }: { lead: LeadRow; masters: Detai
           <Row label="Source" value={lead.source?.label ?? "—"} />
           <Row label="Service" value={lead.service?.name ?? "—"} />
           <Row label="Qualification" value={qualificationText(lead.qualification?.label, lead.qualificationOther) ?? "—"} />
+          <Row label="Status" value={summaryStatusText(lead)} />
           <Row label="Temperature" value={<TemperaturePill temperature={lead.temperature} />} />
           {lead.dob && <Row label="Date of birth" value={lead.dob} />}
           {lead.age !== null && <Row label="Age" value={`${lead.age} yrs`} />}
@@ -1056,6 +1079,179 @@ function ActivityCard({ activity }: { activity: ActivityRow }) {
 }
 
 // ── Assignment ────────────────────────────────────────────────────────────────
+// ── Status band ─────────────────────────────────────────────────────────────
+/**
+ * The second band under the stage bar: where the CONVERSATION stands.
+ *
+ * Shows only the statuses in the current one's group, because the change made
+ * most often is a flip inside a group — "Details Sent and Awaiting
+ * Confirmation" to "…and Not Responding" — and that should cost one click in
+ * the same place the stage bar sits. The full list of 24 is a click away under
+ * "More"; laying all of them out as pills the way stages are would run to
+ * eight rows and push the lead's actual details off the screen.
+ */
+function StatusBar({
+  lead,
+  subStatuses,
+  canEdit,
+}: {
+  lead: LeadRow;
+  subStatuses: DetailMasters["subStatuses"];
+  canEdit: boolean;
+}) {
+  const router = useRouter();
+  const [busy, setBusy] = useState(false);
+  const [open, setOpen] = useState(false);
+
+  async function setSubStatus(subStatusId: string) {
+    if (!canEdit || busy || subStatusId === lead.subStatus?.id) return;
+    setBusy(true);
+    const res = await fetch(`/api/crm/leads/${lead.id}`, {
+      method: "PATCH",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ subStatusId }),
+    });
+    setBusy(false);
+    setOpen(false);
+    if (res.ok) router.refresh();
+  }
+
+  // With no status yet, show the first group so the band is never empty — a
+  // brand-new lead still gets somewhere to click.
+  const currentGroup = lead.subStatus?.group ?? subStatuses[0]?.group ?? "";
+  const inGroup = subStatuses.filter((s) => (s.group || "") === currentGroup);
+  const days = daysInStatus(lead.subStatusSince);
+
+  return (
+    <div className="relative bg-surface-container-lowest border border-outline-variant rounded-xl shadow-sm p-md flex flex-wrap items-center gap-xs">
+      <span className="text-label-sm uppercase tracking-wider text-on-surface-variant mr-xs">
+        {currentGroup || "Status"}
+      </span>
+
+      {inGroup.map((s) => {
+        const isCurrent = s.id === lead.subStatus?.id;
+        const color = s.color ?? DEFAULT_STATUS_COLOR;
+        const style: React.CSSProperties = isCurrent
+          ? { backgroundColor: color, color: "#fff", boxShadow: `0 0 0 3px ${color}40, 0 4px 12px ${color}55` }
+          : { backgroundColor: `${color}14`, color, border: `1px solid ${color}40` };
+        return (
+          <button
+            key={s.id}
+            type="button"
+            disabled={!canEdit || busy}
+            onClick={() => setSubStatus(s.id)}
+            style={style}
+            className={
+              "inline-flex items-center gap-xs h-9 px-md text-label-sm font-semibold rounded-lg transition disabled:cursor-default" +
+              (canEdit ? " cursor-pointer hover:brightness-105" : "")
+            }
+            title={canEdit ? `Set status: ${s.label}` : s.label}
+          >
+            {isCurrent && (
+              <span className="material-symbols-outlined" style={{ fontSize: 16 }}>
+                radio_button_checked
+              </span>
+            )}
+            {s.label}
+          </button>
+        );
+      })}
+
+      {/* How long they have been sitting here. The number is the point: the same
+          status at 2 days and at 94 days are different problems. */}
+      {days !== null && (
+        <span className={"text-label-sm " + (days >= 14 ? "text-amber-700 font-semibold" : "text-on-surface-variant")}>
+          · {days}d
+        </span>
+      )}
+      {lead.subStatus && days === null && (
+        <span className="text-label-sm text-on-surface-variant" title="Set before this lead was tracked">
+          · not timed yet
+        </span>
+      )}
+
+      {canEdit && (
+        <button
+          type="button"
+          disabled={busy}
+          onClick={() => setOpen((v) => !v)}
+          className="ml-auto inline-flex items-center gap-xs h-9 px-md text-label-sm font-semibold rounded-lg border border-outline-variant text-on-surface-variant hover:text-primary hover:border-primary transition"
+        >
+          More
+          <span className="material-symbols-outlined" style={{ fontSize: 16 }}>
+            {open ? "expand_less" : "expand_more"}
+          </span>
+        </button>
+      )}
+
+      {open && (
+        <>
+          {/* Backdrop catches the outside click; transparent so the band stays visible. */}
+          <button
+            type="button"
+            aria-label="Close status picker"
+            onClick={() => setOpen(false)}
+            className="fixed inset-0 z-40 cursor-default"
+          />
+          <div className="absolute right-md top-full mt-xs z-50 w-[min(28rem,calc(100vw-2rem))] max-h-[60vh] overflow-auto bg-surface-container-lowest border border-outline-variant rounded-xl shadow-lg p-sm">
+            {groupedStatuses(subStatuses).map(([group, rows]) => (
+              <div key={group} className="mb-sm last:mb-0">
+                <div className="px-sm py-xs text-label-sm uppercase tracking-wider text-on-surface-variant">
+                  {group || "Other"}
+                </div>
+                {rows.map((s) => {
+                  const isCurrent = s.id === lead.subStatus?.id;
+                  return (
+                    <button
+                      key={s.id}
+                      type="button"
+                      disabled={busy}
+                      onClick={() => setSubStatus(s.id)}
+                      className={
+                        "w-full text-left flex items-center gap-sm px-sm py-xs rounded-lg text-body-md hover:bg-surface-container-low transition " +
+                        (isCurrent ? "font-semibold text-on-surface" : "text-on-surface-variant")
+                      }
+                    >
+                      <span
+                        className="inline-block w-2.5 h-2.5 rounded-full shrink-0"
+                        style={{ backgroundColor: s.color ?? DEFAULT_STATUS_COLOR }}
+                      />
+                      {s.label}
+                      {isCurrent && (
+                        <span className="material-symbols-outlined ml-auto text-primary" style={{ fontSize: 18 }}>
+                          check
+                        </span>
+                      )}
+                    </button>
+                  );
+                })}
+              </div>
+            ))}
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
+
+/** "Details Sent and Not Responding · 45d" for the Summary read-only row. */
+function summaryStatusText(lead: LeadRow): string {
+  if (!lead.subStatus) return "—";
+  const days = daysInStatus(lead.subStatusSince);
+  return days === null ? lead.subStatus.label : `${lead.subStatus.label} · ${days}d`;
+}
+
+/** Group statuses by heading, preserving the masters' journey order. */
+function groupedStatuses(rows: DetailMasters["subStatuses"]): [string, DetailMasters["subStatuses"]][] {
+  const out: [string, DetailMasters["subStatuses"]][] = [];
+  for (const r of rows) {
+    const last = out[out.length - 1];
+    if (last && last[0] === (r.group || "")) last[1].push(r);
+    else out.push([r.group || "", [r]]);
+  }
+  return out;
+}
+
 function AssignmentCard({ lead, masters, canAssign }: { lead: LeadRow; masters: DetailMasters; canAssign: boolean }) {
   const router = useRouter();
   const [busy, setBusy] = useState(false);
@@ -1099,87 +1295,6 @@ function AssignmentCard({ lead, masters, canAssign }: { lead: LeadRow; masters: 
   );
 }
 
-
-// ── Status (the cross-stage state) ──────────────────────────────────────────
-/**
- * Where the conversation stands, independent of the lead's stage — and how long
- * it has stood there. The day-count is the reason this is a card rather than
- * another row in the summary: "Details Sent and Not Responding" is a problem,
- * and "for 94 days" is how big a problem.
- */
-function StatusCard({ lead, masters, canEdit }: { lead: LeadRow; masters: DetailMasters; canEdit: boolean }) {
-  const router = useRouter();
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-
-  async function change(subStatusId: string) {
-    setBusy(true);
-    setError(null);
-    const res = await fetch(`/api/crm/leads/${lead.id}`, {
-      method: "PATCH",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ subStatusId: subStatusId || null }),
-    });
-    setBusy(false);
-    if (!res.ok) {
-      setError("That didn’t save.");
-      return;
-    }
-    router.refresh();
-  }
-
-  const days = daysInStatus(lead.subStatusSince);
-
-  // Preserve the API's journey order while splitting into <optgroup>s.
-  const groups: [string, typeof masters.subStatuses][] = [];
-  for (const r of masters.subStatuses) {
-    const last = groups[groups.length - 1];
-    if (last && last[0] === (r.group || "")) last[1].push(r);
-    else groups.push([r.group || "", [r]]);
-  }
-
-  return (
-    <div className={cardCls}>
-      <CardHeading icon="label" color="#0ea5e9">Status</CardHeading>
-      {error && <div className="rounded-lg bg-error-container text-on-error-container px-md py-sm">{error}</div>}
-
-      {canEdit ? (
-        <select className={inputCls} disabled={busy} value={lead.subStatus?.id ?? ""} onChange={(e) => void change(e.target.value)}>
-          <option value="">—</option>
-          {groups.map(([group, rows]) => (
-            <optgroup key={group} label={group || "Other"}>
-              {rows.map((r) => (
-                <option key={r.id} value={r.id}>
-                  {r.label}
-                </option>
-              ))}
-            </optgroup>
-          ))}
-        </select>
-      ) : (
-        <p className="text-body-md text-on-surface font-medium">{lead.subStatus?.label ?? "—"}</p>
-      )}
-
-      {lead.subStatus && days !== null && (
-        <dl className="space-y-sm text-body-md">
-          <Row
-            label="In this status"
-            value={
-              <span className={days >= 14 ? "text-amber-700" : undefined}>
-                {days === 0 ? "since today" : `${days} day${days === 1 ? "" : "s"}`}
-              </span>
-            }
-          />
-        </dl>
-      )}
-      {lead.subStatus && days === null && (
-        <p className="text-label-sm text-on-surface-variant">
-          Set before this lead was tracked — the clock starts at the next status change.
-        </p>
-      )}
-    </div>
-  );
-}
 
 // ── Deal & enrollment ───────────────────────────────────────────────────────
 function pipelineBadgeStyle(status: string): React.CSSProperties {
@@ -1297,7 +1412,7 @@ function DealCard({
               Reopen for another service
             </button>
           )}
-          {/* The "dedicated action" the status picker and the lead PATCH API both
+          {/* The "dedicated action" the stage picker and the lead PATCH API both
               point at: an enrollment recorded in Finance / Marketing / Operations
               can only be left through an undo that unwinds all three. */}
           {canUnenroll && (
@@ -1399,7 +1514,7 @@ function UnenrollModal({
   const [acknowledged, setAcknowledged] = useState(false);
   const [reason, setReason] = useState("");
 
-  // Statuses the lead may land in. Unlike the ordinary status picker this DOES
+  // Stages the lead may land in. Unlike the ordinary stage picker this DOES
   // offer "Pipeline", and prefers it: the deal survives the undo (its pipeline
   // row goes back to `open`), so a previously-enrolled lead belongs back in the
   // forecast rather than dropped to a generic working status.

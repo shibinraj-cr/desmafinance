@@ -1060,7 +1060,7 @@ export function LeadsTable({
         </form>
 
         <MultiSelect
-          placeholder="All statuses"
+          placeholder="All stages"
           options={masters.statuses.map((s) => ({ value: s.id, label: s.label }))}
           selected={pickedStatuses}
           onChange={(next) => update({ status: next })}
