@@ -22,6 +22,17 @@ type StatusRow = {
   leadCount: number;
 };
 type QualRow = { id: string; label: string; displayOrder: number; active: boolean; leadCount: number };
+type SubStatusRow = {
+  id: string;
+  code: string;
+  label: string;
+  group: string;
+  displayOrder: number;
+  color: string | null;
+  isDefault: boolean;
+  active: boolean;
+  leadCount: number;
+};
 
 const inputCls =
   "w-full h-10 px-md rounded-lg border border-outline-variant bg-surface-container-lowest focus:border-primary focus:ring-2 focus:ring-primary/20 outline-none transition text-body-md";
@@ -56,6 +67,14 @@ const statusErrors: Record<string, string> = {
   not_found: "Status no longer exists.",
   in_use: "Status is used by leads — deactivate instead.",
 };
+const subStatusErrors: Record<string, string> = {
+  label_taken: "A status with that label already exists.",
+  validation_error: "Please check the fields.",
+  not_found: "Status no longer exists.",
+  in_use: "Status is used by leads — deactivate instead.",
+  is_default: "This is the status new leads start in — make another the default first.",
+  default_required: "Every new lead has to start somewhere — promote another status instead.",
+};
 const qualErrors: Record<string, string> = {
   label_taken: "A qualification with that label already exists.",
   validation_error: "Please check the fields.",
@@ -63,12 +82,16 @@ const qualErrors: Record<string, string> = {
   in_use: "Qualification is used by leads — deactivate instead.",
 };
 
-type TabKey = "statuses" | "qualifications" | "capture" | "whatsapp" | "wa_module" | "remarketing" | "email";
+type TabKey = "statuses" | "sub_statuses" | "qualifications" | "capture" | "whatsapp" | "wa_module" | "remarketing" | "email";
 
 // One tab per settings section. `group` is a soft caption shown above the active
 // panel so the old "Reference data / Integrations" split isn't lost.
 const TABS: { key: TabKey; label: string; icon: string; group: string }[] = [
-  { key: "statuses", label: "Lead Statuses", icon: "flag", group: "Reference data" },
+  // "Stages", not "Statuses": the pipeline positions. The word "Status" now
+  // belongs to the cross-stage field on the next tab, and two things called
+  // Status would be one too many.
+  { key: "statuses", label: "Stages", icon: "flag", group: "Reference data" },
+  { key: "sub_statuses", label: "Statuses", icon: "label", group: "Reference data" },
   { key: "qualifications", label: "Qualifications", icon: "school", group: "Reference data" },
   { key: "capture", label: "Lead Capture", icon: "sync_alt", group: "Integrations" },
   { key: "whatsapp", label: "Wabis", icon: "forum", group: "Integrations" },
@@ -79,7 +102,15 @@ const TABS: { key: TabKey; label: string; icon: string; group: string }[] = [
 
 const TAB_KEYS = new Set<string>(TABS.map((t) => t.key));
 
-export function SettingsClient({ statuses, qualifications }: { statuses: StatusRow[]; qualifications: QualRow[] }) {
+export function SettingsClient({
+  statuses,
+  subStatuses,
+  qualifications,
+}: {
+  statuses: StatusRow[];
+  subStatuses: SubStatusRow[];
+  qualifications: QualRow[];
+}) {
   const [tab, setTab] = useState<TabKey>("statuses");
 
   // Deep-link / restore the active tab via the URL hash (e.g. #email), so a
@@ -131,6 +162,7 @@ export function SettingsClient({ statuses, qualifications }: { statuses: StatusR
           <div className="text-label-sm font-semibold uppercase tracking-wider text-on-surface-variant">{activeGroup}</div>
         )}
         {tab === "statuses" && <StatusEditor statuses={statuses} />}
+        {tab === "sub_statuses" && <SubStatusEditor subStatuses={subStatuses} />}
         {tab === "qualifications" && <QualificationEditor qualifications={qualifications} />}
         {tab === "capture" && <IntegrationsCard />}
         {tab === "whatsapp" && <WabisWebhookCard />}
@@ -480,6 +512,283 @@ function NewStatusButton() {
                   </span>
                 </span>
               </label>
+              <div className="flex justify-end gap-base">
+                <button type="button" className={secondaryBtn} disabled={busy} onClick={() => setOpen(false)}>
+                  Cancel
+                </button>
+                <button type="submit" className={primaryBtn} disabled={busy}>
+                  {busy ? "Saving…" : "Create"}
+                </button>
+              </div>
+            </form>
+          </div>,
+          document.body,
+        )}
+    </>
+  );
+}
+
+
+// ── Statuses (the cross-stage state) ────────────────────────────────────────
+// Distinct from the Stages tab above: a lead has a STAGE (where it sits in the
+// pipeline) and a STATUS (what is actually happening to it). The status filter
+// on the leads list cuts across every stage, which is the whole point.
+function SubStatusEditor({ subStatuses }: { subStatuses: SubStatusRow[] }) {
+  return (
+    <section className="bg-surface-container-lowest border border-outline-variant rounded-xl shadow-sm overflow-hidden">
+      <div className="flex items-center justify-between px-lg py-md border-b border-outline-variant">
+        <div>
+          <h3 className="text-h3 text-on-surface">Statuses</h3>
+          <p className="text-label-sm text-on-surface-variant">
+            What is happening to a candidate right now — independent of their stage. The{" "}
+            <span className="font-semibold">group</span> only sets the heading it appears under in the
+            picker; the <span className="font-semibold">default</span> is what new leads start in.
+          </p>
+        </div>
+        <NewSubStatusButton />
+      </div>
+      <div className="overflow-auto">
+        <table className="w-full text-body-md">
+          <thead className="bg-surface-container-low text-on-surface-variant">
+            <tr>
+              <Th className="text-left">Order</Th>
+              <Th className="text-left">Label</Th>
+              <Th className="text-left">Group</Th>
+              <Th className="text-left">Default</Th>
+              <Th className="text-left">Active</Th>
+              <Th className="text-right">Actions</Th>
+            </tr>
+          </thead>
+          <tbody>
+            {subStatuses.map((r) => (
+              <SubStatusRowView key={r.id} row={r} />
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </section>
+  );
+}
+
+function SubStatusRowView({ row }: { row: SubStatusRow }) {
+  const router = useRouter();
+  const [editing, setEditing] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [draft, setDraft] = useState({ label: row.label, group: row.group, displayOrder: row.displayOrder });
+
+  async function patch(body: Record<string, unknown>, after?: () => void) {
+    setBusy(true);
+    setError(null);
+    const res = await fetch(`/api/crm/sub-statuses/${row.id}`, {
+      method: "PATCH",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(body),
+    });
+    setBusy(false);
+    if (!res.ok) {
+      const d = (await res.json().catch(() => ({}))) as { error?: string };
+      setError(subStatusErrors[d.error ?? ""] ?? "Failed to save.");
+      return;
+    }
+    after?.();
+    router.refresh();
+  }
+
+  async function remove() {
+    if (!confirm(`Delete status "${row.label}"?`)) return;
+    setBusy(true);
+    setError(null);
+    const res = await fetch(`/api/crm/sub-statuses/${row.id}`, { method: "DELETE" });
+    setBusy(false);
+    if (!res.ok) {
+      const d = (await res.json().catch(() => ({}))) as { error?: string };
+      setError(subStatusErrors[d.error ?? ""] ?? "Failed to delete.");
+      return;
+    }
+    router.refresh();
+  }
+
+  return (
+    <tr className="border-t border-outline-variant/60">
+      <Td>
+        {editing ? (
+          <input
+            type="number"
+            min={0}
+            className={smInput + " w-[64px] text-right"}
+            value={draft.displayOrder}
+            onChange={(e) => setDraft({ ...draft, displayOrder: Number(e.target.value) || 0 })}
+          />
+        ) : (
+          row.displayOrder
+        )}
+      </Td>
+      <Td>
+        {editing ? (
+          <input className={smInput + " w-full"} value={draft.label} onChange={(e) => setDraft({ ...draft, label: e.target.value })} />
+        ) : (
+          <span className="inline-flex items-center gap-xs">
+            {row.color && (
+              <span className="inline-block w-2.5 h-2.5 rounded-full" style={{ backgroundColor: row.color }} />
+            )}
+            {row.label}
+          </span>
+        )}
+        {error && <div className="text-label-sm text-error mt-xs">{error}</div>}
+      </Td>
+      <Td className="text-on-surface-variant">
+        {editing ? (
+          <input className={smInput + " w-full"} value={draft.group} onChange={(e) => setDraft({ ...draft, group: e.target.value })} />
+        ) : (
+          row.group || "—"
+        )}
+      </Td>
+      <Td>
+        <button
+          type="button"
+          disabled={busy || row.isDefault}
+          onClick={() => patch({ isDefault: true })}
+          title={row.isDefault ? "New leads start here" : "Make this the status new leads start in"}
+          className="text-on-surface-variant hover:text-accent disabled:opacity-100 disabled:text-primary"
+        >
+          <span className="material-symbols-outlined" style={{ fontSize: 20 }}>
+            {row.isDefault ? "radio_button_checked" : "radio_button_unchecked"}
+          </span>
+        </button>
+      </Td>
+      <Td>
+        <button
+          type="button"
+          disabled={busy}
+          onClick={() => patch({ active: !row.active })}
+          className="text-on-surface-variant hover:text-accent"
+          title={row.active ? "Deactivate" : "Activate"}
+        >
+          <span className="material-symbols-outlined" style={{ fontSize: 20 }}>
+            {row.active ? "toggle_on" : "toggle_off"}
+          </span>
+        </button>
+      </Td>
+      <Td className="text-right">
+        {editing ? (
+          <span className="inline-flex gap-xs">
+            <button
+              type="button"
+              disabled={busy}
+              onClick={() => patch({ label: draft.label, group: draft.group, displayOrder: draft.displayOrder }, () => setEditing(false))}
+              className="text-primary hover:underline text-label-sm font-semibold"
+            >
+              Save
+            </button>
+            <button type="button" disabled={busy} onClick={() => setEditing(false)} className="text-on-surface-variant text-label-sm">
+              Cancel
+            </button>
+          </span>
+        ) : (
+          <span className="inline-flex gap-xs">
+            <button type="button" onClick={() => setEditing(true)} className="text-on-surface-variant hover:text-accent" title="Edit">
+              <span className="material-symbols-outlined" style={{ fontSize: 18 }}>
+                edit
+              </span>
+            </button>
+            <button
+              type="button"
+              onClick={remove}
+              disabled={busy || row.leadCount > 0 || row.isDefault}
+              title={
+                row.isDefault
+                  ? "New leads start here — make another status the default first"
+                  : row.leadCount > 0
+                    ? `Used by ${row.leadCount} leads — deactivate instead`
+                    : "Delete"
+              }
+              className="text-on-surface-variant hover:text-error disabled:opacity-40"
+            >
+              <span className="material-symbols-outlined" style={{ fontSize: 18 }}>
+                delete
+              </span>
+            </button>
+          </span>
+        )}
+      </Td>
+    </tr>
+  );
+}
+
+function NewSubStatusButton() {
+  const router = useRouter();
+  const [open, setOpen] = useState(false);
+  const [mounted, setMounted] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [form, setForm] = useState({ label: "", group: "", displayOrder: 0 });
+
+  useEffect(() => setMounted(true), []);
+
+  async function submit(e: React.FormEvent) {
+    e.preventDefault();
+    setError(null);
+    setBusy(true);
+    const res = await fetch("/api/crm/sub-statuses", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(form),
+    });
+    setBusy(false);
+    if (!res.ok) {
+      const d = (await res.json().catch(() => ({}))) as { error?: string };
+      setError(subStatusErrors[d.error ?? ""] ?? "Failed to create.");
+      return;
+    }
+    setForm({ label: "", group: "", displayOrder: 0 });
+    setOpen(false);
+    router.refresh();
+  }
+
+  return (
+    <>
+      <button
+        type="button"
+        onClick={() => setOpen(true)}
+        className="inline-flex items-center gap-xs h-9 px-md rounded-lg bg-primary text-on-primary text-label-sm font-semibold hover:bg-primary-container transition"
+      >
+        <span className="material-symbols-outlined" style={{ fontSize: 18 }}>
+          add
+        </span>
+        New status
+      </button>
+      {open &&
+        mounted &&
+        createPortal(
+          <div className="fixed inset-0 z-[1000] grid place-items-center bg-black/50 p-md" onClick={() => !busy && setOpen(false)}>
+            <form
+              onClick={(e) => e.stopPropagation()}
+              onSubmit={submit}
+              className="w-full max-w-md bg-surface-container-lowest border border-outline-variant rounded-xl shadow-lg p-lg space-y-md"
+            >
+              <h3 className="text-h3 text-on-surface">New status</h3>
+              {error && <div className="rounded-lg bg-error-container text-on-error-container px-md py-sm">{error}</div>}
+              <Field label="Label">
+                <input className={inputCls} value={form.label} onChange={(e) => setForm({ ...form, label: e.target.value })} autoFocus />
+              </Field>
+              <Field label="Group (heading in the picker)">
+                <input
+                  className={inputCls}
+                  value={form.group}
+                  placeholder="e.g. Waiting on candidate"
+                  onChange={(e) => setForm({ ...form, group: e.target.value })}
+                />
+              </Field>
+              <Field label="Display order">
+                <input
+                  type="number"
+                  min={0}
+                  className={inputCls}
+                  value={form.displayOrder}
+                  onChange={(e) => setForm({ ...form, displayOrder: Number(e.target.value) || 0 })}
+                />
+              </Field>
               <div className="flex justify-end gap-base">
                 <button type="button" className={secondaryBtn} disabled={busy} onClick={() => setOpen(false)}>
                   Cancel

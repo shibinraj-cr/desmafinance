@@ -32,6 +32,7 @@
     "db:migrate-party-services": "tsx prisma/migrate-party-services.ts",
     "db:seed-lead-pulse": "tsx prisma/seed-lead-pulse.ts",
     "db:seed-crm": "tsx prisma/seed-crm.ts",
+    "db:seed-crm-sub-statuses": "tsx prisma/seed-crm-sub-statuses.ts",
     "db:seed-hiring": "tsx prisma/seed-hiring.ts",
     "db:seed-hiring:remove": "tsx prisma/seed-hiring.ts --remove",
     "db:seed-hiring:branch": "node scripts/with-branch-db.mjs npx tsx prisma/seed-hiring.ts",

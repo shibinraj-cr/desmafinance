@@ -15,6 +15,7 @@ import {
   crmTaskFollowAssignmentWhere,
   bulkStageSkipReason,
   isActionOnlyStatus,
+  leadFilterParamsFromQuery,
 } from "@/lib/crm-leads";
 
 describe("requiresNextStepOnComplete — mandatory next step on an active lead", () => {
@@ -476,5 +477,55 @@ describe("bulkStageSkipReason — what a bulk stage change may move", () => {
     expect(isActionOnlyStatus("duplicate")).toBe(true);
     expect(isActionOnlyStatus("enrolled")).toBe(true);
     expect(isActionOnlyStatus("follow_up")).toBe(false);
+  });
+});
+
+describe("buildLeadWhere — status (the cross-stage state)", () => {
+  it("filters on the status alone, independent of stage", () => {
+    // The whole point: picking a status must NOT constrain statusId, so
+    // "Details Sent and Not Responding" is returned from every stage at once.
+    const w = buildLeadWhere({ substatus: "lss_details_no_response" });
+    expect(w.subStatusId).toBe("lss_details_no_response");
+    expect(w.statusId).toBeUndefined();
+  });
+
+  it("takes several statuses as an IN", () => {
+    // e.g. every "Not Responding" variant at once — the chase list.
+    const w = buildLeadWhere({ substatus: ["lss_details_no_response", "lss_docs_no_response"] });
+    expect(w.subStatusId).toEqual({ in: ["lss_details_no_response", "lss_docs_no_response"] });
+  });
+
+  it("composes with a stage filter rather than replacing it", () => {
+    const w = buildLeadWhere({ status: "follow_up", substatus: "lss_details_awaiting" });
+    expect(w.statusId).toBe("follow_up");
+    expect(w.subStatusId).toBe("lss_details_awaiting");
+  });
+
+  it("applies no status filter when none is picked", () => {
+    expect(buildLeadWhere({}).subStatusId).toBeUndefined();
+  });
+
+  it("does not filter on how long the lead has been in its status", () => {
+    // Ageing is display-and-sort only. Whether a candidate is responding is
+    // said by the status label itself, so there is no silence clause to add.
+    const w = buildLeadWhere({ substatus: "lss_details_no_response" });
+    expect(w.subStatusSince).toBeUndefined();
+  });
+});
+
+describe("leadFilterParamsFromQuery — status params", () => {
+  const opts = { isBde: false, userId: "u1" };
+
+  it("reads repeated statuses", () => {
+    const p = leadFilterParamsFromQuery(new URLSearchParams("substatus=a&substatus=b"), opts);
+    expect(p.substatus).toEqual(["a", "b"]);
+  });
+
+  it("does not confuse the stage param with the status param", () => {
+    // `?status=` is the STAGE and predates this field — saved bookmarks that
+    // carry it must keep meaning what they always meant.
+    const p = leadFilterParamsFromQuery(new URLSearchParams("status=follow_up&substatus=x"), opts);
+    expect(p.status).toEqual(["follow_up"]);
+    expect(p.substatus).toEqual(["x"]);
   });
 });

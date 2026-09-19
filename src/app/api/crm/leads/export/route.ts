@@ -5,7 +5,7 @@ import { withApiHandler } from "@/lib/api";
 import { unauthorized, forbidden } from "@/lib/http-error";
 import { getCurrentUserAndPermissions } from "@/lib/permissions";
 import { getCrmAccess } from "@/lib/crm-rbac";
-import { leadTemperatureMeta, qualificationText } from "@/lib/crm";
+import { leadTemperatureMeta, qualificationText, daysInStatus } from "@/lib/crm";
 import { countryCodeFor } from "@/lib/countries";
 import {
   buildLeadWhere,
@@ -46,7 +46,12 @@ export const GET = withApiHandler(async (req: Request) => {
       Created: new Date(l.createdAt).toLocaleString("en-IN"),
       Source: l.source?.label ?? "",
       Campaign: l.campaign ?? "",
-      Status: l.status.label,
+      // "Stage" is the pipeline position; "Status" the cross-stage state. Both
+      // ship, because a report that has one without the other can't answer
+      // "who is waiting on an English test inside Follow-Up".
+      Stage: l.status.label,
+      Status: l.subStatus?.label ?? "",
+      "Days In Status": daysInStatus(l.subStatusSince) ?? "",
       Temperature: leadTemperatureMeta(l.temperature)?.label ?? "",
       Candidate: l.candidateName,
       Email: l.email ?? "",
@@ -66,11 +71,11 @@ export const GET = withApiHandler(async (req: Request) => {
   });
 
   const ws = XLSX.utils.json_to_sheet(data, {
-    header: ["Created", "Source", "Campaign", "Status", "Temperature", "Candidate", "Email", "Phone", "Alt Phone", "DOB", "Age", "Country", "Country Code", "Study Destination", "Service", "Qualification", "Consultant", "Assigned"],
+    header: ["Created", "Source", "Campaign", "Stage", "Status", "Days In Status", "Temperature", "Candidate", "Email", "Phone", "Alt Phone", "DOB", "Age", "Country", "Country Code", "Study Destination", "Service", "Qualification", "Consultant", "Assigned"],
   });
   // Reasonable column widths.
   ws["!cols"] = [
-    { wch: 20 }, { wch: 14 }, { wch: 22 }, { wch: 14 }, { wch: 12 }, { wch: 22 },
+    { wch: 20 }, { wch: 14 }, { wch: 22 }, { wch: 14 }, { wch: 38 }, { wch: 13 }, { wch: 12 }, { wch: 22 },
     { wch: 26 }, { wch: 16 }, { wch: 16 }, { wch: 12 }, { wch: 6 }, { wch: 16 }, { wch: 6 }, { wch: 18 }, { wch: 22 }, { wch: 16 }, { wch: 18 }, { wch: 20 },
   ];
   const wb = XLSX.utils.book_new();

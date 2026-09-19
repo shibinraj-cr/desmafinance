@@ -69,6 +69,8 @@ const CreateSchema = z.object({
   // resolveQualificationOther, which the client cannot talk its way around.
   qualificationOther: z.string().trim().max(QUALIFICATION_OTHER_MAX).optional(),
   statusId: z.string().optional(),
+  /** Cross-stage status; falls back to the default status when not given. */
+  subStatusId: z.string().optional(),
   assignedToId: z.string().optional(),
   // Official date of birth as YYYY-MM-DD (age is derived, never sent).
   dob: z.preprocess(
@@ -170,6 +172,19 @@ export const POST = withApiHandler(async (req: Request) => {
     data.qualificationOther,
   );
 
+  // Every lead carries a status from the moment it exists — an unset one would
+  // read as "nobody has looked at this" and make the filter lie. Falls back to
+  // the `isDefault` row ("Not contacted yet"), mirroring how the stage defaults.
+  const subStatusId =
+    data.subStatusId ||
+    (
+      await prisma.crmLeadSubStatus.findFirst({
+        where: { isDefault: true, active: true },
+        select: { id: true },
+      })
+    )?.id ||
+    null;
+
   const created = await prisma.lead.create({
     data: {
       candidateName: data.candidateName,
@@ -185,6 +200,8 @@ export const POST = withApiHandler(async (req: Request) => {
       qualificationId: data.qualificationId || null,
       qualificationOther,
       statusId,
+      subStatusId,
+      subStatusSince: subStatusId ? new Date() : null,
       assignedToId,
       assignedAt: assignedToId ? new Date() : null,
       dob: parseDobInput(data.dob) ?? null,

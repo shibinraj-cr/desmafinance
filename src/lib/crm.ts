@@ -128,6 +128,57 @@ export function renderTemplate(
     .replace(/\{consultant\}/g, vars.consultant ?? "");
 }
 
+// ── Lead STATUS (the cross-stage state) ────────────────────────────────────
+// Where the conversation stands — "Connected On Call", "Details Sent and
+// Awaiting Confirmation", "Details Sent and Not Responding" — independent of
+// which pipeline STAGE the lead sits in. One value per lead, filterable across
+// every stage.
+//
+// Whether a candidate is responding is part of the status LABEL, said by the
+// consultant, never inferred from message traffic: they know a lead has gone
+// quiet long before any threshold would fire, and a computed second opinion
+// could only contradict them.
+//
+// NAMING: the UI word is "Status"; the code spelling is `subStatus` because
+// `CrmLeadStatus`/`Lead.statusId` already own "status" and mean the STAGE. That
+// older name is deliberately left alone (70 call sites, and `?status=` is in
+// saved bookmarks), so the mismatch is documented rather than refactored away.
+
+/**
+ * Stable `code` for a status an admin typed a label for. Labels get reworded
+ * ("Fee quoted" → "Quotation shared") and anything keyed on the label would
+ * break; the code never changes once assigned.
+ */
+export function slugifyStatusCode(label: string): string {
+  const slug = label
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "_")
+    .replace(/^_+|_+$/g, "")
+    .slice(0, 48);
+  // A label of pure punctuation ("—") would slug to nothing; fall back to
+  // something unique rather than writing an empty unique key.
+  return slug || `status_${Date.now().toString(36)}`;
+}
+
+/**
+ * Whole days a lead has sat in its current status, or null when it has never
+ * been moved into one (the backfill leaves `subStatusSince` null on purpose —
+ * nobody actually put those leads there). Floors, so "0d" means today.
+ *
+ * This is ageing, not a verdict: "Details Sent and Not Responding · 45d" is a
+ * worse problem than the same status at 2d, and the number is what lets a
+ * consultant work the worst first.
+ */
+export function daysInStatus(
+  subStatusSince: string | null | undefined,
+  now: Date = new Date(),
+): number | null {
+  if (!subStatusSince) return null;
+  const since = new Date(subStatusSince).getTime();
+  if (Number.isNaN(since)) return null;
+  return Math.max(0, Math.floor((now.getTime() - since) / 86_400_000));
+}
+
 // ── Qualification: the "Others" catch-all ──────────────────────────────────
 // The qualification master is a closed reference list (BSN, MSN, GNM, …), so
 // anything outside it used to be recorded as nothing at all. "Others" is the

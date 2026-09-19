@@ -2283,8 +2283,36 @@ model Lead {
   qualificationOther String?
 
   // Pipeline stage / disposition (admin-editable master)
+  //
+  // NAMING: this is the field the UI calls **Stage**. `status` is historical and
+  // is deliberately left alone — renaming it would touch 70 references and break
+  // every saved `?status=` bookmark. The thing the UI calls **Status** is
+  // `subStatus` below: a second, orthogonal axis.
   statusId String
   status   CrmLeadStatus @relation(fields: [statusId], references: [id], onDelete: Restrict)
+
+  // ── Status (the cross-stage state) ────────────────────────────────────────
+  // Where the CONVERSATION stands — "Connected On Call", "Details Sent and
+  // Awaiting Confirmation", "Details Sent and Not Responding" — independent of
+  // which stage the lead sits in. Two leads both in Follow-Up can be in
+  // completely different situations, and before this there was no way to tell
+  // them apart or filter for either.
+  //
+  // The labels are compound on purpose: the same action ("Details Sent") splits
+  // into a healthy chase and a stalled one, and telling those two apart is the
+  // entire reason to read the list. Set on every lead (new leads take the
+  // `isDefault` row).
+  subStatusId    String?
+  subStatus      CrmLeadSubStatus? @relation(fields: [subStatusId], references: [id], onDelete: SetNull)
+  /// When the lead entered its current status. The clock behind "in this status
+  /// for N days" — how a consultant finds who has been sitting on "Details Sent
+  /// and Not Responding" since March. Reset on every status change.
+  ///
+  /// Ageing ONLY. Whether a candidate is responding is said by the status
+  /// itself, never inferred from message traffic: a computed "they replied two
+  /// days ago" that contradicts the consultant who marked them Not Responding
+  /// helps nobody, and one of the two would always be the stale one.
+  subStatusSince DateTime?
 
   // Assignment — the consultant (BDE) who owns this lead.
   assignedToId String?
@@ -2402,6 +2430,9 @@ model Lead {
   @@index([sourceId])
   @@index([serviceId])
   @@index([qualificationId])
+  @@index([subStatusId])
+  // Backs "in this status for N+ days", the chase list's ordering.
+  @@index([subStatusSince])
   @@index([partyId])
   @@index([originalSourceId])
   @@index([importBatchId])
@@ -2441,6 +2472,36 @@ model CrmLeadStatus {
   // force a follow-up task when the last open task is completed. Admin-togglable
   // from /crm/settings so a new parked stage needs no code change.
   parked       Boolean  @default(false)
+  active       Boolean  @default(true)
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+  leads        Lead[]
+
+  @@index([active])
+  @@index([displayOrder])
+}
+
+// Admin-configurable lead STATUS — the cross-stage state.
+//
+// NAMING: despite the model name, this is what the UI calls **Status**.
+// `CrmLeadStatus` (above) is the pipeline **Stage**; its name is historical and
+// is not being renamed, so this one carries the `SubStatus` spelling in code and
+// the plain word in the interface. The two are orthogonal: a lead has a stage
+// AND a status, and the status filter cuts across every stage.
+model CrmLeadSubStatus {
+  id           String   @id @default(cuid())
+  // 'not_contacted' | 'call_connected' | 'details_given' | …
+  code         String   @unique
+  label        String
+  // Heading this status sits under in the picker ("Contact", "Pitch",
+  // "Waiting on candidate", …). Purely presentational — a flat list of twenty
+  // is unreadable in a dropdown, and grouping costs nothing to maintain.
+  group        String   @default("")
+  displayOrder Int      @default(0)
+  // Hex colour for the pill (optional).
+  color        String?
+  // The status new leads start in. Exactly one row should have this true.
+  isDefault    Boolean  @default(false)
   active       Boolean  @default(true)
   createdAt    DateTime @default(now())
   updatedAt    DateTime @updatedAt

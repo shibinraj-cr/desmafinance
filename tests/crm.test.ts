@@ -7,6 +7,8 @@ import {
   renderTemplate,
   isOtherQualification,
   qualificationText,
+  slugifyStatusCode,
+  daysInStatus,
 } from "@/lib/crm";
 
 describe("normalizePhone", () => {
@@ -145,5 +147,41 @@ describe("qualificationText", () => {
   it("returns null with no qualification, leaving the caller's blank convention", () => {
     expect(qualificationText(null, "MBA")).toBeNull();
     expect(qualificationText(undefined)).toBeNull();
+  });
+});
+
+describe("slugifyStatusCode", () => {
+  it("makes a stable handle out of whatever an admin typed", () => {
+    expect(slugifyStatusCode("Connected On Call")).toBe("connected_on_call");
+    // Every word survives, "and" included — the code is an internal handle, not
+    // a pretty name, and dropping filler words would only make two similar
+    // labels collide more often.
+    expect(slugifyStatusCode("Details Sent and Not Responding")).toBe("details_sent_and_not_responding");
+    expect(slugifyStatusCode("Awaiting English Test (OET / IELTS)")).toBe("awaiting_english_test_oet_ielts");
+  });
+  it("trims the separators it would otherwise leave at the ends", () => {
+    expect(slugifyStatusCode("  — Documents Received! ")).toBe("documents_received");
+  });
+  it("never returns an empty code, which would break the unique key", () => {
+    expect(slugifyStatusCode("—")).toMatch(/^status_/);
+    expect(slugifyStatusCode("")).toMatch(/^status_/);
+  });
+});
+
+describe("daysInStatus", () => {
+  const now = new Date("2026-09-19T12:00:00.000Z");
+
+  it("counts whole days since the status changed", () => {
+    expect(daysInStatus("2026-09-12T12:00:00.000Z", now)).toBe(7);
+  });
+  it("floors, so a change made today reads 0 rather than rounding up", () => {
+    expect(daysInStatus("2026-09-19T01:00:00.000Z", now)).toBe(0);
+  });
+  it("is null for a lead the backfill placed (no start recorded)", () => {
+    expect(daysInStatus(null, now)).toBeNull();
+    expect(daysInStatus(undefined, now)).toBeNull();
+  });
+  it("never goes negative on a clock skew", () => {
+    expect(daysInStatus("2026-09-20T12:00:00.000Z", now)).toBe(0);
   });
 });

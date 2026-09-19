@@ -53,7 +53,7 @@ export default async function LeadDetailPage({ params }: { params: { id: string 
   const lead = await prisma.lead.findUnique({ where: { id: params.id }, include: leadRowInclude });
   if (!lead) notFound();
 
-  const [notes, activities, tasks, statuses, sources, services, qualifications, bdes, parties, emailConfigured, templates] = await Promise.all([
+  const [notes, activities, tasks, statuses, sources, services, qualifications, subStatuses, bdes, parties, emailConfigured, templates] = await Promise.all([
     prisma.leadNote.findMany({ where: { leadId: params.id }, orderBy: { createdAt: "desc" }, include: noteInclude }),
     prisma.leadActivity.findMany({
       where: { leadId: params.id, type: { notIn: TIMELINE_EXCLUDE } },
@@ -77,6 +77,11 @@ export default async function LeadDetailPage({ params }: { params: { id: string 
       where: { active: true },
       orderBy: [{ displayOrder: "asc" }, { label: "asc" }],
       select: { id: true, label: true },
+    }),
+    prisma.crmLeadSubStatus.findMany({
+      where: { active: true },
+      orderBy: [{ displayOrder: "asc" }, { label: "asc" }],
+      select: { id: true, label: true, group: true, color: true },
     }),
     getAssignableBdes(),
     prisma.party.findMany({
@@ -135,6 +140,7 @@ export default async function LeadDetailPage({ params }: { params: { id: string 
     sources,
     services: services.map((s) => ({ id: s.id, label: s.name })),
     qualifications,
+    subStatuses,
     bdes,
     parties: parties.map((p) => ({ id: p.id, label: p.name, phone: p.phone })),
   };
