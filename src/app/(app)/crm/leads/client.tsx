@@ -5,7 +5,7 @@ import { createPortal } from "react-dom";
 import Link from "next/link";
 import { useRouter, usePathname, useSearchParams } from "next/navigation";
 import { type LeadRow, isActionOnlyStatus } from "@/lib/crm-leads";
-import { DEFAULT_STATUS_COLOR, BULK_EMAIL_MERGE_FIELDS, fillTemplate, LEAD_TEMPERATURES, leadTemperatureMeta, type MessageTemplateDTO } from "@/lib/crm";
+import { DEFAULT_STATUS_COLOR, BULK_EMAIL_MERGE_FIELDS, fillTemplate, LEAD_TEMPERATURES, leadTemperatureMeta, isOtherQualification, qualificationText, QUALIFICATION_OTHER_MAX, type MessageTemplateDTO } from "@/lib/crm";
 import { ageFromDob } from "@/lib/age";
 import { COUNTRIES, countryCodeFor } from "@/lib/countries";
 import { MultiSelect } from "@/components/MultiSelect";
@@ -269,6 +269,7 @@ function NewLeadButton({ masters, access }: { masters: Masters; access: LeadsAcc
     sourceId: "",
     serviceId: "",
     qualificationId: "",
+    qualificationOther: "",
     dob: "",
     country: "",
     studyDestination: "",
@@ -283,6 +284,11 @@ function NewLeadButton({ masters, access }: { masters: Masters; access: LeadsAcc
   // The study-destination field only applies to the Study Abroad service.
   const selectedServiceLabel = masters.services.find((s) => s.id === form.serviceId)?.label ?? "";
   const isStudyAbroad = /study abroad/i.test(selectedServiceLabel);
+
+  // "Others" is the only qualification that asks for free text.
+  const isOtherQual = isOtherQualification(
+    masters.qualifications.find((q) => q.id === form.qualificationId)?.label,
+  );
 
   useEffect(() => setMounted(true), []);
   useEffect(() => {
@@ -313,6 +319,7 @@ function NewLeadButton({ masters, access }: { masters: Masters; access: LeadsAcc
         sourceId: form.sourceId || undefined,
         serviceId: form.serviceId || undefined,
         qualificationId: form.qualificationId || undefined,
+        qualificationOther: isOtherQual ? form.qualificationOther.trim() || undefined : undefined,
         dob: form.dob || undefined,
         country: form.country || undefined,
         studyDestination: isStudyAbroad ? form.studyDestination || undefined : undefined,
@@ -335,6 +342,7 @@ function NewLeadButton({ masters, access }: { masters: Masters; access: LeadsAcc
       sourceId: "",
       serviceId: "",
       qualificationId: "",
+      qualificationOther: "",
       dob: "",
       country: "",
       studyDestination: "",
@@ -449,6 +457,20 @@ function NewLeadButton({ masters, access }: { masters: Masters; access: LeadsAcc
                     ))}
                   </select>
                 </Field>
+                {/* "Others" on its own says nothing — ask what it actually is.
+                    Short by design (QUALIFICATION_OTHER_MAX): this lands in a
+                    list column and a template merge field. */}
+                {isOtherQual && (
+                  <Field label={`Which qualification? (max ${QUALIFICATION_OTHER_MAX} chars)`}>
+                    <input
+                      className={inputCls}
+                      value={form.qualificationOther}
+                      maxLength={QUALIFICATION_OTHER_MAX}
+                      placeholder="e.g. MBA"
+                      onChange={(e) => setForm({ ...form, qualificationOther: e.target.value })}
+                    />
+                  </Field>
+                )}
                 <Field label="Status">
                   <select
                     className={inputCls}
@@ -892,7 +914,7 @@ export function LeadsTable({
         ),
     },
     { id: "service", label: "Service", className: "whitespace-nowrap", render: (l) => l.service?.name ?? "—" },
-    { id: "qualification", label: "Qualification", className: "whitespace-nowrap", render: (l) => l.qualification?.label ?? "—" },
+    { id: "qualification", label: "Qualification", className: "whitespace-nowrap", render: (l) => qualificationText(l.qualification?.label, l.qualificationOther) ?? "—" },
     {
       id: "consultant",
       label: "Consultant",

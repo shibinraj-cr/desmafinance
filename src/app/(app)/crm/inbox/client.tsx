@@ -6,6 +6,7 @@ import Link from "next/link";
 import { WaComposer, type WaTemplateOpt } from "@/components/crm/WaComposer";
 import { WaAttachment } from "@/components/crm/WaAttachment";
 import { statusTooltip } from "@/lib/wa/status-label";
+import { isOtherQualification, qualificationText, QUALIFICATION_OTHER_MAX } from "@/lib/crm";
 
 /**
  * The three-pane inbox: conversation list | thread | lead context.
@@ -65,6 +66,7 @@ type Thread = {
     serviceId: string | null;
     sourceId: string | null;
     qualificationId: string | null;
+    qualificationOther: string | null;
     country: string | null;
     studyDestination: string | null;
     temperature: string | null;
@@ -923,6 +925,7 @@ function LeadFields({
 }) {
   const [name, setName] = useState(lead.candidateName);
   const [email, setEmail] = useState(lead.email ?? "");
+  const [qualOther, setQualOther] = useState(lead.qualificationOther ?? "");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [saved, setSaved] = useState<string | null>(null);
@@ -931,9 +934,10 @@ function LeadFields({
   useEffect(() => {
     setName(lead.candidateName);
     setEmail(lead.email ?? "");
+    setQualOther(lead.qualificationOther ?? "");
     setError(null);
     setSaved(null);
-  }, [lead.id, lead.candidateName, lead.email]);
+  }, [lead.id, lead.candidateName, lead.email, lead.qualificationOther]);
 
   async function save(patch: Record<string, unknown>, what: string) {
     setBusy(true);
@@ -960,7 +964,7 @@ function LeadFields({
         <Row label="Stage" value={lead.statusLabel} color={lead.statusColor} />
         <Row label="Service" value={lead.serviceName} />
         <Row label="Source" value={lead.sourceLabel} />
-        <Row label="Qualification" value={lead.qualificationLabel} />
+        <Row label="Qualification" value={qualificationText(lead.qualificationLabel, lead.qualificationOther)} />
         <Row label="Country" value={lead.country} />
         <Row label="Email" value={lead.email} />
       </dl>
@@ -1027,6 +1031,28 @@ function LeadFields({
       {pick("Service", lead.serviceId, masters.services, "serviceId")}
       {pick("Source", lead.sourceId, masters.sources, "sourceId")}
       {pick("Qualification", lead.qualificationId, masters.qualifications, "qualificationId")}
+      {/* "Others" on its own says nothing — ask what it actually is. Commits on
+          blur like the other text fields. */}
+      {isOtherQualification(masters.qualifications.find((q) => q.id === lead.qualificationId)?.label) && (
+        <label className="block">
+          <span className="block text-label-sm text-on-surface-variant mb-xs">
+            Which qualification? (max {QUALIFICATION_OTHER_MAX} chars)
+          </span>
+          <input
+            value={qualOther}
+            disabled={busy}
+            maxLength={QUALIFICATION_OTHER_MAX}
+            placeholder="e.g. MBA"
+            onChange={(e) => setQualOther(e.target.value)}
+            onBlur={() =>
+              qualOther.trim() !== (lead.qualificationOther ?? "") &&
+              void save({ qualificationOther: qualOther.trim() || null }, "Qualification")
+            }
+            onKeyDown={(e) => e.key === "Enter" && e.currentTarget.blur()}
+            className={railInput}
+          />
+        </label>
+      )}
 
       <label className="block">
         <span className="block text-label-sm text-on-surface-variant mb-xs">Country</span>

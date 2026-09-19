@@ -48,7 +48,9 @@ const QUALIFICATIONS = [
   { label: "Bachelor's", displayOrder: 4 },
   { label: "Master's", displayOrder: 5 },
   { label: "PhD", displayOrder: 6 },
-  { label: "Other", displayOrder: 7 },
+  // Catch-all. Picking it reveals a short free-text box on the lead form
+  // (Lead.qualificationOther) for the qualification the list doesn't carry.
+  { label: "Others", displayOrder: 999 },
 ];
 
 async function main() {

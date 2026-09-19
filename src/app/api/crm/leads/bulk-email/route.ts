@@ -5,7 +5,7 @@ import { withApiHandler } from "@/lib/api";
 import { unauthorized, forbidden, badRequest } from "@/lib/http-error";
 import { getCurrentUserAndPermissions } from "@/lib/permissions";
 import { getCrmAccess } from "@/lib/crm-rbac";
-import { buildLeadMergeVars, fillTemplate } from "@/lib/crm";
+import { buildLeadMergeVars, fillTemplate, qualificationText } from "@/lib/crm";
 import { getEmailConfig, getDailyQuota, sendEmail, smtpErrorInfo } from "@/lib/mailer";
 
 export const dynamic = "force-dynamic";
@@ -31,6 +31,7 @@ function mergeVars(lead: {
   campaign: string | null;
   service: { name: string } | null;
   qualification: { label: string } | null;
+  qualificationOther: string | null;
   assignedTo: { username: string; leadPulseRole: { displayName: string; phone: string | null } | null } | null;
 }): Record<string, string> {
   return buildLeadMergeVars({
@@ -39,7 +40,7 @@ function mergeVars(lead: {
     consultant: lead.assignedTo?.leadPulseRole?.displayName ?? lead.assignedTo?.username,
     consultantPhone: lead.assignedTo?.leadPulseRole?.phone,
     campaign: lead.campaign,
-    qualification: lead.qualification?.label,
+    qualification: qualificationText(lead.qualification?.label, lead.qualificationOther),
   });
 }
 
@@ -84,6 +85,7 @@ export const POST = withApiHandler(async (req: Request) => {
       campaign: true,
       service: { select: { name: true } },
       qualification: { select: { label: true } },
+      qualificationOther: true,
       assignedTo: { select: { username: true, leadPulseRole: { select: { displayName: true, phone: true } } } },
     },
   });

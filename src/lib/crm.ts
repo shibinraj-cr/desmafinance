@@ -128,6 +128,49 @@ export function renderTemplate(
     .replace(/\{consultant\}/g, vars.consultant ?? "");
 }
 
+// ── Qualification: the "Others" catch-all ──────────────────────────────────
+// The qualification master is a closed reference list (BSN, MSN, GNM, …), so
+// anything outside it used to be recorded as nothing at all. "Others" is the
+// escape hatch: picking it reveals a short free-text box for what the
+// candidate actually holds, stored on the lead as `qualificationOther`.
+
+/**
+ * Cap on the free-text detail. Deliberately tight — this is a label shown in a
+ * table column and a template merge field, not a notes field; anything longer
+ * belongs in a lead note. Enforced by the API (zod) and by `maxLength` on every
+ * input, so the two can never disagree.
+ */
+export const QUALIFICATION_OTHER_MAX = 10;
+
+/**
+ * Is this the catch-all qualification — the one that asks for free text?
+ *
+ * Matched on the label rather than an id or a flag because the master is
+ * admin-editable reference data with no schema knob for "this one is special",
+ * and "Other"/"Others" is the only spelling it has ever carried (the db:seed-crm
+ * list seeds "Other"; the migration seeds "Others"). Both are accepted.
+ */
+export function isOtherQualification(label: string | null | undefined): boolean {
+  return /^others?$/i.test((label ?? "").trim());
+}
+
+/**
+ * How a qualification reads wherever one is shown — list column, detail row,
+ * export cell, template merge field. Folds the free-text detail into the label
+ * ("Others (MBA)") so a reader never sees a bare "Others" and has to open the
+ * lead to learn what it meant. Returns null when the lead has no qualification,
+ * leaving the caller's own em-dash/blank convention to it.
+ */
+export function qualificationText(
+  label: string | null | undefined,
+  other?: string | null,
+): string | null {
+  const base = (label ?? "").trim();
+  if (!base) return null;
+  const detail = (other ?? "").trim();
+  return detail && isOtherQualification(base) ? `${base} (${detail})` : base;
+}
+
 /** Merge fields supported in bulk-email subjects/bodies (shown in the composer hint). */
 export const BULK_EMAIL_MERGE_FIELDS = [
   "name",

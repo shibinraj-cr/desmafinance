@@ -2275,6 +2275,12 @@ model Lead {
   service          Service?          @relation(fields: [serviceId], references: [id], onDelete: SetNull)
   qualificationId  String?
   qualification    CrmQualification? @relation(fields: [qualificationId], references: [id], onDelete: SetNull)
+  // Free-text detail captured when the chosen qualification is the catch-all
+  // "Others" row — the candidate's actual qualification, kept short on purpose
+  // (QUALIFICATION_OTHER_MAX in crm.ts) so it stays a label, not a paragraph.
+  // Cleared whenever the qualification moves off "Others", so it can never
+  // contradict the master it hangs off.
+  qualificationOther String?
 
   // Pipeline stage / disposition (admin-editable master)
   statusId String

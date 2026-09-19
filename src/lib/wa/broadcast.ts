@@ -21,7 +21,7 @@ import type { Prisma } from "@prisma/client";
 import { z } from "zod";
 import { prisma } from "../prisma";
 import { buildLeadWhere, type LeadFilterParams } from "../crm-leads";
-import { buildLeadMergeVars, fillTemplate } from "../crm";
+import { buildLeadMergeVars, fillTemplate, qualificationText } from "../crm";
 import { logger } from "../logger";
 import {
   getSetting,
@@ -136,6 +136,7 @@ export type AudienceLead = {
   campaign?: string | null;
   service: { name: string } | null;
   qualification?: { label: string } | null;
+  qualificationOther?: string | null;
   assignedTo: { username: string; leadPulseRole: { displayName: string; phone: string | null } | null } | null;
 };
 
@@ -154,7 +155,7 @@ export function renderRecipientParams(
     consultant: lead.assignedTo?.leadPulseRole?.displayName ?? lead.assignedTo?.username ?? null,
     consultantPhone: lead.assignedTo?.leadPulseRole?.phone ?? null,
     campaign: lead.campaign ?? null,
-    qualification: lead.qualification?.label ?? null,
+    qualification: qualificationText(lead.qualification?.label, lead.qualificationOther),
   });
 
   const out: Record<string, string> = {};
@@ -184,6 +185,7 @@ const AUDIENCE_SELECT = {
   whatsappUndeliverableAt: true,
   service: { select: { name: true } },
   qualification: { select: { label: true } },
+  qualificationOther: true,
   assignedTo: { select: { username: true, leadPulseRole: { select: { displayName: true, phone: true } } } },
 } as const;
 

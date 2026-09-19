@@ -5,7 +5,7 @@ import { withApiHandler } from "@/lib/api";
 import { unauthorized, forbidden } from "@/lib/http-error";
 import { getCurrentUserAndPermissions } from "@/lib/permissions";
 import { getCrmAccess } from "@/lib/crm-rbac";
-import { leadTemperatureMeta } from "@/lib/crm";
+import { leadTemperatureMeta, qualificationText } from "@/lib/crm";
 import { countryCodeFor } from "@/lib/countries";
 import {
   buildLeadWhere,
@@ -59,7 +59,7 @@ export const GET = withApiHandler(async (req: Request) => {
       "Country Code": countryCodeFor(l.country ?? ""),
       "Study Destination": l.studyDestination ?? "",
       Service: l.service?.name ?? "",
-      Qualification: l.qualification?.label ?? "",
+      Qualification: qualificationText(l.qualification?.label, l.qualificationOther) ?? "",
       Consultant: l.assignedTo?.name ?? "",
       Assigned: l.assignedAt ? new Date(l.assignedAt).toLocaleString("en-IN") : "",
     };

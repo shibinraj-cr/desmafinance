@@ -1,7 +1,7 @@
 import { Prisma } from "@prisma/client";
 import { prisma } from "./prisma";
 import { ageFromDob, dobRangeForAge } from "./age";
-import { normalizeTemperature, type LeadTemperature } from "./crm";
+import { isOtherQualification, normalizeTemperature, type LeadTemperature } from "./crm";
 import { listParam, oneOf, oneParam } from "./filter-params";
 import { parseAgeParam } from "./age";
 import { parsePeriod, rangeFor } from "./period";
@@ -41,6 +41,12 @@ export type LeadRow = {
   source: { id: string; label: string } | null;
   service: { id: string; name: string } | null;
   qualification: { id: string; label: string } | null;
+  /**
+   * Free-text detail, set only while `qualification` is the "Others" catch-all.
+   * Render via `qualificationText(lead.qualification?.label, lead.qualificationOther)`
+   * rather than the bare label, so "Others" never reads as an answer in itself.
+   */
+  qualificationOther: string | null;
   status: { id: string; code: string; label: string; kind: string; color: string | null };
   assignedTo: { id: string; name: string; phone: string | null } | null;
   assignedAt: string | null;
@@ -76,6 +82,7 @@ export function serializeLead(l: LeadWithRels): LeadRow {
     source: l.source ? { id: l.source.id, label: l.source.label } : null,
     service: l.service ? { id: l.service.id, name: l.service.name } : null,
     qualification: l.qualification ? { id: l.qualification.id, label: l.qualification.label } : null,
+    qualificationOther: l.qualificationOther,
     status: {
       id: l.status.id,
       code: l.status.code,
@@ -106,6 +113,28 @@ export function serializeLead(l: LeadWithRels): LeadRow {
     importBatchId: l.importBatchId,
     extra: (l.extra as Record<string, string> | null) ?? null,
   };
+}
+
+/**
+ * Decide what `qualificationOther` should be for a lead that is about to end up
+ * on `qualificationId`, given whatever free text the caller sent.
+ *
+ * Both write paths (create and edit) go through this so the invariant holds in
+ * one place: the detail survives ONLY while the qualification is the "Others"
+ * catch-all. Move the lead to BSN and the stale "MBA" is dropped rather than
+ * left behind to contradict the master on the next export.
+ */
+export async function resolveQualificationOther(
+  qualificationId: string | null | undefined,
+  raw: string | null | undefined,
+): Promise<string | null> {
+  const detail = (raw ?? "").trim();
+  if (!qualificationId || !detail) return null;
+  const qual = await prisma.crmQualification.findUnique({
+    where: { id: qualificationId },
+    select: { label: true },
+  });
+  return isOtherQualification(qual?.label) ? detail : null;
 }
 
 /**

@@ -1,5 +1,13 @@
 import { describe, it, expect } from "vitest";
-import { normalizePhone, computeDedupeKey, emailKeyOf, phoneMatchKeys, renderTemplate } from "@/lib/crm";
+import {
+  normalizePhone,
+  computeDedupeKey,
+  emailKeyOf,
+  phoneMatchKeys,
+  renderTemplate,
+  isOtherQualification,
+  qualificationText,
+} from "@/lib/crm";
 
 describe("normalizePhone", () => {
   it("prefixes +91 for bare 10-digit Indian mobiles", () => {
@@ -103,5 +111,39 @@ describe("renderTemplate", () => {
   });
   it("replaces all occurrences of a field", () => {
     expect(renderTemplate("{name} {name}", { name: "X" })).toBe("X X");
+  });
+});
+
+describe("isOtherQualification", () => {
+  it("matches both spellings the master has ever carried, any case", () => {
+    expect(isOtherQualification("Others")).toBe(true);
+    expect(isOtherQualification("Other")).toBe(true);
+    expect(isOtherQualification("others")).toBe(true);
+    expect(isOtherQualification("  Other  ")).toBe(true);
+  });
+  it("does not match a real qualification that merely contains the word", () => {
+    expect(isOtherQualification("BSN")).toBe(false);
+    expect(isOtherQualification("Other Nursing Degree")).toBe(false);
+    expect(isOtherQualification(null)).toBe(false);
+    expect(isOtherQualification("")).toBe(false);
+  });
+});
+
+describe("qualificationText", () => {
+  it("folds the free-text detail into the catch-all label", () => {
+    expect(qualificationText("Others", "MBA")).toBe("Others (MBA)");
+  });
+  it("leaves a real qualification alone even if stale detail is present", () => {
+    // Belt-and-braces: the API clears the detail on a move off "Others", but a
+    // row written before that rule existed must never read as "BSN (MBA)".
+    expect(qualificationText("BSN", "MBA")).toBe("BSN");
+  });
+  it("falls back to the bare label when there is no detail", () => {
+    expect(qualificationText("Others", null)).toBe("Others");
+    expect(qualificationText("Others", "   ")).toBe("Others");
+  });
+  it("returns null with no qualification, leaving the caller's blank convention", () => {
+    expect(qualificationText(null, "MBA")).toBeNull();
+    expect(qualificationText(undefined)).toBeNull();
   });
 });
