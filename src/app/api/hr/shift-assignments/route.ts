@@ -4,6 +4,10 @@ import { prisma } from "@/lib/prisma";
 import { getCurrentUserAndPermissions } from "@/lib/permissions";
 import { canApproveHr, isHrUser } from "@/lib/hr-rbac";
 import { addShiftAssignment } from "@/lib/hr-shift";
+import { recomputeAfterShiftChange } from "@/lib/hr-attendance-ingest";
+
+// The approved path re-derives stored attendance cycle by cycle.
+export const maxDuration = 120;
 
 const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
 
@@ -48,16 +52,28 @@ export async function POST(req: Request) {
   }
   const status = canApproveHr(perms) ? parsed.data.status : "pending";
   try {
+    const effectiveFrom = new Date(parsed.data.effectiveFrom);
     const created = await addShiftAssignment({
       employeeId: parsed.data.employeeId,
       shiftId: parsed.data.shiftId,
-      effectiveFrom: new Date(parsed.data.effectiveFrom),
+      effectiveFrom,
       effectiveTo: parsed.data.effectiveTo ? new Date(parsed.data.effectiveTo) : null,
       reason: parsed.data.reason ?? null,
       status,
       createdById: userId ?? null,
     });
-    return NextResponse.json({ id: created.id, status });
+    // A pending request changes nothing until approved; an approved one must
+    // re-derive the days already stored, or the corrected shift only shows up
+    // whenever the sync next happens to re-import that cycle.
+    const recompute =
+      status === "approved"
+        ? await recomputeAfterShiftChange({
+            employeeId: parsed.data.employeeId,
+            from: effectiveFrom,
+            actorUserId: userId ?? null,
+          })
+        : null;
+    return NextResponse.json({ id: created.id, status, recompute });
   } catch (e: unknown) {
     const msg = e instanceof Error ? e.message : "failed";
     return NextResponse.json({ error: msg }, { status: 400 });
