@@ -47,6 +47,8 @@ const PatchSchema = z.object({
   // while the lead's qualification IS "Others" — see below.
   qualificationOther: z.string().trim().max(QUALIFICATION_OTHER_MAX).nullable().optional(),
   statusId: z.string().optional(),
+  /** Cross-stage status. "" / null clears it back to no status. */
+  subStatusId: z.string().nullable().optional(),
   partyId: z.string().nullable().optional(),
   // Official date of birth as YYYY-MM-DD; "" / null clears it (age is derived).
   dob: z.preprocess(
@@ -71,6 +73,7 @@ const FIELD_LABELS: Record<string, string> = {
   sourceId: "Source",
   serviceId: "Service",
   qualificationId: "Qualification",
+  subStatusId: "Status",
   qualificationOther: "Qualification (other)",
   dob: "Date of birth",
   country: "Country",
@@ -86,7 +89,10 @@ export const PATCH = withApiHandler(async (req: Request, { params }: Ctx) => {
 
   const existing = await prisma.lead.findUnique({
     where: { id: params.id },
-    include: { status: { select: { id: true, label: true, code: true } } },
+    include: {
+      status: { select: { id: true, label: true, code: true } },
+      subStatus: { select: { label: true } },
+    },
   });
   if (!existing) throw notFound();
   if (!canEditLead(access, existing, userId)) throw forbidden();
@@ -178,6 +184,28 @@ export const PATCH = withApiHandler(async (req: Request, { params }: Ctx) => {
     }
   }
 
+  // Cross-stage STATUS. Kept out of `fieldDiff` because it gets its own, more
+  // readable timeline entry below — and because the two clocks it resets are the
+  // interesting part, not the id.
+  let subStatusChange: { fromLabel: string; toLabel: string } | null = null;
+  if (d.subStatusId !== undefined && clean(d.subStatusId) !== existing.subStatusId) {
+    const nextId = clean(d.subStatusId);
+    let nextLabel = "—";
+    if (nextId) {
+      const next = await prisma.crmLeadSubStatus.findFirst({
+        where: { id: nextId, active: true },
+        select: { label: true },
+      });
+      if (!next) throw badRequest("Unknown or inactive status", "invalid_sub_status");
+      nextLabel = next.label;
+    }
+    update.subStatusId = nextId;
+    // The clock restarts: time-in-status is measured from this moment, so an
+    // ageing "Not Responding" resets the day the consultant changes it.
+    update.subStatusSince = nextId ? new Date() : null;
+    subStatusChange = { fromLabel: existing.subStatus?.label ?? "—", toLabel: nextLabel };
+  }
+
   // Recompute the normalized phone + dedupe key if email or phone changed.
   if ("email" in update || "phone" in update) {
     const finalEmail = "email" in update ? (update.email as string | null) : existing.email;
@@ -266,6 +294,15 @@ export const PATCH = withApiHandler(async (req: Request, { params }: Ctx) => {
       type: "FIELD_UPDATED",
       summary: `Updated ${fields}`,
       metadata: fieldDiff,
+    });
+  }
+  if (subStatusChange) {
+    await recordLeadActivity({
+      leadId: updated.id,
+      actorId: userId,
+      type: "SUB_STATUS_CHANGED",
+      summary: `Status: ${subStatusChange.fromLabel} → ${subStatusChange.toLabel}`,
+      metadata: subStatusChange,
     });
   }
   if (partyLinked) {

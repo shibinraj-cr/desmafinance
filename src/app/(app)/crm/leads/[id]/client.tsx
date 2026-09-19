@@ -6,7 +6,7 @@ import { useRouter } from "next/navigation";
 import Link from "next/link";
 import type { LeadRow, NoteRow, ActivityRow, TaskRow, TaskReminderRow } from "@/lib/crm-leads";
 import { isActionOnlyStatus, canUnenrollInto } from "@/lib/crm-leads";
-import { buildLeadMergeVars, fillTemplate, LEAD_TEMPERATURES, TASK_TYPES, isOtherQualification, qualificationText, QUALIFICATION_OTHER_MAX, type MessageTemplateDTO } from "@/lib/crm";
+import { buildLeadMergeVars, fillTemplate, LEAD_TEMPERATURES, TASK_TYPES, isOtherQualification, qualificationText, QUALIFICATION_OTHER_MAX, daysInStatus, type MessageTemplateDTO } from "@/lib/crm";
 import { ageFromDob } from "@/lib/age";
 import { COUNTRIES, countryCodeFor } from "@/lib/countries";
 import { MultiSelect } from "@/components/MultiSelect";
@@ -27,6 +27,7 @@ export type DetailMasters = {
   sources: Opt[];
   services: Opt[];
   qualifications: Opt[];
+  subStatuses: { id: string; label: string; group: string; color: string | null }[];
   bdes: BdeOpt[];
   parties: PartyOpt[];
 };
@@ -365,6 +366,7 @@ export function LeadDetail({
                 canReEnroll={access.canCreateLeads}
                 canUnenroll={access.canUnenroll}
               />
+              <StatusCard lead={lead} masters={masters} canEdit={canEdit} />
               <AssignmentCard lead={lead} masters={masters} canAssign={access.canAssign} />
               <LeadInfoCard lead={lead} masters={masters} canEdit={canEdit} />
             </div>
@@ -761,7 +763,7 @@ function SummaryCard({ lead, masters, canEdit }: { lead: LeadRow; masters: Detai
               </select>
             </Field>
           )}
-          <Field label="Status">
+          <Field label="Stage">
             {lead.status.code === "enrolled" ? (
               // Enrolled is more than a label — it has a Party record / LeadPulsePipeline row /
               // Finance TransactionDraft / Operations project already created off the back of it.
@@ -1092,6 +1094,88 @@ function AssignmentCard({ lead, masters, canAssign }: { lead: LeadRow; masters: 
             ))}
           </select>
         </Field>
+      )}
+    </div>
+  );
+}
+
+
+// ── Status (the cross-stage state) ──────────────────────────────────────────
+/**
+ * Where the conversation stands, independent of the lead's stage — and how long
+ * it has stood there. The day-count is the reason this is a card rather than
+ * another row in the summary: "Details Sent and Not Responding" is a problem,
+ * and "for 94 days" is how big a problem.
+ */
+function StatusCard({ lead, masters, canEdit }: { lead: LeadRow; masters: DetailMasters; canEdit: boolean }) {
+  const router = useRouter();
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  async function change(subStatusId: string) {
+    setBusy(true);
+    setError(null);
+    const res = await fetch(`/api/crm/leads/${lead.id}`, {
+      method: "PATCH",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ subStatusId: subStatusId || null }),
+    });
+    setBusy(false);
+    if (!res.ok) {
+      setError("That didn’t save.");
+      return;
+    }
+    router.refresh();
+  }
+
+  const days = daysInStatus(lead.subStatusSince);
+
+  // Preserve the API's journey order while splitting into <optgroup>s.
+  const groups: [string, typeof masters.subStatuses][] = [];
+  for (const r of masters.subStatuses) {
+    const last = groups[groups.length - 1];
+    if (last && last[0] === (r.group || "")) last[1].push(r);
+    else groups.push([r.group || "", [r]]);
+  }
+
+  return (
+    <div className={cardCls}>
+      <CardHeading icon="label" color="#0ea5e9">Status</CardHeading>
+      {error && <div className="rounded-lg bg-error-container text-on-error-container px-md py-sm">{error}</div>}
+
+      {canEdit ? (
+        <select className={inputCls} disabled={busy} value={lead.subStatus?.id ?? ""} onChange={(e) => void change(e.target.value)}>
+          <option value="">—</option>
+          {groups.map(([group, rows]) => (
+            <optgroup key={group} label={group || "Other"}>
+              {rows.map((r) => (
+                <option key={r.id} value={r.id}>
+                  {r.label}
+                </option>
+              ))}
+            </optgroup>
+          ))}
+        </select>
+      ) : (
+        <p className="text-body-md text-on-surface font-medium">{lead.subStatus?.label ?? "—"}</p>
+      )}
+
+      {lead.subStatus && days !== null && (
+        <dl className="space-y-sm text-body-md">
+          <Row
+            label="In this status"
+            value={
+              <span className={days >= 14 ? "text-amber-700" : undefined}>
+                {days === 0 ? "since today" : `${days} day${days === 1 ? "" : "s"}`}
+              </span>
+            }
+          />
+        </dl>
+      )}
+      {lead.subStatus && days === null && (
+        <p className="text-label-sm text-on-surface-variant">
+          Set before this lead was tracked — the clock starts at the next status change.
+        </p>
       )}
     </div>
   );
@@ -1719,7 +1803,7 @@ function LeadInfoCard({ lead, masters, canEdit }: { lead: LeadRow; masters: Deta
       <CardHeading icon="info" color="#3b82f6">Lead detail</CardHeading>
       <dl className="space-y-sm text-body-md">
         <div className="flex justify-between gap-md">
-          <dt className="text-on-surface-variant">Status</dt>
+          <dt className="text-on-surface-variant">Stage</dt>
           <dd>
             <StatusPill status={lead.status} />
           </dd>

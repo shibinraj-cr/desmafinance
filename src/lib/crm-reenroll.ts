@@ -70,6 +70,7 @@ export async function reopenForAnotherService(p: ReopenServiceParams): Promise<R
       sourceId: true,
       qualificationId: true,
       qualificationOther: true,
+      subStatusId: true,
       dob: true,
       country: true,
       studyDestination: true,
@@ -161,6 +162,10 @@ export async function reopenForAnotherService(p: ReopenServiceParams): Promise<R
       serviceId: service.id,
       qualificationId: src.qualificationId,
       qualificationOther: src.qualificationOther,
+      // The re-enrollment starts its own clock: the candidate is at this status
+      // for the NEW service as of now, not since whenever the first lead got here.
+      subStatusId: src.subStatusId,
+      subStatusSince: src.subStatusId ? new Date() : null,
       statusId,
       assignedToId,
       assignedAt: assignedToId ? new Date() : null,

@@ -5,7 +5,7 @@ import { createPortal } from "react-dom";
 import Link from "next/link";
 import { useRouter, usePathname, useSearchParams } from "next/navigation";
 import { type LeadRow, isActionOnlyStatus } from "@/lib/crm-leads";
-import { DEFAULT_STATUS_COLOR, BULK_EMAIL_MERGE_FIELDS, fillTemplate, LEAD_TEMPERATURES, leadTemperatureMeta, isOtherQualification, qualificationText, QUALIFICATION_OTHER_MAX, type MessageTemplateDTO } from "@/lib/crm";
+import { DEFAULT_STATUS_COLOR, BULK_EMAIL_MERGE_FIELDS, fillTemplate, LEAD_TEMPERATURES, leadTemperatureMeta, isOtherQualification, qualificationText, QUALIFICATION_OTHER_MAX, daysInStatus, type MessageTemplateDTO } from "@/lib/crm";
 import { ageFromDob } from "@/lib/age";
 import { COUNTRIES, countryCodeFor } from "@/lib/countries";
 import { MultiSelect } from "@/components/MultiSelect";
@@ -20,6 +20,8 @@ export type Masters = {
   sources: Opt[];
   services: Opt[];
   qualifications: Opt[];
+  /** Cross-stage statuses, ordered; `group` is the heading they sit under. */
+  subStatuses: { id: string; label: string; group: string; color: string | null }[];
   bdes: BdeOpt[];
   campaigns: string[];
   /** Distinct, non-empty country values present in the data (drives the filter). */
@@ -270,6 +272,7 @@ function NewLeadButton({ masters, access }: { masters: Masters; access: LeadsAcc
     serviceId: "",
     qualificationId: "",
     qualificationOther: "",
+    subStatusId: "",
     dob: "",
     country: "",
     studyDestination: "",
@@ -320,6 +323,7 @@ function NewLeadButton({ masters, access }: { masters: Masters; access: LeadsAcc
         serviceId: form.serviceId || undefined,
         qualificationId: form.qualificationId || undefined,
         qualificationOther: isOtherQual ? form.qualificationOther.trim() || undefined : undefined,
+        subStatusId: form.subStatusId || undefined,
         dob: form.dob || undefined,
         country: form.country || undefined,
         studyDestination: isStudyAbroad ? form.studyDestination || undefined : undefined,
@@ -343,6 +347,7 @@ function NewLeadButton({ masters, access }: { masters: Masters; access: LeadsAcc
       serviceId: "",
       qualificationId: "",
       qualificationOther: "",
+      subStatusId: "",
       dob: "",
       country: "",
       studyDestination: "",
@@ -471,7 +476,7 @@ function NewLeadButton({ masters, access }: { masters: Masters; access: LeadsAcc
                     />
                   </Field>
                 )}
-                <Field label="Status">
+                <Field label="Stage">
                   <select
                     className={inputCls}
                     value={form.statusId}
@@ -487,6 +492,27 @@ function NewLeadButton({ masters, access }: { masters: Masters; access: LeadsAcc
                           {s.label}
                         </option>
                       ))}
+                  </select>
+                </Field>
+                {/* The other axis: where they are in the pipeline vs what is
+                    actually happening to them. Left blank, the server assigns
+                    the default status. */}
+                <Field label="Status">
+                  <select
+                    className={inputCls}
+                    value={form.subStatusId}
+                    onChange={(e) => setForm({ ...form, subStatusId: e.target.value })}
+                  >
+                    <option value="">Default</option>
+                    {groupedSubStatuses(masters.subStatuses).map(([group, rows]) => (
+                      <optgroup key={group} label={group || "Other"}>
+                        {rows.map((r) => (
+                          <option key={r.id} value={r.id}>
+                            {r.label}
+                          </option>
+                        ))}
+                      </optgroup>
+                    ))}
                   </select>
                 </Field>
                 <Field label="Temperature">
@@ -600,8 +626,55 @@ const SORT_OPTIONS: { value: string; label: string }[] = [
 // fixed). Order is remembered per browser in localStorage.
 const LEADS_COL_ORDER_KEY = "crm.leads.columnOrder.v1";
 const LEADS_DEFAULT_COLUMNS = [
-  "created", "source", "campaign", "status", "temperature", "candidate", "email", "phone", "age", "country", "code", "studyDestination", "service", "qualification", "consultant", "assigned",
+  "created", "source", "campaign", "status", "substatus", "temperature", "candidate", "email", "phone", "age", "country", "code", "studyDestination", "service", "qualification", "consultant", "assigned",
 ] as const;
+
+
+/**
+ * Group statuses by their `group` heading, preserving the order they arrived in
+ * (the API sorts by displayOrder, which is the journey order). Used for
+ * `<optgroup>`s — a flat list of twenty statuses is unreadable in a dropdown.
+ */
+function groupedSubStatuses<T extends { group: string }>(rows: T[]): [string, T[]][] {
+  const out = new Map<string, T[]>();
+  for (const r of rows) {
+    const g = r.group || "";
+    const bucket = out.get(g);
+    if (bucket) bucket.push(r);
+    else out.set(g, [r]);
+  }
+  return [...out.entries()];
+}
+
+/** Statuses older than this read as stale — long enough that nobody is "just waiting". */
+const STATUS_STALE_DAYS = 14;
+
+/**
+ * Status plus how long it has been that way. The day-count is the point of the
+ * column: "Details Sent and Not Responding" says something is wrong, and
+ * "· 94d" says how long it has been wrong for. Sorting the worst to the top is
+ * the whole job of a chase list.
+ */
+function StatusCell({ lead }: { lead: LeadRow }) {
+  if (!lead.subStatus) return <span className="text-on-surface-variant">—</span>;
+  const days = daysInStatus(lead.subStatusSince);
+  return (
+    <span className="inline-flex items-center gap-xs whitespace-nowrap">
+      {lead.subStatus.color && (
+        <span className="inline-block w-2 h-2 rounded-full shrink-0" style={{ backgroundColor: lead.subStatus.color }} />
+      )}
+      <span>{lead.subStatus.label}</span>
+      {days !== null && (
+        <span
+          className={days >= STATUS_STALE_DAYS ? "text-amber-700" : "text-on-surface-variant"}
+          title={`In this status for ${days} day${days === 1 ? "" : "s"}`}
+        >
+          · {days}d
+        </span>
+      )}
+    </span>
+  );
+}
 
 export function LeadsTable({
   leads,
@@ -769,6 +842,7 @@ export function LeadsTable({
     assigneeIsFilter ||
     picked("campaign").length > 0 ||
     picked("temperature").length > 0 ||
+    picked("substatus").length > 0 ||
     picked("country").length > 0 ||
     picked("studyDestination").length > 0 ||
     !!search.get("ageMin") ||
@@ -838,7 +912,8 @@ export function LeadsTable({
           "—"
         ),
     },
-    { id: "status", label: "Status", className: "", render: (l) => <StatusPill status={l.status} /> },
+    { id: "status", label: "Stage", className: "", render: (l) => <StatusPill status={l.status} /> },
+    { id: "substatus", label: "Status", className: "", render: (l) => <StatusCell lead={l} /> },
     {
       id: "temperature",
       label: "Temperature",
@@ -1074,6 +1149,18 @@ export function LeadsTable({
           onChange={(next) => update({ temperature: next })}
         />
 
+        {/* The cross-stage filter. Picking "Details Sent and Not Responding"
+            here returns those leads from EVERY stage — the reason the field
+            exists. The group rides along as a hint so a long list stays
+            navigable, and the search box makes a two-dozen list typeable. */}
+        <MultiSelect
+          placeholder="All statuses"
+          searchable
+          options={masters.subStatuses.map((r) => ({ value: r.id, label: r.label, hint: r.group }))}
+          selected={picked("substatus")}
+          onChange={(next) => update({ substatus: next })}
+        />
+
         {masters.countries.length > 0 && (
           <MultiSelect
             placeholder="All countries"
@@ -1134,7 +1221,7 @@ export function LeadsTable({
         {anyFilter && (
           <button
             type="button"
-            onClick={() => update({ status: null, source: null, service: null, assignee: null, campaign: null, country: null, studyDestination: null, ageMin: null, ageMax: null, assignedOn: null, from: null, to: null, period: null, q: null })}
+            onClick={() => update({ status: null, substatus: null, source: null, service: null, assignee: null, campaign: null, country: null, studyDestination: null, ageMin: null, ageMax: null, assignedOn: null, from: null, to: null, period: null, q: null })}
             className="h-9 px-md rounded-lg border border-outline-variant text-label-sm text-on-surface-variant hover:text-on-surface hover:bg-surface-container-low transition"
           >
             Clear all

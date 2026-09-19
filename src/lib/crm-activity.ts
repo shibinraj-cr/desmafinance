@@ -10,6 +10,9 @@ export const CRM_ACTIVITY_TYPES = [
   "LEAD_IMPORTED",
   "LEAD_OPENED",
   "STATUS_CHANGED",
+  // The cross-stage STATUS (Lead.subStatusId) — distinct from STATUS_CHANGED,
+  // which is the pipeline stage.
+  "SUB_STATUS_CHANGED",
   "FIELD_UPDATED",
   "ASSIGNED",
   "REASSIGNED",
