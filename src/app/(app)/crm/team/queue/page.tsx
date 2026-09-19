@@ -239,7 +239,7 @@ export default async function AttentionQueuePage({ searchParams }: { searchParam
                 <thead>
                   <tr className="border-b border-outline-variant text-left text-caption uppercase tracking-wider text-on-surface-variant">
                     <th className="py-sm pr-sm font-semibold">Lead</th>
-                    <th className="px-sm py-sm font-semibold">Status</th>
+                    <th className="px-sm py-sm font-semibold">Stage</th>
                     {showConsultant && <th className="px-sm py-sm font-semibold">Consultant</th>}
                     <th className="pl-sm py-sm text-right font-semibold">Age</th>
                   </tr>
@@ -297,7 +297,7 @@ export default async function AttentionQueuePage({ searchParams }: { searchParam
                 <thead>
                   <tr className="border-b border-outline-variant text-left text-caption uppercase tracking-wider text-on-surface-variant">
                     <th className="py-sm pr-sm font-semibold">Lead</th>
-                    <th className="px-sm py-sm font-semibold">Status</th>
+                    <th className="px-sm py-sm font-semibold">Stage</th>
                     {showConsultant && <th className="px-sm py-sm font-semibold">Consultant</th>}
                     <th className="px-sm py-sm font-semibold">Issues</th>
                     <th className="px-sm py-sm text-right font-semibold">Idle</th>
@@ -350,7 +350,7 @@ export default async function AttentionQueuePage({ searchParams }: { searchParam
                           </td>
                           <td
                             className={`px-sm py-sm text-right tabular-nums ${r.stuck ? "font-semibold text-amber-700" : "text-on-surface-variant"}`}
-                            title="Days in the current status"
+                            title="Days in the current stage"
                           >
                             {fmtDays(r.daysInStage)}
                           </td>
