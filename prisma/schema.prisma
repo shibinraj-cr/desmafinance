@@ -79,6 +79,7 @@ model User {
   // CRM relations
   assignedLeads           Lead[]                 @relation("LeadAssignee")
   createdLeads            Lead[]                 @relation("LeadCreatedBy")
+  detailsSentLeads        Lead[]                 @relation("LeadDetailsSentBy")
   leadNotes               LeadNote[]             @relation("LeadNoteAuthor")
   leadActivities          LeadActivity[]         @relation("LeadActivityActor")
   leadImports             LeadImportBatch[]      @relation("LeadImportUploader")
@@ -2396,6 +2397,24 @@ model Lead {
   /// means the number does not work — this one means they asked us not to.
   whatsappOptedOutAt DateTime?
 
+  // ── "Details sent" (the pitch clock) ──────────────────────────────────────
+  // The moment a consultant sent the candidate the actual process/fee details,
+  // marked EXPLICITLY on the lead rather than inferred from "some message went
+  // out": details are usually free text or a PDF inside a live chat, which is
+  // indistinguishable from a "hi". A deliberate tick is the only way this means
+  // what it says — and it is what makes "how many go dark after the pitch"
+  // answerable at all.
+  /// When a consultant marked the details as sent. Null = never sent.
+  detailsSentAt      DateTime?
+  detailsSentById    String?
+  detailsSentBy      User?     @relation("LeadDetailsSentBy", fields: [detailsSentById], references: [id], onDelete: SetNull)
+  /// First inbound message AFTER `detailsSentAt` — stamped by the WhatsApp
+  /// mirror, so "they went quiet" answers itself instead of needing a second
+  /// tick nobody would remember. Set once and left alone: it is the response to
+  /// THAT pitch, so a later chat must not overwrite it. Cleared with
+  /// `detailsSentAt` when the mark is undone.
+  detailsRespondedAt DateTime?
+
   @@index([assignedToId])
   @@index([assignedAt])
   @@index([statusId])
@@ -2407,6 +2426,10 @@ model Lead {
   @@index([importBatchId])
   @@index([createdAt])
   @@index([lastActivityAt])
+  // Backs the "Details sent · awaiting reply" filter, which is the BDE's daily
+  // chase list — a partial-ish scan over a nullable column, kept cheap.
+  @@index([detailsSentAt])
+  @@index([detailsSentById])
   @@index([dedupeKey])
   @@index([emailKey])
   @@index([campaign])

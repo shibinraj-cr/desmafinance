@@ -7,6 +7,7 @@ import {
   renderTemplate,
   isOtherQualification,
   qualificationText,
+  detailsSilentDays,
 } from "@/lib/crm";
 
 describe("normalizePhone", () => {
@@ -145,5 +146,26 @@ describe("qualificationText", () => {
   it("returns null with no qualification, leaving the caller's blank convention", () => {
     expect(qualificationText(null, "MBA")).toBeNull();
     expect(qualificationText(undefined)).toBeNull();
+  });
+});
+
+describe("detailsSilentDays", () => {
+  const now = new Date("2026-09-19T12:00:00.000Z");
+
+  it("counts whole days since the pitch went out", () => {
+    expect(detailsSilentDays("2026-09-12T12:00:00.000Z", null, now)).toBe(7);
+  });
+  it("floors, so a pitch sent today reads as 0 rather than rounding up", () => {
+    expect(detailsSilentDays("2026-09-19T01:00:00.000Z", null, now)).toBe(0);
+  });
+  it("stops counting once they replied — the clock is silence, not age", () => {
+    expect(detailsSilentDays("2026-09-12T12:00:00.000Z", "2026-09-13T09:00:00.000Z", now)).toBeNull();
+  });
+  it("has nothing to count when no details were sent", () => {
+    expect(detailsSilentDays(null, null, now)).toBeNull();
+    expect(detailsSilentDays(undefined, undefined, now)).toBeNull();
+  });
+  it("never goes negative on a clock skew", () => {
+    expect(detailsSilentDays("2026-09-20T12:00:00.000Z", null, now)).toBe(0);
   });
 });

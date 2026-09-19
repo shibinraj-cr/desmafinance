@@ -15,6 +15,7 @@ import {
   crmTaskFollowAssignmentWhere,
   bulkStageSkipReason,
   isActionOnlyStatus,
+  leadFilterParamsFromQuery,
 } from "@/lib/crm-leads";
 
 describe("requiresNextStepOnComplete — mandatory next step on an active lead", () => {
@@ -476,5 +477,76 @@ describe("bulkStageSkipReason — what a bulk stage change may move", () => {
     expect(isActionOnlyStatus("duplicate")).toBe(true);
     expect(isActionOnlyStatus("enrolled")).toBe(true);
     expect(isActionOnlyStatus("follow_up")).toBe(false);
+  });
+});
+
+describe("buildLeadWhere — details sent (the pitch clock)", () => {
+  it("awaiting = pitched and never answered", () => {
+    const w = buildLeadWhere({ details: "awaiting" });
+    expect(w.detailsSentAt).toEqual({ not: null });
+    expect(w.detailsRespondedAt).toBeNull();
+  });
+
+  it("applies the silence grace period as a cutoff on the SENT date", () => {
+    // Someone pitched an hour ago is not ignoring you: only leads whose details
+    // went out 7+ days ago count as gone quiet.
+    const now = new Date("2026-09-19T00:00:00.000Z");
+    const w = buildLeadWhere({ details: "awaiting", detailsSilentDays: 7, now });
+    expect(w.detailsSentAt).toEqual({ not: null, lte: new Date("2026-09-12T00:00:00.000Z") });
+    expect(w.detailsRespondedAt).toBeNull();
+  });
+
+  it("ignores the grace period for the states it cannot mean", () => {
+    const now = new Date("2026-09-19T00:00:00.000Z");
+    expect(buildLeadWhere({ details: "responded", detailsSilentDays: 7, now })).toMatchObject({
+      detailsSentAt: { not: null },
+      detailsRespondedAt: { not: null },
+    });
+    expect(buildLeadWhere({ details: "not_sent", detailsSilentDays: 7, now }).detailsSentAt).toBeNull();
+  });
+
+  it("ORs several states inside AND, leaving `where.OR` to the text search", () => {
+    const w = buildLeadWhere({ details: ["awaiting", "responded"], q: "priya" });
+    // The free-text search owns where.OR — a details OR that landed there would
+    // widen the name search instead of narrowing it.
+    expect(Array.isArray(w.OR)).toBe(true);
+    expect(w.AND).toEqual([
+      {
+        OR: [
+          { detailsSentAt: { not: null }, detailsRespondedAt: null },
+          { detailsSentAt: { not: null }, detailsRespondedAt: { not: null } },
+        ],
+      },
+    ]);
+  });
+
+  it("drops an unrecognised state rather than matching nothing", () => {
+    const w = buildLeadWhere({ details: ["nonsense"] });
+    expect(w.detailsSentAt).toBeUndefined();
+    expect(w.detailsRespondedAt).toBeUndefined();
+  });
+
+  it("applies no details filter when none is picked", () => {
+    const w = buildLeadWhere({});
+    expect(w.detailsSentAt).toBeUndefined();
+    expect(w.detailsRespondedAt).toBeUndefined();
+  });
+});
+
+describe("leadFilterParamsFromQuery — details params", () => {
+  const opts = { isBde: false, userId: "u1" };
+
+  it("reads repeated details values and a whole-day grace period", () => {
+    const sp = new URLSearchParams("details=awaiting&details=responded&detailsSilentDays=7");
+    const p = leadFilterParamsFromQuery(sp, opts);
+    expect(p.details).toEqual(["awaiting", "responded"]);
+    expect(p.detailsSilentDays).toBe(7);
+  });
+
+  it("drops a malformed grace period instead of guessing a window", () => {
+    for (const raw of ["0", "-3", "2.5", "abc", "999"]) {
+      const p = leadFilterParamsFromQuery(new URLSearchParams(`detailsSilentDays=${raw}`), opts);
+      expect(p.detailsSilentDays).toBeUndefined();
+    }
   });
 });

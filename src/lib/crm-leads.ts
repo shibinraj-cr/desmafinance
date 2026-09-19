@@ -24,6 +24,9 @@ export const leadRowInclude = Prisma.validator<Prisma.LeadInclude>()({
   },
   party: { select: { id: true, name: true } },
   pipeline: { select: { status: true } },
+  detailsSentBy: {
+    select: { username: true, leadPulseRole: { select: { displayName: true } } },
+  },
 });
 
 export type LeadWithRels = Prisma.LeadGetPayload<{ include: typeof leadRowInclude }>;
@@ -60,6 +63,12 @@ export type LeadRow = {
   age: number | null;
   country: string | null;
   studyDestination: string | null;
+  /** When a consultant marked the process/fee details as sent; null = never. */
+  detailsSentAt: string | null;
+  /** First reply after that mark. Null WITH `detailsSentAt` set = gone quiet. */
+  detailsRespondedAt: string | null;
+  /** Who marked the details sent (display name), or null. */
+  detailsSentBy: string | null;
   expectedValue: number | null;
   expectedCloseDate: string | null;
   pipelineStatus: string | null; // 'open' | 'closed_won' | 'lost' (from the linked pipeline)
@@ -106,6 +115,11 @@ export function serializeLead(l: LeadWithRels): LeadRow {
     age: ageFromDob(l.dob, new Date()),
     country: l.country,
     studyDestination: l.studyDestination,
+    detailsSentAt: l.detailsSentAt ? l.detailsSentAt.toISOString() : null,
+    detailsRespondedAt: l.detailsRespondedAt ? l.detailsRespondedAt.toISOString() : null,
+    detailsSentBy: l.detailsSentBy
+      ? (l.detailsSentBy.leadPulseRole?.displayName ?? l.detailsSentBy.username)
+      : null,
     expectedValue: l.expectedValue ? Number(l.expectedValue) : null,
     expectedCloseDate: l.expectedCloseDate ? l.expectedCloseDate.toISOString() : null,
     pipelineStatus: l.pipeline?.status ?? null,
@@ -159,6 +173,17 @@ export type LeadFilterParams = {
   campaign?: MultiFilterValue;
   /** Lead temperature codes (`'hot' | 'warm' | 'cold'`). Invalid values are ignored. */
   temperature?: MultiFilterValue;
+  /**
+   * "Details sent" state — see {@link DETAILS_FILTER_VALUES}. `awaiting` is the
+   * BDE's chase list: the pitch went out and nothing came back.
+   */
+  details?: MultiFilterValue;
+  /**
+   * Grace period on `details=awaiting`: only count someone as gone quiet once
+   * the details have been out this many whole days. Someone pitched an hour ago
+   * is not ignoring you. Ignored for the other states.
+   */
+  detailsSilentDays?: number;
   country?: MultiFilterValue;
   studyDestination?: MultiFilterValue;
   /** Inclusive minimum age in years (translated to a `dob` upper bound). */
@@ -248,6 +273,30 @@ function assignedToFilter(where: Prisma.LeadWhereInput, raw: MultiFilterValue): 
   where.assignedToId = unassigned ? null : oneOf(userIds);
 }
 
+/**
+ * The three states a lead can be in against the pitch clock. Deliberately a
+ * closed vocabulary rather than two loose date params: "did we pitch, and did
+ * they answer" is the question, and spelling it as dates at every call site
+ * invites each list to define "no response" slightly differently.
+ */
+export const DETAILS_FILTER_VALUES = ["awaiting", "responded", "not_sent"] as const;
+export type DetailsFilterValue = (typeof DETAILS_FILTER_VALUES)[number];
+
+/** Prisma clause for one details state. `silentCutoff` applies to `awaiting` only. */
+function detailsClause(v: DetailsFilterValue, silentCutoff?: Date): Prisma.LeadWhereInput {
+  switch (v) {
+    case "awaiting":
+      return {
+        detailsSentAt: silentCutoff ? { not: null, lte: silentCutoff } : { not: null },
+        detailsRespondedAt: null,
+      };
+    case "responded":
+      return { detailsSentAt: { not: null }, detailsRespondedAt: { not: null } };
+    case "not_sent":
+      return { detailsSentAt: null };
+  }
+}
+
 /** Build the Prisma `where` for the leads list. Shared by the list page and the GET API so they never drift. */
 export function buildLeadWhere(p: LeadFilterParams): Prisma.LeadWhereInput {
   const where: Prisma.LeadWhereInput = {};
@@ -269,6 +318,26 @@ export function buildLeadWhere(p: LeadFilterParams): Prisma.LeadWhereInput {
       .filter((t): t is LeadTemperature => !!t),
   );
   if (temperature !== undefined) where.temperature = temperature;
+  // Details state. Several picks are an OR of whole clauses (each one constrains
+  // two columns), so it can't collapse to an `IN` like the flat filters above.
+  const details = listParam(p.details).filter((v): v is DetailsFilterValue =>
+    (DETAILS_FILTER_VALUES as readonly string[]).includes(v),
+  );
+  if (details.length > 0) {
+    const cutoff =
+      p.detailsSilentDays && p.detailsSilentDays > 0
+        ? new Date((p.now ?? new Date()).getTime() - p.detailsSilentDays * 86_400_000)
+        : undefined;
+    const clauses = details.map((v) => detailsClause(v, cutoff));
+    // One pick goes on flat so the generated SQL stays readable; several become
+    // an OR inside AND — never `where.OR`, which the free-text `q` search owns.
+    if (clauses.length === 1) {
+      Object.assign(where, clauses[0]);
+    } else {
+      const prev = Array.isArray(where.AND) ? where.AND : where.AND ? [where.AND] : [];
+      where.AND = [...prev, { OR: clauses }];
+    }
+  }
   const country = oneOf(listParam(p.country));
   if (country !== undefined) where.country = country;
   const studyDestination = oneOf(listParam(p.studyDestination));
@@ -345,6 +414,18 @@ function readOne(sp: LeadQuerySource, key: string): string | undefined {
 }
 
 /**
+ * The "silent for at least N days" grace period. A whole number of days, capped
+ * at a year: anything else (a stray string, 0, a negative) is not a request for
+ * a different window, it's a malformed one — so it drops out and the filter
+ * falls back to "no reply at all".
+ */
+function parseSilentDays(raw: string | undefined): number | undefined {
+  const n = Number((raw ?? "").trim());
+  if (!Number.isInteger(n) || n <= 0 || n > 365) return undefined;
+  return n;
+}
+
+/**
  * Turn a leads query string into {@link LeadFilterParams}.
  *
  * The list page, the GET list API, the export and the bulk-ids endpoint all
@@ -373,6 +454,8 @@ export function leadFilterParamsFromQuery(
     assignee: resolveAssigneeFilter(readAll(sp, "assignee"), opts),
     campaign: readAll(sp, "campaign"),
     temperature: readAll(sp, "temperature"),
+    details: readAll(sp, "details"),
+    detailsSilentDays: parseSilentDays(readOne(sp, "detailsSilentDays")),
     country: readAll(sp, "country"),
     studyDestination: readAll(sp, "studyDestination"),
     ageMin: parseAgeParam(readOne(sp, "ageMin")),

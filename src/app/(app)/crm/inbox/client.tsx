@@ -6,7 +6,7 @@ import Link from "next/link";
 import { WaComposer, type WaTemplateOpt } from "@/components/crm/WaComposer";
 import { WaAttachment } from "@/components/crm/WaAttachment";
 import { statusTooltip } from "@/lib/wa/status-label";
-import { isOtherQualification, qualificationText, QUALIFICATION_OTHER_MAX } from "@/lib/crm";
+import { isOtherQualification, qualificationText, QUALIFICATION_OTHER_MAX, detailsSilentDays } from "@/lib/crm";
 
 /**
  * The three-pane inbox: conversation list | thread | lead context.
@@ -67,6 +67,8 @@ type Thread = {
     sourceId: string | null;
     qualificationId: string | null;
     qualificationOther: string | null;
+    detailsSentAt: string | null;
+    detailsRespondedAt: string | null;
     country: string | null;
     studyDestination: string | null;
     temperature: string | null;
@@ -82,6 +84,18 @@ type Thread = {
   duplicates: LeadDuplicate[];
   activity: { id: string; type: string; summary: string | null; occurredAt: string; actorName: string | null }[];
 };
+
+
+/**
+ * The pitch clock as one line for the rail: never sent, answered, or how long
+ * they have been quiet.
+ */
+function detailsSentSummary(sentAt: string | null, respondedAt: string | null): string {
+  if (!sentAt) return "Not sent";
+  if (respondedAt) return `Replied ${new Date(respondedAt).toLocaleDateString("en-IN")}`;
+  const days = detailsSilentDays(sentAt, respondedAt);
+  return days && days > 0 ? `No reply — ${days}d` : "No reply yet";
+}
 
 type LeadDuplicate = {
   id: string;
@@ -965,6 +979,7 @@ function LeadFields({
         <Row label="Service" value={lead.serviceName} />
         <Row label="Source" value={lead.sourceLabel} />
         <Row label="Qualification" value={qualificationText(lead.qualificationLabel, lead.qualificationOther)} />
+        <Row label="Details sent" value={detailsSentSummary(lead.detailsSentAt, lead.detailsRespondedAt)} />
         <Row label="Country" value={lead.country} />
         <Row label="Email" value={lead.email} />
       </dl>
@@ -1053,6 +1068,36 @@ function LeadFields({
           />
         </label>
       )}
+
+      {/* The tick belongs here: this is the screen the consultant is on at the
+          moment they send the details. */}
+      <div className="block">
+        <span className="block text-label-sm text-on-surface-variant mb-xs">Details sent</span>
+        {lead.detailsSentAt ? (
+          <div className="flex items-center justify-between gap-sm">
+            <span className={lead.detailsRespondedAt ? "text-green-700" : "text-amber-700"}>
+              {detailsSentSummary(lead.detailsSentAt, lead.detailsRespondedAt)}
+            </span>
+            <button
+              type="button"
+              disabled={busy}
+              onClick={() => void save({ detailsSent: false }, "Details sent")}
+              className="text-label-sm text-on-surface-variant hover:text-error underline underline-offset-2 disabled:opacity-50"
+            >
+              Undo
+            </button>
+          </div>
+        ) : (
+          <button
+            type="button"
+            disabled={busy}
+            onClick={() => void save({ detailsSent: true }, "Details sent")}
+            className="w-full rounded-lg border border-outline-variant px-md py-sm text-label-md text-on-surface hover:border-primary hover:text-primary disabled:opacity-50"
+          >
+            Mark details sent
+          </button>
+        )}
+      </div>
 
       <label className="block">
         <span className="block text-label-sm text-on-surface-variant mb-xs">Country</span>

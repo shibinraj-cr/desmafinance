@@ -48,6 +48,10 @@ const PatchSchema = z.object({
   qualificationOther: z.string().trim().max(QUALIFICATION_OTHER_MAX).nullable().optional(),
   statusId: z.string().optional(),
   partyId: z.string().nullable().optional(),
+  // The "details sent" mark. `true` stamps the clock (and who started it),
+  // `false` undoes a mis-click by clearing the mark AND any reply recorded
+  // against it — an undone pitch has no response to remember.
+  detailsSent: z.boolean().optional(),
   // Official date of birth as YYYY-MM-DD; "" / null clears it (age is derived).
   dob: z.preprocess(
     (v) => (v === "" ? null : v),
@@ -178,6 +182,23 @@ export const PATCH = withApiHandler(async (req: Request, { params }: Ctx) => {
     }
   }
 
+  // Details-sent mark. Kept out of `fieldDiff` (and so out of the "Updated …"
+  // activity) because it gets its own, more readable timeline entry below;
+  // re-marking a lead that is already marked is a no-op, so an eager click
+  // can't silently restart the clock on a pitch sent last week.
+  let detailsChange: "sent" | "undone" | null = null;
+  if (d.detailsSent === true && !existing.detailsSentAt) {
+    update.detailsSentAt = new Date();
+    update.detailsSentById = userId;
+    update.detailsRespondedAt = null;
+    detailsChange = "sent";
+  } else if (d.detailsSent === false && existing.detailsSentAt) {
+    update.detailsSentAt = null;
+    update.detailsSentById = null;
+    update.detailsRespondedAt = null;
+    detailsChange = "undone";
+  }
+
   // Recompute the normalized phone + dedupe key if email or phone changed.
   if ("email" in update || "phone" in update) {
     const finalEmail = "email" in update ? (update.email as string | null) : existing.email;
@@ -266,6 +287,17 @@ export const PATCH = withApiHandler(async (req: Request, { params }: Ctx) => {
       type: "FIELD_UPDATED",
       summary: `Updated ${fields}`,
       metadata: fieldDiff,
+    });
+  }
+  if (detailsChange) {
+    await recordLeadActivity({
+      leadId: updated.id,
+      actorId: userId,
+      type: detailsChange === "sent" ? "DETAILS_SENT" : "DETAILS_SENT_UNDONE",
+      summary:
+        detailsChange === "sent"
+          ? "Process / fee details sent to the candidate"
+          : "Undid the details-sent mark",
     });
   }
   if (partyLinked) {

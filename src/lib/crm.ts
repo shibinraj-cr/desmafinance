@@ -128,6 +128,36 @@ export function renderTemplate(
     .replace(/\{consultant\}/g, vars.consultant ?? "");
 }
 
+// ── "Details sent" (the pitch clock) ───────────────────────────────────────
+// A consultant ticks "details sent" when they send the candidate the process
+// and fee details; the WhatsApp mirror stamps the first reply that follows. The
+// three states below are what the leads list filters on. Values must match
+// DETAILS_FILTER_VALUES in crm-leads.ts, which owns the Prisma side — they live
+// apart because that module imports prisma and this one is client-safe.
+
+/** The details-state filter options, in the order a consultant thinks about them. */
+export const DETAILS_FILTER_LABELS: { value: string; label: string }[] = [
+  { value: "awaiting", label: "Details sent · awaiting reply" },
+  { value: "responded", label: "Details sent · replied" },
+  { value: "not_sent", label: "Details not sent" },
+];
+
+/**
+ * Whole days a pitch has gone unanswered, or null when there is nothing to
+ * count — no details sent, or a reply already came back. Floors, so "0d" means
+ * sent today rather than "not yet a day".
+ */
+export function detailsSilentDays(
+  detailsSentAt: string | null | undefined,
+  detailsRespondedAt: string | null | undefined,
+  now: Date = new Date(),
+): number | null {
+  if (!detailsSentAt || detailsRespondedAt) return null;
+  const sent = new Date(detailsSentAt).getTime();
+  if (Number.isNaN(sent)) return null;
+  return Math.max(0, Math.floor((now.getTime() - sent) / 86_400_000));
+}
+
 // ── Qualification: the "Others" catch-all ──────────────────────────────────
 // The qualification master is a closed reference list (BSN, MSN, GNM, …), so
 // anything outside it used to be recorded as nothing at all. "Others" is the

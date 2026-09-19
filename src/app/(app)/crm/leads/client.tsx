@@ -5,7 +5,8 @@ import { createPortal } from "react-dom";
 import Link from "next/link";
 import { useRouter, usePathname, useSearchParams } from "next/navigation";
 import { type LeadRow, isActionOnlyStatus } from "@/lib/crm-leads";
-import { DEFAULT_STATUS_COLOR, BULK_EMAIL_MERGE_FIELDS, fillTemplate, LEAD_TEMPERATURES, leadTemperatureMeta, isOtherQualification, qualificationText, QUALIFICATION_OTHER_MAX, type MessageTemplateDTO } from "@/lib/crm";
+
+import { DEFAULT_STATUS_COLOR, BULK_EMAIL_MERGE_FIELDS, fillTemplate, LEAD_TEMPERATURES, leadTemperatureMeta, isOtherQualification, qualificationText, QUALIFICATION_OTHER_MAX, DETAILS_FILTER_LABELS, detailsSilentDays, type MessageTemplateDTO } from "@/lib/crm";
 import { ageFromDob } from "@/lib/age";
 import { COUNTRIES, countryCodeFor } from "@/lib/countries";
 import { MultiSelect } from "@/components/MultiSelect";
@@ -600,8 +601,27 @@ const SORT_OPTIONS: { value: string; label: string }[] = [
 // fixed). Order is remembered per browser in localStorage.
 const LEADS_COL_ORDER_KEY = "crm.leads.columnOrder.v1";
 const LEADS_DEFAULT_COLUMNS = [
-  "created", "source", "campaign", "status", "temperature", "candidate", "email", "phone", "age", "country", "code", "studyDestination", "service", "qualification", "consultant", "assigned",
+  "created", "source", "campaign", "status", "temperature", "candidate", "email", "phone", "age", "country", "code", "studyDestination", "service", "qualification", "details", "consultant", "assigned",
 ] as const;
+
+
+/**
+ * The pitch clock in one cell: whether the details went out, and whether they
+ * were answered. The silent day-count is the point of the column — "sent" alone
+ * doesn't tell a consultant who is owed a chase.
+ */
+function DetailsCell({ lead }: { lead: LeadRow }) {
+  if (!lead.detailsSentAt) return <span className="text-on-surface-variant">—</span>;
+  if (lead.detailsRespondedAt) {
+    return <span className="text-green-700">Replied</span>;
+  }
+  const days = detailsSilentDays(lead.detailsSentAt, lead.detailsRespondedAt);
+  return (
+    <span className="text-amber-700" title={`Details sent ${new Date(lead.detailsSentAt).toLocaleString("en-IN")}`}>
+      Sent · no reply{days !== null && days > 0 ? ` ${days}d` : ""}
+    </span>
+  );
+}
 
 export function LeadsTable({
   leads,
@@ -769,6 +789,7 @@ export function LeadsTable({
     assigneeIsFilter ||
     picked("campaign").length > 0 ||
     picked("temperature").length > 0 ||
+    picked("details").length > 0 ||
     picked("country").length > 0 ||
     picked("studyDestination").length > 0 ||
     !!search.get("ageMin") ||
@@ -915,6 +936,7 @@ export function LeadsTable({
     },
     { id: "service", label: "Service", className: "whitespace-nowrap", render: (l) => l.service?.name ?? "—" },
     { id: "qualification", label: "Qualification", className: "whitespace-nowrap", render: (l) => qualificationText(l.qualification?.label, l.qualificationOther) ?? "—" },
+    { id: "details", label: "Details", className: "whitespace-nowrap", render: (l) => <DetailsCell lead={l} /> },
     {
       id: "consultant",
       label: "Consultant",
@@ -1074,6 +1096,15 @@ export function LeadsTable({
           onChange={(next) => update({ temperature: next })}
         />
 
+        {/* The chase list. "Awaiting reply" is the one a BDE lives in: details
+            went out and nothing came back. */}
+        <MultiSelect
+          placeholder="Any details state"
+          options={DETAILS_FILTER_LABELS.map((d) => ({ value: d.value, label: d.label }))}
+          selected={picked("details")}
+          onChange={(next) => update({ details: next })}
+        />
+
         {masters.countries.length > 0 && (
           <MultiSelect
             placeholder="All countries"
@@ -1134,7 +1165,7 @@ export function LeadsTable({
         {anyFilter && (
           <button
             type="button"
-            onClick={() => update({ status: null, source: null, service: null, assignee: null, campaign: null, country: null, studyDestination: null, ageMin: null, ageMax: null, assignedOn: null, from: null, to: null, period: null, q: null })}
+            onClick={() => update({ status: null, source: null, service: null, assignee: null, campaign: null, details: null, detailsSilentDays: null, country: null, studyDestination: null, ageMin: null, ageMax: null, assignedOn: null, from: null, to: null, period: null, q: null })}
             className="h-9 px-md rounded-lg border border-outline-variant text-label-sm text-on-surface-variant hover:text-on-surface hover:bg-surface-container-low transition"
           >
             Clear all

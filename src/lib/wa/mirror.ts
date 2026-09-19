@@ -485,6 +485,26 @@ export async function ingestInboundMessage(
           data: { lastActivityAt: occurredAt },
         })
         .catch(() => undefined);
+
+      // Close the pitch clock: this is the answer to the details we sent, so the
+      // lead drops off the "sent details, gone quiet" chase list on its own. No
+      // second tick for a consultant to forget.
+      //
+      // Guarded on `detailsRespondedAt: null` so only the FIRST reply counts —
+      // the metric is "how long did they take to come back", not "when did they
+      // last chat" — and on `detailsSentAt: { lte: occurredAt }` so a message
+      // that predates the mark (a redelivery, an imported backlog) can never
+      // answer a pitch that had not been sent yet.
+      await prisma.lead
+        .updateMany({
+          where: {
+            id: conversation.leadId,
+            detailsSentAt: { not: null, lte: occurredAt },
+            detailsRespondedAt: null,
+          },
+          data: { detailsRespondedAt: occurredAt },
+        })
+        .catch(() => undefined);
     }
 
     // A reply ends a re-marketing campaign.

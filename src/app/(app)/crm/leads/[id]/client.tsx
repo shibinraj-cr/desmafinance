@@ -366,6 +366,7 @@ export function LeadDetail({
                 canUnenroll={access.canUnenroll}
               />
               <AssignmentCard lead={lead} masters={masters} canAssign={access.canAssign} />
+              <DetailsSentCard lead={lead} canEdit={canEdit} />
               <LeadInfoCard lead={lead} masters={masters} canEdit={canEdit} />
             </div>
           </div>
@@ -1092,6 +1093,102 @@ function AssignmentCard({ lead, masters, canAssign }: { lead: LeadRow; masters: 
             ))}
           </select>
         </Field>
+      )}
+    </div>
+  );
+}
+
+
+// ── Details sent (the pitch clock) ──────────────────────────────────────────
+/**
+ * One deliberate tick for "I've sent them the process and fee details", and the
+ * reply that answers it.
+ *
+ * Marked by hand rather than inferred from outbound traffic because details go
+ * out as free text or a PDF inside a live chat — nothing in the message stream
+ * tells a pitch apart from a "hi". The reply side needs no tick: the WhatsApp
+ * mirror stamps the first inbound after the mark, so a lead leaves the chase
+ * list by being answered, not by being remembered.
+ */
+function DetailsSentCard({ lead, canEdit }: { lead: LeadRow; canEdit: boolean }) {
+  const router = useRouter();
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  async function mark(detailsSent: boolean) {
+    if (!detailsSent && !confirm("Undo the details-sent mark? The reply recorded against it is cleared too.")) return;
+    setBusy(true);
+    setError(null);
+    const res = await fetch(`/api/crm/leads/${lead.id}`, {
+      method: "PATCH",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ detailsSent }),
+    });
+    setBusy(false);
+    if (!res.ok) {
+      setError("That didn’t save.");
+      return;
+    }
+    router.refresh();
+  }
+
+  const silentDays =
+    lead.detailsSentAt && !lead.detailsRespondedAt
+      ? Math.floor((Date.now() - new Date(lead.detailsSentAt).getTime()) / 86_400_000)
+      : null;
+
+  return (
+    <div className={cardCls}>
+      <CardHeading icon="forward_to_inbox" color="#0ea5e9">Details sent</CardHeading>
+      {error && <div className="rounded-lg bg-error-container text-on-error-container px-md py-sm">{error}</div>}
+
+      {!lead.detailsSentAt ? (
+        <>
+          <p className="text-body-md text-on-surface-variant">
+            Not sent yet. Mark this once you’ve sent the candidate the process and fee details — it
+            starts the clock that shows who never wrote back.
+          </p>
+          {canEdit && (
+            <button
+              type="button"
+              disabled={busy}
+              onClick={() => void mark(true)}
+              className="inline-flex items-center gap-xs rounded-lg bg-primary text-on-primary px-md py-sm text-label-md disabled:opacity-50"
+            >
+              <span className="material-symbols-outlined" style={{ fontSize: 18 }}>check</span>
+              {busy ? "Saving…" : "Mark details sent"}
+            </button>
+          )}
+        </>
+      ) : (
+        <>
+          <dl className="space-y-sm text-body-md">
+            <Row label="Sent" value={fmtDateTime(lead.detailsSentAt)} />
+            {lead.detailsSentBy && <Row label="By" value={lead.detailsSentBy} />}
+            <Row
+              label="Response"
+              value={
+                lead.detailsRespondedAt ? (
+                  <span className="text-green-700">Replied {fmtDateTime(lead.detailsRespondedAt)}</span>
+                ) : (
+                  <span className="text-amber-700">
+                    No reply yet{silentDays !== null && silentDays > 0 ? ` — ${silentDays}d` : ""}
+                  </span>
+                )
+              }
+            />
+          </dl>
+          {canEdit && (
+            <button
+              type="button"
+              disabled={busy}
+              onClick={() => void mark(false)}
+              className="text-label-sm text-on-surface-variant hover:text-error underline underline-offset-2 disabled:opacity-50 self-start"
+            >
+              {busy ? "Saving…" : "Undo"}
+            </button>
+          )}
+        </>
       )}
     </div>
   );

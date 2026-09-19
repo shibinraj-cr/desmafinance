@@ -21,6 +21,9 @@ export const CRM_ACTIVITY_TYPES = [
   "EMAIL_SENT",
   "WHATSAPP_SENT",
   "CALL_LOGGED",
+  // The explicit "I sent them the process/fee details" mark, and its undo.
+  "DETAILS_SENT",
+  "DETAILS_SENT_UNDONE",
   "PARTY_LINKED",
   "TASK_CREATED",
   "TASK_COMPLETED",
