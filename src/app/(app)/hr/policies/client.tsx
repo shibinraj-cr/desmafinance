@@ -1,8 +1,9 @@
 "use client";
 
-import { useState, useTransition } from "react";
+import { Fragment, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import { Section } from "@/components/Cards";
+import { Markdown } from "@/components/hiring/Markdown";
 
 type Policy = {
   id: string;
@@ -33,6 +34,10 @@ export function PoliciesClient({ policies, canEdit }: { policies: Policy[]; canE
   const [pending, start] = useTransition();
   const [draft, setDraft] = useState(BLANK);
   const [error, setError] = useState<string | null>(null);
+  // Which policy's body is open. A saved policy's content was never rendered
+  // anywhere in HR, so a draft could be written and published without anyone
+  // being able to read it back first.
+  const [openId, setOpenId] = useState<string | null>(null);
 
   async function save() {
     setError(null);
@@ -154,8 +159,18 @@ export function PoliciesClient({ policies, canEdit }: { policies: Policy[]; canE
           </thead>
           <tbody>
             {policies.map((p) => (
-              <tr key={p.id} className="border-b border-outline-variant last:border-0">
-                <td className="py-sm pr-md font-semibold">{p.title}</td>
+              <Fragment key={p.id}>
+              <tr className="border-b border-outline-variant last:border-0">
+                <td className="py-sm pr-md font-semibold">
+                  <button
+                    onClick={() => setOpenId(openId === p.id ? null : p.id)}
+                    className="text-left hover:underline"
+                    aria-expanded={openId === p.id}
+                  >
+                    {openId === p.id ? "▾ " : "▸ "}
+                    {p.title}
+                  </button>
+                </td>
                 <td className="py-sm pr-md">{p.version}</td>
                 <td className="py-sm pr-md text-on-surface-variant">{p.category ?? "—"}</td>
                 <td className="py-sm pr-md">
@@ -186,6 +201,28 @@ export function PoliciesClient({ policies, canEdit }: { policies: Policy[]; canE
                   </td>
                 )}
               </tr>
+              {openId === p.id && (
+                <tr className="border-b border-outline-variant">
+                  <td colSpan={canEdit ? 6 : 5} className="py-md">
+                    <div className="rounded-lg border border-outline-variant bg-surface-container p-md">
+                      <p className="text-caption text-on-surface-variant mb-sm">
+                        Exactly as employees will see it on their Policies page.
+                        {p.status === "draft" && " This policy is still a draft — publishing notifies every employee."}
+                      </p>
+                      <Markdown source={p.body} />
+                      {p.externalUrl && (
+                        <p className="text-label-sm mt-md">
+                          Attached link:{" "}
+                          <a href={p.externalUrl} className="text-primary underline" target="_blank" rel="noreferrer">
+                            {p.externalUrl}
+                          </a>
+                        </p>
+                      )}
+                    </div>
+                  </td>
+                </tr>
+              )}
+              </Fragment>
             ))}
             {policies.length === 0 && (
               <tr>
