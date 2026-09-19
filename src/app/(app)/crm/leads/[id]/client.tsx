@@ -6,7 +6,7 @@ import { useRouter } from "next/navigation";
 import Link from "next/link";
 import type { LeadRow, NoteRow, ActivityRow, TaskRow, TaskReminderRow } from "@/lib/crm-leads";
 import { isActionOnlyStatus, canUnenrollInto } from "@/lib/crm-leads";
-import { buildLeadMergeVars, fillTemplate, LEAD_TEMPERATURES, TASK_TYPES, type MessageTemplateDTO } from "@/lib/crm";
+import { buildLeadMergeVars, fillTemplate, LEAD_TEMPERATURES, TASK_TYPES, isOtherQualification, qualificationText, QUALIFICATION_OTHER_MAX, type MessageTemplateDTO } from "@/lib/crm";
 import { ageFromDob } from "@/lib/age";
 import { COUNTRIES, countryCodeFor } from "@/lib/countries";
 import { MultiSelect } from "@/components/MultiSelect";
@@ -582,6 +582,7 @@ function SummaryCard({ lead, masters, canEdit }: { lead: LeadRow; masters: Detai
     sourceId: lead.source?.id ?? "",
     serviceId: lead.service?.id ?? "",
     qualificationId: lead.qualification?.id ?? "",
+    qualificationOther: lead.qualificationOther ?? "",
     dob: lead.dob ?? "",
     country: lead.country ?? "",
     studyDestination: lead.studyDestination ?? "",
@@ -595,6 +596,11 @@ function SummaryCard({ lead, masters, canEdit }: { lead: LeadRow; masters: Detai
   // Study destination only applies to the Study Abroad service.
   const selectedServiceLabel = masters.services.find((s) => s.id === draft.serviceId)?.label ?? "";
   const isStudyAbroad = /study abroad/i.test(selectedServiceLabel);
+
+  // "Others" is the only qualification that asks for free text.
+  const isOtherQual = isOtherQualification(
+    masters.qualifications.find((q) => q.id === draft.qualificationId)?.label,
+  );
 
   async function save() {
     setError(null);
@@ -614,6 +620,9 @@ function SummaryCard({ lead, masters, canEdit }: { lead: LeadRow; masters: Detai
         sourceId: draft.sourceId,
         serviceId: draft.serviceId,
         qualificationId: draft.qualificationId,
+        // Always sent: the server clears it when the qualification is no longer
+        // "Others", so a correction away from Others can't leave stale text.
+        qualificationOther: isOtherQual ? draft.qualificationOther.trim() : null,
         dob: draft.dob,
         country: draft.country,
         studyDestination: isStudyAbroad ? draft.studyDestination : undefined,
@@ -697,6 +706,18 @@ function SummaryCard({ lead, masters, canEdit }: { lead: LeadRow; masters: Detai
               ))}
             </select>
           </Field>
+          {/* "Others" on its own says nothing — ask what it actually is. */}
+          {isOtherQual && (
+            <Field label={`Which qualification? (max ${QUALIFICATION_OTHER_MAX} chars)`}>
+              <input
+                className={inputCls}
+                value={draft.qualificationOther}
+                maxLength={QUALIFICATION_OTHER_MAX}
+                placeholder="e.g. MBA"
+                onChange={(e) => setDraft({ ...draft, qualificationOther: e.target.value })}
+              />
+            </Field>
+          )}
           <Field label={`Date of birth${draftAge !== null ? ` — age ${draftAge}` : ""}`}>
             <input
               className={inputCls}
@@ -804,7 +825,7 @@ function SummaryCard({ lead, masters, canEdit }: { lead: LeadRow; masters: Detai
           <Row label="Alt. phone" value={lead.altPhone ?? "—"} />
           <Row label="Source" value={lead.source?.label ?? "—"} />
           <Row label="Service" value={lead.service?.name ?? "—"} />
-          <Row label="Qualification" value={lead.qualification?.label ?? "—"} />
+          <Row label="Qualification" value={qualificationText(lead.qualification?.label, lead.qualificationOther) ?? "—"} />
           <Row label="Temperature" value={<TemperaturePill temperature={lead.temperature} />} />
           {lead.dob && <Row label="Date of birth" value={lead.dob} />}
           {lead.age !== null && <Row label="Age" value={`${lead.age} yrs`} />}
@@ -1705,7 +1726,7 @@ function LeadInfoCard({ lead, masters, canEdit }: { lead: LeadRow; masters: Deta
         </div>
         <Row label="Source" value={lead.source?.label ?? "—"} />
         <Row label="Service" value={lead.service?.name ?? "—"} />
-        <Row label="Qualification" value={lead.qualification?.label ?? "—"} />
+        <Row label="Qualification" value={qualificationText(lead.qualification?.label, lead.qualificationOther) ?? "—"} />
         {lead.status.code === "duplicate" && (
           <div className="rounded-lg bg-amber-50 text-amber-800 border border-amber-200 px-md py-sm text-label-sm">
             Flagged as a possible duplicate.
@@ -1838,7 +1859,7 @@ function leadCommsVars(lead: LeadRow) {
     consultant: lead.assignedTo?.name,
     consultantPhone: lead.assignedTo?.phone,
     campaign: lead.campaign,
-    qualification: lead.qualification?.label,
+    qualification: qualificationText(lead.qualification?.label, lead.qualificationOther),
   });
 }
 

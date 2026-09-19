@@ -8,7 +8,7 @@ import { getCurrentUserAndPermissions } from "@/lib/permissions";
 import { getCrmAccess } from "@/lib/crm-rbac";
 import { recordLeadActivity } from "@/lib/crm-activity";
 import { notifyLeadAssigned } from "@/lib/crm-notify";
-import { normalizePhone, computeDedupeKey, emailKeyOf, phoneMatchKeys, LEAD_TEMPERATURE_VALUES } from "@/lib/crm";
+import { normalizePhone, computeDedupeKey, emailKeyOf, phoneMatchKeys, LEAD_TEMPERATURE_VALUES, QUALIFICATION_OTHER_MAX } from "@/lib/crm";
 import { parseDobInput } from "@/lib/age";
 import {
   leadRowInclude,
@@ -20,6 +20,7 @@ import {
   leadOrderBy,
   isActiveBde,
   isActionOnlyStatus,
+  resolveQualificationOther,
 } from "@/lib/crm-leads";
 import { recordReInquiry, resolveReInquiryContext, notifySupervisorOfReInquiries } from "@/lib/crm-reinquiry";
 
@@ -63,6 +64,10 @@ const CreateSchema = z.object({
   sourceId: z.string().optional(),
   serviceId: z.string().optional(),
   qualificationId: z.string().optional(),
+  // Free text for the "Others" qualification. Ignored (stored as null) unless
+  // the chosen qualification is actually the catch-all — see
+  // resolveQualificationOther, which the client cannot talk its way around.
+  qualificationOther: z.string().trim().max(QUALIFICATION_OTHER_MAX).optional(),
   statusId: z.string().optional(),
   assignedToId: z.string().optional(),
   // Official date of birth as YYYY-MM-DD (age is derived, never sent).
@@ -160,6 +165,11 @@ export const POST = withApiHandler(async (req: Request) => {
     assignedToId = userId;
   }
 
+  const qualificationOther = await resolveQualificationOther(
+    data.qualificationId || null,
+    data.qualificationOther,
+  );
+
   const created = await prisma.lead.create({
     data: {
       candidateName: data.candidateName,
@@ -173,6 +183,7 @@ export const POST = withApiHandler(async (req: Request) => {
       sourceId: data.sourceId || null,
       serviceId: data.serviceId || null,
       qualificationId: data.qualificationId || null,
+      qualificationOther,
       statusId,
       assignedToId,
       assignedAt: assignedToId ? new Date() : null,

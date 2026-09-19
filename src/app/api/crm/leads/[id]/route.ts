@@ -8,9 +8,9 @@ import { getCurrentUserAndPermissions } from "@/lib/permissions";
 import { getCrmAccess, canEditLead } from "@/lib/crm-rbac";
 import { recordLeadActivity } from "@/lib/crm-activity";
 import { recordAudit } from "@/lib/audit";
-import { normalizePhone, computeDedupeKey, emailKeyOf, LEAD_TEMPERATURE_VALUES } from "@/lib/crm";
+import { normalizePhone, computeDedupeKey, emailKeyOf, LEAD_TEMPERATURE_VALUES, QUALIFICATION_OTHER_MAX } from "@/lib/crm";
 import { parseDobInput } from "@/lib/age";
-import { leadRowInclude, serializeLead, isActionOnlyStatus } from "@/lib/crm-leads";
+import { leadRowInclude, serializeLead, isActionOnlyStatus, resolveQualificationOther } from "@/lib/crm-leads";
 import { openRemarketingCampaign, stopRemarketingCampaigns } from "@/lib/crm-remarketing";
 import { syncPipelineToLeadStatus } from "@/lib/crm-enroll";
 import { REMARKETING_STATUS_CODE } from "@/lib/crm-reinquiry";
@@ -43,6 +43,9 @@ const PatchSchema = z.object({
   sourceId: z.string().nullable().optional(),
   serviceId: z.string().nullable().optional(),
   qualificationId: z.string().nullable().optional(),
+  // Free text for the "Others" qualification; "" / null clears it. Only kept
+  // while the lead's qualification IS "Others" — see below.
+  qualificationOther: z.string().trim().max(QUALIFICATION_OTHER_MAX).nullable().optional(),
   statusId: z.string().optional(),
   partyId: z.string().nullable().optional(),
   // Official date of birth as YYYY-MM-DD; "" / null clears it (age is derived).
@@ -68,6 +71,7 @@ const FIELD_LABELS: Record<string, string> = {
   sourceId: "Source",
   serviceId: "Service",
   qualificationId: "Qualification",
+  qualificationOther: "Qualification (other)",
   dob: "Date of birth",
   country: "Country",
   studyDestination: "Study Destination",
@@ -124,6 +128,24 @@ export const PATCH = withApiHandler(async (req: Request, { params }: Ctx) => {
   if (d.qualificationId !== undefined && clean(d.qualificationId) !== existing.qualificationId) {
     update.qualificationId = clean(d.qualificationId);
     fieldDiff.qualificationId = { from: existing.qualificationId, to: clean(d.qualificationId) };
+  }
+  // The free-text detail is resolved against whichever qualification the lead
+  // ENDS UP on, so a move off "Others" clears it even when this request never
+  // mentions the text — otherwise a lead corrected from Others (MBA) to BSN
+  // would keep exporting "MBA" forever.
+  if (d.qualificationOther !== undefined || update.qualificationId !== undefined) {
+    const nextQualificationId =
+      update.qualificationId !== undefined
+        ? (update.qualificationId as string | null)
+        : existing.qualificationId;
+    const nextOther = await resolveQualificationOther(
+      nextQualificationId,
+      d.qualificationOther !== undefined ? clean(d.qualificationOther) : existing.qualificationOther,
+    );
+    if (nextOther !== existing.qualificationOther) {
+      update.qualificationOther = nextOther;
+      fieldDiff.qualificationOther = { from: existing.qualificationOther, to: nextOther };
+    }
   }
   if (d.dob !== undefined) {
     const nextDob = parseDobInput(d.dob); // Date | null (date-only)

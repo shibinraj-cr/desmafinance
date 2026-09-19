@@ -29,7 +29,7 @@ import type { Prisma } from "@prisma/client";
 import { prisma } from "./prisma";
 import { logger } from "./logger";
 import { recordLeadActivity } from "./crm-activity";
-import { buildLeadMergeVars, fillTemplate } from "./crm";
+import { buildLeadMergeVars, fillTemplate, qualificationText } from "./crm";
 import { getEmailConfig, sendEmail, getDailyQuota, smtpErrorInfo } from "./mailer";
 import { findOrCreateConversationForLead } from "./wa/mirror";
 import { sendWaMessage } from "./wa/send";
@@ -145,6 +145,7 @@ const TASK_WITH_LEAD = {
       status: { select: { kind: true } },
       service: { select: { name: true } },
       qualification: { select: { label: true } },
+      qualificationOther: true,
       assignedToId: true,
       assignedTo: {
         select: {
@@ -168,7 +169,7 @@ function mergeVarsFor(task: TaskWithLead): Record<string, string> {
       consultant: lead.assignedTo?.leadPulseRole?.displayName ?? lead.assignedTo?.username ?? null,
       consultantPhone: lead.assignedTo?.leadPulseRole?.phone ?? null,
       campaign: lead.campaign ?? null,
-      qualification: lead.qualification?.label ?? null,
+      qualification: qualificationText(lead.qualification?.label, lead.qualificationOther),
     }),
     ...buildTaskMergeVars({ subject: task.subject, dueAt: task.dueAt }),
   };
@@ -422,6 +423,7 @@ export async function previewTaskReminders(
       whatsappUndeliverableAt: true,
       service: { select: { name: true } },
       qualification: { select: { label: true } },
+      qualificationOther: true,
       assignedTo: {
         select: { username: true, leadPulseRole: { select: { displayName: true, phone: true } } },
       },
@@ -442,7 +444,7 @@ export async function previewTaskReminders(
     consultant: lead.assignedTo?.leadPulseRole?.displayName ?? lead.assignedTo?.username ?? null,
     consultantPhone: lead.assignedTo?.leadPulseRole?.phone ?? null,
     campaign: lead.campaign ?? null,
-    qualification: lead.qualification?.label ?? null,
+    qualification: qualificationText(lead.qualification?.label, lead.qualificationOther),
   });
 
   // Memoised across task types. With no per-type overrides configured — the
