@@ -8,9 +8,9 @@ import {
   type ParsedDay,
 } from "@/lib/hr-attendance-parser";
 import { cycleMonthForDate, cycleWindowForMonth, SHIFT_GRACE_MINUTES } from "@/lib/hr-data";
-import { recomputeAllLeaveBalances } from "@/lib/hr-leave-balance";
+import { recomputeAllLeaveBalances, recomputeLeaveBalance } from "@/lib/hr-leave-balance";
 import { applySandwichRule } from "@/lib/hr-sandwich";
-import { resolveShiftForDate } from "@/lib/hr-shift";
+import { loadShiftTimeline, pickShiftForDate } from "@/lib/hr-shift";
 import { computeSalaryRun } from "@/lib/hr-salary-engine";
 
 /**
@@ -408,8 +408,8 @@ export async function ingestParsedAttendance(
     },
   });
 
-  // Recompute, per employee, against the authoritative HR shift now that it can
-  // be resolved from the DB:
+  // Recompute, per employee, against the authoritative HR shift for EACH DAY now
+  // that it can be resolved from the DB:
   //   (1) Weekday late-coming vs the HR shift start.
   //   (2) The half-day rule with the out-time CAPPED at the shift end.
   // Every query here is clamped to `effStart` so pre-floor rows are never read
@@ -423,75 +423,7 @@ export async function ingestParsedAttendance(
       distinct: ["employeeId"],
     });
     for (const { employeeId } of empRows) {
-      const shift = await resolveShiftForDate(employeeId, effStart);
-      const shiftStart = shift ? toMin(shift.startTime) : null;
-      const shiftEnd = shift ? toMin(shift.endTime) : null;
-      const days = await prisma.hrAttendanceDay.findMany({
-        // Skip locked days: an HR manual override owns its status/lateness and
-        // must not be re-derived from the (possibly wrong) biometric punches.
-        where: { employeeId, date: { gte: effStart, lte: end }, locked: false },
-        select: {
-          id: true,
-          date: true,
-          inTime: true,
-          outTime: true,
-          lateMinutes: true,
-          status: true,
-          rawName: true,
-        },
-      });
-      for (const d of days) {
-        const dow = d.date.getUTCDay();
-        if (dow === 0) continue; // Sunday = week-off
-        const isSat = dow === 6;
-        const updates: { lateMinutes?: number; status?: string } = {};
-
-        // (1) Weekday late-coming (Saturday handled in the parser/adapter).
-        if (!isSat && shiftStart != null) {
-          const inMin = toMin(d.inTime);
-          if (inMin != null) {
-            const newLate = Math.max(0, inMin - shiftStart);
-            if (newLate !== (d.lateMinutes ?? 0)) updates.lateMinutes = newLate;
-          }
-        }
-
-        // (2) Half-day / absence recompute from the capped punch duration.
-        if ((d.status === "P" || d.status === "HD") && d.inTime && d.outTime) {
-          const cap = isSat
-            ? isSaturdayRuleExempt(d.rawName ?? "")
-              ? null
-              : SATURDAY_END_MIN
-            : shiftEnd;
-          const worked = workedMinutesForHalfDay(d.inTime, d.outTime, cap);
-          if (worked != null) {
-            const newStatus = classifyWorkedDay(worked, isSat);
-            if (newStatus !== d.status) updates.status = newStatus;
-          }
-        }
-
-        // (3) Second-half rule: a morning-absent WEEKDAY afternoon arrival that
-        // is >10 min late for the second-half start (shift start + 4h30m) — or
-        // worked under the 3h floor — is a full absence (A). STATUS-ONLY: it does
-        // NOT touch lateMinutes/earlyOutMinutes (so the sandwich AM/PM inference
-        // stays correct). ≤10-min-late afternoons keep their duration HD. Shared
-        // with the .xls upload route via secondHalfStatusOverride; gated to the
-        // cutover here because the upload path passes no dateFloor.
-        const secondHalfStatus = secondHalfStatusOverride(
-          d.status,
-          toMin(d.inTime),
-          toMin(d.outTime),
-          shiftStart,
-          shiftEnd,
-          dow,
-          d.date >= SECOND_HALF_RULE_CUTOVER,
-          SHIFT_GRACE_MINUTES,
-        );
-        if (secondHalfStatus) updates.status = secondHalfStatus;
-
-        if (Object.keys(updates).length > 0) {
-          await prisma.hrAttendanceDay.update({ where: { id: d.id }, data: updates });
-        }
-      }
+      await recomputeShiftDerivedDays({ employeeId, windowStart: effStart, windowEnd: end });
     }
   }
 
@@ -558,4 +490,198 @@ export async function ingestParsedAttendance(
     rangeStart: rangeStart?.toISOString().slice(0, 10) ?? null,
     rangeEnd: rangeEnd?.toISOString().slice(0, 10) ?? null,
   };
+}
+
+/**
+ * Re-derive the shift-dependent fields for one employee across a date window:
+ *
+ *   (1) Weekday late-coming vs the shift start.
+ *   (2) The half-day rule, with the out-time CAPPED at the shift end
+ *       (weekday: the shift end; Saturday: 16:00, unless rule-exempt).
+ *   (3) The second-half rule (morning-absent afternoon arrivals).
+ *
+ * The shift is resolved PER DAY from the assignment timeline. It used to be
+ * resolved once at the window start and applied to the whole salary cycle,
+ * which silently ignored any mid-cycle shift change: an employee moved from
+ * Shift A (09:00-17:30) to Shift B (09:30-18:00) on, say, the 1st kept being
+ * scored against A until the next cycle began on the 26th — every 09:00-09:30
+ * arrival booked as late, and enough of those tip into AL half-days.
+ *
+ * Locked days are skipped — an HR manual override (approved regularization,
+ * decide/override) owns its status and lateness.
+ *
+ * Returns the number of days actually changed.
+ */
+export async function recomputeShiftDerivedDays(args: {
+  employeeId: string;
+  windowStart: Date;
+  windowEnd: Date;
+}): Promise<number> {
+  const { employeeId, windowStart, windowEnd } = args;
+  if (windowEnd < windowStart) return 0;
+
+  const timeline = await loadShiftTimeline(employeeId);
+  const days = await prisma.hrAttendanceDay.findMany({
+    // Skip locked days: an HR manual override owns its status/lateness and
+    // must not be re-derived from the (possibly wrong) biometric punches.
+    where: { employeeId, date: { gte: windowStart, lte: windowEnd }, locked: false },
+    select: {
+      id: true,
+      date: true,
+      inTime: true,
+      outTime: true,
+      lateMinutes: true,
+      status: true,
+      rawName: true,
+    },
+  });
+
+  let changed = 0;
+  for (const d of days) {
+    const dow = d.date.getUTCDay();
+    if (dow === 0) continue; // Sunday = week-off
+    const isSat = dow === 6;
+    const shift = pickShiftForDate(timeline, d.date);
+    const shiftStart = shift ? toMin(shift.startTime) : null;
+    const shiftEnd = shift ? toMin(shift.endTime) : null;
+    const updates: { lateMinutes?: number; status?: string } = {};
+
+    // (1) Weekday late-coming (Saturday handled in the parser/adapter).
+    if (!isSat && shiftStart != null) {
+      const inMin = toMin(d.inTime);
+      if (inMin != null) {
+        const newLate = Math.max(0, inMin - shiftStart);
+        if (newLate !== (d.lateMinutes ?? 0)) updates.lateMinutes = newLate;
+      }
+    }
+
+    // (2) Half-day / absence recompute from the capped punch duration.
+    if ((d.status === "P" || d.status === "HD") && d.inTime && d.outTime) {
+      const cap = isSat
+        ? isSaturdayRuleExempt(d.rawName ?? "")
+          ? null
+          : SATURDAY_END_MIN
+        : shiftEnd;
+      const worked = workedMinutesForHalfDay(d.inTime, d.outTime, cap);
+      if (worked != null) {
+        const newStatus = classifyWorkedDay(worked, isSat);
+        if (newStatus !== d.status) updates.status = newStatus;
+      }
+    }
+
+    // (3) Second-half rule: a morning-absent WEEKDAY afternoon arrival that
+    // is >10 min late for the second-half start (shift start + 4h30m) — or
+    // worked under the 3h floor — is a full absence (A). STATUS-ONLY: it does
+    // NOT touch lateMinutes/earlyOutMinutes (so the sandwich AM/PM inference
+    // stays correct). ≤10-min-late afternoons keep their duration HD. Shared
+    // with the .xls upload route via secondHalfStatusOverride; gated to the
+    // cutover here because the upload path passes no dateFloor.
+    const secondHalfStatus = secondHalfStatusOverride(
+      d.status,
+      toMin(d.inTime),
+      toMin(d.outTime),
+      shiftStart,
+      shiftEnd,
+      dow,
+      d.date >= SECOND_HALF_RULE_CUTOVER,
+      SHIFT_GRACE_MINUTES,
+    );
+    if (secondHalfStatus) updates.status = secondHalfStatus;
+
+    if (Object.keys(updates).length > 0) {
+      await prisma.hrAttendanceDay.update({ where: { id: d.id }, data: updates });
+      changed++;
+    }
+  }
+  return changed;
+}
+
+/** Walk the salary-cycle keys (26th → 25th) spanned by an inclusive window. */
+function cycleKeysBetween(from: Date, to: Date): string[] {
+  const keys: string[] = [];
+  const last = cycleMonthForDate(to);
+  let key = cycleMonthForDate(from);
+  // Bounded: 20 years of cycles is far beyond any real window.
+  for (let i = 0; i < 240; i++) {
+    keys.push(key);
+    if (key === last) break;
+    const [y, m] = key.split("-").map(Number);
+    key = m === 12 ? `${y + 1}-01` : `${y}-${String(m + 1).padStart(2, "0")}`;
+  }
+  return keys;
+}
+
+export type ShiftChangeRecomputeResult = {
+  cycles: {
+    monthKey: string;
+    updatedDays: number;
+    /** Non-null when the cycle was left alone, with the reason. */
+    skipped: string | null;
+  }[];
+};
+
+/**
+ * Re-derive stored attendance after an employee's shift timeline changes
+ * (assignment created/approved/edited/deleted, or the shift swapped on the
+ * employee record). Without this, corrected history stays wrong until the next
+ * sync happens to re-import the cycle — and past cycles never self-heal.
+ *
+ * Runs `from` → today, cycle by cycle: per-day shift recompute, then the
+ * sandwich rule over the FULL cycle (it needs the neighbouring days), then the
+ * employee's leave balance, then any DRAFT salary run.
+ *
+ * A cycle whose salary run is no longer a draft is SKIPPED — approved/paid
+ * payroll is never silently rewritten. HR reopens those explicitly. This also
+ * keeps the recompute off closed historical cycles when HR back-dates a change.
+ */
+export async function recomputeAfterShiftChange(args: {
+  employeeId: string;
+  from: Date;
+  /** Defaults to today; clamped to today (future days hold no attendance). */
+  to?: Date | null;
+  actorUserId?: string | null;
+}): Promise<ShiftChangeRecomputeResult> {
+  const { employeeId, actorUserId = null } = args;
+  const n = new Date();
+  const today = new Date(Date.UTC(n.getUTCFullYear(), n.getUTCMonth(), n.getUTCDate()));
+  const windowEnd = args.to && args.to < today ? args.to : today;
+  if (windowEnd < args.from) return { cycles: [] };
+
+  const cycles: ShiftChangeRecomputeResult["cycles"] = [];
+  const yearsTouched = new Set<number>();
+  const draftKeys: string[] = [];
+
+  for (const monthKey of cycleKeysBetween(args.from, windowEnd)) {
+    const run = await prisma.hrSalaryRun.findUnique({
+      where: { monthKey },
+      select: { status: true },
+    });
+    if (run && run.status !== "draft") {
+      cycles.push({ monthKey, updatedDays: 0, skipped: `salary run ${run.status}` });
+      continue;
+    }
+    const { start, end } = cycleWindowForMonth(monthKey);
+    const dayStart = start > args.from ? start : args.from;
+    const dayEnd = end < windowEnd ? end : windowEnd;
+    const updatedDays = await recomputeShiftDerivedDays({
+      employeeId,
+      windowStart: dayStart,
+      windowEnd: dayEnd,
+    });
+    // The sandwich rule reads neighbouring days, so re-run it over the whole
+    // cycle rather than just the changed slice. It is idempotent.
+    await applySandwichRule({ employeeId, windowStart: start, windowEnd: end, actorUserId });
+    yearsTouched.add(dayStart.getUTCFullYear());
+    yearsTouched.add(dayEnd.getUTCFullYear());
+    if (run) draftKeys.push(monthKey);
+    cycles.push({ monthKey, updatedDays, skipped: null });
+  }
+
+  for (const y of yearsTouched) {
+    await recomputeLeaveBalance(employeeId, y);
+  }
+  for (const monthKey of draftKeys) {
+    await computeSalaryRun(monthKey, actorUserId);
+  }
+  return { cycles };
 }

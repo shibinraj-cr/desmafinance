@@ -3,6 +3,10 @@ import { z } from "zod";
 import { prisma } from "@/lib/prisma";
 import { getCurrentUserAndPermissions } from "@/lib/permissions";
 import { canApproveHr } from "@/lib/hr-rbac";
+import { recomputeAfterShiftChange } from "@/lib/hr-attendance-ingest";
+
+// Approving / editing / deleting re-derives stored attendance cycle by cycle.
+export const maxDuration = 120;
 
 const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
 
@@ -55,7 +59,24 @@ export async function PATCH(req: Request, { params }: { params: { id: string } }
       data: { shiftId: updated.shiftId },
     });
   }
-  return NextResponse.json({ ok: true });
+  // Re-derive stored attendance whenever this row's effect on the timeline
+  // moved — approved, rejected (an approved window withdrawn), or its end date
+  // changed. A reason-only edit changes nothing. Always runs from the window
+  // start to today, so days on BOTH sides of a moved end date are corrected.
+  const statusChanged = !!parsed.data.status && parsed.data.status !== existing.status;
+  const endMoved =
+    parsed.data.effectiveTo !== undefined &&
+    (data.effectiveTo as Date | null)?.getTime() !== existing.effectiveTo?.getTime();
+  const touchesTimeline = existing.status === "approved" || updated.status === "approved";
+  const recompute =
+    touchesTimeline && (statusChanged || endMoved)
+      ? await recomputeAfterShiftChange({
+          employeeId: updated.employeeId,
+          from: existing.effectiveFrom,
+          actorUserId: userId ?? null,
+        })
+      : null;
+  return NextResponse.json({ ok: true, recompute });
 }
 
 export async function DELETE(_req: Request, { params }: { params: { id: string } }) {
@@ -77,5 +98,14 @@ export async function DELETE(_req: Request, { params }: { params: { id: string }
       },
     },
   });
-  return NextResponse.json({ ok: true });
+  // Deleting an approved window changes which shift those days resolve to.
+  const recompute =
+    existing.status === "approved"
+      ? await recomputeAfterShiftChange({
+          employeeId: existing.employeeId,
+          from: existing.effectiveFrom,
+          actorUserId: userId ?? null,
+        })
+      : null;
+  return NextResponse.json({ ok: true, recompute });
 }
