@@ -19,6 +19,9 @@ export const leadRowInclude = Prisma.validator<Prisma.LeadInclude>()({
   service: { select: { id: true, name: true, isStudyAbroad: true } },
   qualification: { select: { id: true, label: true } },
   status: { select: { id: true, code: true, label: true, kind: true, color: true } },
+  // The cross-stage STATUS (see crm.ts). Separate axis from `status` above,
+  // which is the pipeline STAGE.
+  subStatus: { select: { id: true, code: true, label: true, group: true, color: true } },
   assignedTo: {
     select: { id: true, username: true, leadPulseRole: { select: { displayName: true, phone: true } } },
   },
@@ -48,6 +51,10 @@ export type LeadRow = {
    */
   qualificationOther: string | null;
   status: { id: string; code: string; label: string; kind: string; color: string | null };
+  /** The cross-stage status ("Call connected", "Waiting for English test"), or null. */
+  subStatus: { id: string; code: string; label: string; group: string; color: string | null } | null;
+  /** When the lead entered `subStatus`. Null on leads the backfill placed. */
+  subStatusSince: string | null;
   assignedTo: { id: string; name: string; phone: string | null } | null;
   assignedAt: string | null;
   party: { id: string; name: string } | null;
@@ -97,6 +104,16 @@ export function serializeLead(l: LeadWithRels): LeadRow {
           phone: l.assignedTo.leadPulseRole?.phone ?? null,
         }
       : null,
+    subStatus: l.subStatus
+      ? {
+          id: l.subStatus.id,
+          code: l.subStatus.code,
+          label: l.subStatus.label,
+          group: l.subStatus.group,
+          color: l.subStatus.color,
+        }
+      : null,
+    subStatusSince: l.subStatusSince ? l.subStatusSince.toISOString() : null,
     assignedAt: l.assignedAt ? l.assignedAt.toISOString() : null,
     party: l.party ? { id: l.party.id, name: l.party.name } : null,
     campaign: l.campaign,
@@ -159,6 +176,12 @@ export type LeadFilterParams = {
   campaign?: MultiFilterValue;
   /** Lead temperature codes (`'hot' | 'warm' | 'cold'`). Invalid values are ignored. */
   temperature?: MultiFilterValue;
+  /**
+   * Cross-stage STATUS ids. Deliberately independent of `status` (the STAGE)
+   * above — filtering "Waiting for English test" is meant to reach into every
+   * stage at once, which is the entire point of the field.
+   */
+  substatus?: MultiFilterValue;
   country?: MultiFilterValue;
   studyDestination?: MultiFilterValue;
   /** Inclusive minimum age in years (translated to a `dob` upper bound). */
@@ -269,6 +292,8 @@ export function buildLeadWhere(p: LeadFilterParams): Prisma.LeadWhereInput {
       .filter((t): t is LeadTemperature => !!t),
   );
   if (temperature !== undefined) where.temperature = temperature;
+  const subStatusId = oneOf(listParam(p.substatus));
+  if (subStatusId !== undefined) where.subStatusId = subStatusId;
   const country = oneOf(listParam(p.country));
   if (country !== undefined) where.country = country;
   const studyDestination = oneOf(listParam(p.studyDestination));
@@ -344,6 +369,7 @@ function readOne(sp: LeadQuerySource, key: string): string | undefined {
   return oneParam(sp instanceof URLSearchParams ? sp.getAll(key) : sp[key]);
 }
 
+
 /**
  * Turn a leads query string into {@link LeadFilterParams}.
  *
@@ -373,6 +399,7 @@ export function leadFilterParamsFromQuery(
     assignee: resolveAssigneeFilter(readAll(sp, "assignee"), opts),
     campaign: readAll(sp, "campaign"),
     temperature: readAll(sp, "temperature"),
+    substatus: readAll(sp, "substatus"),
     country: readAll(sp, "country"),
     studyDestination: readAll(sp, "studyDestination"),
     ageMin: parseAgeParam(readOne(sp, "ageMin")),

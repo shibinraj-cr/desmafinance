@@ -58,7 +58,7 @@ export default async function LeadsPage({ searchParams }: { searchParams: SP }) 
   const totalPages = Math.max(1, Math.ceil(total / PAGE_SIZE));
   const page = Math.min(requestedPage, totalPages);
 
-  const [rows, statuses, sources, services, qualifications, bdes, campaignGroups, countryGroups, destinationGroups, emailConfigured, emailTemplates] = await Promise.all([
+  const [rows, statuses, sources, services, qualifications, subStatuses, bdes, campaignGroups, countryGroups, destinationGroups, emailConfigured, emailTemplates] = await Promise.all([
     prisma.lead.findMany({
       where,
       orderBy: leadOrderBy(sort),
@@ -85,6 +85,11 @@ export default async function LeadsPage({ searchParams }: { searchParams: SP }) 
       where: { active: true },
       orderBy: [{ displayOrder: "asc" }, { label: "asc" }],
       select: { id: true, label: true },
+    }),
+    prisma.crmLeadSubStatus.findMany({
+      where: { active: true },
+      orderBy: [{ displayOrder: "asc" }, { label: "asc" }],
+      select: { id: true, label: true, group: true, color: true },
     }),
     getAssignableBdes(),
     prisma.lead.groupBy({
@@ -115,6 +120,7 @@ export default async function LeadsPage({ searchParams }: { searchParams: SP }) 
     sources,
     services: services.map((s) => ({ id: s.id, label: s.name })),
     qualifications,
+    subStatuses,
     bdes,
     campaigns: campaignGroups.map((g) => g.campaign).filter((c): c is string => !!c),
     countries: countryGroups.map((g) => g.country).filter((c): c is string => !!c),

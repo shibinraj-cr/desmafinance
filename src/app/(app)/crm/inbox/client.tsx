@@ -6,7 +6,7 @@ import Link from "next/link";
 import { WaComposer, type WaTemplateOpt } from "@/components/crm/WaComposer";
 import { WaAttachment } from "@/components/crm/WaAttachment";
 import { statusTooltip } from "@/lib/wa/status-label";
-import { isOtherQualification, qualificationText, QUALIFICATION_OTHER_MAX } from "@/lib/crm";
+import { isOtherQualification, qualificationText, QUALIFICATION_OTHER_MAX, daysInStatus } from "@/lib/crm";
 
 /**
  * The three-pane inbox: conversation list | thread | lead context.
@@ -67,6 +67,9 @@ type Thread = {
     sourceId: string | null;
     qualificationId: string | null;
     qualificationOther: string | null;
+    subStatusId: string | null;
+    subStatusLabel: string | null;
+    subStatusSince: string | null;
     country: string | null;
     studyDestination: string | null;
     temperature: string | null;
@@ -83,6 +86,31 @@ type Thread = {
   activity: { id: string; type: string; summary: string | null; occurredAt: string; actorName: string | null }[];
 };
 
+
+/** Group statuses by heading, preserving the API's journey order. */
+function groupedByHeading<T extends { group: string }>(rows: T[]): [string, T[]][] {
+  const out: [string, T[]][] = [];
+  for (const r of rows) {
+    const last = out[out.length - 1];
+    if (last && last[0] === (r.group || "")) last[1].push(r);
+    else out.push([r.group || "", [r]]);
+  }
+  return out;
+}
+
+/** "12d" — how long the lead has been in its current status, for the rail. */
+function statusAgeSuffix(since: string | null): string {
+  const days = daysInStatus(since);
+  return days === null ? "" : `${days}d`;
+}
+
+/** The status as one line for the read-only rail. */
+function statusSummary(label: string | null, since: string | null): string {
+  if (!label) return "—";
+  const suffix = statusAgeSuffix(since);
+  return suffix ? `${label} · ${suffix}` : label;
+}
+
 type LeadDuplicate = {
   id: string;
   candidateName: string;
@@ -97,6 +125,7 @@ export type InboxMasters = {
   services: { id: string; label: string }[];
   sources: { id: string; label: string }[];
   qualifications: { id: string; label: string }[];
+  subStatuses: { id: string; label: string; group: string }[];
   countries: string[];
 };
 
@@ -965,6 +994,7 @@ function LeadFields({
         <Row label="Service" value={lead.serviceName} />
         <Row label="Source" value={lead.sourceLabel} />
         <Row label="Qualification" value={qualificationText(lead.qualificationLabel, lead.qualificationOther)} />
+        <Row label="Status" value={statusSummary(lead.subStatusLabel, lead.subStatusSince)} />
         <Row label="Country" value={lead.country} />
         <Row label="Email" value={lead.email} />
       </dl>
@@ -1028,6 +1058,37 @@ function LeadFields({
       </label>
 
       {pick("Stage", lead.statusId, masters.statuses, "statusId")}
+
+      {/* The other axis. Sits next to Stage because this is the screen a
+          consultant is on when the state actually changes — they just got off
+          the call or sent the details. */}
+      <label className="block">
+        <span className="block text-label-sm text-on-surface-variant mb-xs">
+          Status
+          {lead.subStatusSince && (
+            <span className="ml-xs text-on-surface-variant/70">
+              · {statusAgeSuffix(lead.subStatusSince)}
+            </span>
+          )}
+        </span>
+        <select
+          value={lead.subStatusId ?? ""}
+          disabled={busy}
+          onChange={(e) => void save({ subStatusId: e.target.value || null }, "Status")}
+          className={railInput}
+        >
+          <option value="">—</option>
+          {groupedByHeading(masters.subStatuses).map(([group, rows]) => (
+            <optgroup key={group} label={group || "Other"}>
+              {rows.map((o) => (
+                <option key={o.id} value={o.id}>
+                  {o.label}
+                </option>
+              ))}
+            </optgroup>
+          ))}
+        </select>
+      </label>
       {pick("Service", lead.serviceId, masters.services, "serviceId")}
       {pick("Source", lead.sourceId, masters.sources, "sourceId")}
       {pick("Qualification", lead.qualificationId, masters.qualifications, "qualificationId")}

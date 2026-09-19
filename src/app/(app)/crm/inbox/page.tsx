@@ -55,7 +55,7 @@ export default async function CrmInboxPage({
     );
   }
 
-  const [config, provider, bdes, statuses, services, sources, qualifications] = await Promise.all([
+  const [config, provider, bdes, statuses, services, sources, subStatuses, qualifications] = await Promise.all([
     getWaMirrorConfig(),
     getWaProvider(),
     prisma.leadPulseRole.findMany({
@@ -76,6 +76,11 @@ export default async function CrmInboxPage({
       where: { active: true },
       orderBy: { displayOrder: "asc" },
       select: { id: true, label: true },
+    }),
+    prisma.crmLeadSubStatus.findMany({
+      where: { active: true },
+      orderBy: [{ displayOrder: "asc" }, { label: "asc" }],
+      select: { id: true, label: true, group: true },
     }),
     prisma.crmQualification.findMany({
       where: { active: true },
@@ -139,6 +144,7 @@ export default async function CrmInboxPage({
             services: services.map((s) => ({ id: s.id, label: s.name })),
             sources,
             qualifications,
+            subStatuses,
             countries: [...COUNTRIES],
           }}
         />
