@@ -5,7 +5,8 @@ import { withApiHandler } from "@/lib/api";
 import { unauthorized, forbidden, badRequest } from "@/lib/http-error";
 import { getCurrentUserAndPermissions } from "@/lib/permissions";
 import { getCrmAccess, canEditLead } from "@/lib/crm-rbac";
-import { isActionOnlyStatus, bulkStageSkipReason } from "@/lib/crm-leads";
+import { isActionOnlyStatus, bulkStageSkipReason, isCentralisedStatus } from "@/lib/crm-leads";
+import { releaseLeads } from "@/lib/crm-assign";
 import { openRemarketingCampaign, stopRemarketingCampaigns } from "@/lib/crm-remarketing";
 import { isLostStatusCode, REMARKETING_STATUS_CODE } from "@/lib/crm-reinquiry";
 import { todayIst, toPrismaDate } from "@/lib/lead-pulse-dates";
@@ -36,6 +37,8 @@ const BodySchema = z.object({
 //     because a bulk selection legitimately sweeps some enrolled leads up;
 //   - a lead already in the target stage is a no-op (no activity, no churn);
 //   - entering Re-marketing opens a nurturing campaign, leaving it closes one;
+//   - entering Centralised (Re-)marketing releases the lead's consultant — the
+//     central pool is nurtured by marketing, not owned by a BDE;
 //   - the Marketing forecast mirror follows a lost/revived lead.
 //
 // Restricted to users who may edit ANY lead (system admins + Lead Pulse
@@ -180,6 +183,15 @@ export const POST = withApiHandler(async (req: Request) => {
     }
   }
 
+  // Into the central pool → release every consultant in the sweep. Set-based
+  // (see releaseLeads) so a 200-lead move stays within this route's budget, and
+  // reported back so the toast can say how many owners were let go rather than
+  // leaving the BDEs to notice their queues shrank.
+  let unassigned = 0;
+  if (isCentralisedStatus(target)) {
+    unassigned = await releaseLeads(moving, userId);
+  }
+
   return NextResponse.json({
     requested: leadIds.length,
     moved: moving.length,
@@ -189,6 +201,7 @@ export const POST = withApiHandler(async (req: Request) => {
     skippedMissing,
     remarketingEntered,
     remarketingLeft,
+    unassigned,
     statusLabel: target.label,
   });
 });

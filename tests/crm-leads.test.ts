@@ -15,7 +15,9 @@ import {
   crmTaskFollowAssignmentWhere,
   bulkStageSkipReason,
   isActionOnlyStatus,
+  isCentralisedStatus,
   leadFilterParamsFromQuery,
+  LEAD_IDLE_BUCKETS,
 } from "@/lib/crm-leads";
 
 describe("requiresNextStepOnComplete — mandatory next step on an active lead", () => {
@@ -527,5 +529,158 @@ describe("leadFilterParamsFromQuery — status params", () => {
     const p = leadFilterParamsFromQuery(new URLSearchParams("status=follow_up&substatus=x"), opts);
     expect(p.status).toEqual(["follow_up"]);
     expect(p.substatus).toEqual(["x"]);
+  });
+});
+
+describe("buildLeadWhere — open-task filter (the chase list)", () => {
+  it("finds leads with nothing scheduled to move them forward", () => {
+    const w = buildLeadWhere({ task: "none" });
+    expect(w.AND).toEqual([{ tasks: { none: { status: "open" } } }]);
+  });
+
+  it("finds leads that do have an open task", () => {
+    const w = buildLeadWhere({ task: "open" });
+    expect(w.AND).toEqual([{ tasks: { some: { status: "open" } } }]);
+  });
+
+  it("applies no task filter when neither option is picked", () => {
+    expect(buildLeadWhere({}).AND).toBeUndefined();
+  });
+
+  it("treats picking both options as picking neither", () => {
+    // "No open task OR has an open task" is every lead — a filter that narrows
+    // nothing should cost nothing, not emit a contradictory clause.
+    expect(buildLeadWhere({ task: ["none", "open"] }).AND).toBeUndefined();
+  });
+
+  it("ignores a stray value rather than matching everything", () => {
+    expect(buildLeadWhere({ task: "overdue" }).AND).toBeUndefined();
+  });
+
+  it("intersects with the consultant filter rather than widening it", () => {
+    // The whole point of the pairing: "Priya's leads with no open task".
+    const w = buildLeadWhere({ assignee: "u1", task: "none" });
+    expect(w.assignedToId).toBe("u1");
+    expect(w.AND).toEqual([{ tasks: { none: { status: "open" } } }]);
+  });
+
+  it("keeps the free-text search in OR and the task clause in AND", () => {
+    // `q` owns where.OR; a task clause landing there would union the two and
+    // return every lead with no open task regardless of the search.
+    const w = buildLeadWhere({ q: "priya", task: "none" });
+    expect(Array.isArray(w.OR)).toBe(true);
+    expect(w.AND).toEqual([{ tasks: { none: { status: "open" } } }]);
+  });
+});
+
+describe("buildLeadWhere — idle buckets (no updates for N days)", () => {
+  const now = new Date("2026-09-23T10:00:00.000Z");
+  const daysBefore = (n: number) => new Date(now.getTime() - n * 86_400_000);
+
+  it("bounds a closed bucket on both sides", () => {
+    // 1–10 days idle: last touched at least 1 day ago, less than 11 days ago.
+    const w = buildLeadWhere({ idle: "1_10", now });
+    expect(w.AND).toEqual([
+      { OR: [{ lastActivityAt: { lte: daysBefore(1), gt: daysBefore(11) } }] },
+    ]);
+  });
+
+  it("leaves the top bucket open-ended", () => {
+    const w = buildLeadWhere({ idle: "40_plus", now });
+    expect(w.AND).toEqual([{ OR: [{ lastActivityAt: { lte: daysBefore(41) } }] }]);
+  });
+
+  it("unions several buckets as an OR", () => {
+    const w = buildLeadWhere({ idle: ["21_30", "40_plus"], now });
+    expect(w.AND).toEqual([
+      {
+        OR: [
+          { lastActivityAt: { lte: daysBefore(21), gt: daysBefore(31) } },
+          { lastActivityAt: { lte: daysBefore(41) } },
+        ],
+      },
+    ]);
+  });
+
+  it("partitions the timeline — the buckets are contiguous and never overlap", () => {
+    // Each bucket starts exactly where the one below it ends, so a lead of any
+    // age falls in exactly one. Guards a future edit that renumbers a band.
+    const closed = LEAD_IDLE_BUCKETS.filter((b) => b.maxDays !== null);
+    for (const b of closed) expect(b.maxDays!).toBeGreaterThanOrEqual(b.minDays);
+    for (let i = 1; i < LEAD_IDLE_BUCKETS.length; i++) {
+      expect(LEAD_IDLE_BUCKETS[i].minDays).toBe(LEAD_IDLE_BUCKETS[i - 1].maxDays! + 1);
+    }
+  });
+
+  it("does not reach a lead touched today", () => {
+    // The lowest bucket starts at 1 day, so a freshly-worked lead matches none
+    // of them — "idle" has to mean idle.
+    expect(LEAD_IDLE_BUCKETS[0].minDays).toBe(1);
+  });
+
+  it("ignores an unknown bucket rather than matching every lead", () => {
+    expect(buildLeadWhere({ idle: "99_plus", now }).AND).toBeUndefined();
+  });
+
+  it("intersects with the consultant and task filters", () => {
+    const w = buildLeadWhere({ assignee: "u1", task: "none", idle: "11_20", now });
+    expect(w.assignedToId).toBe("u1");
+    expect(w.AND).toEqual([
+      { tasks: { none: { status: "open" } } },
+      { OR: [{ lastActivityAt: { lte: daysBefore(11), gt: daysBefore(21) } }] },
+    ]);
+  });
+});
+
+describe("leadFilterParamsFromQuery — task and idle params", () => {
+  const opts = { isBde: false, userId: "u1" };
+
+  it("reads the task filter", () => {
+    expect(leadFilterParamsFromQuery(new URLSearchParams("task=none"), opts).task).toEqual(["none"]);
+  });
+
+  it("reads repeated idle buckets", () => {
+    const p = leadFilterParamsFromQuery(new URLSearchParams("idle=1_10&idle=40_plus"), opts);
+    expect(p.idle).toEqual(["1_10", "40_plus"]);
+  });
+
+  it("leaves both absent when the query carries neither", () => {
+    const p = leadFilterParamsFromQuery(new URLSearchParams("status=follow_up"), opts);
+    expect(p.task).toEqual([]);
+    expect(p.idle).toEqual([]);
+  });
+});
+
+describe("isCentralisedStatus — the stage that releases the lead's consultant", () => {
+  it("matches the seeded code", () => {
+    expect(isCentralisedStatus({ code: "centralised_marketing", label: "Centralised Marketing" })).toBe(true);
+  });
+
+  it("matches the American and short spellings the migration also looked for", () => {
+    expect(isCentralisedStatus({ code: "centralized_marketing" })).toBe(true);
+    expect(isCentralisedStatus({ code: "central_marketing" })).toBe(true);
+  });
+
+  it("matches a hand-made stage by label, whatever code the admin gave it", () => {
+    // The same `lower(label) LIKE '%central%market%'` test the parked migration
+    // used to find (or avoid duplicating) the stage.
+    expect(isCentralisedStatus({ code: "cm2", label: "Centralised Re-marketing" })).toBe(true);
+    expect(isCentralisedStatus({ code: "pool", label: "central marketing pool" })).toBe(true);
+  });
+
+  it("does not match Re-marketing — a re-marketing lead keeps its consultant", () => {
+    // Both stages are parked, but only the central pool is ownerless. The drip
+    // still belongs to the BDE who put the lead there.
+    expect(isCentralisedStatus({ code: "re_marketing", label: "Re-marketing" })).toBe(false);
+  });
+
+  it("does not match the ordinary working stages", () => {
+    expect(isCentralisedStatus({ code: "follow_up", label: "Follow-Up" })).toBe(false);
+    expect(isCentralisedStatus({ code: "not_yet_started", label: "Not Yet Started" })).toBe(false);
+    expect(isCentralisedStatus({ code: "enrolled", label: "Enrolled" })).toBe(false);
+  });
+
+  it("tolerates a missing label", () => {
+    expect(isCentralisedStatus({ code: "follow_up" })).toBe(false);
   });
 });

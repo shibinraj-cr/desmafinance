@@ -20,6 +20,7 @@ import {
   leadOrderBy,
   isActiveBde,
   isActionOnlyStatus,
+  isCentralisedStatus,
   resolveQualificationOther,
 } from "@/lib/crm-leads";
 import { recordReInquiry, resolveReInquiryContext, notifySupervisorOfReInquiries } from "@/lib/crm-reinquiry";
@@ -108,9 +109,13 @@ export const POST = withApiHandler(async (req: Request) => {
 
   // Resolve the starting status (explicit valid status, else the default).
   let statusId = data.statusId;
+  // Kept for the assignment rule below: a lead born in the central pool has no
+  // consultant, the same as one moved there (see PATCH /api/crm/leads/[id]).
+  let startingStatus: { code: string; label: string };
   if (statusId) {
     const exists = await prisma.crmLeadStatus.findFirst({ where: { id: statusId, active: true } });
     if (!exists) throw badRequest("Unknown or inactive status", "invalid_status");
+    startingStatus = exists;
     // Action-only statuses (Pipeline / Enrolled / Duplicate) are set by an action
     // (Set deal / Enroll / import dedup), never by direct create. Mirrors the
     // PATCH guard so a lead can't be born in an action-only stage.
@@ -124,6 +129,7 @@ export const POST = withApiHandler(async (req: Request) => {
     const def = await resolveDefaultStatus();
     if (!def) throw badRequest("No lead statuses configured — run db:seed-crm", "no_status_configured");
     statusId = def.id;
+    startingStatus = def;
   }
 
   // Re-inquiry: if this candidate already exists (email OR any phone), DON'T
@@ -166,6 +172,12 @@ export const POST = withApiHandler(async (req: Request) => {
   } else if (access.isBde) {
     assignedToId = userId;
   }
+  // The central pool is ownerless: a lead created straight into Centralised
+  // (Re-)marketing gets no consultant, whoever was picked and whoever is
+  // creating it. Without this a lead could be born in the state the stage
+  // change exists to prevent — and the assignment would fire the candidate's
+  // WhatsApp introduction from a consultant who is not going to work them.
+  if (isCentralisedStatus(startingStatus)) assignedToId = null;
 
   const qualificationOther = await resolveQualificationOther(
     data.qualificationId || null,

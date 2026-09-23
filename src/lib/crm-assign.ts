@@ -136,3 +136,94 @@ export async function assignLeadTo(
 
   return updated;
 }
+
+/**
+ * Release a batch of leads to the central pool — the set-based sibling of
+ * `assignLeadTo(id, null, actor)`.
+ *
+ * The single-lead call stays the one to use wherever a person unassigns one
+ * lead; this exists for the bulk stage sweep, which moves up to 200 leads per
+ * request and keeps its writes set-based on purpose (see MAX_PER_REQUEST in
+ * src/app/api/crm/leads/bulk-status/route.ts). Doing it per lead would add ~5
+ * round trips each to a path built to cost two.
+ *
+ * It mirrors `assignLeadTo`'s contract exactly, minus the parts that only apply
+ * when there IS a new owner (no notification, no WhatsApp intro, no assignee
+ * validation):
+ *   - `assignedAt` is cleared alongside `assignedToId`, so the "Assigned" column
+ *     and the assigned-on filter don't keep pointing at a consultant who no
+ *     longer owns the lead;
+ *   - OPEN tasks follow the lead — a task the outgoing consultant owned is
+ *     released with it, one owned by anyone else (a supervisor's oversight copy)
+ *     is left alone. Grouped by outgoing owner so a task is only ever matched
+ *     against the lead it actually hangs off;
+ *   - one UNASSIGNED timeline entry per lead, carrying the same `fromUserId` /
+ *     `toUserId` metadata the single-lead path writes plus a `bulk` marker;
+ *   - the candidate's WhatsApp thread(s) follow the lead owner.
+ *
+ * Leads that are already unassigned are skipped, so the count returned is the
+ * number of consultants actually released, not the size of the sweep.
+ */
+export async function releaseLeads(
+  leads: { id: string; assignedToId: string | null }[],
+  actorUserId: string,
+): Promise<number> {
+  const owned = leads.filter(
+    (l): l is { id: string; assignedToId: string } => !!l.assignedToId,
+  );
+  if (owned.length === 0) return 0;
+  const ids = owned.map((l) => l.id);
+
+  const byOwner = new Map<string, string[]>();
+  for (const l of owned) {
+    const list = byOwner.get(l.assignedToId);
+    if (list) list.push(l.id);
+    else byOwner.set(l.assignedToId, [l.id]);
+  }
+
+  await prisma.$transaction([
+    prisma.lead.updateMany({
+      where: { id: { in: ids } },
+      data: { assignedToId: null, assignedAt: null },
+    }),
+    ...Array.from(byOwner, ([ownerId, leadIds]) =>
+      prisma.crmTask.updateMany({
+        where: { leadId: { in: leadIds }, status: "open", assignedToId: ownerId },
+        data: { assignedToId: null },
+      }),
+    ),
+    prisma.leadActivity.createMany({
+      data: owned.map((l) => ({
+        leadId: l.id,
+        actorId: actorUserId,
+        type: "UNASSIGNED",
+        summary: "Unassigned — moved to the central pool",
+        metadata: { fromUserId: l.assignedToId, toUserId: null, bulk: true },
+      })),
+    }),
+  ]);
+
+  // The WhatsApp mirror, set-based: the same rows syncConversationAssignee would
+  // touch one lead at a time — threads linked to these leads, plus threads still
+  // matched only by number. Best-effort like the mirror itself; the release has
+  // already committed and must not be undone by a mirror hiccup.
+  try {
+    const phones = await prisma.lead.findMany({
+      where: { id: { in: ids } },
+      select: { phoneE164: true, altPhoneE164: true },
+    });
+    const numbers = phones
+      .flatMap((l) => [l.phoneE164, l.altPhoneE164])
+      .filter((n): n is string => !!n);
+    await prisma.waConversation.updateMany({
+      where: {
+        OR: [{ leadId: { in: ids } }, ...(numbers.length ? [{ phoneE164: { in: numbers } }] : [])],
+      },
+      data: { assignedToId: null },
+    });
+  } catch {
+    // Swallowed deliberately — see above.
+  }
+
+  return owned.length;
+}

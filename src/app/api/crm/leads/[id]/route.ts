@@ -10,10 +10,17 @@ import { recordLeadActivity } from "@/lib/crm-activity";
 import { recordAudit } from "@/lib/audit";
 import { normalizePhone, computeDedupeKey, emailKeyOf, LEAD_TEMPERATURE_VALUES, QUALIFICATION_OTHER_MAX } from "@/lib/crm";
 import { parseDobInput } from "@/lib/age";
-import { leadRowInclude, serializeLead, isActionOnlyStatus, resolveQualificationOther } from "@/lib/crm-leads";
+import {
+  leadRowInclude,
+  serializeLead,
+  isActionOnlyStatus,
+  isCentralisedStatus,
+  resolveQualificationOther,
+} from "@/lib/crm-leads";
 import { openRemarketingCampaign, stopRemarketingCampaigns } from "@/lib/crm-remarketing";
 import { syncPipelineToLeadStatus } from "@/lib/crm-enroll";
 import { REMARKETING_STATUS_CODE } from "@/lib/crm-reinquiry";
+import { assignLeadTo } from "@/lib/crm-assign";
 
 export const dynamic = "force-dynamic";
 
@@ -329,7 +336,22 @@ export const PATCH = withApiHandler(async (req: Request, { params }: Ctx) => {
     await syncPipelineToLeadStatus({ leadId: updated.id, toCode: statusCodeChange.toCode });
   }
 
-  return NextResponse.json({ lead: serializeLead(updated) });
+  // Centralised (Re-)marketing is the central pool: a lead resting there is
+  // nurtured by marketing on its own cadence, not worked by a consultant. So
+  // entering the stage releases the owner — otherwise a BDE keeps a lead they
+  // are no longer expected to touch, and it keeps counting toward their queue.
+  // Routed through assignLeadTo so the release is logged, sweeps the lead's open
+  // tasks and moves its WhatsApp thread exactly like any other unassignment.
+  let lead = updated;
+  if (
+    statusCodeChange &&
+    updated.assignedToId &&
+    isCentralisedStatus({ code: statusCodeChange.toCode, label: statusChange?.to })
+  ) {
+    lead = await assignLeadTo(updated.id, null, userId);
+  }
+
+  return NextResponse.json({ lead: serializeLead(lead) });
 });
 
 // ── DELETE /api/crm/leads/[id] — admin only ─────────────────────────────────

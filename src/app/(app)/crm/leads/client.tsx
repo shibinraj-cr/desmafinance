@@ -4,7 +4,13 @@ import { useEffect, useMemo, useRef, useState, useTransition } from "react";
 import { createPortal } from "react-dom";
 import Link from "next/link";
 import { useRouter, usePathname, useSearchParams } from "next/navigation";
-import { type LeadRow, isActionOnlyStatus } from "@/lib/crm-leads";
+import {
+  type LeadRow,
+  isActionOnlyStatus,
+  isCentralisedStatus,
+  LEAD_TASK_FILTERS,
+  LEAD_IDLE_BUCKETS,
+} from "@/lib/crm-leads";
 import { DEFAULT_STATUS_COLOR, BULK_EMAIL_MERGE_FIELDS, fillTemplate, LEAD_TEMPERATURES, leadTemperatureMeta, isOtherQualification, qualificationText, QUALIFICATION_OTHER_MAX, daysInStatus, type MessageTemplateDTO } from "@/lib/crm";
 import { ageFromDob } from "@/lib/age";
 import { COUNTRIES, countryCodeFor } from "@/lib/countries";
@@ -845,6 +851,8 @@ export function LeadsTable({
     picked("substatus").length > 0 ||
     picked("country").length > 0 ||
     picked("studyDestination").length > 0 ||
+    picked("task").length > 0 ||
+    picked("idle").length > 0 ||
     !!search.get("ageMin") ||
     !!search.get("ageMax") ||
     !!search.get("assignedOn") ||
@@ -1094,6 +1102,28 @@ export function LeadsTable({
           onChange={(next) => update({ assignee: next.length ? next : "all" })}
         />
 
+        {/* Sits next to the consultant picker on purpose: the two together are
+            the chase list — "Priya's leads with no open task". */}
+        <MultiSelect
+          placeholder="Any task"
+          icon="task_alt"
+          title="Whether the lead has an open (not yet completed) task"
+          options={LEAD_TASK_FILTERS.map((t) => ({ value: t.value, label: t.label }))}
+          selected={picked("task")}
+          onChange={(next) => update({ task: next })}
+        />
+
+        {/* Days since the lead was last worked (lastActivityAt) — the same
+            clock the Team Activity page ages leads by. */}
+        <MultiSelect
+          placeholder="Any last update"
+          icon="hourglass_empty"
+          title="How long the lead has gone without an update"
+          options={LEAD_IDLE_BUCKETS.map((b) => ({ value: b.value, label: b.label }))}
+          selected={picked("idle")}
+          onChange={(next) => update({ idle: next })}
+        />
+
         <label
           className={selectClass + " inline-flex items-center gap-xs text-on-surface-variant"}
           title="Show only leads assigned (to a consultant) on this date"
@@ -1221,7 +1251,7 @@ export function LeadsTable({
         {anyFilter && (
           <button
             type="button"
-            onClick={() => update({ status: null, substatus: null, source: null, service: null, assignee: null, campaign: null, country: null, studyDestination: null, ageMin: null, ageMax: null, assignedOn: null, from: null, to: null, period: null, q: null })}
+            onClick={() => update({ status: null, substatus: null, source: null, service: null, assignee: null, campaign: null, country: null, studyDestination: null, task: null, idle: null, ageMin: null, ageMax: null, assignedOn: null, from: null, to: null, period: null, q: null })}
             className="h-9 px-md rounded-lg border border-outline-variant text-label-sm text-on-surface-variant hover:text-on-surface hover:bg-surface-container-low transition"
           >
             Clear all
@@ -1918,9 +1948,11 @@ type StageProgress = {
   skippedEnrolled: number;
   skippedUnchanged: number;
   skippedMissing: number;
+  /** Leads whose consultant was released by the move (Centralised pool only). */
+  unassigned: number;
 };
 
-const ZERO_STAGE: StageProgress = { done: 0, moved: 0, skippedEnrolled: 0, skippedUnchanged: 0, skippedMissing: 0 };
+const ZERO_STAGE: StageProgress = { done: 0, moved: 0, skippedEnrolled: 0, skippedUnchanged: 0, skippedMissing: 0, unassigned: 0 };
 
 function BulkStatusModal({
   leadIds,
@@ -1994,12 +2026,14 @@ function BulkStatusModal({
         skippedEnrolled: number;
         skippedUnchanged: number;
         skippedMissing: number;
+        unassigned?: number;
       };
       agg.done += chunk.length;
       agg.moved += d.moved;
       agg.skippedEnrolled += d.skippedEnrolled;
       agg.skippedUnchanged += d.skippedUnchanged;
       agg.skippedMissing += d.skippedMissing;
+      agg.unassigned += d.unassigned ?? 0;
       setProgress({ ...agg });
     }
     setCursor(leadIds.length);
@@ -2074,6 +2108,14 @@ function BulkStatusModal({
               </div>
             )}
 
+            {target && isCentralisedStatus(target) && (
+              <div className="rounded-lg bg-amber-50 text-amber-800 border border-amber-200 px-md py-sm text-label-sm">
+                {target.label} is the central pool, so every lead moved here is <span className="font-semibold">released
+                from its consultant</span> — their open tasks and WhatsApp threads come off them too. Re-assign a lead to
+                bring it back out.
+              </div>
+            )}
+
             {error && <div className="rounded-lg bg-error-container text-on-error-container px-md py-sm text-label-sm">{error}</div>}
 
             <div className="flex justify-end gap-base pt-xs">
@@ -2113,6 +2155,7 @@ function BulkStatusModal({
                   {progress.skippedUnchanged > 0 && `${progress.skippedUnchanged.toLocaleString()} already there · `}
                   {progress.skippedEnrolled > 0 && `${progress.skippedEnrolled.toLocaleString()} Enrolled (not moved) · `}
                   {progress.skippedMissing > 0 && `${progress.skippedMissing.toLocaleString()} no longer exist · `}
+                  {progress.unassigned > 0 && `${progress.unassigned.toLocaleString()} released from their consultant · `}
                   logged on each lead&apos;s timeline.
                 </p>
               </div>
