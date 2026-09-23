@@ -184,6 +184,18 @@ export type LeadFilterParams = {
   substatus?: MultiFilterValue;
   country?: MultiFilterValue;
   studyDestination?: MultiFilterValue;
+  /**
+   * Open-task presence — see {@link LEAD_TASK_FILTERS}. `"none"` is the chase
+   * list ("nothing scheduled to move this lead forward"), `"open"` its
+   * complement. Picking both is the same as picking neither.
+   */
+  task?: MultiFilterValue;
+  /**
+   * How long the lead has gone without an update — one or more of the
+   * {@link LEAD_IDLE_BUCKETS} codes. Several picks union as an OR, so
+   * "21–30" + "over 40" is one list of both piles.
+   */
+  idle?: MultiFilterValue;
   /** Inclusive minimum age in years (translated to a `dob` upper bound). */
   ageMin?: number;
   /** Inclusive maximum age in years (translated to a `dob` lower bound). */
@@ -247,6 +259,70 @@ export function dueDateRange(
 }
 
 /**
+ * The two ways to cut the leads list by what is scheduled on a lead.
+ *
+ * `"none"` is the one that earns the filter: paired with the consultant
+ * multi-select it answers "which of Priya's leads have nothing planned to move
+ * them forward" — the same question the Team Activity page's no-next-step
+ * bucket asks per BDE, asked here as a working list instead of a count. An
+ * "active" task is an OPEN one (`CrmTask.status = 'open'`); a completed task is
+ * history, not a next step, and a task's due date is deliberately not part of
+ * this — an overdue task is still a plan, just a late one.
+ */
+export const LEAD_TASK_FILTERS = [
+  { value: "none", label: "No open task" },
+  { value: "open", label: "Has an open task" },
+] as const;
+
+/**
+ * "No updates for N days" buckets, measured against `lastActivityAt` — the same
+ * clock the Team Activity page ages a lead by, bumped by every meaningful
+ * activity and deliberately NOT by passive ones (see crm-activity.ts), so an
+ * idle lead is one nobody has actually worked.
+ *
+ * Contiguous and non-overlapping, so every lead falls in exactly one and the
+ * five together partition the list: a lead touched today sits below the first
+ * bucket and matches none of them. `maxDays: null` is the open-ended top.
+ *
+ * Ages are rolling elapsed time, not calendar days — 10 days means 240 hours,
+ * matching `ageInDays` in crm-team rather than the local-midnight boundaries
+ * the created/assigned date filters use (those bound a *date*; this bounds an
+ * *age*).
+ */
+export const LEAD_IDLE_BUCKETS = [
+  { value: "1_10", label: "No update 1–10 days", minDays: 1, maxDays: 10 },
+  { value: "11_20", label: "No update 11–20 days", minDays: 11, maxDays: 20 },
+  { value: "21_30", label: "No update 21–30 days", minDays: 21, maxDays: 30 },
+  { value: "31_40", label: "No update 31–40 days", minDays: 31, maxDays: 40 },
+  { value: "40_plus", label: "No update over 40 days", minDays: 41, maxDays: null },
+] as const satisfies ReadonlyArray<{ value: string; label: string; minDays: number; maxDays: number | null }>;
+
+const DAY_MS = 86_400_000;
+
+/**
+ * Codes the Centralised (Re-)marketing stage may carry, plus the label shape
+ * that identifies one an admin created by hand — the *same* test the
+ * `crm_status_parked` migration used to find (or create) the stage, so code and
+ * migration can never disagree about which stage this is. Renaming a stage in
+ * /crm/settings is allowed, so the label test is a fallback, never the primary.
+ */
+const CENTRALISED_STATUS_CODES: ReadonlySet<string> = new Set([
+  "centralised_marketing",
+  "centralized_marketing",
+  "central_marketing",
+]);
+
+/**
+ * Is this stage the central pool? A lead that lands there is nurtured centrally
+ * by marketing rather than worked by a consultant, which is why entering it
+ * releases the lead's owner (see `releaseLeads` and the two stage-change paths).
+ */
+export function isCentralisedStatus(status: { code: string; label?: string | null }): boolean {
+  if (CENTRALISED_STATUS_CODES.has(status.code)) return true;
+  return /central.*market/.test((status.label ?? "").toLowerCase());
+}
+
+/**
  * Apply the consultant filter. Unlike the other multi-selects this one mixes
  * real userIds with two sentinels, so it can't collapse to a plain `IN`:
  *
@@ -255,25 +331,67 @@ export function dueDateRange(
  *  - `"unassigned"` matches `assignedToId IS NULL`, which combines with picked
  *    userIds as an OR ("Unassigned + Priya" = both piles).
  *
- * The OR goes into `where.AND` rather than `where.OR`, which the free-text `q`
- * search already owns — the two must intersect, not union.
+ * The OR joins the shared `and` list rather than `where.OR`, which the
+ * free-text `q` search already owns — the two must intersect, not union.
  */
-function assignedToFilter(where: Prisma.LeadWhereInput, raw: MultiFilterValue): void {
+function assignedToFilter(
+  where: Prisma.LeadWhereInput,
+  and: Prisma.LeadWhereInput[],
+  raw: MultiFilterValue,
+): void {
   const values = listParam(raw);
   if (values.length === 0 || values.includes("all")) return;
   const unassigned = values.includes("unassigned");
   const userIds = values.filter((v) => v !== "unassigned");
   if (unassigned && userIds.length > 0) {
-    const or: Prisma.LeadWhereInput[] = [{ assignedToId: null }, { assignedToId: oneOf(userIds) }];
-    where.AND = [...(Array.isArray(where.AND) ? where.AND : where.AND ? [where.AND] : []), { OR: or }];
+    and.push({ OR: [{ assignedToId: null }, { assignedToId: oneOf(userIds) }] });
     return;
   }
   where.assignedToId = unassigned ? null : oneOf(userIds);
 }
 
+/**
+ * Open-task predicate for the `task` filter, or null when nothing (or both
+ * options, which is the same thing) is picked.
+ */
+function openTaskFilter(raw: MultiFilterValue): Prisma.LeadWhereInput | null {
+  const values = listParam(raw).filter((v) => v === "none" || v === "open");
+  if (values.length !== 1) return null;
+  return values[0] === "none"
+    ? { tasks: { none: { status: "open" } } }
+    : { tasks: { some: { status: "open" } } };
+}
+
+/**
+ * Turn the picked {@link LEAD_IDLE_BUCKETS} into one `lastActivityAt` clause per
+ * bucket, to be OR-ed together. A bucket of [min, max] days of age is the
+ * half-open window `(now - (max+1)d, now - min d]` — upper bound inclusive so a
+ * lead exactly `min` days idle counts as `min`, lower bound exclusive so it
+ * belongs to the next bucket up and to no other.
+ */
+function idleClauses(raw: MultiFilterValue, now: Date): Prisma.LeadWhereInput[] {
+  const out: Prisma.LeadWhereInput[] = [];
+  for (const value of listParam(raw)) {
+    const bucket = LEAD_IDLE_BUCKETS.find((b) => b.value === value);
+    if (!bucket) continue; // stray/legacy query value — ignored, never matches everything
+    const lastActivityAt: Prisma.DateTimeFilter = {
+      lte: new Date(now.getTime() - bucket.minDays * DAY_MS),
+    };
+    if (bucket.maxDays !== null) {
+      lastActivityAt.gt = new Date(now.getTime() - (bucket.maxDays + 1) * DAY_MS);
+    }
+    out.push({ lastActivityAt });
+  }
+  return out;
+}
+
 /** Build the Prisma `where` for the leads list. Shared by the list page and the GET API so they never drift. */
 export function buildLeadWhere(p: LeadFilterParams): Prisma.LeadWhereInput {
   const where: Prisma.LeadWhereInput = {};
+  // Predicates that can't collapse to a column `=`/`IN` land here so they
+  // intersect with the free-text search rather than joining its OR.
+  const and: Prisma.LeadWhereInput[] = [];
+  const now = p.now ?? new Date();
   // Each of these is `=` for one pick, `IN (...)` for several, absent for none.
   const statusId = oneOf(listParam(p.status));
   if (statusId !== undefined) where.statusId = statusId;
@@ -281,7 +399,7 @@ export function buildLeadWhere(p: LeadFilterParams): Prisma.LeadWhereInput {
   if (sourceId !== undefined) where.sourceId = sourceId;
   const serviceId = oneOf(listParam(p.service));
   if (serviceId !== undefined) where.serviceId = serviceId;
-  assignedToFilter(where, p.assignee);
+  assignedToFilter(where, and, p.assignee);
   const campaign = oneOf(listParam(p.campaign));
   if (campaign !== undefined) where.campaign = campaign;
   // Only apply the temperature filter for recognised codes (guards against a
@@ -301,9 +419,16 @@ export function buildLeadWhere(p: LeadFilterParams): Prisma.LeadWhereInput {
   // Age filter → indexed `dob` range. A candidate with no dob never matches an
   // age filter (dob IS NULL is excluded by a gte/lte bound), which is intended.
   if (p.ageMin !== undefined || p.ageMax !== undefined) {
-    const dob = dobRangeForAge(p.ageMin, p.ageMax, p.now ?? new Date());
+    const dob = dobRangeForAge(p.ageMin, p.ageMax, now);
     if (dob) where.dob = dob;
   }
+  // "Which of this consultant's leads have nothing scheduled" — a relation
+  // predicate, so it can't be a column filter.
+  const taskClause = openTaskFilter(p.task);
+  if (taskClause) and.push(taskClause);
+  // Staleness buckets union as an OR: picking two age bands means "either".
+  const idle = idleClauses(p.idle, now);
+  if (idle.length > 0) and.push({ OR: idle });
   const q = p.q?.trim();
   if (q) {
     // An "@" makes this unambiguously an email search — match the email only.
@@ -352,6 +477,7 @@ export function buildLeadWhere(p: LeadFilterParams): Prisma.LeadWhereInput {
     if (p.assignedTo) assignedAt.lt = p.assignedTo;
     where.assignedAt = assignedAt;
   }
+  if (and.length > 0) where.AND = and;
   return where;
 }
 
@@ -402,6 +528,8 @@ export function leadFilterParamsFromQuery(
     substatus: readAll(sp, "substatus"),
     country: readAll(sp, "country"),
     studyDestination: readAll(sp, "studyDestination"),
+    task: readAll(sp, "task"),
+    idle: readAll(sp, "idle"),
     ageMin: parseAgeParam(readOne(sp, "ageMin")),
     ageMax: parseAgeParam(readOne(sp, "ageMax")),
     q: readOne(sp, "q"),
