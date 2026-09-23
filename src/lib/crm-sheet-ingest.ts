@@ -158,6 +158,20 @@ export function mapSheetRow(config: SheetSourceConfig, campaign: string, row: Sh
   return { candidateName, email, phone, phoneE164, emailKey, createdAt, extra, externalKey };
 }
 
+/**
+ * The latest submission we already hold for a lead — its own creation, or the
+ * last re-inquiry folded onto it, whichever is later.
+ *
+ * `createdAt` is the ORIGINAL lead date for a sheet-imported lead (the ingest
+ * preserves it) and the import/keying date for every other route, which is
+ * exactly what makes it the right watermark: a row dated before it describes
+ * something that had already reached us by the time that lead was made.
+ */
+export function knownThrough(lead: { createdAt: Date; lastInquiryAt: Date | null }): Date {
+  const last = lead.lastInquiryAt;
+  return last && last.getTime() > lead.createdAt.getTime() ? last : lead.createdAt;
+}
+
 export type IngestResult = {
   received: number;
   inserted: number;
@@ -166,6 +180,11 @@ export type IngestResult = {
   /** How many of those re-inquiries revived a lost lead to Re-marketing. */
   revived: number;
   skippedAlreadyImported: number;
+  /**
+   * Rows describing a submission we already hold on the matched lead — the same
+   * inquiry reaching us twice by two routes, not a candidate coming back.
+   */
+  skippedAlreadyKnown: number;
   errorRows: number;
 };
 
@@ -191,7 +210,7 @@ export async function ingestSheetLeads(opts: {
     else mapped.push(m);
   }
   if (mapped.length === 0) {
-    return { received, inserted: 0, reInquiries: 0, revived: 0, skippedAlreadyImported: 0, errorRows };
+    return { received, inserted: 0, reInquiries: 0, revived: 0, skippedAlreadyImported: 0, skippedAlreadyKnown: 0, errorRows };
   }
 
   const [defStatus, source] = await Promise.all([
@@ -219,26 +238,39 @@ export async function ingestSheetLeads(opts: {
     dupWhere.length
       ? prisma.lead.findMany({
           where: { OR: dupWhere },
-          select: { id: true, emailKey: true, phoneE164: true, altPhoneE164: true },
+          select: { id: true, emailKey: true, phoneE164: true, altPhoneE164: true, createdAt: true, lastInquiryAt: true },
           orderBy: { createdAt: "asc" },
         })
-      : Promise.resolve([] as { id: string; emailKey: string | null; phoneE164: string | null; altPhoneE164: string | null }[]),
+      : Promise.resolve(
+          [] as {
+            id: string;
+            emailKey: string | null;
+            phoneE164: string | null;
+            altPhoneE164: string | null;
+            createdAt: Date;
+            lastInquiryAt: Date | null;
+          }[],
+        ),
   ]);
   const alreadyImported = new Set(existingExt.map((e) => e.externalKey).filter(Boolean) as string[]);
   // Oldest existing lead per key = the canonical lead a re-inquiry folds onto.
   const existingByEmail = new Map<string, string>();
   const existingByPhone = new Map<string, string>();
+  // Latest submission we already hold for each existing lead. See `knownThrough`.
+  const knownThroughByLead = new Map<string, Date>();
   for (const e of existingDup) {
     if (e.emailKey && !existingByEmail.has(e.emailKey)) existingByEmail.set(e.emailKey, e.id);
     for (const ph of phoneMatchKeys(e.phoneE164, e.altPhoneE164)) {
       if (!existingByPhone.has(ph)) existingByPhone.set(ph, e.id);
     }
+    knownThroughByLead.set(e.id, knownThrough(e));
   }
 
   const seenExternal = new Set<string>();
   const seenEmail = new Set<string>();
   const seenPhone = new Set<string>();
   let skippedAlreadyImported = 0;
+  let skippedAlreadyKnown = 0;
   const toCreate: Prisma.LeadCreateManyInput[] = [];
   const reInquiriesExisting: { leadId: string; occurredAt: Date | null }[] = [];
   const reInquiriesWithinBatch: { emailKey: string | null; phoneE164: string | null; occurredAt: Date | null }[] = [];
@@ -250,10 +282,23 @@ export async function ingestSheetLeads(opts: {
     }
     seenExternal.add(m.externalKey);
 
-    // Existing candidate → re-inquiry on their canonical lead (no new row).
+    // Existing candidate → re-inquiry on their canonical lead (no new row) —
+    // but only when the row is NEWS. A submission dated no later than what we
+    // already hold for that lead is the same inquiry arriving by a second route
+    // (the Meta reconcile tool imported it, someone keyed it in by hand, the
+    // same person sits in two campaign tabs), and folding it would manufacture
+    // a re-inquiry — high-priority task, supervisor oversight task, digest
+    // email, and a revive out of a lost stage — for a candidate who never came
+    // back. Undated rows keep the old behaviour: with nothing to compare, the
+    // fold is still the safer read.
     const existingId =
       (m.emailKey && existingByEmail.get(m.emailKey)) || (m.phoneE164 && existingByPhone.get(m.phoneE164)) || null;
     if (existingId) {
+      const seen = knownThroughByLead.get(existingId);
+      if (m.createdAt && seen && m.createdAt.getTime() <= seen.getTime()) {
+        skippedAlreadyKnown++;
+        continue;
+      }
       reInquiriesExisting.push({ leadId: existingId, occurredAt: m.createdAt });
       continue;
     }
@@ -284,7 +329,7 @@ export async function ingestSheetLeads(opts: {
 
   const reInquiryTotal = reInquiriesExisting.length + reInquiriesWithinBatch.length;
   if (toCreate.length === 0 && reInquiryTotal === 0) {
-    return { received, inserted: 0, reInquiries: 0, revived: 0, skippedAlreadyImported, errorRows };
+    return { received, inserted: 0, reInquiries: 0, revived: 0, skippedAlreadyImported, skippedAlreadyKnown, errorRows };
   }
 
   let inserted = 0;
@@ -295,7 +340,7 @@ export async function ingestSheetLeads(opts: {
       data: {
         fileName: `${config.label}: ${opts.campaign}`,
         totalRows: received,
-        duplicateRows: reInquiryTotal,
+        duplicateRows: reInquiryTotal + skippedAlreadyKnown,
         errorRows,
         status: "completed",
       },
@@ -349,6 +394,7 @@ export async function ingestSheetLeads(opts: {
     reInquiries: reInquiryTotal,
     revived: outcomes.filter((o) => o.revived).length,
     skippedAlreadyImported,
+    skippedAlreadyKnown,
     errorRows,
   };
 }

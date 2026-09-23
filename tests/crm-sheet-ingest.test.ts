@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { mapSheetRow, parseSheetDate, computeExternalKey, SHEET_SOURCES } from "@/lib/crm-sheet-ingest";
+import { mapSheetRow, parseSheetDate, computeExternalKey, knownThrough, SHEET_SOURCES } from "@/lib/crm-sheet-ingest";
 
 const META = SHEET_SOURCES.meta;
 const WEBSITE = SHEET_SOURCES.website;
@@ -80,5 +80,39 @@ describe("parseSheetDate", () => {
   it("returns null for blank / invalid input", () => {
     expect(parseSheetDate("")).toBeNull();
     expect(parseSheetDate("not a date")).toBeNull();
+  });
+});
+
+describe("knownThrough — the watermark that tells a re-submission from a re-import", () => {
+  const d = (s: string) => new Date(s);
+
+  it("is the lead's own creation when it has never re-inquired", () => {
+    expect(knownThrough({ createdAt: d("2026-08-01T00:00:00Z"), lastInquiryAt: null })).toEqual(d("2026-08-01T00:00:00Z"));
+  });
+
+  it("advances to the last re-inquiry once one has been folded", () => {
+    expect(
+      knownThrough({ createdAt: d("2026-08-01T00:00:00Z"), lastInquiryAt: d("2026-09-10T00:00:00Z") }),
+    ).toEqual(d("2026-09-10T00:00:00Z"));
+  });
+
+  it("ignores a lastInquiryAt that predates creation", () => {
+    expect(
+      knownThrough({ createdAt: d("2026-08-01T00:00:00Z"), lastInquiryAt: d("2026-07-01T00:00:00Z") }),
+    ).toEqual(d("2026-08-01T00:00:00Z"));
+  });
+
+  // The case this whole guard exists for: the Meta reconcile tool imported the
+  // row on the 23rd, the sheet catches up and re-sends the same 22nd submission.
+  it("sits after a reconcile-imported lead's source date, so the re-send is not news", () => {
+    const lead = { createdAt: d("2026-09-23T09:48:00Z"), lastInquiryAt: null };
+    const rowDate = d("2026-09-22T05:47:32Z");
+    expect(rowDate.getTime() <= knownThrough(lead).getTime()).toBe(true);
+  });
+
+  it("sits before a genuine later re-submission, so that one still folds", () => {
+    const lead = { createdAt: d("2026-08-01T00:00:00Z"), lastInquiryAt: null };
+    const rowDate = d("2026-09-23T10:00:00Z");
+    expect(rowDate.getTime() <= knownThrough(lead).getTime()).toBe(false);
   });
 });

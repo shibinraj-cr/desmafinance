@@ -10,11 +10,15 @@ import { siteBaseUrl } from "@/lib/site-url";
 import { SHEET_SOURCES } from "@/lib/crm-sheet-ingest";
 import { SHEET_LEADS_APPS_SCRIPT } from "@/lib/sheet-leads-apps-script";
 import { getSetting, setSetting, SHEET_LEADS_SECRET_KEY } from "@/lib/app-settings";
+import { readSheetSyncHealth, verdictFor, explainVerdict, type SheetSyncHealth } from "@/lib/sheet-sync-health";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs"; // node:crypto
 
-async function sourcesSummary() {
+// "Last sync" only ever meant "last time a row became a NEW lead", which is
+// silent both when the sheet stops calling and when every row is already in the
+// CRM. The health heartbeat separates the two — see sheet-sync-health.ts.
+async function sourcesSummary(health: SheetSyncHealth) {
   return Promise.all(
     Object.values(SHEET_SOURCES).map(async (s) => {
       const src = await prisma.leadPulseSource.findUnique({
@@ -31,6 +35,8 @@ async function sourcesSummary() {
           select: { createdAt: true },
         }),
       ]);
+      const contact = health.contacts[s.key] ?? null;
+      const verdict = verdictFor({ contact, rejected: health.rejected });
       return {
         key: s.key,
         label: s.label,
@@ -40,6 +46,10 @@ async function sourcesSummary() {
         phoneColumns: s.phoneKeys.slice(0, 4),
         leadCount,
         lastSyncAt: lastBatch?.createdAt?.toISOString() ?? null,
+        lastContactAt: contact?.at ?? null,
+        lastContact: contact,
+        verdict,
+        verdictNote: explainVerdict(verdict, contact, health.rejected),
       };
     }),
   );
@@ -53,6 +63,7 @@ export const GET = withApiHandler(async (req: Request) => {
   if (!access.canManageSettings) throw forbidden();
 
   const secret = await getSetting(SHEET_LEADS_SECRET_KEY);
+  const health = await readSheetSyncHealth();
   const recent = await prisma.leadImportBatch.findMany({
     orderBy: { createdAt: "desc" },
     take: 10,
@@ -72,7 +83,8 @@ export const GET = withApiHandler(async (req: Request) => {
     secret: secret ?? null,
     secretSet: !!secret,
     envFallback: !secret && !!process.env.SHEET_LEADS_WEBHOOK_SECRET,
-    sources: await sourcesSummary(),
+    sources: await sourcesSummary(health),
+    rejected: health.rejected,
     appsScript: SHEET_LEADS_APPS_SCRIPT,
     recentBatches: recent.map((b) => ({ ...b, createdAt: b.createdAt.toISOString() })),
   });

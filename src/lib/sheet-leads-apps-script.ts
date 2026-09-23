@@ -16,10 +16,15 @@ export const SHEET_LEADS_APPS_SCRIPT = `/**
  *      CRM_WEBHOOK_URL     = (shown on the CRM Integrations page)
  *      CRM_WEBHOOK_SECRET  = (shown on the CRM Integrations page)
  *      CRM_SOURCE          = meta   OR   website
- * 3. Run initBaseline once -> only leads added after now will sync.
+ * 3. Run selfTest once -> confirms the URL and secret are right BEFORE any
+ *    lead depends on them. It sends no rows.
+ * 4. Run initBaseline once -> only leads added after now will sync.
  *    (Run resetForBackfill instead to import the whole sheet.)
- * 4. Triggers (clock) -> Add Trigger -> function syncNewLeads,
+ * 5. Triggers (clock) -> Add Trigger -> function syncNewLeads,
  *    Time-driven -> Minutes timer -> Every minute.
+ *
+ * Every run checks in with the CRM even when there is nothing to send, so the
+ * Integrations page can tell "no new leads" apart from "this script stopped".
  */
 
 var HEADER_ROW = 1;
@@ -60,22 +65,50 @@ function syncNewLeads() {
   if (!lock.tryLock(5000)) return;
   try {
     var cfg = _config();
+    var sent = 0;
     SpreadsheetApp.getActiveSpreadsheet().getSheets().forEach(function (sh) {
-      _syncSheet(sh, cfg);
+      sent += _syncSheet(sh, cfg);
     });
+    // Nothing new this run -> still check in, so that silence on the CRM's
+    // Integrations page means this script stopped rather than "no leads today".
+    if (sent === 0) _post(cfg, null, []);
   } finally {
     lock.releaseLock();
   }
 }
 
+/**
+ * Check the CRM connection without sending a single lead. Run it from the
+ * editor after setup, or whenever leads stop arriving: the log says plainly
+ * whether the URL is reachable and the secret matches.
+ */
+function selfTest() {
+  var cfg = _config();
+  var res = UrlFetchApp.fetch(cfg.url, {
+    method: 'post',
+    contentType: 'application/json',
+    headers: { 'x-webhook-secret': cfg.secret },
+    payload: JSON.stringify({ source: cfg.source, rows: [] }),
+    muteHttpExceptions: true,
+  });
+  var code = res.getResponseCode();
+  if (code === 200) Logger.log('OK - connected to the CRM as source "' + cfg.source + '". Nothing was imported.');
+  else if (code === 401) Logger.log('FAILED (401) - CRM_WEBHOOK_SECRET does not match the secret on the CRM Integrations page. Copy it again.');
+  else if (code === 503) Logger.log('FAILED (503) - no webhook secret is set on the CRM Integrations page yet.');
+  else if (code === 404) Logger.log('FAILED (404) - CRM_WEBHOOK_URL is wrong: ' + cfg.url);
+  else Logger.log('FAILED (' + code + ') - ' + res.getContentText());
+  return code;
+}
+
+/** Returns the number of rows POSTed, so the caller knows to heartbeat instead. */
 function _syncSheet(sh, cfg) {
   var name = sh.getName();
   var lastRow = sh.getLastRow();
-  if (lastRow <= HEADER_ROW) return;
+  if (lastRow <= HEADER_ROW) return 0;
 
   var cursor = parseInt(_docProps().getProperty(_cursorKey(name)) || String(HEADER_ROW), 10);
   if (isNaN(cursor) || cursor < HEADER_ROW) cursor = HEADER_ROW;
-  if (lastRow <= cursor) return;
+  if (lastRow <= cursor) return 0;
 
   var lastCol = sh.getLastColumn();
   var headers = sh.getRange(HEADER_ROW, 1, 1, lastCol).getValues()[0].map(function (h) {
@@ -102,27 +135,35 @@ function _syncSheet(sh, cfg) {
 
   if (dataRows.length === 0) {
     _docProps().setProperty(_cursorKey(name), String(lastRow));
-    return;
+    return 0;
   }
 
   var lastSentRow = cursor;
   var allOk = true;
+  var sent = 0;
   for (var b = 0; b < dataRows.length; b += SERVER_BATCH) {
     var chunk = dataRows.slice(b, b + SERVER_BATCH);
     var ok = _post(cfg, name, chunk.map(function (r) { return r.obj; }));
     if (!ok) { allOk = false; break; }
     lastSentRow = chunk[chunk.length - 1].rowNum;
+    sent += chunk.length;
   }
 
+  // On failure the cursor stays at the last row the CRM actually accepted, so
+  // the next run retries from there rather than skipping past unsent leads.
   _docProps().setProperty(_cursorKey(name), String(allOk ? lastRow : lastSentRow));
+  return sent;
 }
 
+/** POST one batch, or a no-row heartbeat when campaign is null. */
 function _post(cfg, campaign, rows) {
+  var body = { source: cfg.source, rows: rows };
+  if (campaign) body.campaign = campaign;
   var res = UrlFetchApp.fetch(cfg.url, {
     method: 'post',
     contentType: 'application/json',
     headers: { 'x-webhook-secret': cfg.secret },
-    payload: JSON.stringify({ source: cfg.source, campaign: campaign, rows: rows }),
+    payload: JSON.stringify(body),
     muteHttpExceptions: true,
   });
   var code = res.getResponseCode();
