@@ -11,7 +11,13 @@ type Source = {
   phoneColumns: string[];
   leadCount: number;
   lastSyncAt: string | null;
+  /** Last time this sheet reached us AT ALL — including with nothing to send. */
+  lastContactAt: string | null;
+  lastContact: { rows: number; inserted: number; reInquiries: number; skipped: number; errorRows: number; campaign: string | null } | null;
+  verdict: "ok" | "idle" | "stale" | "rejected" | "never";
+  verdictNote: string;
 };
+type Rejection = { at: string; reason: string; count: number };
 type Batch = {
   id: string;
   fileName: string | null;
@@ -29,12 +35,23 @@ type Data = {
   sources: Source[];
   appsScript: string;
   recentBatches: Batch[];
+  rejected: Rejection | null;
 };
 
 const card = "bg-surface-container-lowest border border-outline-variant rounded-xl shadow-sm";
 const btn = "h-9 px-md rounded-lg text-label-sm font-semibold transition disabled:opacity-60";
 const primary = btn + " bg-primary text-on-primary hover:bg-primary-container";
 const ghost = btn + " border border-outline-variant text-on-surface-variant hover:bg-surface-container-low";
+
+// A sheet that is talking to us but being turned away is the loudest state
+// here: it is the one failure an admin can fix from this page in ten seconds.
+const VERDICT: Record<Source["verdict"], { dot: string; text: string; tone: "bad" | "warn" | "good" | "muted" }> = {
+  ok: { dot: "bg-green-500", text: "Importing", tone: "good" },
+  idle: { dot: "bg-green-500", text: "Connected — nothing new", tone: "good" },
+  stale: { dot: "bg-red-500", text: "Not calling in", tone: "bad" },
+  rejected: { dot: "bg-red-500", text: "Rejected — wrong secret", tone: "bad" },
+  never: { dot: "bg-outline", text: "Never connected", tone: "muted" },
+};
 
 function fmt(iso: string) {
   const d = new Date(iso);
@@ -105,6 +122,31 @@ export function IntegrationsCard() {
 
       {loading && <p className="text-body-md text-on-surface-variant">Loading…</p>}
 
+      {data?.rejected && data.rejected.count > 0 && (
+        <div className="rounded-lg border border-error/40 bg-error-container/40 p-md">
+          <div className="flex items-start gap-xs">
+            <span className="material-symbols-outlined text-error" style={{ fontSize: 20 }}>error</span>
+            <div className="text-body-md text-on-surface">
+              <span className="font-semibold">Leads are being turned away.</span>{" "}
+              {data.rejected.reason === "invalid_secret" ? (
+                <>
+                  A spreadsheet has called {data.rejected.count.toLocaleString()} time
+                  {data.rejected.count === 1 ? "" : "s"} with the wrong secret — most recently {rel(data.rejected.at)}. Copy
+                  the secret below into <span className="font-mono">CRM_WEBHOOK_SECRET</span> in each sheet&apos;s Apps Script
+                  (Project Settings → Script properties), then run <span className="font-mono">selfTest</span> there.
+                </>
+              ) : (
+                <>
+                  A spreadsheet is calling but no webhook secret is set here ({data.rejected.count.toLocaleString()} call
+                  {data.rejected.count === 1 ? "" : "s"}, most recently {rel(data.rejected.at)}). Generate one below and paste
+                  it into each sheet.
+                </>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+
       {data && (
         <>
           {/* Webhook URL */}
@@ -173,18 +215,26 @@ export function IntegrationsCard() {
                     <tr key={s.key} className="border-t border-outline-variant/60">
                       <td className="px-md py-xs font-mono">{s.key}</td>
                       <td className="px-md py-xs">{s.label}</td>
-                      <td className="px-md py-xs whitespace-nowrap">
-                        {s.leadCount > 0 || s.lastSyncAt ? (
-                          <span className="inline-flex items-center gap-xs">
-                            <span className="h-2 w-2 rounded-full bg-green-500" />
-                            <span className="text-on-surface font-medium">{s.leadCount.toLocaleString()} leads</span>
-                            {s.lastSyncAt && <span className="text-on-surface-variant">· last sync {rel(s.lastSyncAt)}</span>}
+                      <td className="px-md py-xs align-top">
+                        <span className="inline-flex items-center gap-xs whitespace-nowrap">
+                          <span className={"h-2 w-2 rounded-full " + VERDICT[s.verdict].dot} />
+                          <span
+                            className={
+                              "font-medium " + (VERDICT[s.verdict].tone === "bad" ? "text-error" : "text-on-surface")
+                            }
+                          >
+                            {VERDICT[s.verdict].text}
                           </span>
-                        ) : (
-                          <span className="inline-flex items-center gap-xs text-on-surface-variant">
-                            <span className="h-2 w-2 rounded-full bg-outline" />
-                            No data received yet
-                          </span>
+                          {s.lastContactAt && (
+                            <span className="text-on-surface-variant">· heard from {rel(s.lastContactAt)}</span>
+                          )}
+                        </span>
+                        <div className="text-on-surface-variant mt-[2px] whitespace-nowrap">
+                          {s.leadCount.toLocaleString()} leads
+                          {s.lastSyncAt ? <> · last import {rel(s.lastSyncAt)}</> : <> · never imported</>}
+                        </div>
+                        {s.verdict !== "ok" && s.verdict !== "idle" && (
+                          <div className="mt-xs max-w-[34rem] whitespace-normal text-on-surface-variant">{s.verdictNote}</div>
                         )}
                       </td>
                       <td className="px-md py-xs text-on-surface-variant">
@@ -209,6 +259,7 @@ export function IntegrationsCard() {
             <ol className="text-label-sm text-on-surface-variant list-decimal pl-lg space-y-[2px]">
               <li>In the sheet: Extensions → Apps Script → paste the script → Save.</li>
               <li>Project Settings → Script properties: <span className="font-mono">CRM_WEBHOOK_URL</span>, <span className="font-mono">CRM_WEBHOOK_SECRET</span>, <span className="font-mono">CRM_SOURCE</span> (meta or website).</li>
+              <li>Run <span className="font-mono">selfTest</span> → confirms the URL and secret without importing anything.</li>
               <li>Run <span className="font-mono">initBaseline</span> once → add an every-minute <span className="font-mono">syncNewLeads</span> trigger.</li>
             </ol>
             {showScript && (
