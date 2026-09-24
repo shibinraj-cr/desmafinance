@@ -36,6 +36,7 @@ type Data = {
   appsScript: string;
   recentBatches: Batch[];
   rejected: Rejection | null;
+  dateFloor: string | null;
 };
 
 const card = "bg-surface-container-lowest border border-outline-variant rounded-xl shadow-sm";
@@ -100,6 +101,25 @@ export function IntegrationsCard() {
       await load();
     }
   }
+  async function floor(action: "set_floor" | "clear_floor") {
+    if (
+      action === "set_floor" &&
+      !confirm(
+        "Import only leads received from now on?\n\nAnything already sitting in the spreadsheets — including the backlog from an outage — will be skipped, not imported. You can clear this later.",
+      )
+    )
+      return;
+    if (action === "clear_floor" && !confirm("Remove the cut-off? The sheets will be free to send older rows again.")) return;
+    setBusy(true);
+    await fetch("/api/crm/integrations", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ action }),
+    });
+    setBusy(false);
+    await load();
+  }
+
   function copy(text: string, what: string) {
     navigator.clipboard?.writeText(text);
     setCopied(what);
@@ -244,6 +264,36 @@ export function IntegrationsCard() {
                   ))}
                 </tbody>
               </table>
+            </div>
+          </div>
+
+          {/* Import cut-off */}
+          <div className="rounded-lg border border-outline-variant p-md">
+            <div className="flex items-start justify-between gap-base">
+              <div className="flex-1">
+                <div className="text-label-sm text-on-surface font-semibold">Import cut-off</div>
+                {data.dateFloor ? (
+                  <p className="text-label-sm text-on-surface-variant mt-[2px]">
+                    Only leads dated after <span className="font-medium text-on-surface">{fmt(data.dateFloor)}</span> are
+                    imported. Older rows are skipped even if a sheet sends them — so repairing a broken sheet cannot drag
+                    its backlog in.
+                  </p>
+                ) : (
+                  <p className="text-label-sm text-on-surface-variant mt-[2px]">
+                    No cut-off: whatever the sheets send is imported. Set one before reconnecting a sheet that has been
+                    down, so its backlog stays out.
+                  </p>
+                )}
+              </div>
+              {data.dateFloor ? (
+                <button className={ghost} disabled={busy} onClick={() => void floor("clear_floor")}>
+                  Remove cut-off
+                </button>
+              ) : (
+                <button className={ghost} disabled={busy} onClick={() => void floor("set_floor")}>
+                  Only import from now
+                </button>
+              )}
             </div>
           </div>
 

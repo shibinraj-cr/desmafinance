@@ -60,7 +60,7 @@ export const POST = withApiHandler(async (req: Request) => {
     rows: result.received,
     inserted: result.inserted,
     reInquiries: result.reInquiries,
-    skipped: result.skippedAlreadyImported + result.skippedAlreadyKnown,
+    skipped: result.skippedAlreadyImported + result.skippedAlreadyKnown + result.skippedBeforeFloor,
     errorRows: result.errorRows,
     campaign,
   });

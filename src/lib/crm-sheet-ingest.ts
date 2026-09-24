@@ -12,6 +12,7 @@ import { prisma } from "./prisma";
 import { badRequest, HttpError } from "./http-error";
 import { normalizePhone, emailKeyOf, computeDedupeKey, phoneMatchKeys } from "./crm";
 import { resolveDefaultStatus } from "./crm-leads";
+import { getSheetLeadsDateFloor } from "./app-settings";
 import {
   recordReInquiry,
   resolveReInquiryContext,
@@ -172,6 +173,19 @@ export function knownThrough(lead: { createdAt: Date; lastInquiryAt: Date | null
   return last && last.getTime() > lead.createdAt.getTime() ? last : lead.createdAt;
 }
 
+/**
+ * Drop rows dated strictly before the floor — leads that predate the moment an
+ * admin said "start fresh from here".
+ *
+ * UNDATED rows pass through. A row we cannot date cannot be judged old, and
+ * silently discarding a genuinely new lead because its sheet has no timestamp
+ * column is the worse failure. The Apps Script cursor still bounds those.
+ */
+export function filterRowsFromFloor<T extends { createdAt: Date | null }>(rows: T[], floor: Date | null): T[] {
+  if (!floor) return rows;
+  return rows.filter((r) => !r.createdAt || r.createdAt.getTime() >= floor.getTime());
+}
+
 export type IngestResult = {
   received: number;
   inserted: number;
@@ -185,6 +199,8 @@ export type IngestResult = {
    * inquiry reaching us twice by two routes, not a candidate coming back.
    */
   skippedAlreadyKnown: number;
+  /** Rows older than the configured "import nothing before this" floor. */
+  skippedBeforeFloor: number;
   errorRows: number;
 };
 
@@ -197,20 +213,39 @@ export async function ingestSheetLeads(opts: {
   sourceKey: string;
   campaign: string;
   rows: SheetRow[];
+  /** Overrides the stored floor; omit to read it from settings. */
+  dateFloor?: Date | null;
 }): Promise<IngestResult> {
   const config = SHEET_SOURCES[opts.sourceKey];
   if (!config) throw badRequest(`Unknown source "${opts.sourceKey}"`, "unknown_source");
 
   const received = opts.rows.length;
-  const mapped: MappedLead[] = [];
+  const all: MappedLead[] = [];
   let errorRows = 0;
   for (const row of opts.rows) {
     const m = mapSheetRow(config, opts.campaign, row);
     if (!m) errorRows++;
-    else mapped.push(m);
+    else all.push(m);
   }
+
+  // Before anything else: an admin may have drawn a line under the backlog. A
+  // row older than that line is not imported, deduped, or counted as a
+  // re-inquiry — it is simply not ours to take. See SHEET_LEADS_DATE_FLOOR_KEY.
+  const floor = opts.dateFloor !== undefined ? opts.dateFloor : await getSheetLeadsDateFloor();
+  const mapped = filterRowsFromFloor(all, floor);
+  const skippedBeforeFloor = all.length - mapped.length;
+
   if (mapped.length === 0) {
-    return { received, inserted: 0, reInquiries: 0, revived: 0, skippedAlreadyImported: 0, skippedAlreadyKnown: 0, errorRows };
+    return {
+      received,
+      inserted: 0,
+      reInquiries: 0,
+      revived: 0,
+      skippedAlreadyImported: 0,
+      skippedAlreadyKnown: 0,
+      skippedBeforeFloor,
+      errorRows,
+    };
   }
 
   const [defStatus, source] = await Promise.all([
@@ -329,7 +364,16 @@ export async function ingestSheetLeads(opts: {
 
   const reInquiryTotal = reInquiriesExisting.length + reInquiriesWithinBatch.length;
   if (toCreate.length === 0 && reInquiryTotal === 0) {
-    return { received, inserted: 0, reInquiries: 0, revived: 0, skippedAlreadyImported, skippedAlreadyKnown, errorRows };
+    return {
+      received,
+      inserted: 0,
+      reInquiries: 0,
+      revived: 0,
+      skippedAlreadyImported,
+      skippedAlreadyKnown,
+      skippedBeforeFloor,
+      errorRows,
+    };
   }
 
   let inserted = 0;
@@ -340,7 +384,7 @@ export async function ingestSheetLeads(opts: {
       data: {
         fileName: `${config.label}: ${opts.campaign}`,
         totalRows: received,
-        duplicateRows: reInquiryTotal + skippedAlreadyKnown,
+        duplicateRows: reInquiryTotal + skippedAlreadyKnown + skippedBeforeFloor,
         errorRows,
         status: "completed",
       },
@@ -395,6 +439,7 @@ export async function ingestSheetLeads(opts: {
     revived: outcomes.filter((o) => o.revived).length,
     skippedAlreadyImported,
     skippedAlreadyKnown,
+    skippedBeforeFloor,
     errorRows,
   };
 }

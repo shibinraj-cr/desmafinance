@@ -2,14 +2,14 @@ import { NextResponse } from "next/server";
 import { z } from "zod";
 import { randomBytes } from "node:crypto";
 import { withApiHandler } from "@/lib/api";
-import { unauthorized, forbidden } from "@/lib/http-error";
+import { unauthorized, forbidden, badRequest } from "@/lib/http-error";
 import { getCurrentUserAndPermissions } from "@/lib/permissions";
 import { getCrmAccess } from "@/lib/crm-rbac";
 import { prisma } from "@/lib/prisma";
 import { siteBaseUrl } from "@/lib/site-url";
 import { SHEET_SOURCES } from "@/lib/crm-sheet-ingest";
 import { SHEET_LEADS_APPS_SCRIPT } from "@/lib/sheet-leads-apps-script";
-import { getSetting, setSetting, SHEET_LEADS_SECRET_KEY } from "@/lib/app-settings";
+import { getSetting, setSetting, SHEET_LEADS_SECRET_KEY, SHEET_LEADS_DATE_FLOOR_KEY } from "@/lib/app-settings";
 import { readSheetSyncHealth, verdictFor, explainVerdict, type SheetSyncHealth } from "@/lib/sheet-sync-health";
 
 export const dynamic = "force-dynamic";
@@ -64,6 +64,7 @@ export const GET = withApiHandler(async (req: Request) => {
 
   const secret = await getSetting(SHEET_LEADS_SECRET_KEY);
   const health = await readSheetSyncHealth();
+  const dateFloor = await getSetting(SHEET_LEADS_DATE_FLOOR_KEY);
   const recent = await prisma.leadImportBatch.findMany({
     orderBy: { createdAt: "desc" },
     take: 10,
@@ -85,6 +86,7 @@ export const GET = withApiHandler(async (req: Request) => {
     envFallback: !secret && !!process.env.SHEET_LEADS_WEBHOOK_SECRET,
     sources: await sourcesSummary(health),
     rejected: health.rejected,
+    dateFloor,
     appsScript: SHEET_LEADS_APPS_SCRIPT,
     recentBatches: recent.map((b) => ({ ...b, createdAt: b.createdAt.toISOString() })),
   });
@@ -92,8 +94,9 @@ export const GET = withApiHandler(async (req: Request) => {
 
 // POST /api/crm/integrations — generate (or set) the webhook secret (admin).
 const PostSchema = z.object({
-  action: z.enum(["generate", "set"]),
-  value: z.string().trim().min(16).max(200).optional(),
+  action: z.enum(["generate", "set", "set_floor", "clear_floor"]),
+  /** The secret for "set"; an ISO timestamp for "set_floor" (omit for now). */
+  value: z.string().trim().min(1).max(200).optional(),
 });
 
 export const POST = withApiHandler(async (req: Request) => {
@@ -103,6 +106,20 @@ export const POST = withApiHandler(async (req: Request) => {
   if (!access.canManageSettings) throw forbidden();
 
   const { action, value } = PostSchema.parse(await req.json().catch(() => null));
+
+  // "Start fresh from here" — nothing dated earlier is imported by any sheet.
+  if (action === "set_floor") {
+    const at = value ? new Date(value) : new Date();
+    if (Number.isNaN(at.getTime())) throw badRequest("Invalid date", "invalid_date");
+    await setSetting(SHEET_LEADS_DATE_FLOOR_KEY, at.toISOString(), userId);
+    return NextResponse.json({ dateFloor: at.toISOString() });
+  }
+  if (action === "clear_floor") {
+    await prisma.appSetting.deleteMany({ where: { key: SHEET_LEADS_DATE_FLOOR_KEY } });
+    return NextResponse.json({ dateFloor: null });
+  }
+
+  if (action === "set" && value && value.length < 16) throw badRequest("Secret is too short", "secret_too_short");
   const secret = action === "set" && value ? value : randomBytes(24).toString("base64url");
   await setSetting(SHEET_LEADS_SECRET_KEY, secret, userId);
   return NextResponse.json({ secret });
