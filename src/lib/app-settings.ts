@@ -5,6 +5,24 @@ import { prisma } from "./prisma";
 export const SHEET_LEADS_SECRET_KEY = "sheet_leads_webhook_secret";
 
 /**
+ * "Import nothing dated before this" for the lead-spreadsheet webhook — an ISO
+ * timestamp, or unset for no floor.
+ *
+ * The Apps Script already tracks a per-tab cursor, but that cursor lives in the
+ * spreadsheet and is the wrong place to hold this decision: after an outage it
+ * still points at the row where syncing stopped, so the moment the connection is
+ * repaired the whole backlog flows in. Re-baselining the sheet fixes that only
+ * if it happens BEFORE the every-minute trigger fires again, which is a race a
+ * person cannot reliably win across two spreadsheets.
+ *
+ * So the floor is enforced here instead, where it cannot be raced and covers
+ * every source at once. Same idea as ATTENDANCE_API_CUTOVER in
+ * hr-attendance-ingest.ts, but admin-set rather than env-pinned: it marks a
+ * moment ("start fresh from now"), so it has to be settable at that moment.
+ */
+export const SHEET_LEADS_DATE_FLOOR_KEY = "sheet_leads_date_floor";
+
+/**
  * User id of the CRM/marketing supervisor who is notified (and owns the
  * follow-up task for unassigned leads) whenever a re-inquiry is detected. Set on
  * the CRM → Settings page; falls back to the CRM_REINQUIRY_SUPERVISOR_USER_ID
@@ -215,6 +233,18 @@ export async function setSetting(key: string, value: string, userId?: string | n
     create: { key, value, updatedById: userId ?? null },
     update: { value, updatedById: userId ?? null },
   });
+}
+
+/**
+ * Rows dated before this are never imported. Invalid/absent → no floor, and a
+ * parse failure is treated as no floor rather than as a floor of the epoch:
+ * losing leads silently is worse than importing one that is already on file.
+ */
+export async function getSheetLeadsDateFloor(): Promise<Date | null> {
+  const raw = await getSetting(SHEET_LEADS_DATE_FLOOR_KEY).catch(() => null);
+  if (!raw) return null;
+  const t = Date.parse(raw);
+  return Number.isNaN(t) ? null : new Date(t);
 }
 
 /**

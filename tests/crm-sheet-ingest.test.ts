@@ -1,5 +1,12 @@
 import { describe, it, expect } from "vitest";
-import { mapSheetRow, parseSheetDate, computeExternalKey, knownThrough, SHEET_SOURCES } from "@/lib/crm-sheet-ingest";
+import {
+  mapSheetRow,
+  parseSheetDate,
+  computeExternalKey,
+  knownThrough,
+  filterRowsFromFloor,
+  SHEET_SOURCES,
+} from "@/lib/crm-sheet-ingest";
 
 const META = SHEET_SOURCES.meta;
 const WEBSITE = SHEET_SOURCES.website;
@@ -114,5 +121,36 @@ describe("knownThrough — the watermark that tells a re-submission from a re-im
     const lead = { createdAt: d("2026-08-01T00:00:00Z"), lastInquiryAt: null };
     const rowDate = d("2026-09-23T10:00:00Z");
     expect(rowDate.getTime() <= knownThrough(lead).getTime()).toBe(false);
+  });
+});
+
+describe("filterRowsFromFloor — the line an admin draws under a backlog", () => {
+  const row = (iso: string | null) => ({ createdAt: iso ? new Date(iso) : null });
+  const FLOOR = new Date("2026-09-24T00:00:00Z");
+
+  it("passes everything through when no floor is set", () => {
+    const rows = [row("2020-01-01T00:00:00Z"), row(null)];
+    expect(filterRowsFromFloor(rows, null)).toHaveLength(2);
+  });
+
+  it("drops the backlog and keeps what arrived after the line", () => {
+    const rows = [
+      row("2026-09-21T18:00:00Z"), // the outage backlog
+      row("2026-09-23T23:59:59Z"),
+      row("2026-09-24T09:00:00Z"), // genuinely new
+    ];
+    const kept = filterRowsFromFloor(rows, FLOOR);
+    expect(kept).toHaveLength(1);
+    expect(kept[0].createdAt?.toISOString()).toBe("2026-09-24T09:00:00.000Z");
+  });
+
+  it("keeps a row dated exactly on the floor", () => {
+    expect(filterRowsFromFloor([row("2026-09-24T00:00:00Z")], FLOOR)).toHaveLength(1);
+  });
+
+  // Discarding a lead we simply cannot date is the worse failure — the sheet
+  // cursor still bounds those, and a missed new lead is unrecoverable.
+  it("keeps undated rows rather than guessing they are old", () => {
+    expect(filterRowsFromFloor([row(null)], FLOOR)).toHaveLength(1);
   });
 });
