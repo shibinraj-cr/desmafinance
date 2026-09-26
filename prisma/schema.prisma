@@ -42,6 +42,11 @@ model User {
   // Marketing holiday calendar edits
   holidaysCreated         Holiday[]             @relation("HolidaysCreated")
   holidaysUpdated         Holiday[]             @relation("HolidaysUpdated")
+  // Media Planner (marketing content calendar)
+  mediaPlanItemsOwned     MediaPlanItem[]       @relation("MediaPlanItemOwner")
+  mediaPlanItemsCreated   MediaPlanItem[]       @relation("MediaPlanItemCreatedBy")
+  mediaPlanTasksAssigned  MediaPlanTask[]       @relation("MediaPlanTaskAssignee")
+  mediaPlanTasksDone      MediaPlanTask[]       @relation("MediaPlanTaskDoneBy")
   // Voxbay CSV uploads
   voxbayUploads           VoxbayUpload[]        @relation("VoxbayUploads")
   // Per-user "draft first" workflow flag — when true, new transactions
@@ -837,6 +842,72 @@ model Holiday {
 
   @@unique([date])
   @@index([date])
+}
+
+/// One planned piece of marketing content — a YouTube Short or video, an
+/// Instagram reel, or a poster. The unit the Media Planner calendar and
+/// production board render. Dates are IST calendar days stored as
+/// UTC-midnight `@db.Date` (the `toPrismaDate` convention).
+model MediaPlanItem {
+  id     String @id @default(cuid())
+  title  String
+  // 'short' | 'video' | 'reel' | 'poster'
+  format String
+  // Production stage: 'idea' | 'script' | 'shoot' | 'edit' | 'approval' |
+  // 'scheduled' | 'published'. A string union like CrmTask.status, not an
+  // enum, so a stage can be added without a migration.
+  status String @default("idea")
+  // The calendar day the piece should go live; null while it is only an idea.
+  publishDate DateTime? @db.Date
+  // Display slot like "18:00" (IST) — a label for the publish day, not a
+  // timestamp, so an unset slot never renders as a fake midnight.
+  publishTime String?
+  shootDate   DateTime? @db.Date
+  // Hook / caption / creative notes.
+  hook        String?
+  ownerId     String?
+  owner       User?     @relation("MediaPlanItemOwner", fields: [ownerId], references: [id], onDelete: SetNull)
+  createdById String?
+  createdBy   User?     @relation("MediaPlanItemCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
+  publishedAt DateTime?
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  tasks MediaPlanTask[]
+
+  // Calendar month fetch.
+  @@index([publishDate])
+  // Production board (active items regardless of month).
+  @@index([status, publishDate])
+}
+
+/// One production step on a media plan item (script, shoot, edit, approval,
+/// publish…). Reminders are derived from `dueDate`, CRM-style: the morning
+/// cron notifies the assignee (falling back to the item owner) about steps
+/// due today or overdue — `remindedOn` dedupes to one ping per day.
+model MediaPlanTask {
+  id           String        @id @default(cuid())
+  itemId       String
+  item         MediaPlanItem @relation(fields: [itemId], references: [id], onDelete: Cascade)
+  // Checklist display order within the item.
+  seq          Int           @default(0)
+  name         String
+  dueDate      DateTime?     @db.Date
+  assignedToId String?
+  assignedTo   User?         @relation("MediaPlanTaskAssignee", fields: [assignedToId], references: [id], onDelete: SetNull)
+  // 'open' | 'done'
+  status       String        @default("open")
+  doneAt       DateTime?
+  doneById     String?
+  doneBy       User?         @relation("MediaPlanTaskDoneBy", fields: [doneById], references: [id], onDelete: SetNull)
+  // The IST day (UTC-midnight date) the last due/overdue reminder went out.
+  remindedOn   DateTime?     @db.Date
+  createdAt    DateTime      @default(now())
+  updatedAt    DateTime      @updatedAt
+
+  @@index([itemId, status])
+  // The reminder cron's drain: open tasks whose due date has arrived.
+  @@index([status, dueDate])
 }
 
 // Master: parties (candidates / vendors) referenced by transactions.

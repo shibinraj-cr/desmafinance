@@ -168,6 +168,15 @@ export const MODULES: AppModule[] = [
         group: "TEAM & TARGETS",
       },
       {
+        // Content calendar for shorts/reels/videos/posters. Not adminOnly:
+        // gated by an explicit page grant so the Marketing Admin role holds
+        // the tool without full admin (the Meta Reconcile pattern).
+        href: "/marketing/media-planner",
+        label: "Media Planner",
+        icon: "movie",
+        group: "CONTENT",
+      },
+      {
         href: "/marketing/parties",
         label: "Candidates & Vendors",
         icon: "groups",
