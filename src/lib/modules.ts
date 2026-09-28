@@ -177,6 +177,14 @@ export const MODULES: AppModule[] = [
         group: "CONTENT",
       },
       {
+        // Channel views/uploads vs YouTube + Voxbay leads. Page-grant gated
+        // like the Media Planner, so the Marketing Admin role holds it.
+        href: "/marketing/youtube-insights",
+        label: "YouTube Insights",
+        icon: "insights",
+        group: "CONTENT",
+      },
+      {
         href: "/marketing/parties",
         label: "Candidates & Vendors",
         icon: "groups",
