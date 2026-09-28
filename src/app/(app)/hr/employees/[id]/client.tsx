@@ -547,6 +547,10 @@ function SalaryStructureTab({
   // PF capped at ₹15,000 wage ceiling → max ₹1,800.
   const pfEmp = draft.pfApplicable ? Math.round(Math.min(basic, 15000) * 0.12) : 0;
   const netTakeHome = gross - esiEmp - pfEmp - ptToUse;
+  // Employer-side statutory contributions sit on top of gross: CTC = gross + employer PF + employer ESI.
+  const esiEr = esiEligible ? Math.round(gross * 0.0375) : 0;
+  const pfEr = pfEmp;
+  const ctc = gross + pfEr + esiEr;
 
   async function save() {
     setError(null);
@@ -717,7 +721,7 @@ function SalaryStructureTab({
               <Stat label={`Special ${draft.specialPct}%`} value={`₹${special.toLocaleString("en-IN")}`} />
             </div>
             <div className="grid grid-cols-2 md:grid-cols-4 gap-sm text-label-sm mt-md">
-              <Stat label="Gross (CTC monthly)" value={`₹${gross.toLocaleString("en-IN")}`} hero />
+              <Stat label="Gross (monthly)" value={`₹${gross.toLocaleString("en-IN")}`} hero />
               <Stat label="ESI (E) 0.75%" value={`₹${esiEmp.toLocaleString("en-IN")}`} />
               <Stat
                 label={
@@ -728,6 +732,15 @@ function SalaryStructureTab({
                 value={`₹${pfEmp.toLocaleString("en-IN")}`}
               />
               <Stat label="Professional Tax" value={`₹${ptToUse}`} />
+            </div>
+            <div className="grid grid-cols-2 md:grid-cols-4 gap-sm text-label-sm mt-md">
+              <Stat
+                label={basic > 15000 ? "PF (Employer) capped at ₹1,800" : "PF (Employer) 12% of Basic"}
+                value={`₹${pfEr.toLocaleString("en-IN")}`}
+              />
+              <Stat label="ESI (Employer) 3.75%" value={`₹${esiEr.toLocaleString("en-IN")}`} />
+              <Stat label="CTC (monthly)" value={`₹${ctc.toLocaleString("en-IN")}`} hero />
+              <Stat label="CTC (annual)" value={`₹${(ctc * 12).toLocaleString("en-IN")}`} hero />
             </div>
             <div className="grid grid-cols-1 md:grid-cols-2 gap-sm text-label-sm mt-md">
               <Stat
