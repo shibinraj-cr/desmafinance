@@ -190,6 +190,13 @@ export function calcLine(args: {
    * category adjustments feed this; other deductions apply post-net.
    */
   penaltyBeforeStatutory?: number;
+  /**
+   * Calendar days of the cycle before the employee's join date (see
+   * `daysBeforeJoining`). Docked as loss-of-pay on the working-days base like an
+   * absence, but AFTER the paid-leave cover — the allocation must never pay for
+   * days the person wasn't yet employed. Defaults to 0 (no change).
+   */
+  daysBeforeJoining?: number;
 }): SalaryCalc {
   const wd = args.workingDaysBase;
   const breakdown = deriveBreakdown(args.basic, args);
@@ -210,7 +217,8 @@ export function calcLine(args: {
   const lopBeforeCover =
     args.daysAbsent + paidUncovered + (args.daysHalfDay - halfDayPaid) * 0.5;
   const lopCover = Math.min(Math.max(0, args.paidLeaveCoverForLop ?? 0), lopBeforeCover);
-  const totalLeaveForLop = round2(lopBeforeCover - lopCover);
+  const preJoin = Math.max(0, args.daysBeforeJoining ?? 0);
+  const totalLeaveForLop = round2(Math.min(wd, lopBeforeCover - lopCover + preJoin));
   // Paid days = working-days base − loss-of-pay. We derive attended days
   // from LOP rather than summing present-marked rows, so the PF base stays
   // consistent with the gross/LOP side: an employee paid the full month
@@ -223,7 +231,9 @@ export function calcLine(args: {
   const daysAttended = Math.max(0, round2(wd - totalLeaveForLop));
 
   // Loss-of-pay reduced gross (before any penalty).
-  const grossAfterLop = round2(gross - dailyBasis * totalLeaveForLop);
+  // Floored at 0: dailyBasis is rounded, so a whole-base LOP can overshoot gross
+  // by a few paise (666.67 × 30 = 20000.10).
+  const grossAfterLop = Math.max(0, round2(gross - dailyBasis * totalLeaveForLop));
   // A pre-statutory penalty is additional monetary loss-of-pay: it comes off the
   // pre-ESI salary and can't push it below zero.
   const penalty = Math.max(0, Math.min(args.penaltyBeforeStatutory ?? 0, grossAfterLop));
@@ -407,6 +417,22 @@ export function summarizeAdjustments(rows: { kind: string; category: string; amo
   };
 }
 
+/**
+ * Calendar days of the cycle `[start, end]` that fall before `joinDate` — the
+ * days a mid-cycle joiner was not yet employed and must not be paid for. They
+ * usually carry no attendance row at all, and an unmarked day counts as paid
+ * (see calcLine), so without this a 1-Sep joiner drew the whole 26-Aug cycle.
+ *
+ * Dates are date-only at midnight UTC. No join date, or one on/before the cycle
+ * start → 0. A join date after the cycle end → every day of the cycle.
+ */
+export function daysBeforeJoining(joinDate: Date | null | undefined, start: Date, end: Date): number {
+  if (!joinDate || joinDate.getTime() <= start.getTime()) return 0;
+  const DAY = 86_400_000;
+  const lastUnpaid = Math.min(joinDate.getTime() - DAY, end.getTime());
+  return Math.round((lastUnpaid - start.getTime()) / DAY) + 1;
+}
+
 export async function computeSalaryRun(monthKey: string, userId: string | null): Promise<{
   runId: string;
   lineCount: number;
@@ -480,11 +506,15 @@ export async function computeSalaryRun(monthKey: string, userId: string | null):
     // allocation this cycle — read from the canonical leave ledger so payroll and
     // the "Paid taken / Unpaid taken" ledger agree exactly.
     let lopCover = 0;
+    let preJoin = 0;
     if (isOwner) {
       buckets = { daysPresent: 0, daysAbsent: 0, daysHalfDay: 0, daysHalfDayPaid: 0, daysPaidLeave: 0 };
     } else {
+      // Nothing before the join date counts: a holiday / week-off / stray punch
+      // row there is not a day of employment. Those days are docked below.
+      const from = e.joinDate && e.joinDate > start ? e.joinDate : start;
       const attendance = await prisma.hrAttendanceDay.findMany({
-        where: { employeeId: e.id, date: { gte: start, lte: end } },
+        where: { employeeId: e.id, date: { gte: from, lte: end } },
       });
       if (attendance.length === 0) {
         warnings.push(`No attendance for ${e.empCode} ${e.name} in ${monthKey} — skipped.`);
@@ -523,6 +553,13 @@ export async function computeSalaryRun(monthKey: string, userId: string | null):
       const cycleMonthIdx = Number(monthKey.split("-")[1]);
       const ledger = await computeMonthlyLeaveLedger(e.id, year, { asOf: end, fill: "full" });
       lopCover = ledger.rows.find((r) => r.month === cycleMonthIdx)?.covered ?? 0;
+
+      preJoin = daysBeforeJoining(e.joinDate, start, end);
+      if (preJoin > 0) {
+        warnings.push(
+          `${e.empCode} ${e.name} joined ${e.joinDate!.toISOString().slice(0, 10)} — ${preJoin} day(s) before joining docked as loss-of-pay.`,
+        );
+      }
     }
 
     // Trainees are paid on BASIC ONLY — the engine forces allowances/ESI/PF/PT
@@ -554,6 +591,7 @@ export async function computeSalaryRun(monthKey: string, userId: string | null):
       paidLeaveCoverForLop: lopCover,
       // "penalty"-category deductions reduce the salary before ESI/PF/PT.
       penaltyBeforeStatutory: adj.penaltyTotal,
+      daysBeforeJoining: preJoin,
     });
 
     await prisma.hrSalaryRunLine.create({
