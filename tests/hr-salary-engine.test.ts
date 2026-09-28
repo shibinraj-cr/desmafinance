@@ -28,6 +28,7 @@ import {
   countAlHalfDays,
   summarizeAdjustments,
   calcLine,
+  daysBeforeJoining,
   DEFAULT_ALLOWANCE_PCTS,
   ESI_EMPLOYEE_RATE,
   ESI_EMPLOYER_RATE,
@@ -604,5 +605,73 @@ describe("calcLine — penalty reduces the salary before ESI/PF/PT (Option B)", 
     expect(c.pfEmployee).toBe(0);
     expect(c.esiEmployee).toBe(0);
     expect(c.netSalary).toBe(-125); // only PT remains
+  });
+});
+
+describe("daysBeforeJoining — mid-cycle joiner", () => {
+  // Sep-2026 cycle: 26 Aug → 25 Sep (31 calendar days).
+  const start = new Date(Date.UTC(2026, 7, 26));
+  const end = new Date(Date.UTC(2026, 8, 25));
+  const d = (m: number, day: number) => new Date(Date.UTC(2026, m - 1, day));
+
+  it("counts the calendar days from the cycle start up to the day before joining", () => {
+    expect(daysBeforeJoining(d(9, 1), start, end)).toBe(6); // 26–31 Aug
+    expect(daysBeforeJoining(d(8, 27), start, end)).toBe(1);
+    expect(daysBeforeJoining(d(9, 25), start, end)).toBe(30);
+  });
+
+  it("is 0 with no join date, or one on/before the cycle start", () => {
+    expect(daysBeforeJoining(null, start, end)).toBe(0);
+    expect(daysBeforeJoining(undefined, start, end)).toBe(0);
+    expect(daysBeforeJoining(d(8, 26), start, end)).toBe(0);
+    expect(daysBeforeJoining(new Date(Date.UTC(2025, 0, 1)), start, end)).toBe(0);
+  });
+
+  it("covers the whole cycle when the join date is after it", () => {
+    expect(daysBeforeJoining(d(10, 3), start, end)).toBe(31);
+  });
+});
+
+describe("calcLine — pre-joining days", () => {
+  const base = {
+    workingDaysBase: 30,
+    basic: 10000, // gross 20000
+    esiApplicable: true,
+    pfApplicable: true,
+    professionalTax: 125,
+    daysPresent: 25,
+    daysHalfDay: 0,
+    daysAbsent: 0,
+    daysPaidLeave: 0,
+    carriedBalanceBefore: 0,
+  };
+
+  it("a 1-Sep joiner with full attendance after joining is paid 24/30", () => {
+    const c = calcLine({ ...base, daysBeforeJoining: 6 });
+    expect(c.totalLeaveForLop).toBe(6);
+    expect(c.daysAttended).toBe(24);
+    expect(c.salaryBeforeEsi).toBeCloseTo(20000 - 666.67 * 6, 2);
+    expect(c.basicAfterLop).toBeCloseTo(8000, 0);
+  });
+
+  it("the paid-leave allocation never covers the pre-joining days", () => {
+    // One absence after joining, allocation covers 1 day: only that absence
+    // is forgiven; all 6 pre-joining days stay docked.
+    const c = calcLine({ ...base, daysAbsent: 1, paidLeaveCoverForLop: 5, daysBeforeJoining: 6 });
+    expect(c.totalLeaveForLop).toBe(6);
+  });
+
+  it("stacks on the joiner's own loss-of-pay, capped at the working-days base", () => {
+    expect(calcLine({ ...base, daysAbsent: 2, daysHalfDay: 1, daysBeforeJoining: 6 }).totalLeaveForLop).toBe(8.5);
+    const all = calcLine({ ...base, daysAbsent: 5, daysBeforeJoining: 31 });
+    expect(all.totalLeaveForLop).toBe(30);
+    expect(all.daysAttended).toBe(0);
+    expect(all.salaryBeforeEsi).toBe(0);
+  });
+
+  it("no join date in the cycle → identical to before", () => {
+    expect(calcLine({ ...base, daysAbsent: 1 })).toEqual(
+      calcLine({ ...base, daysAbsent: 1, daysBeforeJoining: 0 }),
+    );
   });
 });

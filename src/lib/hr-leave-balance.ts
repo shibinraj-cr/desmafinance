@@ -260,7 +260,7 @@ export async function computeMonthlyLeaveLedger(
       where: { employeeId, date: { gte: windowStart, lte: windowEnd } },
       select: { id: true, date: true, status: true, lateMinutes: true, halfPaid: true },
     }),
-    prisma.employee.findUnique({ where: { id: employeeId }, select: { halfHourConcession: true } }),
+    prisma.employee.findUnique({ where: { id: employeeId }, select: { halfHourConcession: true, joinDate: true } }),
   ]);
 
   const opening = existing ? Number(existing.opening) : 0;
@@ -287,7 +287,12 @@ export async function computeMonthlyLeaveLedger(
   const eligibleLce = employee?.halfHourConcession ?? false;
   const daysByMonth = new Map<number, typeof days>();
   const lvByMonth = new Map<number, number>();
+  // A row before the join date is not a day of employment — an absence there
+  // must not be "covered" by the allocation (payroll docks those days itself,
+  // see daysBeforeJoining in the salary engine).
+  const joinDate = employee?.joinDate ?? null;
   for (const d of days) {
+    if (joinDate && d.date < joinDate) continue;
     const m = Number(cycleMonthForDate(d.date).split("-")[1]);
     if (m < 1 || m > 12) continue;
     if (!daysByMonth.has(m)) daysByMonth.set(m, []);
@@ -382,7 +387,7 @@ export async function computeLeaveBalanceFor(
       where: { employeeId, date: { gte: windowStart, lte: windowEnd } },
       select: { id: true, date: true, status: true, lateMinutes: true, halfPaid: true },
     }),
-    db.employee.findUnique({ where: { id: employeeId }, select: { halfHourConcession: true } }),
+    db.employee.findUnique({ where: { id: employeeId }, select: { halfHourConcession: true, joinDate: true } }),
   ]);
 
   // HR's per-month allocation (source 'allocation') overrides the eligibility
@@ -414,7 +419,12 @@ export async function computeLeaveBalanceFor(
   const eligibleLce = employee?.halfHourConcession ?? false;
   const daysByMonth = new Map<number, typeof days>();
   const lvByMonth = new Map<number, number>();
+  // A row before the join date is not a day of employment — an absence there
+  // must not be "covered" by the allocation (payroll docks those days itself,
+  // see daysBeforeJoining in the salary engine).
+  const joinDate = employee?.joinDate ?? null;
   for (const d of days) {
+    if (joinDate && d.date < joinDate) continue;
     const m = Number(cycleMonthForDate(d.date).split("-")[1]);
     if (m < 1 || m > 12) continue;
     if (!daysByMonth.has(m)) daysByMonth.set(m, []);
