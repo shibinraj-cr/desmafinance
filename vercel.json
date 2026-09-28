@@ -76,6 +76,10 @@
     {
       "path": "/api/cron/media-plan-reminders",
       "schedule": "30 3 * * *"
+    },
+    {
+      "path": "/api/cron/youtube-sync",
+      "schedule": "30 2 * * *"
     }
   ]
 }

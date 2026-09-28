@@ -4836,3 +4836,64 @@ model WealthSecretReveal {
   @@index([holdingId, createdAt])
   @@index([actorUserId, createdAt])
 }
+
+/// The YouTube channel connected for lead analytics (Marketing → YouTube
+/// Insights). One row per channel; connecting a different channel replaces the
+/// old row. The Google refresh token is stored encrypted (AES-256-GCM, key
+/// derived from NEXTAUTH_SECRET — see src/lib/youtube/token-crypto.ts) and is
+/// read-only scoped (yt-analytics.readonly + youtube.readonly).
+model YouTubeConnection {
+  id                String    @id @default(cuid())
+  channelId         String    @unique
+  channelTitle      String
+  uploadsPlaylistId String?
+  refreshTokenEnc   String
+  scope             String?
+  // Plain id, no relation: who connected it is audit context, not a join.
+  connectedById     String?
+  lastSyncAt        DateTime?
+  lastSyncOk        Boolean?
+  lastSyncError     String?
+  createdAt         DateTime  @default(now())
+  updatedAt         DateTime  @updatedAt
+}
+
+/// One uploaded video/Short on the connected channel. Lifetime counters are a
+/// snapshot refreshed by every sync. `publishDay` is the IST calendar day of
+/// `publishedAt` (UTC-midnight @db.Date, the `toPrismaDate` convention).
+model YouTubeVideo {
+  // The YouTube video id.
+  id           String   @id
+  channelId    String
+  title        String
+  publishedAt  DateTime
+  publishDay   DateTime @db.Date
+  durationSec  Int      @default(0)
+  // 'short' | 'video' | 'live'
+  format       String
+  viewCount    Int      @default(0)
+  likeCount    Int      @default(0)
+  commentCount Int      @default(0)
+  thumbnailUrl String?
+  syncedAt     DateTime @updatedAt
+
+  @@index([channelId, publishDay])
+}
+
+/// Channel-wide YouTube Analytics for one day, split by content type. Days are
+/// as YouTube Analytics reports them (the channel's reporting day).
+model YouTubeChannelDay {
+  channelId         String
+  day               DateTime @db.Date
+  views             Int      @default(0)
+  shortsViews       Int      @default(0)
+  videoViews        Int      @default(0)
+  liveViews         Int      @default(0)
+  watchMinutes      Int      @default(0)
+  subscribersGained Int      @default(0)
+  subscribersLost   Int      @default(0)
+  syncedAt          DateTime @updatedAt
+
+  @@id([channelId, day])
+  @@index([day])
+}
