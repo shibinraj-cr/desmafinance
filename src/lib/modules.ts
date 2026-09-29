@@ -391,6 +391,7 @@ export const MODULES: AppModule[] = [
       { href: "/hr/attendance/settings", label: "Biometric Sync", icon: "fingerprint", group: "ATTENDANCE" },
       { href: "/hr/salary-structures", label: "Salary Structures", icon: "calculate", group: "PAYROLL" },
       { href: "/hr/salary", label: "Salary Runs", icon: "payments", group: "PAYROLL" },
+      { href: "/hr/salary/statutory", label: "Statutory Settings", icon: "gavel", group: "PAYROLL" },
       { href: "/hr/masters/designations", label: "Designations", icon: "stairs", group: "MASTERS" },
       { href: "/hr/masters/departments", label: "Departments", icon: "domain", group: "MASTERS" },
       { href: "/hr/masters/roles", label: "Roles", icon: "badge", group: "MASTERS" },

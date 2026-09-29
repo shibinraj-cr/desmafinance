@@ -73,6 +73,7 @@ model User {
   hrSalaryRunsCreated    HrSalaryRun[]        @relation("HrSalaryRunCreator")
   hrSalaryRunsApproved   HrSalaryRun[]        @relation("HrSalaryRunApprover")
   hrSalaryAdjustments    HrSalaryAdjustment[] @relation("HrSalaryAdjustmentCreator")
+  hrPfRulesCreated       HrPfRule[]           @relation("HrPfRuleCreator")
   hrPoliciesPublished    HrPolicy[]           @relation("HrPolicyPublisher")
   hrTrainingsCreated     HrTraining[]         @relation("HrTrainingCreator")
   hrNotificationsCreated HrNotification[]     @relation("HrNotificationCreator")
@@ -1415,6 +1416,14 @@ model HrSalaryStructure {
   specialPct      Decimal  @default(15) @db.Decimal(5, 2)
   esiApplicable   Boolean  @default(true)
   pfApplicable    Boolean  @default(true)
+  /// PF contribution basis: "ceiling" = statutory wage-ceiling contribution
+  /// (default); "actual" = contribute on actual PF wages even above the
+  /// statutory ceiling (existing higher-wage EPF members — a ceiling change
+  /// must never auto-reduce them). See src/lib/hr-pf.ts.
+  pfBasis         String   @default("ceiling")
+  /// Voluntary EXTRA employee PF (VPF) as % of eligible PF wages, on top of
+  /// the statutory employee rate. Employer does not match it. Null/0 = none.
+  pfVoluntaryPct  Decimal? @db.Decimal(5, 2)
   /// Override Kerala PT slab if needed. Default 125 (₹125/mo slab).
   professionalTax Decimal  @default(125) @db.Decimal(8, 2)
   notes           String?
@@ -1423,6 +1432,44 @@ model HrSalaryStructure {
 
   @@unique([employeeId, effectiveFrom])
   @@index([employeeId])
+  @@index([effectiveFrom])
+}
+
+/// Effective-dated statutory Provident Fund rule (EPFO master data).
+///
+/// The payroll engine selects the rule(s) by SALARY-PERIOD DATE — never a
+/// single global ceiling — so historical runs keep their historical maths and
+/// a payroll window straddling a boundary (e.g. the 17 Sep 2026 ₹15,000 →
+/// ₹25,000 ceiling change, mid-way through the 26 Aug – 25 Sep cycle) is
+/// split and prorated per rule. A future EPFO amendment is a NEW row with its
+/// own effectiveFrom (the previous row's effectiveTo closes the day before),
+/// not a code change. Rules that have governed a computed run are immutable;
+/// only future-dated (never-applied) rows may be deleted.
+model HrPfRule {
+  id                String    @id @default(cuid())
+  code              String    @unique
+  /// Statutory PF wage ceiling, ₹/month.
+  wageCeiling       Decimal   @db.Decimal(10, 2)
+  /// Employee contribution % of eligible PF wages.
+  employeeRatePct   Decimal   @default(12) @db.Decimal(5, 2)
+  /// Employer total (EPF+EPS) contribution % of eligible PF wages.
+  employerRatePct   Decimal   @default(12) @db.Decimal(5, 2)
+  /// Employer slice diverted to EPS, % of the ceiling-capped wage (8.33
+  /// statutory). EPF receives the remainder of the employer contribution.
+  epsRatePct        Decimal   @default(8.33) @db.Decimal(5, 2)
+  epsApplicable     Boolean   @default(true)
+  /// Whether employees may contribute on actual wages above the ceiling
+  /// (HrSalaryStructure.pfBasis = "actual").
+  higherWageAllowed Boolean   @default(true)
+  effectiveFrom     DateTime  @db.Date
+  /// Null = open-ended (the currently active rule).
+  effectiveTo       DateTime? @db.Date
+  notes             String?
+  createdById       String?
+  createdBy         User?     @relation("HrPfRuleCreator", fields: [createdById], references: [id], onDelete: SetNull)
+  createdAt         DateTime  @default(now())
+  updatedAt         DateTime  @updatedAt
+
   @@index([effectiveFrom])
 }
 
@@ -1644,6 +1691,25 @@ model HrSalaryRunLine {
   pfEmployer       Decimal     @default(0) @db.Decimal(10, 2)
   esiTotal         Decimal     @default(0) @db.Decimal(10, 2)
   pfTotal          Decimal     @default(0) @db.Decimal(10, 2)
+  /// ——— PF audit trail, frozen at compute time. Future statutory changes
+  /// must never alter these; ECR/exports read the stored figures, not a
+  /// recomputation. pfDetail (JSON) carries the full per-rule segment
+  /// snapshot: rule id/code, ceiling, prorated ceiling, days, eligible wage
+  /// and per-side contributions for each slice of a split (transition) cycle.
+  /// Eligible PF wage the contributions were computed on.
+  pfWage           Decimal     @default(0) @db.Decimal(12, 2)
+  pfEmployerEpf    Decimal     @default(0) @db.Decimal(10, 2)
+  pfEmployerEps    Decimal     @default(0) @db.Decimal(10, 2)
+  /// Rule applied (the LAST segment's rule for a split cycle — every
+  /// segment's rule is in pfDetail). Plain snapshot, not a relation, so the
+  /// audit record can never be mutated through the rule row.
+  pfRuleId         String?
+  pfRuleCode       String?
+  /// "ceiling" | "actual" — contribution basis applied for this employee.
+  pfBasisApplied   String?
+  /// True when the statutory ceiling actually capped the eligible wage.
+  pfCeilingApplied Boolean     @default(false)
+  pfDetail         Json?
   /// Cached net effect of this employee's non-penalty HrSalaryAdjustment rows
   /// (Σ additions − Σ non-penalty deductions). Penalty deductions are NOT here —
   /// they reduce the pre-statutory salary and are baked into the statutory

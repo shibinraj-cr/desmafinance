@@ -37,6 +37,7 @@ import {
   TRAINEE_DESIGNATION_NAME,
   OWNER_DESIGNATION_NAMES,
 } from "@/lib/hr-salary-engine";
+import { pfSegmentsForWindow } from "@/lib/hr-pf";
 
 describe("deriveBreakdown", () => {
   it("defaults the allowance split to 40/20/25/15 → gross = basic × 2", () => {
@@ -605,6 +606,140 @@ describe("calcLine — penalty reduces the salary before ESI/PF/PT (Option B)", 
     expect(c.pfEmployee).toBe(0);
     expect(c.esiEmployee).toBe(0);
     expect(c.netSalary).toBe(-125); // only PT remains
+  });
+});
+
+describe("calcLine — statutory PF rules (17 Sep 2026 ceiling revision)", () => {
+  // Mirrors the seeded HrPfRule rows; computeSalaryRun passes segments built
+  // from them via pfSegmentsForWindow for the run's cycle window.
+  const RULE_OLD = {
+    id: "pf_rule_old_15000",
+    code: "PF_RULE_OLD",
+    wageCeiling: 15000,
+    employeeRatePct: 12,
+    employerRatePct: 12,
+    epsRatePct: 8.33,
+    epsApplicable: true,
+    effectiveFrom: new Date(Date.UTC(1952, 10, 1)),
+    effectiveTo: new Date(Date.UTC(2026, 8, 16)),
+  };
+  const RULE_2026 = {
+    id: "pf_rule_2026_25000",
+    code: "PF_RULE_2026",
+    wageCeiling: 25000,
+    employeeRatePct: 12,
+    employerRatePct: 12,
+    epsRatePct: 8.33,
+    epsApplicable: true,
+    effectiveFrom: new Date(Date.UTC(2026, 8, 17)),
+    effectiveTo: null,
+  };
+  // Sep-2026 cycle 26 Aug → 25 Sep: 22 days old rule + 9 days new rule.
+  const sepPf = {
+    segments: pfSegmentsForWindow(
+      [RULE_OLD, RULE_2026],
+      new Date(Date.UTC(2026, 7, 26)),
+      new Date(Date.UTC(2026, 8, 25)),
+    ).segments,
+    totalDays: 31,
+    basis: "ceiling" as const,
+  };
+  // Oct-2026 cycle 26 Sep → 25 Oct: fully under the new rule.
+  const octPf = {
+    segments: pfSegmentsForWindow(
+      [RULE_OLD, RULE_2026],
+      new Date(Date.UTC(2026, 8, 26)),
+      new Date(Date.UTC(2026, 9, 25)),
+    ).segments,
+    totalDays: 30,
+    basis: "ceiling" as const,
+  };
+  const base = {
+    workingDaysBase: 30,
+    esiApplicable: false,
+    pfApplicable: true,
+    professionalTax: 208,
+    daysPresent: 30,
+    daysHalfDay: 0,
+    daysAbsent: 0,
+    daysPaidLeave: 0,
+    carriedBalanceBefore: 0,
+  };
+
+  it("October 2026 (post-transition): PF wage capped at ₹25,000 → employee PF ₹3,000", () => {
+    const c = calcLine({ ...base, basic: 30000, pf: octPf });
+    expect(c.pfWage).toBe(25000);
+    expect(c.pfEmployee).toBe(3000);
+    expect(c.pfEmployer).toBe(3000);
+    expect(c.pfEmployerEps).toBe(2083); // round(25000 × 8.33%)
+    expect(c.pfEmployerEpf).toBe(917); // remainder — never the whole 12% to EPF
+    expect(c.pfCeilingApplied).toBe(true);
+    expect(c.pfSegments).toHaveLength(1);
+    expect(c.pfSegments[0].ruleCode).toBe("PF_RULE_2026");
+    expect(c.netSalary).toBe(60000 - 3000 - 208); // gross 60000, no ESI
+  });
+
+  it("October 2026: ₹20,000 basic now contributes on the full wage → ₹2,400", () => {
+    const c = calcLine({ ...base, basic: 20000, pf: octPf });
+    expect(c.pfWage).toBe(20000);
+    expect(c.pfEmployee).toBe(2400);
+    expect(c.pfCeilingApplied).toBe(false);
+  });
+
+  it("September 2026 transition cycle: both slices prorated and combined into one line", () => {
+    const c = calcLine({ ...base, basic: 30000, pf: sepPf });
+    const combined = (15000 * 22) / 31 + (25000 * 9) / 31;
+    expect(c.pfWage).toBeCloseTo(combined, 2); // 17,903.23
+    expect(c.pfEmployee).toBe(2148); // round(12% × combined)
+    expect(c.pfEmployer).toBe(2148);
+    expect(c.pfEmployerEpf + c.pfEmployerEps).toBe(c.pfEmployer);
+    expect(c.pfSegments.map((s) => s.ruleCode)).toEqual(["PF_RULE_OLD", "PF_RULE_2026"]);
+    expect(c.pfSegments.map((s) => s.days)).toEqual([22, 9]);
+  });
+
+  it("September 2026 with loss-of-pay: the LOP-reduced basic feeds the split", () => {
+    // 5 absent days → basicAfterLop = 30000 × 25/30 = 25000; both prorated
+    // ceilings still bind (25000 > 15000 and > 25000×9/31 per-slice shares).
+    const c = calcLine({ ...base, basic: 30000, daysPresent: 25, daysAbsent: 5, pf: sepPf });
+    expect(c.basicAfterLop).toBeCloseTo(25000, 0);
+    const combined = (15000 * 22) / 31 + (25000 * 9) / 31;
+    expect(c.pfWage).toBeCloseTo(combined, 1); // ceilings bind in both slices
+    expect(c.pfEmployee).toBe(Math.round(combined * 0.12));
+  });
+
+  it("higher-wage (actual basis) member is preserved through the transition", () => {
+    const c = calcLine({ ...base, basic: 30000, pf: { ...octPf, basis: "actual" } });
+    expect(c.pfWage).toBe(30000);
+    expect(c.pfEmployee).toBe(3600); // never auto-reduced to ₹3,000
+    expect(c.pfBasisApplied).toBe("actual");
+    expect(c.pfEmployerEps).toBe(2083); // EPS stays ceiling-capped
+  });
+
+  it("voluntary PF deducts from the employee only", () => {
+    const c = calcLine({ ...base, basic: 20000, pf: { ...octPf, voluntaryPct: 5 } });
+    expect(c.pfEmployeeStatutory).toBe(2400);
+    expect(c.pfEmployeeVpf).toBe(1000);
+    expect(c.pfEmployee).toBe(3400);
+    expect(c.pfEmployer).toBe(2400); // no employer match on VPF
+    expect(c.netSalary).toBe(40000 - 3400 - 208);
+  });
+
+  it("without pf args the legacy ₹15,000 single-rule month applies unchanged", () => {
+    const c = calcLine({ ...base, basic: 20000 });
+    expect(c.pfWage).toBe(15000);
+    expect(c.pfEmployee).toBe(1800);
+    expect(c.pfSegments[0].ruleCode).toBe("PF_LEGACY_15000");
+    // The employer split is still recorded on the legacy path.
+    expect(c.pfEmployerEps).toBe(1250);
+    expect(c.pfEmployerEpf).toBe(550);
+  });
+
+  it("pfApplicable=false zeroes every PF figure including the audit detail", () => {
+    const c = calcLine({ ...base, basic: 20000, pfApplicable: false, pf: octPf });
+    expect(c.pfEmployee).toBe(0);
+    expect(c.pfEmployer).toBe(0);
+    expect(c.pfWage).toBe(0);
+    expect(c.pfSegments).toHaveLength(0);
   });
 });
 

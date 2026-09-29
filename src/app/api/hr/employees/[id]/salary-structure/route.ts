@@ -14,6 +14,15 @@ const Schema = z.object({
   specialPct: z.number().min(0).max(200).default(DEFAULT_ALLOWANCE_PCTS.special),
   esiApplicable: z.boolean().optional(),
   pfApplicable: z.boolean().default(true),
+  // PF contribution basis: "ceiling" (statutory wage ceiling — default) or
+  // "actual" (contribute on full PF wages above the ceiling; higher-wage
+  // members are never auto-reduced by a ceiling change). When omitted —
+  // e.g. the quick "Update Basic" flow posts only {effectiveFrom, basic} —
+  // the employee's latest saved basis carries forward instead of resetting.
+  pfBasis: z.enum(["ceiling", "actual"]).optional(),
+  // Voluntary EXTRA employee PF % (VPF) on the eligible wage; no employer
+  // match. Omitted → carried forward like pfBasis; explicit null clears it.
+  pfVoluntaryPct: z.number().min(0).max(88).nullable().optional(),
   professionalTax: z.number().nonnegative().optional(),
   notes: z.string().nullable().optional(),
 });
@@ -48,6 +57,21 @@ export async function POST(req: Request, { params }: { params: { id: string } })
   const esiApplicable = d.esiApplicable ?? breakdown.gross <= 21000;
   const professionalTax = d.professionalTax ?? suggestProfessionalTax(breakdown.gross);
 
+  // PF basis / VPF carry forward from the latest structure when the caller
+  // doesn't send them, so a quick Basic update can never silently reset a
+  // higher-wage ("actual") member to the statutory ceiling.
+  const prev = await prisma.hrSalaryStructure.findFirst({
+    where: { employeeId: params.id },
+    orderBy: { effectiveFrom: "desc" },
+  });
+  const pfBasis = d.pfBasis ?? (prev?.pfBasis === "actual" ? "actual" : "ceiling");
+  const pfVoluntaryPct =
+    d.pfVoluntaryPct !== undefined
+      ? d.pfVoluntaryPct
+      : prev?.pfVoluntaryPct != null
+        ? Number(prev.pfVoluntaryPct)
+        : null;
+
   const row = await prisma.hrSalaryStructure.upsert({
     where: { employeeId_effectiveFrom: { employeeId: params.id, effectiveFrom } },
     update: {
@@ -58,6 +82,8 @@ export async function POST(req: Request, { params }: { params: { id: string } })
       specialPct: d.specialPct,
       esiApplicable,
       pfApplicable: d.pfApplicable,
+      pfBasis,
+      pfVoluntaryPct,
       professionalTax,
       notes: d.notes ?? null,
     },
@@ -71,6 +97,8 @@ export async function POST(req: Request, { params }: { params: { id: string } })
       specialPct: d.specialPct,
       esiApplicable,
       pfApplicable: d.pfApplicable,
+      pfBasis,
+      pfVoluntaryPct,
       professionalTax,
       notes: d.notes ?? null,
     },

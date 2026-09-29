@@ -1,6 +1,15 @@
 import { prisma } from "./prisma";
 import { cycleWindowForMonth, structureForMonth, computeLateTags, type LateTag } from "./hr-data";
 import { computeMonthlyLeaveLedger } from "./hr-leave-balance";
+import {
+  computePf,
+  pfSegmentsForWindow,
+  toPfRule,
+  LEGACY_PF_RULE,
+  type PfBasis,
+  type PfSegment,
+  type PfSegmentCalc,
+} from "./hr-pf";
 
 /**
  * Salary calculation engine.
@@ -42,9 +51,12 @@ export const DEFAULT_ALLOWANCE_PCTS = {
 /// payroll uses 3.75% (per the May 2026 salary structure sheet).
 export const ESI_EMPLOYEE_RATE = 0.0075;
 export const ESI_EMPLOYER_RATE = 0.0375;
+/// LEGACY PF constants. PF is now governed by effective-dated HrPfRule rows
+/// (see src/lib/hr-pf.ts) selected by salary-period date — ₹15,000 through
+/// 16 Sep 2026, ₹25,000 from 17 Sep 2026. These constants only back the
+/// built-in fallback rule applied when no HrPfRule covers a period, and the
+/// pre-rules behaviour pinned by older tests.
 export const PF_RATE = 0.12;
-/// Statutory PF wage ceiling: ₹15,000 of Basic. PF contribution from
-/// each side is therefore capped at ₹1,800 / month.
 export const PF_WAGE_CEILING = 15000;
 export const PF_CONTRIBUTION_CAP = PF_WAGE_CEILING * PF_RATE; // 1800
 
@@ -107,12 +119,26 @@ export type SalaryCalc = SalaryBreakdown & {
   salaryBeforeEsi: number;
   esiEmployee: number;
   esiEmployer: number;
+  /** Total employee PF deduction (statutory + voluntary). */
   pfEmployee: number;
+  /** Total employer PF contribution (EPF + EPS). */
   pfEmployer: number;
   professionalTax: number;
   netSalary: number;
   esiTotal: number;
   pfTotal: number;
+  // ——— PF audit detail (rule-based; see src/lib/hr-pf.ts) ———
+  /** Eligible PF wage the contributions were computed on. */
+  pfWage: number;
+  pfEmployerEpf: number;
+  pfEmployerEps: number;
+  /** Statutory employee share (pfEmployee minus VPF). */
+  pfEmployeeStatutory: number;
+  pfEmployeeVpf: number;
+  pfBasisApplied: PfBasis;
+  pfCeilingApplied: boolean;
+  /** Rule applied per calendar segment (2 entries on a transition cycle). */
+  pfSegments: PfSegmentCalc[];
 };
 
 const round = (n: number) => Math.round(n);
@@ -197,6 +223,20 @@ export function calcLine(args: {
    * days the person wasn't yet employed. Defaults to 0 (no change).
    */
   daysBeforeJoining?: number;
+  /**
+   * Statutory PF rule configuration for this payroll window: the effective-
+   * dated rule segments covering the cycle (built once per run via
+   * pfSegmentsForWindow), the cycle's calendar-day total, and this employee's
+   * contribution basis / voluntary %. Omitted → the built-in legacy rule
+   * (₹15,000 ceiling, 12%) applies to the whole month, reproducing the
+   * pre-rules behaviour exactly.
+   */
+  pf?: {
+    segments: PfSegment[];
+    totalDays: number;
+    basis: PfBasis;
+    voluntaryPct?: number | null;
+  };
 }): SalaryCalc {
   const wd = args.workingDaysBase;
   const breakdown = deriveBreakdown(args.basic, args);
@@ -253,11 +293,31 @@ export function calcLine(args: {
   const esiApplies = args.esiApplicable && isEsiApplicable(gross);
   const esiEmployee = esiApplies ? round(salaryBeforeEsi * ESI_EMPLOYEE_RATE) : 0;
   const esiEmployer = esiApplies ? round(salaryBeforeEsi * ESI_EMPLOYER_RATE) : 0;
-  // PF: 12% of basicAfterLop, capped at the statutory ₹15,000 wage
-  // ceiling (so each side maxes out at ₹1,800/month).
-  const pfBase = Math.min(basicAfterLop, PF_WAGE_CEILING);
-  const pfEmployee = args.pfApplicable ? round(pfBase * PF_RATE) : 0;
-  const pfEmployer = args.pfApplicable ? round(pfBase * PF_RATE) : 0;
+  // PF: eligible wage × rate under the effective-dated statutory rule(s)
+  // covering this payroll window — prorated per rule segment when the window
+  // straddles a rule boundary (e.g. the 17 Sep 2026 ceiling change). The
+  // familiar caps (₹1,800 / ₹3,000) fall out of the ceiling; they are never
+  // hard-coded amounts. See src/lib/hr-pf.ts.
+  const pfConf = args.pf ?? {
+    // Legacy single-rule month: identical to the old min(basic, ₹15,000) × 12%.
+    segments: [
+      { rule: LEGACY_PF_RULE, from: new Date(0), to: new Date(0), days: 1 },
+    ],
+    totalDays: 1,
+    basis: "ceiling" as PfBasis,
+    voluntaryPct: null,
+  };
+  const pf = args.pfApplicable
+    ? computePf({
+        monthlyPfWage: basicAfterLop,
+        basis: pfConf.basis,
+        voluntaryPct: pfConf.voluntaryPct,
+        segments: pfConf.segments,
+        totalDays: pfConf.totalDays,
+      })
+    : computePf({ monthlyPfWage: 0, basis: pfConf.basis, segments: [], totalDays: 0 });
+  const pfEmployee = pf.employeeTotal;
+  const pfEmployer = pf.employerTotal;
   const pt = args.professionalTax;
 
   const netSalary = round(salaryBeforeEsi - esiEmployee - pfEmployee - pt);
@@ -288,6 +348,14 @@ export function calcLine(args: {
     netSalary,
     esiTotal: esiEmployee + esiEmployer,
     pfTotal: pfEmployee + pfEmployer,
+    pfWage: pf.pfWage,
+    pfEmployerEpf: pf.employerEpf,
+    pfEmployerEps: pf.employerEps,
+    pfEmployeeStatutory: pf.employeePf,
+    pfEmployeeVpf: pf.employeeVpf,
+    pfBasisApplied: pf.basisApplied,
+    pfCeilingApplied: pf.ceilingApplied,
+    pfSegments: pf.segments,
   };
 }
 
@@ -443,6 +511,18 @@ export async function computeSalaryRun(monthKey: string, userId: string | null):
   const { year, start, end } = cycleWindowForMonth(monthKey);
   const workingDaysBase = 30;
 
+  // Statutory PF rules in force during this cycle, selected by PERIOD DATE.
+  // A cycle straddling a rule boundary (17 Sep 2026: ₹15,000 → ₹25,000) is
+  // split into per-rule segments and prorated by calendar days — both
+  // segments combine into the single month's PF on each line.
+  const pfRuleRows = await prisma.hrPfRule.findMany({ orderBy: { effectiveFrom: "asc" } });
+  const cycleDayTotal = Math.round((end.getTime() - start.getTime()) / 86_400_000) + 1;
+  const { segments: pfSegments, usedFallback: pfFallback } = pfSegmentsForWindow(
+    pfRuleRows.map(toPfRule),
+    start,
+    end,
+  );
+
   const run = await prisma.hrSalaryRun.upsert({
     where: { monthKey },
     update: { status: "draft", workingDaysBase, totalNet: 0 },
@@ -474,6 +554,11 @@ export async function computeSalaryRun(monthKey: string, userId: string | null):
   }
 
   const warnings: string[] = [];
+  if (pfFallback) {
+    warnings.push(
+      `No PF statutory rule covers part of the ${monthKey} cycle — the built-in ₹15,000 ceiling was applied there. Check HR → Salary → Statutory Settings.`,
+    );
+  }
   let totalNet = 0;
   let lineCount = 0;
 
@@ -592,6 +677,12 @@ export async function computeSalaryRun(monthKey: string, userId: string | null):
       // "penalty"-category deductions reduce the salary before ESI/PF/PT.
       penaltyBeforeStatutory: adj.penaltyTotal,
       daysBeforeJoining: preJoin,
+      pf: {
+        segments: pfSegments,
+        totalDays: cycleDayTotal,
+        basis: structure.pfBasis === "actual" ? "actual" : "ceiling",
+        voluntaryPct: structure.pfVoluntaryPct == null ? null : Number(structure.pfVoluntaryPct),
+      },
     });
 
     await prisma.hrSalaryRunLine.create({
@@ -618,6 +709,22 @@ export async function computeSalaryRun(monthKey: string, userId: string | null):
         pfEmployer: calc.pfEmployer,
         esiTotal: calc.esiTotal,
         pfTotal: calc.pfTotal,
+        // PF audit trail — frozen with the line so later statutory changes
+        // can never alter what this run deducted (ECR/exports read these).
+        pfWage: calc.pfWage,
+        pfEmployerEpf: calc.pfEmployerEpf,
+        pfEmployerEps: calc.pfEmployerEps,
+        pfRuleId: calc.pfSegments.at(-1)?.ruleId ?? null,
+        pfRuleCode: calc.pfSegments.at(-1)?.ruleCode ?? null,
+        pfBasisApplied: calc.pfBasisApplied,
+        pfCeilingApplied: calc.pfCeilingApplied,
+        pfDetail: {
+          basis: calc.pfBasisApplied,
+          ceilingApplied: calc.pfCeilingApplied,
+          employeeStatutory: calc.pfEmployeeStatutory,
+          employeeVpf: calc.pfEmployeeVpf,
+          segments: calc.pfSegments,
+        },
         bankAccount: e.accountNumber,
         bankIfsc: e.ifsc,
         bankName: e.bankName,

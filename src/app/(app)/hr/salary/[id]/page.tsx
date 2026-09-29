@@ -5,6 +5,7 @@ import { getCurrentUserAndPermissions } from "@/lib/permissions";
 import { isHrUser, canApproveHr, canDownloadAxis } from "@/lib/hr-rbac";
 import { TopBar } from "@/components/TopBar";
 import { Section } from "@/components/Cards";
+import type { PfSegmentCalc } from "@/lib/hr-pf";
 import { SalaryRunDetail } from "./client";
 
 export const dynamic = "force-dynamic";
@@ -81,6 +82,18 @@ export default async function SalaryRunDetailPage({ params }: { params: { id: st
             salaryBeforeEsi: Number(l.salaryBeforeEsi),
             esiEmployee: Number(l.esiEmployee),
             pfEmployee: Number(l.pfEmployee),
+            pfEmployer: Number(l.pfEmployer),
+            // PF audit trail (frozen at compute time; empty on legacy lines).
+            pfWage: Number(l.pfWage),
+            pfEmployerEpf: Number(l.pfEmployerEpf),
+            pfEmployerEps: Number(l.pfEmployerEps),
+            pfRuleCode: l.pfRuleCode,
+            pfBasisApplied: l.pfBasisApplied,
+            pfCeilingApplied: l.pfCeilingApplied,
+            pfSegments: (() => {
+              const d = l.pfDetail as { segments?: unknown } | null;
+              return Array.isArray(d?.segments) ? (d.segments as PfSegmentCalc[]) : [];
+            })(),
             professionalTax: Number(l.professionalTax),
             adjustments: Number(l.adjustments),
             adjustmentRows: (adjByEmployee.get(l.employeeId) ?? []).map((a) => ({
