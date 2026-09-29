@@ -60,9 +60,19 @@ export default async function EmployeeDetailPage({ params }: { params: { id: str
   if (!employee) notFound();
 
   const currentYear = new Date().getUTCFullYear();
-  const [leaveLedger, leaveYears] = await Promise.all([
+  const today = new Date();
+  const todayDate = new Date(Date.UTC(today.getUTCFullYear(), today.getUTCMonth(), today.getUTCDate()));
+  const [leaveLedger, leaveYears, activePf] = await Promise.all([
     computeMonthlyLeaveLedger(employee.id, currentYear, { fill: "full" }),
     leaveLedgerYears(employee.id),
+    // Statutory PF rule in force today — drives the structure form's live preview.
+    prisma.hrPfRule.findFirst({
+      where: {
+        effectiveFrom: { lte: todayDate },
+        OR: [{ effectiveTo: null }, { effectiveTo: { gte: todayDate } }],
+      },
+      orderBy: { effectiveFrom: "desc" },
+    }),
   ]);
 
   // Designation, department & role are the structured (Designation &
@@ -144,9 +154,20 @@ export default async function EmployeeDetailPage({ params }: { params: { id: str
             specialPct: Number(s.specialPct),
             esiApplicable: s.esiApplicable,
             pfApplicable: s.pfApplicable,
+            pfBasis: s.pfBasis === "actual" ? "actual" : "ceiling",
+            pfVoluntaryPct: s.pfVoluntaryPct == null ? null : Number(s.pfVoluntaryPct),
             professionalTax: Number(s.professionalTax),
             notes: s.notes,
           }))}
+          pfRule={
+            !activePf ? null : {
+              code: activePf.code,
+              wageCeiling: Number(activePf.wageCeiling),
+              employeeRatePct: Number(activePf.employeeRatePct),
+              employerRatePct: Number(activePf.employerRatePct),
+              effectiveFrom: activePf.effectiveFrom.toISOString().slice(0, 10),
+            }
+          }
           canEdit={canApproveHr(perms)}
           leaveTab={{
             employeeId: employee.id,

@@ -25,14 +25,31 @@ export default async function SalaryStructuresPage() {
     );
   }
 
-  const employees = await prisma.employee.findMany({
-    where: { active: true },
-    orderBy: { empCode: "asc" },
-    include: {
-      designationRef: true,
-      salaryStructures: { orderBy: { effectiveFrom: "desc" }, take: 1 },
-    },
-  });
+  const now = new Date();
+  const todayDate = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()));
+  const [employees, activePf] = await Promise.all([
+    prisma.employee.findMany({
+      where: { active: true },
+      orderBy: { empCode: "asc" },
+      include: {
+        designationRef: true,
+        salaryStructures: { orderBy: { effectiveFrom: "desc" }, take: 1 },
+      },
+    }),
+    // Statutory PF rule in force today — this page previews CURRENT monthly
+    // figures, so it uses today's ceiling/rates (payroll itself resolves the
+    // rule per salary-period date).
+    prisma.hrPfRule.findFirst({
+      where: {
+        effectiveFrom: { lte: todayDate },
+        OR: [{ effectiveTo: null }, { effectiveTo: { gte: todayDate } }],
+      },
+      orderBy: { effectiveFrom: "desc" },
+    }),
+  ]);
+  const pfCeil = activePf ? Number(activePf.wageCeiling) : 15000;
+  const pfEeRate = (activePf ? Number(activePf.employeeRatePct) : 12) / 100;
+  const pfErRate = (activePf ? Number(activePf.employerRatePct) : 12) / 100;
 
   const rows = employees.map((e) => {
     const cur = e.salaryStructures[0];
@@ -75,11 +92,16 @@ export default async function SalaryStructuresPage() {
     const esiApplicable = !isTrainee && cur.esiApplicable;
     const pfApplicable = !isTrainee && cur.pfApplicable;
     const esiEmp = esiApplicable ? Math.round(breakdown.gross * 0.0075) : 0;
-    // PF capped at ₹15,000 wage ceiling → max ₹1,800.
-    const pfEmp = pfApplicable ? Math.round(Math.min(basic, 15000) * 0.12) : 0;
+    // PF under the statutory rule active today; "actual"-basis members
+    // contribute on full PF wages (never auto-capped), VPF is employee-only.
+    const pfBase = cur.pfBasis === "actual" ? basic : Math.min(basic, pfCeil);
+    const vpfPct = cur.pfVoluntaryPct == null ? 0 : Number(cur.pfVoluntaryPct);
+    const pfEmp = pfApplicable
+      ? Math.round(pfBase * pfEeRate) + (vpfPct > 0 ? Math.round((pfBase * vpfPct) / 100) : 0)
+      : 0;
     // Employer-side contributions
     const esiEmployer = esiApplicable ? Math.round(breakdown.gross * 0.0375) : 0;
-    const pfEmployer = pfApplicable ? Math.round(Math.min(basic, 15000) * 0.12) : 0;
+    const pfEmployer = pfApplicable ? Math.round(pfBase * pfErRate) : 0;
     const professionalTax = isTrainee ? 0 : Number(cur.professionalTax);
     return {
       id: e.id,

@@ -29,6 +29,21 @@ type AdjRow = {
   note: string | null;
 };
 
+type PfSegment = {
+  ruleId: string | null;
+  ruleCode: string;
+  from: string;
+  to: string;
+  days: number;
+  wageCeiling: number;
+  proratedCeiling: number;
+  segmentWage: number;
+  pfWage: number;
+  employeePf: number;
+  employerEpf: number;
+  employerEps: number;
+};
+
 type Line = {
   id: string;
   employeeId: string;
@@ -44,6 +59,14 @@ type Line = {
   salaryBeforeEsi: number;
   esiEmployee: number;
   pfEmployee: number;
+  pfEmployer: number;
+  pfWage: number;
+  pfEmployerEpf: number;
+  pfEmployerEps: number;
+  pfRuleCode: string | null;
+  pfBasisApplied: string | null;
+  pfCeilingApplied: boolean;
+  pfSegments: PfSegment[];
   professionalTax: number;
   adjustments: number; // cached rollup: Σ additions − Σ deductions
   adjustmentRows: AdjRow[];
@@ -91,6 +114,7 @@ export function SalaryRunDetail({
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [openLine, setOpenLine] = useState<string | null>(null);
+  const [openPf, setOpenPf] = useState<string | null>(null);
   const [drafts, setDrafts] = useState<Record<string, Draft>>({});
 
   const total = lines.reduce((s, l) => s + l.netSalary + l.adjustments, 0);
@@ -247,6 +271,7 @@ export function SalaryRunDetail({
             <tbody>
               {lines.map((l) => {
                 const isOpen = openLine === l.id;
+                const isPfOpen = openPf === l.id;
                 const draft = drafts[l.id] ?? emptyDraft();
                 // Penalty deductions are folded into the reduced Before-ESI /
                 // ESI / PF / Net columns (pre-statutory), so they're shown
@@ -279,7 +304,17 @@ export function SalaryRunDetail({
                       <td className="py-sm pr-md">₹{inr(l.monthlySalary)}</td>
                       <td className="py-sm pr-md">₹{inr(l.salaryBeforeEsi)}</td>
                       <td className="py-sm pr-md">₹{inr(l.esiEmployee)}</td>
-                      <td className="py-sm pr-md">₹{inr(l.pfEmployee)}</td>
+                      <td className="py-sm pr-md">
+                        ₹{inr(l.pfEmployee)}
+                        {l.pfEmployee > 0 && (
+                          <button
+                            onClick={() => setOpenPf(isPfOpen ? null : l.id)}
+                            className="block text-caption underline text-primary"
+                          >
+                            {isPfOpen ? "Hide" : l.pfSegments.length > 1 ? "Split ▸" : "PF ▸"}
+                          </button>
+                        )}
+                      </td>
                       <td className="py-sm pr-md">₹{inr(l.professionalTax)}</td>
                       <td className="py-sm pr-md min-w-[120px]">
                         <div className={l.adjustments === 0 ? "text-on-surface-variant" : l.adjustments < 0 ? "text-red-700" : "text-green-700"}>
@@ -325,6 +360,107 @@ export function SalaryRunDetail({
                         )}
                       </td>
                     </tr>
+                    {isPfOpen && (
+                      <tr className="border-b border-outline-variant bg-surface-container-low">
+                        <td colSpan={12} className="p-md">
+                          <div className="space-y-sm max-w-[860px]">
+                            <div className="font-semibold">
+                              Provident Fund · {l.empCode} · {l.name}
+                            </div>
+                            {l.pfSegments.length === 0 ? (
+                              <p className="text-caption text-on-surface-variant">
+                                No PF rule detail on this line — it was computed before the
+                                statutory-rules update. Recompute the run (draft only) to capture
+                                the audit breakdown.
+                              </p>
+                            ) : (
+                              <>
+                                <div className="grid grid-cols-2 md:grid-cols-5 gap-sm text-label-sm">
+                                  <div>
+                                    <p className="text-caption text-on-surface-variant">PF Applicable Wage</p>
+                                    <p className="font-bold">₹{l.pfWage.toLocaleString("en-IN")}</p>
+                                  </div>
+                                  <div>
+                                    <p className="text-caption text-on-surface-variant">Employee PF</p>
+                                    <p className="font-bold">₹{inr(l.pfEmployee)}</p>
+                                  </div>
+                                  <div>
+                                    <p className="text-caption text-on-surface-variant">Employer EPF</p>
+                                    <p className="font-bold">₹{inr(l.pfEmployerEpf)}</p>
+                                  </div>
+                                  <div>
+                                    <p className="text-caption text-on-surface-variant">Employer EPS</p>
+                                    <p className="font-bold">₹{inr(l.pfEmployerEps)}</p>
+                                  </div>
+                                  <div>
+                                    <p className="text-caption text-on-surface-variant">Total Employer PF</p>
+                                    <p className="font-bold">₹{inr(l.pfEmployer)}</p>
+                                  </div>
+                                </div>
+                                <p className="text-caption text-on-surface-variant">
+                                  Rule applied: <b>{l.pfRuleCode ?? "—"}</b>
+                                  {l.pfSegments.length > 0 && (
+                                    <> · effective {l.pfSegments[l.pfSegments.length - 1].from}</>
+                                  )}
+                                  {" · "}basis:{" "}
+                                  {l.pfBasisApplied === "actual"
+                                    ? "actual PF wages (higher-wage member — not ceiling-capped)"
+                                    : l.pfCeilingApplied
+                                      ? "statutory ceiling (cap applied)"
+                                      : "statutory ceiling (wage below cap)"}
+                                </p>
+                                {l.pfSegments.length > 1 && (
+                                  <div>
+                                    <p className="text-label-sm font-semibold mb-xs">
+                                      Transition split — this cycle straddles a statutory ceiling
+                                      change, so each slice is prorated by its calendar days and
+                                      the amounts combine into the single month above.
+                                    </p>
+                                    <table className="w-full text-caption max-w-[760px]">
+                                      <thead className="text-left text-on-surface-variant border-b border-outline-variant">
+                                        <tr>
+                                          <th className="py-xs pr-sm">Period</th>
+                                          <th className="py-xs pr-sm">Days</th>
+                                          <th className="py-xs pr-sm">Rule / Ceiling</th>
+                                          <th className="py-xs pr-sm">Prorated ceiling</th>
+                                          <th className="py-xs pr-sm">PF wage</th>
+                                          <th className="py-xs pr-sm">Employee PF</th>
+                                          <th className="py-xs pr-sm">Employer EPF</th>
+                                          <th className="py-xs pr-sm">Employer EPS</th>
+                                        </tr>
+                                      </thead>
+                                      <tbody>
+                                        {l.pfSegments.map((s) => (
+                                          <tr key={s.from} className="border-b border-outline-variant last:border-0">
+                                            <td className="py-xs pr-sm whitespace-nowrap">
+                                              {s.from} → {s.to}
+                                            </td>
+                                            <td className="py-xs pr-sm">{s.days}</td>
+                                            <td className="py-xs pr-sm whitespace-nowrap">
+                                              {s.ruleCode} · ₹{s.wageCeiling.toLocaleString("en-IN")}
+                                            </td>
+                                            <td className="py-xs pr-sm">₹{s.proratedCeiling.toLocaleString("en-IN")}</td>
+                                            <td className="py-xs pr-sm font-semibold">₹{s.pfWage.toLocaleString("en-IN")}</td>
+                                            <td className="py-xs pr-sm">₹{s.employeePf.toLocaleString("en-IN")}</td>
+                                            <td className="py-xs pr-sm">₹{s.employerEpf.toLocaleString("en-IN")}</td>
+                                            <td className="py-xs pr-sm">₹{s.employerEps.toLocaleString("en-IN")}</td>
+                                          </tr>
+                                        ))}
+                                      </tbody>
+                                    </table>
+                                    <p className="text-caption text-on-surface-variant mt-xs">
+                                      Whole-rupee (EPFO) rounding is applied to the combined month,
+                                      so the rounded total can differ from the sum of the unrounded
+                                      slices by up to ₹1.
+                                    </p>
+                                  </div>
+                                )}
+                              </>
+                            )}
+                          </div>
+                        </td>
+                      </tr>
+                    )}
                     {canEdit && isOpen && (
                       <tr className="border-b border-outline-variant bg-surface-container-low">
                         <td colSpan={12} className="p-md">

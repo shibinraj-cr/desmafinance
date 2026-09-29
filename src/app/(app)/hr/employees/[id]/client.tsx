@@ -55,9 +55,22 @@ type Structure = {
   specialPct: number;
   esiApplicable: boolean;
   pfApplicable: boolean;
+  /** "ceiling" (statutory wage ceiling) | "actual" (full PF wages, higher-wage member). */
+  pfBasis: "ceiling" | "actual";
+  /** Voluntary EXTRA employee PF % on the eligible wage (no employer match). */
+  pfVoluntaryPct: number | null;
   professionalTax: number;
   notes: string | null;
 };
+
+/** The statutory PF rule in force today (null until the rules are seeded). */
+type PfRuleLite = {
+  code: string;
+  wageCeiling: number;
+  employeeRatePct: number;
+  employerRatePct: number;
+  effectiveFrom: string;
+} | null;
 
 const DEFAULT_PCTS = { hraPct: 40, conveyancePct: 20, medicalPct: 25, specialPct: 15 };
 
@@ -95,6 +108,8 @@ function draftForMonth(structures: Structure[], month: string) {
     specialPct: src?.specialPct ?? DEFAULT_PCTS.specialPct,
     esiApplicable: src ? src.esiApplicable : true,
     pfApplicable: src ? src.pfApplicable : true,
+    pfBasis: src?.pfBasis ?? ("ceiling" as const),
+    pfVoluntaryPct: src?.pfVoluntaryPct ?? null,
     professionalTax: src?.professionalTax ?? 125,
     notes: src?.notes ?? "",
     // Auto only while the saved PT still matches the Kerala slab — a manual
@@ -110,6 +125,8 @@ function hasNonDefaultAllowances(d: ReturnType<typeof draftForMonth>) {
     d.conveyancePct !== DEFAULT_PCTS.conveyancePct ||
     d.medicalPct !== DEFAULT_PCTS.medicalPct ||
     d.specialPct !== DEFAULT_PCTS.specialPct ||
+    d.pfBasis !== "ceiling" ||
+    (d.pfVoluntaryPct ?? 0) > 0 ||
     !d.autoPT
   );
 }
@@ -148,6 +165,7 @@ export function EmployeeEditor({
   login,
   canEdit,
   leaveTab,
+  pfRule,
 }: {
   employee: EmpDraft;
   shifts: ShiftLite[];
@@ -162,6 +180,7 @@ export function EmployeeEditor({
   login: LoginStatus;
   canEdit: boolean;
   leaveTab: LeaveTabData;
+  pfRule: PfRuleLite;
 }) {
   const router = useRouter();
   const [tab, setTab] = useState<"profile" | "org" | "salary" | "leave">("profile");
@@ -502,6 +521,7 @@ export function EmployeeEditor({
           employeeId={employee.id}
           structures={structures}
           canEdit={canEdit}
+          pfRule={pfRule}
         />
       )}
 
@@ -514,10 +534,12 @@ function SalaryStructureTab({
   employeeId,
   structures,
   canEdit,
+  pfRule,
 }: {
   employeeId: string;
   structures: Structure[];
   canEdit: boolean;
+  pfRule: PfRuleLite;
 }) {
   const router = useRouter();
   const [pending, start] = useTransition();
@@ -544,12 +566,24 @@ function SalaryStructureTab({
   const ptToUse = draft.autoPT ? ptSlab : draft.professionalTax;
   const esiEligible = gross > 0 && gross <= 21000 && draft.esiApplicable;
   const esiEmp = esiEligible ? Math.round(gross * 0.0075) : 0;
-  // PF capped at ₹15,000 wage ceiling → max ₹1,800.
-  const pfEmp = draft.pfApplicable ? Math.round(Math.min(basic, 15000) * 0.12) : 0;
+  // PF under the statutory rule active TODAY (effective-dated master data —
+  // the ₹15,000 figures remain only as a fallback until the rules are
+  // seeded). "actual" basis contributes on full PF wages, uncapped; VPF is an
+  // extra employee-only % with no employer match.
+  const pfCeil = pfRule?.wageCeiling ?? 15000;
+  const pfEeRate = (pfRule?.employeeRatePct ?? 12) / 100;
+  const pfErRate = (pfRule?.employerRatePct ?? 12) / 100;
+  const pfBase = draft.pfBasis === "actual" ? basic : Math.min(basic, pfCeil);
+  const pfEmpStatutory = draft.pfApplicable ? Math.round(pfBase * pfEeRate) : 0;
+  const pfVpf =
+    draft.pfApplicable && (draft.pfVoluntaryPct ?? 0) > 0
+      ? Math.round((pfBase * (draft.pfVoluntaryPct ?? 0)) / 100)
+      : 0;
+  const pfEmp = pfEmpStatutory + pfVpf;
   const netTakeHome = gross - esiEmp - pfEmp - ptToUse;
   // Employer-side statutory contributions sit on top of gross: CTC = gross + employer PF + employer ESI.
   const esiEr = esiEligible ? Math.round(gross * 0.0375) : 0;
-  const pfEr = pfEmp;
+  const pfEr = draft.pfApplicable ? Math.round(pfBase * pfErRate) : 0;
   const ctc = gross + pfEr + esiEr;
 
   async function save() {
@@ -563,6 +597,8 @@ function SalaryStructureTab({
       specialPct: draft.specialPct,
       esiApplicable: draft.esiApplicable,
       pfApplicable: draft.pfApplicable,
+      pfBasis: draft.pfBasis,
+      pfVoluntaryPct: (draft.pfVoluntaryPct ?? 0) > 0 ? draft.pfVoluntaryPct : null,
       professionalTax: ptToUse,
       notes: draft.notes || null,
     };
@@ -683,6 +719,35 @@ function SalaryStructureTab({
                 />
                 PF applicable
               </label>
+              <Field label="PF contribution basis">
+                <select
+                  disabled={!draft.pfApplicable}
+                  className="w-full px-sm py-sm rounded border border-outline-variant bg-surface disabled:opacity-50"
+                  value={draft.pfBasis}
+                  onChange={(e) =>
+                    setDraft({ ...draft, pfBasis: e.target.value as "ceiling" | "actual" })
+                  }
+                >
+                  <option value="ceiling">Statutory ceiling</option>
+                  <option value="actual">Actual PF wages (above ceiling)</option>
+                </select>
+              </Field>
+              <Field label="VPF % (extra, employee-only)">
+                <input
+                  type="number"
+                  min="0"
+                  step="0.5"
+                  disabled={!draft.pfApplicable}
+                  className="w-full px-sm py-sm rounded border border-outline-variant bg-surface disabled:opacity-50"
+                  value={draft.pfVoluntaryPct ?? ""}
+                  onChange={(e) =>
+                    setDraft({
+                      ...draft,
+                      pfVoluntaryPct: e.target.value === "" ? null : Number(e.target.value),
+                    })
+                  }
+                />
+              </Field>
               <label className="flex items-center gap-xs text-label-sm">
                 <input
                   type="checkbox"
@@ -725,9 +790,11 @@ function SalaryStructureTab({
               <Stat label="ESI (E) 0.75%" value={`₹${esiEmp.toLocaleString("en-IN")}`} />
               <Stat
                 label={
-                  basic > 15000
-                    ? "PF (E) capped at ₹1,800"
-                    : "PF (E) 12% of Basic"
+                  draft.pfBasis === "actual"
+                    ? `PF (E) ${pfRule?.employeeRatePct ?? 12}% of actual wages${pfVpf > 0 ? " + VPF" : ""}`
+                    : basic > pfCeil
+                      ? `PF (E) capped at ₹${pfCeil.toLocaleString("en-IN")} ceiling${pfVpf > 0 ? " + VPF" : ""}`
+                      : `PF (E) ${pfRule?.employeeRatePct ?? 12}% of Basic${pfVpf > 0 ? " + VPF" : ""}`
                 }
                 value={`₹${pfEmp.toLocaleString("en-IN")}`}
               />
@@ -735,7 +802,13 @@ function SalaryStructureTab({
             </div>
             <div className="grid grid-cols-2 md:grid-cols-4 gap-sm text-label-sm mt-md">
               <Stat
-                label={basic > 15000 ? "PF (Employer) capped at ₹1,800" : "PF (Employer) 12% of Basic"}
+                label={
+                  draft.pfBasis === "actual"
+                    ? `PF (Employer) ${pfRule?.employerRatePct ?? 12}% of actual wages`
+                    : basic > pfCeil
+                      ? `PF (Employer) capped at ₹${pfCeil.toLocaleString("en-IN")} ceiling`
+                      : `PF (Employer) ${pfRule?.employerRatePct ?? 12}% of Basic`
+                }
                 value={`₹${pfEr.toLocaleString("en-IN")}`}
               />
               <Stat label="ESI (Employer) 3.75%" value={`₹${esiEr.toLocaleString("en-IN")}`} />
@@ -752,7 +825,10 @@ function SalaryStructureTab({
                 {esiEligible
                   ? `ESI active (gross ≤ ₹21,000).`
                   : `ESI inactive (gross > ₹21,000 or disabled).`}{" "}
-                PT slab suggested: ₹{ptSlab}.
+                PT slab suggested: ₹{ptSlab}.{" "}
+                {pfRule
+                  ? `PF rule ${pfRule.code}: ₹${pfRule.wageCeiling.toLocaleString("en-IN")} ceiling, effective ${pfRule.effectiveFrom}.`
+                  : "PF statutory rules not seeded — using the built-in ₹15,000 ceiling."}
               </p>
             </div>
           </div>
@@ -801,7 +877,9 @@ function SalaryStructureTab({
                     </td>
                     <td className="py-sm pr-md text-on-surface-variant">
                       {s.esiApplicable ? "ESI" : "—"} /{" "}
-                      {s.pfApplicable ? "PF" : "—"}
+                      {s.pfApplicable
+                        ? `PF${s.pfBasis === "actual" ? " (actual wages)" : ""}${(s.pfVoluntaryPct ?? 0) > 0 ? ` +VPF ${s.pfVoluntaryPct}%` : ""}`
+                        : "—"}
                     </td>
                     <td className="py-sm pr-md">₹{s.professionalTax}</td>
                     <td className="py-sm pr-md text-on-surface-variant">{s.notes ?? "—"}</td>
