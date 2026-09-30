@@ -232,7 +232,16 @@ export function computePf(args: {
   segments: PfSegment[];
   /** Total calendar days of the payroll window (Σ segment days). */
   totalDays: number;
+  /**
+   * MEMBER-level EPS applicability (Employee.epsExempt inverted). False for
+   * members not enrolled in EPS — joined EPF on/after 1 Sep 2014 above the
+   * wage ceiling, or past 58 — whose whole employer share is credited to
+   * EPF. Distinct from the RULE-level epsApplicable; both must hold for EPS
+   * to be diverted. Defaults to true (EPS member).
+   */
+  epsApplicable?: boolean;
 }): PfCalc {
+  const memberEps = args.epsApplicable ?? true;
   const wage = Math.max(0, args.monthlyPfWage);
   if (wage === 0 || args.segments.length === 0 || args.totalDays <= 0) {
     return { ...ZERO_PF, basisApplied: args.basis, segments: [] };
@@ -259,7 +268,8 @@ export function computePf(args: {
     // EPS is computed on the CEILING-CAPPED wage even for actual-basis
     // members (the statutory EPS wage never exceeds the ceiling); it can
     // never exceed the employer total.
-    const eps = r.epsApplicable ? Math.min((capped * r.epsRatePct) / 100, erTotal) : 0;
+    const eps =
+      r.epsApplicable && memberEps ? Math.min((capped * r.epsRatePct) / 100, erTotal) : 0;
 
     eligibleSum += eligible;
     eeSum += ee;

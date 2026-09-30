@@ -1252,6 +1252,17 @@ model Employee {
   yearsOfExperience  String?
   aadhar             String?
   pan                String?
+  /// EPF Universal Account Number (12 digits). Feeds the monthly ECR
+  /// return; the PF & ESI Returns page flags PF members missing it.
+  uan                String?
+  /// ESIC Insured Person number (10 digits). Feeds the monthly ESI
+  /// return; the PF & ESI Returns page flags ESI members missing it.
+  esiIpNumber        String?
+  /// EPS does not apply to this member (joined EPF on/after 1 Sep 2014
+  /// above the wage ceiling, or past 58): the whole employer PF share is
+  /// credited to EPF. Only moves money between EPS and EPF — employee /
+  /// employer totals and net salary are unchanged.
+  epsExempt          Boolean        @default(false)
   accountNumber      String?
   ifsc               String?
   bankName           String?

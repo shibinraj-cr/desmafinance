@@ -29,6 +29,9 @@ type EmpDraft = {
   yearsOfExperience: string;
   aadhar: string;
   pan: string;
+  uan: string;
+  esiIpNumber: string;
+  epsExempt: boolean;
   accountNumber: string;
   ifsc: string;
   bankName: string;
@@ -421,6 +424,34 @@ export function EmployeeEditor({
                 onChange={(e) => setDraft({ ...draft, pan: e.target.value })}
               />
             </Field>
+            <Field label="UAN (EPF)">
+              <input
+                className="w-full px-sm py-sm rounded border border-outline-variant bg-surface"
+                value={draft.uan}
+                onChange={(e) => setDraft({ ...draft, uan: e.target.value })}
+              />
+            </Field>
+            <Field label="ESI IP Number">
+              <input
+                className="w-full px-sm py-sm rounded border border-outline-variant bg-surface"
+                value={draft.esiIpNumber}
+                onChange={(e) => setDraft({ ...draft, esiIpNumber: e.target.value })}
+              />
+            </Field>
+            <label className="flex items-start gap-xs text-label-sm md:col-span-3">
+              <input
+                type="checkbox"
+                className="mt-[3px]"
+                checked={draft.epsExempt}
+                onChange={(e) => setDraft({ ...draft, epsExempt: e.target.checked })}
+              />
+              <span>
+                <b>EPS not applicable</b> — member is not enrolled in the Pension Scheme (joined
+                EPF on/after 1&nbsp;Sep&nbsp;2014 above the wage ceiling, or past 58). The whole
+                employer PF share is credited to EPF; the ECR shows EPS wage and contribution as
+                0. Contribution totals and net salary are unchanged.
+              </span>
+            </label>
             <Field label="Account No.">
               <input
                 className="w-full px-sm py-sm rounded border border-outline-variant bg-surface"

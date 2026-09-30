@@ -28,6 +28,20 @@ export function canDownloadAxis(p: Permissions | null | undefined): boolean {
   return p.canApprove && p.pages.includes("/hr/salary");
 }
 
+/**
+ * PF (ECR) & ESI statutory returns: HR Manager or Admin ONLY — deliberately
+ * narrower than canApproveHr, which Finance Manager also passes (it holds
+ * /hr/salary + canApprove for the Axis download). We tell HR Manager apart
+ * by approval authority over HR pages BEYOND payroll.
+ */
+export function canViewStatutoryReports(p: Permissions | null | undefined): boolean {
+  if (!p) return false;
+  if (p.isAdmin) return true;
+  return (
+    p.canApprove && p.pages.some((pg) => pg.startsWith("/hr/") && !pg.startsWith("/hr/salary"))
+  );
+}
+
 /** Self-service: anyone signed in can hit /me/* pages. */
 export function isEmployeePortalUser(p: Permissions | null | undefined): boolean {
   if (!p) return false;
