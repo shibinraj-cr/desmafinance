@@ -237,6 +237,13 @@ export function calcLine(args: {
     basis: PfBasis;
     voluntaryPct?: number | null;
   };
+  /**
+   * Member is not enrolled in EPS (Employee.epsExempt): the whole employer
+   * PF share is credited to EPF. Reallocates between EPS and EPF only —
+   * employee/employer totals and the net salary are unchanged. Defaults to
+   * false (EPS member).
+   */
+  epsExempt?: boolean;
 }): SalaryCalc {
   const wd = args.workingDaysBase;
   const breakdown = deriveBreakdown(args.basic, args);
@@ -314,6 +321,7 @@ export function calcLine(args: {
         voluntaryPct: pfConf.voluntaryPct,
         segments: pfConf.segments,
         totalDays: pfConf.totalDays,
+        epsApplicable: !args.epsExempt,
       })
     : computePf({ monthlyPfWage: 0, basis: pfConf.basis, segments: [], totalDays: 0 });
   const pfEmployee = pf.employeeTotal;
@@ -683,6 +691,7 @@ export async function computeSalaryRun(monthKey: string, userId: string | null):
         basis: structure.pfBasis === "actual" ? "actual" : "ceiling",
         voluntaryPct: structure.pfVoluntaryPct == null ? null : Number(structure.pfVoluntaryPct),
       },
+      epsExempt: e.epsExempt,
     });
 
     await prisma.hrSalaryRunLine.create({

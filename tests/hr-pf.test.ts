@@ -271,6 +271,21 @@ describe("computePf — edge behaviour", () => {
     expect(c.employerEps).toBe(0);
     expect(c.employerEpf).toBe(2400);
   });
+
+  it("member-level EPS exemption (Employee.epsExempt) reallocates EPS to EPF, totals unchanged", () => {
+    const base = computePf({ monthlyPfWage: 14000, basis: "ceiling", ...fullMonth(RULE_OLD) });
+    const exempt = computePf({
+      monthlyPfWage: 14000,
+      basis: "ceiling",
+      ...fullMonth(RULE_OLD),
+      epsApplicable: false,
+    });
+    expect(base.employerEps).toBe(1166); // 8.33% of 14,000
+    expect(exempt.employerEps).toBe(0);
+    expect(exempt.employerEpf).toBe(base.employerTotal);
+    expect(exempt.employerTotal).toBe(base.employerTotal);
+    expect(exempt.employeeTotal).toBe(base.employeeTotal);
+  });
 });
 
 describe("activePfRule / pfRuleStatus", () => {

@@ -28,6 +28,9 @@ const Patch = z.object({
   yearsOfExperience: z.string().nullable().optional(),
   aadhar: z.string().nullable().optional(),
   pan: z.string().nullable().optional(),
+  uan: z.string().nullable().optional(),
+  esiIpNumber: z.string().nullable().optional(),
+  epsExempt: z.boolean().optional(),
   accountNumber: z.string().nullable().optional(),
   ifsc: z.string().nullable().optional(),
   bankName: z.string().nullable().optional(),
@@ -54,8 +57,8 @@ export async function PATCH(req: Request, { params }: { params: { id: string } }
   for (const k of [
     "email", "officialEmail", "phone", "emergencyContact", "officeNumber",
     "address", "designation", "department", "highestEducation", "maritalStatus",
-    "experienceNotes", "yearsOfExperience", "aadhar", "pan", "accountNumber",
-    "ifsc", "bankName", "branch", "shiftId", "userId", "designationId",
+    "experienceNotes", "yearsOfExperience", "aadhar", "pan", "uan", "esiIpNumber",
+    "accountNumber", "ifsc", "bankName", "branch", "shiftId", "userId", "designationId",
   ]) {
     if (data[k] === "") data[k] = null;
   }
