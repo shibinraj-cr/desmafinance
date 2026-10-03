@@ -219,19 +219,14 @@ campaign and the report could never be reconciled.
 Opted-out and undeliverable numbers are recorded as `skipped` rows rather than
 quietly dropped, so the report answers *why* someone did not receive it.
 
-### The scheduling constraint
+### Scheduling
 
-On Vercel's Hobby plan a cron fires once a day and a request is killed at 60
-seconds, so **one pass cannot finish a campaign of a few thousand**. The drain is
-chunked and resumable, and three daily ticks are configured, but in practice an
-admin drives a campaign with **Send now** on `/crm/broadcasts`.
-
-Three honest fixes, in order of preference:
-
-1. **Vercel Pro** — then a minutely schedule in `vercel.json` is the only change.
-2. **An external scheduler** hitting
-   `/api/cron/crm-broadcasts?key=$CRON_SECRET` every few minutes.
-3. **More daily entries** in `vercel.json`, the way `etime-sync` stacks three.
+On the Pro plan the drain cron fires **every five minutes** with a ~280s budget
+(`maxDuration 300`), looping batch after batch — a campaign of a few thousand
+drains unattended within the hour. The drain stays chunked and resumable, so an
+interrupted pass is picked up by the next tick. **Send next** on
+`/crm/broadcasts` pushes one bounded chunk of *that campaign only*, for when
+five minutes is too long to wait.
 
 ## What Wabis can do, if we ever need it
 

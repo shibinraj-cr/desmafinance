@@ -3,22 +3,18 @@ import { drainBroadcasts } from "@/lib/wa/broadcast";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
-// The drain's own budget stops well inside this; the ceiling is Vercel's.
-export const maxDuration = 60;
+// The drain's budget below stops well inside this; the ceiling is Vercel's
+// (300s is the Pro-plan maximum).
+export const maxDuration = 300;
 
 /**
  * Send the next chunk of every due WhatsApp broadcast.
  *
- * Deliberately NOT the primary path. On the Hobby plan a cron may only fire once
- * a day, and one 60-second pass cannot deliver a campaign of a few thousand — so
- * this is the unattended catch-up, while an admin pressing "Send now" on
- * /crm/broadcasts drives the campaign in the moment. Both call the same bounded,
- * resumable drain, so neither can double-send.
- *
- * Finishing a large campaign on Hobby therefore takes repeated triggers. The
- * honest fixes are Vercel Pro (a minutely cron in vercel.json is then the only
- * change), stacking several daily entries the way etime-sync does, or pinging
- * this endpoint from an external scheduler with `?key=$CRON_SECRET`.
+ * This is the primary delivery path: on the Pro plan it fires every five
+ * minutes (vercel.json) with a near-five-minute budget, so a campaign of a few
+ * thousand drains unattended within the hour. The admin's "Send next" button on
+ * /crm/broadcasts drives ONE campaign in the moment. Both call the same
+ * bounded, resumable drain, so neither can double-send.
  *
  * Auth matches the other crons: Vercel sends `Authorization: Bearer $CRON_SECRET`,
  * and `?key=` is accepted for manual/external triggering. Fail-closed when unset.
@@ -33,7 +29,9 @@ async function handle(req: Request): Promise<NextResponse> {
     req.headers.get("authorization") === `Bearer ${secret}` || url.searchParams.get("key") === secret;
   if (!authed) return NextResponse.json({ error: "unauthorized" }, { status: 401 });
 
-  const summary = await drainBroadcasts();
+  // 280s of sending inside the 300s kill time — the drain stops a send early
+  // rather than risk the platform killing one mid-flight.
+  const summary = await drainBroadcasts(new Date(), { budgetMs: 280_000 });
   return NextResponse.json({ ok: true, ...summary });
 }
 
