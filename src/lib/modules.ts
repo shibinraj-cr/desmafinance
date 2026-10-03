@@ -48,6 +48,12 @@ export const MODULES: AppModule[] = [
         adminOnly: true,
       },
       {
+        href: "/executive/weekly",
+        label: "Weekly P&L",
+        icon: "date_range",
+        adminOnly: true,
+      },
+      {
         href: "/executive/sales-objective",
         label: "Sales Objective",
         icon: "flag",
