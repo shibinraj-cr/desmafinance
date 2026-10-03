@@ -74,3 +74,44 @@ export function EnrollmentsChart({
     </ResponsiveContainer>
   );
 }
+
+/**
+ * Weekly Net Sales (bars) with Net Profit and Net Cash Flow lines, one point
+ * per Saturday → Friday week. All three are rupees, so one axis serves them.
+ */
+export function WeeklyPnlChart({
+  data,
+}: {
+  data: { week: string; range: string; netSales: number; netProfit: number; netCashFlow: number }[];
+}) {
+  return (
+    <ResponsiveContainer width="100%" height={320}>
+      <ComposedChart data={data} margin={{ top: 20, right: 16, left: 0, bottom: 10 }}>
+        <CartesianGrid strokeDasharray="3 3" stroke="#e1e2e9" vertical={false} />
+        <XAxis
+          dataKey="week"
+          tick={{ fontSize: 12, fill: "#424751" }}
+          axisLine={false}
+          tickLine={false}
+          minTickGap={16}
+        />
+        <YAxis
+          tick={{ fontSize: 12, fill: "#424751" }}
+          axisLine={false}
+          tickLine={false}
+          tickFormatter={lakhFormatter}
+        />
+        <Tooltip
+          formatter={(v: number) => inr(v)}
+          labelFormatter={(_, payload) => payload?.[0]?.payload?.range ?? ""}
+          cursor={{ fill: "#f2f3fa" }}
+        />
+        <Legend wrapperStyle={{ fontSize: 12 }} />
+        <ReferenceLine y={0} stroke="#9E9E9E" strokeDasharray="2 2" />
+        <Bar dataKey="netSales" name="Net Sales" fill="#C9A019" radius={[3, 3, 0, 0]} />
+        <Line type="monotone" dataKey="netProfit" name="Net Profit" stroke="#2E6DB4" strokeWidth={2} dot={{ r: 3 }} />
+        <Line type="monotone" dataKey="netCashFlow" name="Net Cash Flow" stroke="#B5532F" strokeWidth={2} dot={{ r: 3 }} />
+      </ComposedChart>
+    </ResponsiveContainer>
+  );
+}
