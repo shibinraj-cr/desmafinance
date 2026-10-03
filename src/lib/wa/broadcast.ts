@@ -10,12 +10,12 @@
  * or dropped, and the report could never be reconciled. A frozen list makes a
  * broadcast an auditable fact.
  *
- * ASSUME THE DRAIN IS INTERRUPTED. This runs on Vercel, where a request is
- * killed at 60 seconds and Hobby-plan crons fire once a day. A send of a few
- * thousand cannot finish in one pass, so the drain is chunked, bounded by BOTH
- * count and elapsed time, and resumable: it claims work by flipping row state,
- * and whatever is still `pending` is simply picked up next run. Nothing is held
- * in memory between chunks, because nothing survives there.
+ * ASSUME THE DRAIN IS INTERRUPTED. This runs on Vercel, where every request has
+ * a hard kill time (60s on the interactive routes, 300s on the cron). A send of
+ * a few thousand cannot finish in one pass, so the drain is chunked, bounded by
+ * BOTH count and elapsed time, and resumable: it claims work by flipping row
+ * state, and whatever is still `pending` is simply picked up next run. Nothing
+ * is held in memory between chunks, because nothing survives there.
  */
 import type { Prisma } from "@prisma/client";
 import { z } from "zod";
@@ -40,15 +40,21 @@ const DEFAULT_BATCH_SIZE = 100;
 const MAX_BATCH_SIZE = 1000;
 
 /**
- * Wall-clock budget for one drain pass. Vercel kills the request at 60s, and a
- * kill mid-send is the one thing that can lose a message: the provider may have
- * accepted it while our row still says `pending`, and the next run would send
- * again. Stopping early with time to spare keeps that window closed.
+ * Default wall-clock budget for one drain pass — sized for the interactive
+ * routes (send_now), which Vercel kills at 60s. A kill mid-send is the one
+ * thing that can lose a message: the provider may have accepted it while our
+ * row still says `pending`, and the next run would send again. Stopping early
+ * with time to spare keeps that window closed. The cron route runs with
+ * maxDuration 300 and passes its own, larger budget.
  */
 const DRAIN_TIME_BUDGET_MS = 45_000;
 
-/** Meta rate-limits template sends; a small gap keeps a burst from tripping it. */
-const INTER_SEND_DELAY_MS = 120;
+/**
+ * A small gap between sends so a burst cannot trip Meta's rate limit. The Cloud
+ * API's default throughput ceiling is 80 messages/second; with Graph latency on
+ * top of this gap the drain runs at roughly 2–4/second, far inside it.
+ */
+const INTER_SEND_DELAY_MS = 50;
 
 /**
  * How many times one recipient may be retried after a transient failure before
@@ -385,6 +391,18 @@ export type DrainSummary = {
   stoppedEarly: boolean;
 };
 
+export type DrainOptions = {
+  /** Wall-clock budget; the caller sizes it to its route's maxDuration. */
+  budgetMs?: number;
+  /**
+   * Drain ONLY this campaign. The admin's "Send next" button passes the row it
+   * was clicked on — without this, the button drained every due campaign in
+   * turn, and one large in-flight campaign could eat the whole budget while the
+   * campaign the admin was looking at never moved off `scheduled`.
+   */
+  onlyId?: string;
+};
+
 /**
  * Send the next chunk of every broadcast that is due.
  *
@@ -392,16 +410,17 @@ export type DrainSummary = {
  * concurrently with itself: each recipient is claimed with a conditional update
  * (`status: pending` -> `sending`), so two runners cannot both take the same row.
  */
-export async function drainBroadcasts(now: Date = new Date()): Promise<DrainSummary> {
+export async function drainBroadcasts(now: Date = new Date(), opts: DrainOptions = {}): Promise<DrainSummary> {
   const summary: DrainSummary = { broadcastsTouched: 0, sent: 0, failed: 0, remaining: 0, stoppedEarly: false };
 
   const config = await getBroadcastConfig();
   if (!config.enabled) return summary;
 
-  const deadline = Date.now() + DRAIN_TIME_BUDGET_MS;
+  const deadline = Date.now() + (opts.budgetMs ?? DRAIN_TIME_BUDGET_MS);
 
   const due = await prisma.waBroadcast.findMany({
     where: {
+      ...(opts.onlyId ? { id: opts.onlyId } : {}),
       status: { in: ["scheduled", "sending"] },
       OR: [{ scheduledAt: null }, { scheduledAt: { lte: now } }],
     },
@@ -434,20 +453,30 @@ export async function drainBroadcasts(now: Date = new Date()): Promise<DrainSumm
             link: broadcast.headerMediaUrl,
           }
         : null;
-    const result = await drainOne(
-      broadcast.id,
-      broadcast.templateName,
-      provider,
-      config.batchSize,
-      deadline,
-      headerMedia,
-    );
-    summary.sent += result.sent;
-    summary.failed += result.failed;
-    summary.remaining += result.remaining;
-    if (result.stoppedEarly) {
-      summary.stoppedEarly = true;
-      break;
+    // Batch after batch until the campaign is drained or the budget runs out.
+    // One drainOne call sends at most `batchSize` rows, which on a 45s budget
+    // was also the ceiling for the whole run — a 300s cron pass would have spent
+    // five minutes to send one batch. drainOne re-reads `pending` each time, so
+    // this loop is just the same resumable pass without the HTTP round trip.
+    for (;;) {
+      const result = await drainOne(
+        broadcast.id,
+        broadcast.templateName,
+        provider,
+        config.batchSize,
+        deadline,
+        headerMedia,
+      );
+      summary.sent += result.sent;
+      summary.failed += result.failed;
+      if (result.stoppedEarly) {
+        // Deadline hit, or a rate limit said back off — either way this run is
+        // done sending, not just done with this campaign.
+        summary.remaining += result.remaining;
+        summary.stoppedEarly = true;
+        return summary;
+      }
+      if (result.remaining === 0) break;
     }
   }
 

@@ -139,9 +139,10 @@ const PatchSchema = z.discriminatedUnion("action", [
 /**
  * PATCH — queue a draft, cancel, or drain immediately.
  *
- * `send_now` exists because Vercel's Hobby plan only allows a daily cron: without
- * a manual trigger a campaign queued at 10am would sit until the next nightly
- * tick. It drains one bounded chunk and returns, exactly like the cron does.
+ * `send_now` pushes THIS campaign without waiting for the next cron tick. It is
+ * scoped to the clicked campaign on purpose: draining every due campaign here
+ * let a large in-flight one eat the whole budget while the campaign the admin
+ * was looking at never moved. It sends one bounded chunk and returns.
  */
 export const PATCH = withApiHandler(async (req: Request, { params }: { params: { id: string } }) => {
   const { userId, perms } = await getCurrentUserAndPermissions();
@@ -224,7 +225,7 @@ export const PATCH = withApiHandler(async (req: Request, { params }: { params: {
 
   // send_now
   if (broadcast.status === "draft") throw badRequest("Queue the campaign first", "not_queued");
-  const summary = await drainBroadcasts();
+  const summary = await drainBroadcasts(new Date(), { onlyId: broadcast.id });
   return NextResponse.json({ ok: true, ...summary });
 });
 

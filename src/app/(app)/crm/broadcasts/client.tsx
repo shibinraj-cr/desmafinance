@@ -191,7 +191,7 @@ export function BroadcastsClient({
 
       <div className="flex items-center justify-between gap-base">
         <p className="text-label-sm text-on-surface-variant">
-          {batchSize} messages per run · a campaign of a few thousand takes several runs on the current plan
+          Queued campaigns send automatically every 5 minutes · Send next pushes one chunk of that campaign right away
         </p>
         {canBroadcast && (
           <button
