@@ -49,6 +49,9 @@ model User {
   mediaPlanTasksDone      MediaPlanTask[]       @relation("MediaPlanTaskDoneBy")
   // Voxbay CSV uploads
   voxbayUploads           VoxbayUpload[]        @relation("VoxbayUploads")
+  financeDocFolders       FinanceDocFolder[]    @relation("FinanceDocFolderCreatedBy")
+  financeDocuments        FinanceDocument[]     @relation("FinanceDocumentUploadedBy")
+  financeDocShares        FinanceDocShare[]     @relation("FinanceDocShareCreatedBy")
   // Per-user "draft first" workflow flag — when true, new transactions
   // created by this user are stored as TransactionDraft rows for them
   // to review/edit before pushing into the regular approval queue.
@@ -4973,4 +4976,72 @@ model YouTubeChannelDay {
 
   @@id([channelId, day])
   @@index([day])
+}
+
+// ─── Finance Documents ──────────────────────────────────────────────────────
+// A folder tree of financial documents (statements, returns, audit papers) in
+// the private Blob store, plus time-limited public download links. Files are
+// never served from a storage URL: signed-in users read through
+// /api/finance/documents/[id]/file, outsiders through /api/share/[token].
+
+model FinanceDocFolder {
+  id          String             @id @default(cuid())
+  name        String
+  /// Null for a top-level folder.
+  parentId    String?
+  parent      FinanceDocFolder?  @relation("FinanceDocFolderTree", fields: [parentId], references: [id], onDelete: Restrict)
+  children    FinanceDocFolder[] @relation("FinanceDocFolderTree")
+  documents   FinanceDocument[]
+  shares      FinanceDocShare[]
+  createdById String?
+  createdBy   User?              @relation("FinanceDocFolderCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
+  createdAt   DateTime           @default(now())
+  updatedAt   DateTime           @updatedAt
+
+  @@index([parentId])
+}
+
+model FinanceDocument {
+  id           String            @id @default(cuid())
+  /// Display name, including its extension. Renaming changes only this; the
+  /// blob keeps its upload-time pathname.
+  name         String
+  /// Null for a document at the top level.
+  folderId     String?
+  folder       FinanceDocFolder? @relation(fields: [folderId], references: [id], onDelete: Restrict)
+  blobPathname String            @unique
+  contentType  String
+  size         Int
+  shares       FinanceDocShare[]
+  uploadedById String?
+  uploadedBy   User?             @relation("FinanceDocumentUploadedBy", fields: [uploadedById], references: [id], onDelete: SetNull)
+  createdAt    DateTime          @default(now())
+  updatedAt    DateTime          @updatedAt
+
+  @@index([folderId])
+}
+
+/// A public, download-only link to ONE document or ONE folder (with everything
+/// beneath it), valid until `expiresAt` unless revoked first.
+model FinanceDocShare {
+  id             String            @id @default(cuid())
+  /// The random credential in the URL. Kept (not hashed) so the link can be
+  /// copied again from the Shared links list; it is revocable and expiring.
+  token          String            @unique
+  label          String?
+  documentId     String?
+  document       FinanceDocument?  @relation(fields: [documentId], references: [id], onDelete: Cascade)
+  folderId       String?
+  folder         FinanceDocFolder? @relation(fields: [folderId], references: [id], onDelete: Cascade)
+  validFrom      DateTime          @default(now())
+  expiresAt      DateTime
+  revokedAt      DateTime?
+  downloadCount  Int               @default(0)
+  lastAccessedAt DateTime?
+  createdById    String?
+  createdBy      User?             @relation("FinanceDocShareCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
+  createdAt      DateTime          @default(now())
+
+  @@index([documentId])
+  @@index([folderId])
 }

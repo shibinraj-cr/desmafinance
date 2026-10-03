@@ -63,8 +63,12 @@ export const config = {
     // `Authorization: Bearer $CRON_SECRET`, which is not a session token, so
     // this gate was 401'ing EVERY scheduled run before it reached its route;
     // each cron route verifies CRON_SECRET itself and fails closed without it),
+    // finance document share links (`share/` + `api/share/` — an auditor or
+    // bank given a download link has no Desgro login; the random token in the
+    // URL is the credential, scoped to one document or folder, time-boxed and
+    // revocable, and nothing under it can write),
     // Next.js internal asset routes, and any file with
     // an extension (/desfin.png, /favicon.ico, fonts).
-    "/((?!login|api/auth|api/health|api/whoami|api/integrations|api/crm/integrations/wabis/inbound|api/crm/integrations/wabis/delivery-status|api/crm/wa/webhook|psych/test|api/psych/test|privacy-policy|careers|api/careers|offer|api/offer|partners|api/partners|api/hiring/calendar|api/wa-media|api/cron|_next/static|_next/image|.*\\..*).*)",
+    "/((?!login|api/auth|api/health|api/whoami|api/integrations|api/crm/integrations/wabis/inbound|api/crm/integrations/wabis/delivery-status|api/crm/wa/webhook|psych/test|api/psych/test|privacy-policy|careers|api/careers|offer|api/offer|partners|api/partners|api/hiring/calendar|api/wa-media|api/cron|share/|api/share/|_next/static|_next/image|.*\\..*).*)",
   ],
 };
