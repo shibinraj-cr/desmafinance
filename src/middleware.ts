@@ -57,8 +57,10 @@ export const config = {
     // the per-user interview calendar feed (`api/hiring/calendar` — a calendar
     // client subscribes with a URL and cannot carry a session; the URL's HMAC
     // token IS the credential and is checked in constant time),
+    // uploaded WhatsApp broadcast header media (`api/wa-media` — Meta fetches
+    // it with no session; the route serves only the broadcast-media prefix),
     // Next.js internal asset routes, and any file with
     // an extension (/desfin.png, /favicon.ico, fonts).
-    "/((?!login|api/auth|api/health|api/whoami|api/integrations|api/crm/integrations/wabis/inbound|api/crm/integrations/wabis/delivery-status|api/crm/wa/webhook|psych/test|api/psych/test|privacy-policy|careers|api/careers|offer|api/offer|partners|api/partners|api/hiring/calendar|_next/static|_next/image|.*\\..*).*)",
+    "/((?!login|api/auth|api/health|api/whoami|api/integrations|api/crm/integrations/wabis/inbound|api/crm/integrations/wabis/delivery-status|api/crm/wa/webhook|psych/test|api/psych/test|privacy-policy|careers|api/careers|offer|api/offer|partners|api/partners|api/hiring/calendar|api/wa-media|_next/static|_next/image|.*\\..*).*)",
   ],
 };
