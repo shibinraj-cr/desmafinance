@@ -6,7 +6,11 @@ const csp = [
   "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com",
   "font-src 'self' https://fonts.gstatic.com data:",
   "img-src 'self' data: blob:",
-  "connect-src 'self'",
+  // Finance Documents uploads go straight from the browser to Vercel Blob
+  // (the only way past the 4.5 MB request cap), so the browser must be able to
+  // reach the Blob API. Scoped to that path, not the whole of vercel.com; the
+  // trailing slash makes it a prefix so multipart (`/mpu`) is covered too.
+  "connect-src 'self' https://vercel.com/api/blob/",
   "frame-ancestors 'none'",
   "base-uri 'self'",
   "form-action 'self'",
