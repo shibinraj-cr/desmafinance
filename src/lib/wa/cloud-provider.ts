@@ -405,7 +405,7 @@ type RawTemplate = {
   category?: string;
   status?: string;
   rejected_reason?: string;
-  components?: { type?: string; format?: string; text?: string }[];
+  components?: { type?: string; format?: string; text?: string; buttons?: { text?: string }[] }[];
 };
 
 /** Meta returns 25 templates a page by default; this asks for the maximum. */
@@ -437,6 +437,10 @@ function mapTemplatePage(rows: RawTemplate[]): WaTemplateSummary[] {
         // to ask for the header media.
         headerFormat: headerComp?.format ? headerComp.format.toUpperCase() : headerComp ? "TEXT" : null,
         variableCount: countTemplateVariables(body),
+        footer: partOf("FOOTER"),
+        buttons: (components.find((c) => (c.type ?? "").toUpperCase() === "BUTTONS")?.buttons ?? [])
+          .map((b) => b.text ?? "")
+          .filter(Boolean),
         // Meta says NONE rather than omitting the field, and a literal
         // "NONE" rendered next to an approved template reads as a rejection.
         rejectedReason: reason && reason.toUpperCase() !== "NONE" ? reason : null,
@@ -700,7 +704,7 @@ export const cloudProvider: WhatsAppProvider = {
             category?: string;
             status?: string;
             rejected_reason?: string;
-            components?: { type?: string; format?: string; text?: string }[];
+            components?: { type?: string; format?: string; text?: string; buttons?: { text?: string }[] }[];
           }[];
           paging?: { next?: string };
         };

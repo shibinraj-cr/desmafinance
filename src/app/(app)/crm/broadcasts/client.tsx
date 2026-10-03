@@ -11,6 +11,11 @@ type TemplateOpt = {
   status: string;
   /** 'TEXT' | 'IMAGE' | 'VIDEO' | 'DOCUMENT' | null — a media header needs a URL. */
   headerFormat?: string | null;
+  body?: string | null;
+  /** Header text, for a TEXT header. */
+  header?: string | null;
+  footer?: string | null;
+  buttons?: string[];
 };
 type Opt = { id: string; label?: string; name?: string };
 
@@ -653,192 +658,336 @@ function BroadcastForm({
       {error && <p className="text-label-sm text-error">{error}</p>}
       {note && <p className="text-label-sm text-emerald-600">{note}</p>}
 
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-base">
-        <label className="block">
-          <span className="block text-label-sm text-on-surface-variant mb-xs">Campaign name</span>
-          <input value={name} onChange={(e) => setName(e.target.value)} className={inputCls + " w-full"} />
-        </label>
-        <label className="block">
-          <span className="block text-label-sm text-on-surface-variant mb-xs">Approved template</span>
-          <select
-            value={templateName}
-            onChange={(e) => {
-              setTemplateName(e.target.value);
-              // The header media belongs to the template that was chosen — drop a
-              // carried-over URL so a switch (e.g. image-header → video-header)
-              // can't persist a link of the wrong kind. Edit pre-fill sets both
-              // directly, so the stored URL survives opening the form.
-              setHeaderMediaUrl("");
-            }}
-            className={inputCls + " w-full"}
-          >
-            <option value="">Choose…</option>
-            {approved.map((t) => (
-              <option key={`${t.name}:${t.language}`} value={`${t.name}:${t.language}`}>
-                {t.name} ({t.language}){t.category ? ` · ${t.category}` : ""}
-              </option>
-            ))}
-          </select>
-          {approved.length === 0 && (
-            <span className="block text-label-sm text-on-surface-variant mt-xs">
-              No approved templates found in the WhatsApp Business Account.
-            </span>
-          )}
-        </label>
-      </div>
-
-      {headerKind && (
-        <div>
-          <span className="block text-label-sm text-on-surface-variant mb-xs">
-            Header {headerKind} <span className="text-error">*</span>
-          </span>
-          <div className="flex gap-base">
-            <input
-              value={headerMediaUrl}
-              onChange={(e) => setHeaderMediaUrl(e.target.value)}
-              placeholder={`Upload a ${headerKind}, or paste a public https link`}
-              className={inputCls + " flex-1 min-w-0 font-mono"}
-            />
-            <label
-              className={
-                "h-9 px-md rounded-lg border border-outline-variant text-label-sm inline-flex items-center whitespace-nowrap " +
-                (uploading ? "opacity-50 cursor-wait" : "cursor-pointer hover:bg-surface-container")
-              }
-            >
-              {uploading ? "Uploading…" : `Upload ${headerKind}`}
-              <input
-                type="file"
-                accept={HEADER_ACCEPT[headerKind]}
-                disabled={uploading}
-                onChange={(e) => {
-                  const file = e.target.files?.[0];
-                  e.target.value = "";
-                  if (file) void uploadHeader(file, headerKind);
-                }}
-                className="hidden"
-              />
+      <div className="grid grid-cols-1 lg:grid-cols-[minmax(0,1fr)_340px] gap-lg items-start">
+        <div className="space-y-md min-w-0">
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-base">
+            <label className="block">
+              <span className="block text-label-sm text-on-surface-variant mb-xs">Campaign name</span>
+              <input value={name} onChange={(e) => setName(e.target.value)} className={inputCls + " w-full"} />
             </label>
-          </div>
-          {headerKind === "image" && /^https:\/\//.test(headerMediaUrl.trim()) && (
-            // eslint-disable-next-line @next/next/no-img-element
-            <img
-              src={headerMediaUrl.trim()}
-              alt="Header preview"
-              className="mt-xs max-h-40 rounded-lg border border-outline-variant"
-            />
-          )}
-          <span className="block text-label-sm text-on-surface-variant mt-xs">
-            This template has a {headerKind} header — Meta needs the media on every send (same {headerKind} for
-            everyone). Upload a {HEADER_FORMATS[headerKind]} file up to 4 MB, or paste a public{" "}
-            <span className="font-mono">https</span> URL. Without it, sends fail with error 132012.
-          </span>
-        </div>
-      )}
-
-      <div>
-        <span className="block text-label-sm text-on-surface-variant mb-xs">Audience</span>
-        <div className="flex flex-wrap gap-base">
-          <MultiSelect
-            placeholder="Any stage"
-            options={statuses.map((s) => ({ value: s.id, label: s.label ?? s.name ?? s.id }))}
-            selected={status}
-            onChange={setStatus}
-          />
-          <MultiSelect
-            placeholder="Any service"
-            options={services.map((s) => ({ value: s.id, label: s.name ?? s.label ?? s.id }))}
-            selected={service}
-            onChange={setService}
-          />
-          <MultiSelect
-            placeholder="Any source"
-            options={sources.map((s) => ({ value: s.id, label: s.label ?? s.name ?? s.id }))}
-            selected={source}
-            onChange={setSource}
-          />
-          <select
-            value={engagedDays}
-            onChange={(e) => setEngagedDays(e.target.value)}
-            className={inputCls}
-            aria-label="Only leads who replied recently"
-          >
-            <option value="">Anyone who matches</option>
-            <option value="7">Replied in last 7 days</option>
-            <option value="30">Replied in last 30 days</option>
-            <option value="90">Replied in last 90 days</option>
-          </select>
-        </div>
-        <p className="text-label-sm text-on-surface-variant mt-xs">
-          Opted-out and undeliverable numbers are excluded automatically and reported as skipped.{" "}
-          <span className="font-medium">Replied in last N days</span> restricts the send to leads who messaged you — the
-          audience a marketing template actually reaches.
-        </p>
-        {showColdWarning && (
-          <div className="mt-sm rounded-lg border border-amber-500/40 bg-amber-500/10 px-md py-sm text-label-sm text-amber-700">
-            <span className="font-semibold">Heads-up:</span> this is a Marketing template to a cold stage (re-marketing /
-            lost). Meta throttles marketing to never-engaged numbers, so most will fail (131049 / 131026) and a high
-            failure rate lowers your number&apos;s quality rating. Use a warmer stage, a <span className="font-medium">Utility</span>{" "}
-            template, or set <span className="font-medium">“Replied in last N days.”</span>
-          </div>
-        )}
-      </div>
-
-      <div>
-        <span className="block text-label-sm text-on-surface-variant mb-xs">
-          Template variables — Meta numbers them {"{{1}}"}, {"{{2}}"}, …
-        </span>
-        <div className="flex flex-wrap gap-base">
-          {["1", "2", "3"].map((slot) => (
-            <label key={slot} className="block">
-              <span className="block text-label-sm text-on-surface-variant mb-xs">{`{{${slot}}}`}</span>
+            <label className="block">
+              <span className="block text-label-sm text-on-surface-variant mb-xs">Approved template</span>
               <select
-                value={variableMap[slot] ?? ""}
-                onChange={(e) => setVariableMap((m) => ({ ...m, [slot]: e.target.value }))}
-                className={inputCls}
+                value={templateName}
+                onChange={(e) => {
+                  setTemplateName(e.target.value);
+                  // The header media belongs to the template that was chosen — drop a
+                  // carried-over URL so a switch (e.g. image-header → video-header)
+                  // can't persist a link of the wrong kind. Edit pre-fill sets both
+                  // directly, so the stored URL survives opening the form.
+                  setHeaderMediaUrl("");
+                }}
+                className={inputCls + " w-full"}
               >
-                <option value="">—</option>
-                {mergeFields.map((f) => (
-                  <option key={f.token} value={f.token}>
-                    {f.label}
+                <option value="">Choose…</option>
+                {approved.map((t) => (
+                  <option key={`${t.name}:${t.language}`} value={`${t.name}:${t.language}`}>
+                    {t.name} ({t.language}){t.category ? ` · ${t.category}` : ""}
                   </option>
                 ))}
               </select>
+              {approved.length === 0 && (
+                <span className="block text-label-sm text-on-surface-variant mt-xs">
+                  No approved templates found in the WhatsApp Business Account.
+                </span>
+              )}
             </label>
-          ))}
+          </div>
+
+          {headerKind && (
+            <div>
+              <span className="block text-label-sm text-on-surface-variant mb-xs">
+                Header {headerKind} <span className="text-error">*</span>
+              </span>
+              <div className="flex gap-base">
+                <input
+                  value={headerMediaUrl}
+                  onChange={(e) => setHeaderMediaUrl(e.target.value)}
+                  placeholder={`Upload a ${headerKind}, or paste a public https link`}
+                  className={inputCls + " flex-1 min-w-0 font-mono"}
+                />
+                <label
+                  className={
+                    "h-9 px-md rounded-lg border border-outline-variant text-label-sm inline-flex items-center whitespace-nowrap " +
+                    (uploading ? "opacity-50 cursor-wait" : "cursor-pointer hover:bg-surface-container")
+                  }
+                >
+                  {uploading ? "Uploading…" : `Upload ${headerKind}`}
+                  <input
+                    type="file"
+                    accept={HEADER_ACCEPT[headerKind]}
+                    disabled={uploading}
+                    onChange={(e) => {
+                      const file = e.target.files?.[0];
+                      e.target.value = "";
+                      if (file) void uploadHeader(file, headerKind);
+                    }}
+                    className="hidden"
+                  />
+                </label>
+              </div>
+              <span className="block text-label-sm text-on-surface-variant mt-xs">
+                This template has a {headerKind} header — Meta needs the media on every send (same {headerKind} for
+                everyone). Upload a {HEADER_FORMATS[headerKind]} file up to 4 MB, or paste a public{" "}
+                <span className="font-mono">https</span> URL. Without it, sends fail with error 132012.
+              </span>
+            </div>
+          )}
+
+          <div>
+            <span className="block text-label-sm text-on-surface-variant mb-xs">Audience</span>
+            <div className="flex flex-wrap gap-base">
+              <MultiSelect
+                placeholder="Any stage"
+                options={statuses.map((s) => ({ value: s.id, label: s.label ?? s.name ?? s.id }))}
+                selected={status}
+                onChange={setStatus}
+              />
+              <MultiSelect
+                placeholder="Any service"
+                options={services.map((s) => ({ value: s.id, label: s.name ?? s.label ?? s.id }))}
+                selected={service}
+                onChange={setService}
+              />
+              <MultiSelect
+                placeholder="Any source"
+                options={sources.map((s) => ({ value: s.id, label: s.label ?? s.name ?? s.id }))}
+                selected={source}
+                onChange={setSource}
+              />
+              <select
+                value={engagedDays}
+                onChange={(e) => setEngagedDays(e.target.value)}
+                className={inputCls}
+                aria-label="Only leads who replied recently"
+              >
+                <option value="">Anyone who matches</option>
+                <option value="7">Replied in last 7 days</option>
+                <option value="30">Replied in last 30 days</option>
+                <option value="90">Replied in last 90 days</option>
+              </select>
+            </div>
+            <p className="text-label-sm text-on-surface-variant mt-xs">
+              Opted-out and undeliverable numbers are excluded automatically and reported as skipped.{" "}
+              <span className="font-medium">Replied in last N days</span> restricts the send to leads who messaged you — the
+              audience a marketing template actually reaches.
+            </p>
+            {showColdWarning && (
+              <div className="mt-sm rounded-lg border border-amber-500/40 bg-amber-500/10 px-md py-sm text-label-sm text-amber-700">
+                <span className="font-semibold">Heads-up:</span> this is a Marketing template to a cold stage (re-marketing /
+                lost). Meta throttles marketing to never-engaged numbers, so most will fail (131049 / 131026) and a high
+                failure rate lowers your number&apos;s quality rating. Use a warmer stage, a <span className="font-medium">Utility</span>{" "}
+                template, or set <span className="font-medium">“Replied in last N days.”</span>
+              </div>
+            )}
+          </div>
+
+          <div>
+            <span className="block text-label-sm text-on-surface-variant mb-xs">
+              Template variables — Meta numbers them {"{{1}}"}, {"{{2}}"}, …
+            </span>
+            <div className="flex flex-wrap gap-base">
+              {["1", "2", "3"].map((slot) => (
+                <label key={slot} className="block">
+                  <span className="block text-label-sm text-on-surface-variant mb-xs">{`{{${slot}}}`}</span>
+                  <select
+                    value={variableMap[slot] ?? ""}
+                    onChange={(e) => setVariableMap((m) => ({ ...m, [slot]: e.target.value }))}
+                    className={inputCls}
+                  >
+                    <option value="">—</option>
+                    {mergeFields.map((f) => (
+                      <option key={f.token} value={f.token}>
+                        {f.label}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+              ))}
+            </div>
+          </div>
+
+          {estimate !== null && (
+            <p className="text-body-md text-on-surface">
+              This audience currently matches <span className="font-semibold tabular-nums">{estimate}</span> leads (before
+              opted-out / undeliverable / no-phone are skipped at queue time).
+            </p>
+          )}
+
+          <div className="flex items-center gap-base">
+            <button
+              type="button"
+              disabled={busy || uploading || !name.trim() || !templateName || headerMissing}
+              onClick={() => void save(false)}
+              className="h-9 px-lg rounded-lg border border-outline-variant text-label-sm font-semibold text-on-surface-variant disabled:opacity-40"
+            >
+              {startedInEdit ? "Save changes & preview count" : "Save draft & preview count"}
+            </button>
+            <button
+              type="button"
+              disabled={busy || uploading || !name.trim() || !templateName || headerMissing}
+              onClick={() => void save(true)}
+              className="h-9 px-lg rounded-lg bg-primary text-on-primary text-label-sm font-semibold disabled:opacity-40"
+            >
+              Queue campaign
+            </button>
+            <button type="button" onClick={onClose} className="h-9 px-md text-label-sm text-on-surface-variant">
+              Close
+            </button>
+          </div>
+          <p className="text-label-sm text-on-surface-variant">
+            Queuing freezes the audience into a fixed recipient list, so the campaign can be reported on and resumed even if
+            leads change afterwards.
+          </p>
+        </div>
+
+        <aside className="lg:sticky lg:top-md">
+          <MessagePreview
+            template={selectedTemplate}
+            headerKind={headerKind}
+            headerMediaUrl={headerMediaUrl.trim()}
+            variableMap={variableMap}
+            mergeFields={mergeFields}
+          />
+        </aside>
+      </div>
+    </div>
+  );
+}
+
+type PreviewVar = { label: string } | null;
+
+/**
+ * Template text as WhatsApp shows it: `{{n}}` becomes the merge field filling
+ * it, and *bold*, _italic_ and ~strike~ are applied. Built from React nodes, not
+ * HTML, so template text can never inject markup.
+ */
+function renderWaText(text: string, vars: Record<string, PreviewVar>): React.ReactNode[] {
+  const out: React.ReactNode[] = [];
+  const re = /\{\{\s*(\d+)\s*\}\}|\*([^*\n]+)\*|_([^_\n]+)_|~([^~\n]+)~/g;
+  let last = 0;
+  let key = 0;
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(text))) {
+    if (m.index > last) out.push(text.slice(last, m.index));
+    const k = key++;
+    if (m[1]) {
+      const v = vars[m[1]];
+      out.push(
+        v ? (
+          <span key={k} className="rounded bg-[#d9fdd3] px-1 text-[#1f7a4d]">
+            {v.label}
+          </span>
+        ) : (
+          <span key={k} className="rounded bg-red-100 px-1 text-red-700" title="No field chosen for this variable">
+            {`{{${m[1]}}}`}
+          </span>
+        ),
+      );
+    } else if (m[2]) out.push(<strong key={k}>{renderWaText(m[2], vars)}</strong>);
+    else if (m[3]) out.push(<em key={k}>{renderWaText(m[3], vars)}</em>);
+    else if (m[4]) out.push(<s key={k}>{renderWaText(m[4], vars)}</s>);
+    last = re.lastIndex;
+  }
+  if (last < text.length) out.push(text.slice(last));
+  return out;
+}
+
+/** A WhatsApp-style bubble showing the chosen template as a recipient will see it. */
+function MessagePreview({
+  template,
+  headerKind,
+  headerMediaUrl,
+  variableMap,
+  mergeFields,
+}: {
+  template: TemplateOpt | null;
+  headerKind: "image" | "video" | "document" | null;
+  headerMediaUrl: string;
+  variableMap: Record<string, string>;
+  mergeFields: MergeField[];
+}) {
+  const [brokenUrl, setBrokenUrl] = useState<string | null>(null);
+  const hasMedia = /^https:\/\//.test(headerMediaUrl);
+  const mediaBroken = hasMedia && brokenUrl === headerMediaUrl;
+
+  const vars: Record<string, PreviewVar> = {};
+  for (const [slot, token] of Object.entries(variableMap)) {
+    if (token) vars[slot] = { label: mergeFields.find((f) => f.token === token)?.label ?? token };
+  }
+  const bodySlots = Array.from((template?.body ?? "").matchAll(/\{\{\s*(\d+)\s*\}\}/g), (x) => x[1]);
+  const missingVars = Array.from(new Set(bodySlots)).filter((slot) => !vars[slot]);
+  const fileName = hasMedia ? decodeURIComponent(headerMediaUrl.split("?")[0].split("/").pop() ?? "") : "";
+
+  return (
+    <div>
+      <span className="block text-label-sm text-on-surface-variant mb-xs">Recipient preview</span>
+      <div className="rounded-2xl border border-outline-variant overflow-hidden">
+        <div className="bg-[#008069] px-md py-sm text-label-sm font-semibold text-white">WhatsApp</div>
+        <div className="min-h-[320px] bg-[#efeae2] p-md">
+          {!template ? (
+            <p className="mt-xl text-center text-label-sm text-[#667781]">Choose a template to see the message.</p>
+          ) : (
+            <div className="max-w-[300px] rounded-lg rounded-tl-none bg-white text-[14px] leading-[19px] text-[#111b21] shadow-sm">
+              {headerKind && (
+                <div className="p-[3px] pb-0">
+                  {!hasMedia || mediaBroken ? (
+                    <div className="flex h-40 items-center justify-center rounded-md bg-[#f0f2f5] px-md text-center text-[12px] text-[#667781]">
+                      {mediaBroken
+                        ? `This ${headerKind} could not be loaded — check the link`
+                        : `No header ${headerKind} yet — upload one or paste a link`}
+                    </div>
+                  ) : headerKind === "image" ? (
+                    // eslint-disable-next-line @next/next/no-img-element
+                    <img
+                      src={headerMediaUrl}
+                      alt="Header"
+                      onError={() => setBrokenUrl(headerMediaUrl)}
+                      className="block max-h-[300px] w-full rounded-md object-cover"
+                    />
+                  ) : headerKind === "video" ? (
+                    <video
+                      src={headerMediaUrl}
+                      muted
+                      controls
+                      preload="metadata"
+                      onError={() => setBrokenUrl(headerMediaUrl)}
+                      className="block max-h-[300px] w-full rounded-md bg-black"
+                    />
+                  ) : (
+                    <div className="flex items-center gap-sm rounded-md bg-[#f0f2f5] p-sm">
+                      <span className="rounded bg-red-600 px-1 text-[10px] font-bold text-white">PDF</span>
+                      <span className="truncate text-[13px]">{fileName || "document.pdf"}</span>
+                    </div>
+                  )}
+                </div>
+              )}
+              <div className="px-sm pb-xs pt-sm">
+                {template.header && !headerKind && <p className="mb-xs font-bold">{renderWaText(template.header, vars)}</p>}
+                <p className="whitespace-pre-wrap break-words">
+                  {template.body ? renderWaText(template.body, vars) : <em className="text-[#667781]">No body text</em>}
+                </p>
+                {template.footer && <p className="mt-xs text-[13px] text-[#667781]">{template.footer}</p>}
+                <p className="mt-[2px] text-right text-[11px] text-[#667781]">10:24</p>
+              </div>
+              {(template.buttons ?? []).map((b, i) => (
+                <div key={i} className="border-t border-[#e9edef] py-sm text-center text-[14px] text-[#027eb5]">
+                  {b}
+                </div>
+              ))}
+            </div>
+          )}
         </div>
       </div>
-
-      {estimate !== null && (
-        <p className="text-body-md text-on-surface">
-          This audience currently matches <span className="font-semibold tabular-nums">{estimate}</span> leads (before
-          opted-out / undeliverable / no-phone are skipped at queue time).
-        </p>
-      )}
-
-      <div className="flex items-center gap-base">
-        <button
-          type="button"
-          disabled={busy || uploading || !name.trim() || !templateName || headerMissing}
-          onClick={() => void save(false)}
-          className="h-9 px-lg rounded-lg border border-outline-variant text-label-sm font-semibold text-on-surface-variant disabled:opacity-40"
-        >
-          {startedInEdit ? "Save changes & preview count" : "Save draft & preview count"}
-        </button>
-        <button
-          type="button"
-          disabled={busy || uploading || !name.trim() || !templateName || headerMissing}
-          onClick={() => void save(true)}
-          className="h-9 px-lg rounded-lg bg-primary text-on-primary text-label-sm font-semibold disabled:opacity-40"
-        >
-          Queue campaign
-        </button>
-        <button type="button" onClick={onClose} className="h-9 px-md text-label-sm text-on-surface-variant">
-          Close
-        </button>
-      </div>
-      <p className="text-label-sm text-on-surface-variant">
-        Queuing freezes the audience into a fixed recipient list, so the campaign can be reported on and resumed even if
-        leads change afterwards.
+      <p className="mt-xs text-label-sm text-on-surface-variant">
+        Highlighted words are filled in per lead from the field shown, so each recipient sees their own details.
+        {missingVars.length > 0 && (
+          <span className="text-error">
+            {" "}
+            Choose a field for {missingVars.map((v) => `{{${v}}}`).join(", ")} — Meta rejects a send with a blank
+            variable.
+          </span>
+        )}
       </p>
     </div>
   );
