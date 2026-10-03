@@ -160,6 +160,9 @@ export type WaTemplateSummary = {
    * is what lets the composer collect the values instead of failing at the API.
    */
   variableCount: number;
+  /** Footer text and button labels — read only to preview the message as sent. */
+  footer?: string | null;
+  buttons?: string[];
   /**
    * Why Meta refused it — `INCORRECT_CATEGORY`, `INVALID_FORMAT`, and so on.
    * The only explanation an author ever gets, so it is carried rather than
