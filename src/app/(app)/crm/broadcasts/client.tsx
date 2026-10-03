@@ -13,6 +13,14 @@ type TemplateOpt = {
   headerFormat?: string | null;
 };
 type Opt = { id: string; label?: string; name?: string };
+
+/** Mirrors HEADER_MEDIA_MIMES in lib/wa/broadcast-media.ts, which the server enforces. */
+const HEADER_ACCEPT = {
+  image: "image/jpeg,image/png",
+  video: "video/mp4,video/3gpp",
+  document: "application/pdf",
+} as const;
+const HEADER_FORMATS = { image: "JPG or PNG", video: "MP4", document: "PDF" } as const;
 type MergeField = { token: string; label: string };
 
 type BroadcastRow = {
@@ -486,6 +494,7 @@ function BroadcastForm({
   const [variableMap, setVariableMap] = useState<Record<string, string>>(initial?.variableMap ?? {});
   const [estimate, setEstimate] = useState<number | null>(null);
   const [busy, setBusy] = useState(false);
+  const [uploading, setUploading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [note, setNote] = useState<string | null>(null);
 
@@ -521,6 +530,33 @@ function BroadcastForm({
   // the stored media and reintroduce 132012.
   const headerKind = selectedTemplate ? templateHeaderKind : (initial?.headerMediaType ?? null);
   const headerMissing = !!headerKind && !headerMediaUrl.trim();
+
+  async function uploadHeader(file: File, kind: "image" | "video" | "document") {
+    setError(null);
+    setNote(null);
+    if (file.size > 4 * 1024 * 1024) {
+      setError("The file must be 4 MB or smaller.");
+      return;
+    }
+    setUploading(true);
+    try {
+      const form = new FormData();
+      form.append("file", file);
+      form.append("kind", kind);
+      const res = await fetch("/api/crm/wa/broadcasts/media", { method: "POST", body: form }).catch(() => null);
+      const d = res ? ((await res.json().catch(() => ({}))) as { url?: string; message?: string }) : {};
+      if (!res?.ok || !d.url) {
+        setError(
+          d.message ?? (res?.status === 413 ? "The file must be 4 MB or smaller." : "The file could not be uploaded."),
+        );
+        return;
+      }
+      setHeaderMediaUrl(d.url);
+      setNote(`${file.name} uploaded.`);
+    } finally {
+      setUploading(false);
+    }
+  }
 
   async function save(queue: boolean) {
     setBusy(true);
@@ -652,22 +688,51 @@ function BroadcastForm({
       </div>
 
       {headerKind && (
-        <label className="block">
+        <div>
           <span className="block text-label-sm text-on-surface-variant mb-xs">
-            Header {headerKind} URL <span className="text-error">*</span>
+            Header {headerKind} <span className="text-error">*</span>
           </span>
-          <input
-            value={headerMediaUrl}
-            onChange={(e) => setHeaderMediaUrl(e.target.value)}
-            placeholder={`https://… public ${headerKind} link`}
-            className={inputCls + " w-full font-mono"}
-          />
+          <div className="flex gap-base">
+            <input
+              value={headerMediaUrl}
+              onChange={(e) => setHeaderMediaUrl(e.target.value)}
+              placeholder={`Upload a ${headerKind}, or paste a public https link`}
+              className={inputCls + " flex-1 min-w-0 font-mono"}
+            />
+            <label
+              className={
+                "h-9 px-md rounded-lg border border-outline-variant text-label-sm inline-flex items-center whitespace-nowrap " +
+                (uploading ? "opacity-50 cursor-wait" : "cursor-pointer hover:bg-surface-container")
+              }
+            >
+              {uploading ? "Uploading…" : `Upload ${headerKind}`}
+              <input
+                type="file"
+                accept={HEADER_ACCEPT[headerKind]}
+                disabled={uploading}
+                onChange={(e) => {
+                  const file = e.target.files?.[0];
+                  e.target.value = "";
+                  if (file) void uploadHeader(file, headerKind);
+                }}
+                className="hidden"
+              />
+            </label>
+          </div>
+          {headerKind === "image" && /^https:\/\//.test(headerMediaUrl.trim()) && (
+            // eslint-disable-next-line @next/next/no-img-element
+            <img
+              src={headerMediaUrl.trim()}
+              alt="Header preview"
+              className="mt-xs max-h-40 rounded-lg border border-outline-variant"
+            />
+          )}
           <span className="block text-label-sm text-on-surface-variant mt-xs">
-            This template has a {headerKind} header — Meta needs the media on every send. Paste a public{" "}
-            <span className="font-mono">https</span> URL (same {headerKind} for everyone). Without it, sends fail with
-            error 132012.
+            This template has a {headerKind} header — Meta needs the media on every send (same {headerKind} for
+            everyone). Upload a {HEADER_FORMATS[headerKind]} file up to 4 MB, or paste a public{" "}
+            <span className="font-mono">https</span> URL. Without it, sends fail with error 132012.
           </span>
-        </label>
+        </div>
       )}
 
       <div>
@@ -753,7 +818,7 @@ function BroadcastForm({
       <div className="flex items-center gap-base">
         <button
           type="button"
-          disabled={busy || !name.trim() || !templateName || headerMissing}
+          disabled={busy || uploading || !name.trim() || !templateName || headerMissing}
           onClick={() => void save(false)}
           className="h-9 px-lg rounded-lg border border-outline-variant text-label-sm font-semibold text-on-surface-variant disabled:opacity-40"
         >
@@ -761,7 +826,7 @@ function BroadcastForm({
         </button>
         <button
           type="button"
-          disabled={busy || !name.trim() || !templateName || headerMissing}
+          disabled={busy || uploading || !name.trim() || !templateName || headerMissing}
           onClick={() => void save(true)}
           className="h-9 px-lg rounded-lg bg-primary text-on-primary text-label-sm font-semibold disabled:opacity-40"
         >
