@@ -5045,3 +5045,50 @@ model FinanceDocShare {
   @@index([documentId])
   @@index([folderId])
 }
+
+// ─── Executive — Meeting Notes ───────────────────────────────────────────────
+// Leadership meeting record: what was discussed, what was decided, and who owes
+// what by when. Shared across admins (the Executive module is admin-only), not
+// owner-scoped like the Wealth desk — a meeting's notes belong to the meeting.
+// Author ids are plain strings (like WealthValuation.createdById) so the User
+// model does not grow another pair of back-relations.
+
+model ExecMeeting {
+  id          String   @id @default(cuid())
+  title       String
+  meetingOn   DateTime @db.Date
+  /// leadership | review | board | one_on_one | client | other
+  kind        String   @default("leadership")
+  /// Free text, one line: "CEO, Finance, Sales lead". Free text so a guest or
+  /// an outside party never needs a user account to be recorded as present.
+  attendees   String?
+  agenda      String?
+  /// Discussion notes — the markdown subset lib/hiring/markdown renders.
+  notes       String?
+  decisions   String?
+  createdById String?
+  updatedById String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  actions ExecMeetingAction[]
+
+  @@index([meetingOn])
+}
+
+model ExecMeetingAction {
+  id        String      @id @default(cuid())
+  meetingId String
+  meeting   ExecMeeting @relation(fields: [meetingId], references: [id], onDelete: Cascade)
+  text      String
+  /// Free text, like attendees — the owner may be someone without a login.
+  owner     String?
+  dueOn     DateTime?   @db.Date
+  doneAt    DateTime?
+  sortOrder Int         @default(0)
+  createdAt DateTime    @default(now())
+  updatedAt DateTime    @updatedAt
+
+  @@index([meetingId])
+  @@index([doneAt, dueOn])
+}
