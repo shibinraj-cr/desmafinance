@@ -2,7 +2,7 @@ import { redirect } from "next/navigation";
 import { prisma } from "@/lib/prisma";
 import { getCurrentUserAndPermissions } from "@/lib/permissions";
 import { isHrUser } from "@/lib/hr-rbac";
-import { isOwnerDesignation } from "@/lib/hr-salary-engine";
+import { isOwnerDesignation, effectiveDesignation } from "@/lib/hr-salary-engine";
 import { recomputeAllLeaveBalances } from "@/lib/hr-leave-balance";
 import { TopBar } from "@/components/TopBar";
 import { Section } from "@/components/Cards";
@@ -36,7 +36,7 @@ export default async function LeaveBalancesPage() {
   });
   // Owners (MD / Director) have no leave — exclude from the balances view.
   const rows = allRows.filter(
-    (r) => !(isOwnerDesignation(r.employee.designationRef?.name) || isOwnerDesignation(r.employee.designation)),
+    (r) => !isOwnerDesignation(effectiveDesignation(r.employee)),
   );
   return (
     <>

@@ -4,7 +4,7 @@ import { getCurrentUserAndPermissions } from "@/lib/permissions";
 import { isHrUser } from "@/lib/hr-rbac";
 import { TopBar } from "@/components/TopBar";
 import { Section } from "@/components/Cards";
-import { isOwnerDesignation } from "@/lib/hr-salary-engine";
+import { isOwnerDesignation, effectiveDesignation } from "@/lib/hr-salary-engine";
 import { LeaveCalendarClient } from "./client";
 
 export const dynamic = "force-dynamic";
@@ -79,7 +79,7 @@ export default async function LeaveCalendarPage({
 
   // Owners do not take leave, so they would only ever be empty rows.
   const staff = employees.filter(
-    (e) => !(isOwnerDesignation(e.designationRef?.name) || isOwnerDesignation(e.designation)),
+    (e) => !isOwnerDesignation(effectiveDesignation(e)),
   );
   const staffIds = new Set(staff.map((e) => e.id));
 

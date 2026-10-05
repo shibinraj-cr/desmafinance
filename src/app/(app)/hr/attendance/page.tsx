@@ -2,7 +2,7 @@ import { redirect } from "next/navigation";
 import { prisma } from "@/lib/prisma";
 import { getCurrentUserAndPermissions } from "@/lib/permissions";
 import { isHrUser, canApproveHr } from "@/lib/hr-rbac";
-import { isOwnerDesignation } from "@/lib/hr-salary-engine";
+import { isOwnerDesignation, effectiveDesignation } from "@/lib/hr-salary-engine";
 import { TopBar } from "@/components/TopBar";
 import { Section } from "@/components/Cards";
 import {
@@ -77,7 +77,7 @@ export default async function HrAttendancePage({
   ]);
   // Owners (MD / Director) have no attendance — exclude them from the grid.
   const employees = employeesRaw.filter(
-    (e) => !(isOwnerDesignation(e.designationRef?.name) || isOwnerDesignation(e.designation)),
+    (e) => !isOwnerDesignation(effectiveDesignation(e)),
   );
 
   const grid: Record<

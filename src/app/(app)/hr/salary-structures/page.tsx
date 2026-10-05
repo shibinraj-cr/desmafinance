@@ -4,7 +4,7 @@ import { getCurrentUserAndPermissions } from "@/lib/permissions";
 import { isHrUser, canApproveHr } from "@/lib/hr-rbac";
 import { TopBar } from "@/components/TopBar";
 import { Section } from "@/components/Cards";
-import { deriveBreakdown, suggestProfessionalTax, isTraineeDesignation } from "@/lib/hr-salary-engine";
+import { deriveBreakdown, suggestProfessionalTax, isTraineeDesignation, effectiveDesignation } from "@/lib/hr-salary-engine";
 import { SalaryStructuresClient } from "./client";
 
 export const dynamic = "force-dynamic";
@@ -56,7 +56,7 @@ export default async function SalaryStructuresPage() {
     // Trainees are paid on basic only — mirror the engine override so the
     // planning view's money columns match the actual payout.
     const isTrainee =
-      isTraineeDesignation(e.designationRef?.name) || isTraineeDesignation(e.designation);
+      isTraineeDesignation(effectiveDesignation(e));
     if (!cur) {
       return {
         id: e.id,

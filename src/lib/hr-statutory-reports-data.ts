@@ -1,6 +1,6 @@
 import { prisma } from "./prisma";
 import { structureForMonth } from "./hr-data";
-import { isTraineeDesignation } from "./hr-salary-engine";
+import { isTraineeDesignation, effectiveDesignation } from "./hr-salary-engine";
 import {
   deriveEcrRow,
   deriveEsiRow,
@@ -63,7 +63,7 @@ export async function getStatutoryReportData(runId: string): Promise<StatutoryRe
   for (const line of run.lines) {
     const e = line.employee;
     const isTrainee =
-      isTraineeDesignation(e.designationRef?.name) || isTraineeDesignation(e.designation);
+      isTraineeDesignation(effectiveDesignation(e));
     const structure = isTrainee ? null : await structureForMonth(e.id, run.monthKey);
 
     const gross = Number(line.monthlySalary);
