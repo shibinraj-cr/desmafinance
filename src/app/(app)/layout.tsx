@@ -14,6 +14,9 @@ import {
 } from "@/lib/celebrations";
 import { AnnouncementBand } from "@/components/AnnouncementBand";
 import { CelebrationGreeting } from "@/components/CelebrationGreeting";
+import { MeetingActionReminder } from "@/components/MeetingActionReminder";
+import { dueRemindersFor } from "@/lib/meeting-notes";
+import { todayIst } from "@/lib/lead-pulse-dates";
 import { SideNav } from "@/components/SideNav";
 import { GroupTabs } from "@/components/GroupTabs";
 import { RouteProgress } from "@/components/RouteProgress";
@@ -39,6 +42,9 @@ export default async function AppLayout({ children }: { children: React.ReactNod
   // Today's birthdays and work anniversaries, for the band. Derived from
   // Employee.dob / .joinDate on every render rather than scheduled, so there is
   // no daily job to babysit and a corrected date of birth is right immediately.
+  // Meeting action items this user owns that are due (or overdue) and not yet
+  // updated, for the reminder pop-up. One indexed query; [] on any error.
+  const today = todayIst();
   const [
     pendingCount,
     rejectedCount,
@@ -48,6 +54,7 @@ export default async function AppLayout({ children }: { children: React.ReactNod
     newsUnreadCount,
     tickerItems,
     celebrations,
+    dueMeetingActions,
   ] = await Promise.all([
     prisma.pendingApproval.count({ where: { status: "pending" } }).catch(() => 0),
     prisma.pendingApproval
@@ -70,6 +77,7 @@ export default async function AppLayout({ children }: { children: React.ReactNod
           ? await celebrationsToday({ settings })
           : [],
     })),
+    dueRemindersFor(userId, today),
   ]);
 
   // Only costs a further query when the viewer is actually one of today's
@@ -141,6 +149,8 @@ export default async function AppLayout({ children }: { children: React.ReactNod
           }}
         />
       ) : null}
+      {/* Owner's action-item reminders: from the due date until they update it. */}
+      {dueMeetingActions.length > 0 ? <MeetingActionReminder items={dueMeetingActions} today={today} /> : null}
     </div>
   );
 }

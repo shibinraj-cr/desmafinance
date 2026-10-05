@@ -24,7 +24,11 @@ export function meetingKindLabel(kind: string): string {
 export type MeetingActionRow = {
   id: string;
   text: string;
+  /** Free-text owner (someone without a login). */
   owner: string | null;
+  /** Linked owner login — gets the reminder pop-up and can update the item. */
+  ownerUserId: string | null;
+  ownerName: string | null;
   /** YYYY-MM-DD */
   dueOn: string | null;
   done: boolean;
@@ -44,7 +48,17 @@ export type MeetingRow = {
   updatedBy: string | null;
   updatedAt: string;
   actions: MeetingActionRow[];
+  /** Users this meeting is shared with (under My Workspace). */
+  sharedWith: SharedUser[];
+  /**
+   * The VIEWER's own access, set only on the My Workspace list: true when the
+   * meeting was shared with them as an editor. Admins don't need it.
+   */
+  canEdit?: boolean;
 };
+
+export type ShareUser = { id: string; username: string };
+export type SharedUser = ShareUser & { canEdit: boolean };
 
 // ── Request shapes ──────────────────────────────────────────────────────────
 
@@ -56,6 +70,7 @@ export const ActionInputSchema = z.object({
   id: z.string().min(1).optional(),
   text: z.string().trim().min(1, "An action item needs some text").max(500),
   owner: z.string().trim().max(120).nullable().optional(),
+  ownerUserId: z.string().min(1).max(64).nullable().optional(),
   dueOn: DATE.nullable().optional(),
   done: z.boolean().default(false),
 });
@@ -71,10 +86,30 @@ export const MeetingInputSchema = z.object({
   decisions: longText,
   /** The full list after this edit — items left out are removed. */
   actions: z.array(ActionInputSchema).max(100).default([]),
+  /** User ids to share with — the full list; anyone left out loses access. */
+  sharedWith: z.array(z.string().min(1).max(64)).max(200).default([]),
+  /** The subset of sharedWith who may also edit (never delete or re-share). */
+  editors: z.array(z.string().min(1).max(64)).max(200).default([]),
 });
 export type MeetingInput = z.infer<typeof MeetingInputSchema>;
 
 export const ActionToggleSchema = z.object({ done: z.boolean() });
+
+/** What an action item's owner can do from the reminder or My Workspace. */
+export const OwnerActionUpdateSchema = z.discriminatedUnion("action", [
+  z.object({ action: z.literal("done") }),
+  z.object({ action: z.literal("reopen") }),
+  /** Not today — ask again tomorrow. */
+  z.object({ action: z.literal("snooze") }),
+  /** A new due date; the reminder moves with it. */
+  z.object({ action: z.literal("reschedule"), dueOn: DATE }),
+]);
+export type OwnerActionUpdate = z.infer<typeof OwnerActionUpdateSchema>;
+
+/** Who to show as the owner: the login's name, else the free text. */
+export function ownerLabel(a: Pick<MeetingActionRow, "owner" | "ownerName">): string | null {
+  return a.ownerName ?? a.owner ?? null;
+}
 
 /** Blank strings mean "nothing", so an emptied textarea clears the column. */
 export function blankToNull(v: string | null | undefined): string | null {
@@ -93,6 +128,19 @@ export function actionState(a: Pick<MeetingActionRow, "done" | "dueOn">, today: 
   if (a.dueOn < today) return "overdue";
   if (a.dueOn === today) return "due_today";
   return "open";
+}
+
+/**
+ * Whether the owner's reminder pop-up should show this item on `today` (IST):
+ * still open, due today or earlier, and not snoozed past today. An overdue item
+ * keeps reminding every day until it is done, rescheduled or snoozed.
+ */
+export function isReminderDue(
+  a: { done: boolean; dueOn: string | null; snoozedUntil: string | null },
+  today: string,
+): boolean {
+  if (a.done || !a.dueOn || a.dueOn > today) return false;
+  return !a.snoozedUntil || a.snoozedUntil <= today;
 }
 
 /**
@@ -126,10 +174,25 @@ export function meetingMatches(m: MeetingRow, query: string): boolean {
     m.agenda,
     m.notes,
     m.decisions,
-    ...m.actions.flatMap((a) => [a.text, a.owner]),
+    ...m.actions.flatMap((a) => [a.text, a.owner, a.ownerName]),
   ]
     .filter(Boolean)
     .join("\n")
     .toLowerCase();
   return q.split(/\s+/).every((word) => hay.includes(word));
+}
+
+/**
+ * Who a non-admin editor may name as an action owner: people who can already
+ * read the meeting (its shares), themselves, and anyone already owning an item
+ * on it. Naming an owner lets that person read the meeting, so an editor
+ * picking freely would be re-sharing by the back door — which stays admin-only.
+ */
+export function editorOwnerChoices(m: Pick<MeetingRow, "sharedWith" | "actions">, self: ShareUser): ShareUser[] {
+  const byId = new Map<string, string>([[self.id, self.username]]);
+  for (const u of m.sharedWith) byId.set(u.id, u.username);
+  for (const a of m.actions) if (a.ownerUserId && a.ownerName) byId.set(a.ownerUserId, a.ownerName);
+  return Array.from(byId, ([id, username]) => ({ id, username })).sort((a, b) =>
+    a.username.localeCompare(b.username),
+  );
 }

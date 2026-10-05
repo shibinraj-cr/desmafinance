@@ -5072,8 +5072,27 @@ model ExecMeeting {
   updatedAt   DateTime @updatedAt
 
   actions ExecMeetingAction[]
+  shares  ExecMeetingShare[]
 
   @@index([meetingOn])
+}
+
+/// A non-admin user who may read one meeting from My Workspace → Meetings,
+/// and edit it when canEdit. Never delete, never re-share, never the
+/// Executive module itself — those stay with admins.
+/// userId is a plain string like the author ids, so User needs no back-relation;
+/// a deleted user's share rows are inert (nobody can sign in as them).
+model ExecMeetingShare {
+  meetingId  String
+  meeting    ExecMeeting @relation(fields: [meetingId], references: [id], onDelete: Cascade)
+  userId     String
+  /// Edit the meeting's content and action items (not delete, not sharing).
+  canEdit    Boolean     @default(false)
+  sharedById String?
+  createdAt  DateTime    @default(now())
+
+  @@id([meetingId, userId])
+  @@index([userId])
 }
 
 model ExecMeetingAction {
@@ -5083,7 +5102,12 @@ model ExecMeetingAction {
   text      String
   /// Free text, like attendees — the owner may be someone without a login.
   owner     String?
+  /// The owner's login, when they have one. Only a linked owner gets the
+  /// due-date reminder pop-up and can update the item from My Workspace.
+  ownerUserId  String?
   dueOn     DateTime?   @db.Date
+  /// "Remind me tomorrow": no pop-up before this IST date.
+  snoozedUntil DateTime? @db.Date
   doneAt    DateTime?
   sortOrder Int         @default(0)
   createdAt DateTime    @default(now())
@@ -5091,4 +5115,5 @@ model ExecMeetingAction {
 
   @@index([meetingId])
   @@index([doneAt, dueOn])
+  @@index([ownerUserId, doneAt])
 }
