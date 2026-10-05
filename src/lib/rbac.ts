@@ -153,6 +153,16 @@ export function canSeePage(p: Permissions, href: string): boolean {
   ) {
     return p.pages.some((pg) => pg === "/crm/leads" || pg.startsWith("/crm/leads/"));
   }
+  // Sales Training is for sales consultants, who are CRM users — show it to
+  // them without a separate grant, so an HR enrolment is never stranded behind
+  // a missing Role.pages entry. Other roles can still be granted it explicitly;
+  // the page itself only opens for enrolled learners.
+  if (
+    (href === "/me/sales-training" || href.startsWith("/me/sales-training/")) &&
+    p.pages.some((pg) => pg === "/crm/leads" || pg.startsWith("/crm/leads/"))
+  ) {
+    return true;
+  }
   // Exact match or prefix match (e.g. allowing /daily-tracker permits
   // /daily-tracker/[id]/edit too).
   return p.pages.some((pg) => href === pg || href.startsWith(pg + "/"));
