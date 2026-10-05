@@ -7,7 +7,7 @@ import { TopBar } from "@/components/TopBar";
 import { KpiCard, Section } from "@/components/Cards";
 import { CategoryDonut, HeadcountArea, HorizontalBars } from "@/components/Charts";
 import { monthLabel } from "@/lib/format";
-import { deriveBreakdown, isTraineeDesignation } from "@/lib/hr-salary-engine";
+import { deriveBreakdown, isTraineeDesignation, effectiveDesignation } from "@/lib/hr-salary-engine";
 import { cycleMonthForDate, cycleWindowForMonth } from "@/lib/hr-data";
 import { loadActiveEmployeeBirthdays, upcomingBirthdays } from "@/lib/hr-birthdays";
 
@@ -123,7 +123,7 @@ export default async function HrDashboardPage() {
     if (!s) continue;
     // Trainees are paid on basic only — don't count allowances in CTC roll-ups.
     const isTrainee =
-      isTraineeDesignation(e.designationRef?.name) || isTraineeDesignation(e.designation);
+      isTraineeDesignation(effectiveDesignation(e));
     const gross = deriveBreakdown(Number(s.basic), {
       hraPct: isTrainee ? 0 : Number(s.hraPct),
       conveyancePct: isTrainee ? 0 : Number(s.conveyancePct),

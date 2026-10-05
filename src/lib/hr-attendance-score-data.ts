@@ -15,7 +15,7 @@ import {
   computeLateTags,
   SHIFT_GRACE_MINUTES,
 } from "./hr-data";
-import { bucketAttendance, isOwnerDesignation } from "./hr-salary-engine";
+import { bucketAttendance, isOwnerDesignation, effectiveDesignation } from "./hr-salary-engine";
 import {
   buildAttendanceScorecard,
   scoreAttendance,
@@ -346,7 +346,7 @@ export async function loadAttendanceScorecard(cycleMonth: string): Promise<Atten
   const days = overlayScoreSignals(daysRaw, signals);
 
   const employees = employeesRaw.filter(
-    (e) => !(isOwnerDesignation(e.designationRef?.name) || isOwnerDesignation(e.designation)),
+    (e) => !isOwnerDesignation(effectiveDesignation(e)),
   );
 
   const daysByEmp = new Map<string, AttDay[]>();

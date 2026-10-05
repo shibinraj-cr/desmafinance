@@ -4,7 +4,7 @@ import { getCurrentUserAndPermissions } from "@/lib/permissions";
 import { TopBar } from "@/components/TopBar";
 import { Section } from "@/components/Cards";
 import { employeeForUser } from "@/lib/hr-me";
-import { isOwnerDesignation } from "@/lib/hr-salary-engine";
+import { isOwnerDesignation, effectiveDesignation } from "@/lib/hr-salary-engine";
 import { computeMonthlyLeaveLedger, recomputeLeaveBalance } from "@/lib/hr-leave-balance";
 import { halfSessionLabel } from "@/lib/hr-regularization";
 import { MyLeaveClient } from "./client";
@@ -46,7 +46,7 @@ export default async function MyLeavePage() {
   const balanceYear = new Date().getUTCFullYear();
   const bal = await recomputeLeaveBalance(emp.id, balanceYear);
   // Owners (MD / Director) have no leave — show history only, no apply form.
-  const canApply = !(isOwnerDesignation(emp.designationRef?.name) || isOwnerDesignation(emp.designation));
+  const canApply = !isOwnerDesignation(effectiveDesignation(emp));
   const ledgerYear = new Date().getUTCFullYear();
   const ledger = canApply
     ? await computeMonthlyLeaveLedger(emp.id, ledgerYear)

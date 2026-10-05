@@ -62,8 +62,8 @@ export const PF_CONTRIBUTION_CAP = PF_WAGE_CEILING * PF_RATE; // 1800
 
 /**
  * Trainees are paid on BASIC ONLY: no allowances, no ESI, no PF, no PT.
- * Enforced by designation NAME (case-insensitive, trimmed), matched against
- * both the modern HrDesignation relation and the legacy `employee.designation`.
+ * Enforced by designation NAME (case-insensitive, trimmed) of the employee's
+ * effective designation — see `effectiveDesignation`.
  */
 export const TRAINEE_DESIGNATION_NAME = "Trainee";
 
@@ -75,14 +75,28 @@ export function isTraineeDesignation(name?: string | null): boolean {
  * Company owners (Managing Director / Director). Attendance and leaves do not
  * apply to them: payroll pays their full structured salary every month with
  * zero loss-of-pay, and they are excluded from leave accrual / the attendance
- * grid. Matched by designation NAME (case-insensitive, trimmed) against both
- * the modern HrDesignation relation and the legacy `employee.designation`.
+ * grid. Matched by designation NAME (case-insensitive, trimmed) of the
+ * employee's effective designation — see `effectiveDesignation`.
  */
 export const OWNER_DESIGNATION_NAMES = ["Managing Director", "Director"] as const;
 
 export function isOwnerDesignation(name?: string | null): boolean {
   const n = (name ?? "").trim().toLowerCase();
   return n !== "" && OWNER_DESIGNATION_NAMES.some((d) => d.toLowerCase() === n);
+}
+
+/**
+ * The designation an employee actually holds: the HrDesignation relation when
+ * set, else the legacy free-text `employee.designation`. Same precedence the
+ * employee page displays. The legacy string is never shown or edited once the
+ * relation is set, so it goes stale on promotion — OR-ing the two used to keep
+ * a promoted ex-Trainee on basic-only pay.
+ */
+export function effectiveDesignation(e: {
+  designationRef?: { name: string } | null;
+  designation?: string | null;
+}): string | null {
+  return e.designationRef?.name ?? e.designation ?? null;
 }
 
 // Ad-hoc pay-correction vocabulary lives in a Prisma-free module so client
@@ -581,7 +595,7 @@ export async function computeSalaryRun(monthKey: string, userId: string | null):
     // is required and there is never any loss-of-pay. ESI/PF/PT still follow
     // their salary structure as HR sets it.
     const isOwner =
-      isOwnerDesignation(e.designationRef?.name) || isOwnerDesignation(e.designation);
+      isOwnerDesignation(effectiveDesignation(e));
 
     let buckets: {
       daysPresent: number;
@@ -657,9 +671,9 @@ export async function computeSalaryRun(monthKey: string, userId: string | null):
 
     // Trainees are paid on BASIC ONLY — the engine forces allowances/ESI/PF/PT
     // to zero by designation name, overriding whatever the saved structure
-    // says. Robust to both the modern relation and the legacy string.
+    // says. Uses the effective designation (relation first, legacy fallback).
     const isTrainee =
-      isTraineeDesignation(e.designationRef?.name) || isTraineeDesignation(e.designation);
+      isTraineeDesignation(effectiveDesignation(e));
 
     // Itemised ad-hoc corrections. The "penalty" slice feeds the pre-statutory
     // calc below (recomputing ESI/PF on the reduced salary); additions and other
