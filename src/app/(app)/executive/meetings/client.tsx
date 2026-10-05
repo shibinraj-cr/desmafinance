@@ -3,21 +3,21 @@
 import { useEffect, useMemo, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import { TopBar } from "@/components/TopBar";
-import { Markdown } from "@/components/hiring/Markdown";
+import { MultiSelect } from "@/components/MultiSelect";
 import { formatIstShort } from "@/lib/lead-pulse-dates";
 import {
   MEETING_KINDS,
   MEETING_KIND_LABEL,
-  actionState,
   meetingKindLabel,
   meetingMatches,
   openActions,
-  type ActionState,
-  type MeetingActionRow,
+  ownerLabel,
   type MeetingKind,
   type MeetingRow,
+  type ShareUser,
 } from "@/lib/meeting-notes-model";
 import { clearDraft, isStale, listDraftIds, readDraft, writeDraft } from "@/lib/meeting-notes-draft";
+import { MeetingDetail, StateChip } from "./_detail";
 import { Drawer, ErrorNote, Field, inputCls, primaryBtn, secondaryBtn } from "../wealth/editors";
 
 // ── plumbing ────────────────────────────────────────────────────────────────
@@ -51,25 +51,19 @@ async function call(
   }
 }
 
-const STATE_CHIP: Record<ActionState, { label: string; cls: string }> = {
-  overdue: { label: "Overdue", cls: "bg-error-container text-on-error-container" },
-  due_today: { label: "Due today", cls: "bg-primary/20 text-on-surface" },
-  open: { label: "Open", cls: "bg-surface-container-high text-on-surface-variant" },
-  done: { label: "Done", cls: "bg-primary-container text-on-primary-container" },
-};
-
-function StateChip({ state }: { state: ActionState }) {
-  const s = STATE_CHIP[state];
-  return (
-    <span className={"inline-flex items-center px-sm h-6 rounded-full text-caption font-semibold " + s.cls}>
-      {s.label}
-    </span>
-  );
-}
-
 // ── drafts ──────────────────────────────────────────────────────────────────
 
-type ActionDraft = { key: string; id?: string; text: string; owner: string; dueOn: string; done: boolean };
+type ActionDraft = {
+  key: string;
+  id?: string;
+  text: string;
+  /** Free-text name, used only when no login is picked. */
+  owner: string;
+  /** "" = no login. */
+  ownerUserId: string;
+  dueOn: string;
+  done: boolean;
+};
 type MeetingDraft = {
   title: string;
   meetingOn: string;
@@ -79,6 +73,8 @@ type MeetingDraft = {
   notes: string;
   decisions: string;
   actions: ActionDraft[];
+  /** User ids. */
+  sharedWith: string[];
 };
 
 let draftSeq = 0;
@@ -94,6 +90,7 @@ function emptyDraft(today: string): MeetingDraft {
     notes: "",
     decisions: "",
     actions: [],
+    sharedWith: [],
   };
 }
 
@@ -111,9 +108,11 @@ function draftFrom(m: MeetingRow): MeetingDraft {
       id: a.id,
       text: a.text,
       owner: a.owner ?? "",
+      ownerUserId: a.ownerUserId ?? "",
       dueOn: a.dueOn ?? "",
       done: a.done,
     })),
+    sharedWith: m.sharedWith.map((u) => u.id),
   };
 }
 
@@ -127,8 +126,9 @@ function reviveDraft(stored: Partial<MeetingDraft>, today: string): MeetingDraft
   return {
     ...base,
     ...stored,
+    sharedWith: Array.isArray(stored.sharedWith) ? stored.sharedWith : [],
     actions: Array.isArray(stored.actions)
-      ? stored.actions.map((a) => ({ ...a, key: a.id ?? newKey() }))
+      ? stored.actions.map((a) => ({ ...a, ownerUserId: a.ownerUserId ?? "", key: a.id ?? newKey() }))
       : [],
   };
 }
@@ -150,10 +150,12 @@ function payloadFrom(d: MeetingDraft) {
       .map((a) => ({
         id: a.id,
         text: a.text,
-        owner: a.owner || null,
+        owner: a.ownerUserId ? null : a.owner || null,
+        ownerUserId: a.ownerUserId || null,
         dueOn: a.dueOn || null,
         done: a.done,
       })),
+    sharedWith: d.sharedWith,
   };
 }
 
@@ -163,10 +165,13 @@ export function MeetingNotesClient({
   meetings,
   today,
   initialSelectedId,
+  users,
 }: {
   meetings: MeetingRow[];
   today: string;
   initialSelectedId: string | null;
+  /** Active logins the meeting can be shared with. */
+  users: ShareUser[];
 }) {
   const router = useRouter();
   const [, startTransition] = useTransition();
@@ -380,7 +385,7 @@ export function MeetingNotesClient({
                     <div className="min-w-0 flex-1">
                       <p className="text-body-md text-on-surface">{a.text}</p>
                       <p className="text-caption text-on-surface-variant">
-                        {a.owner ? `${a.owner} · ` : ""}
+                        {ownerLabel(a) ? `${ownerLabel(a)} · ` : ""}
                         {a.dueOn ? `Due ${formatIstShort(a.dueOn)} · ` : ""}
                         <button
                           type="button"
@@ -459,6 +464,7 @@ export function MeetingNotesClient({
                         <p className="text-caption text-on-surface-variant">
                           {formatIstShort(m.meetingOn)} · {meetingKindLabel(m.kind)}
                           {open > 0 && ` · ${open} open`}
+                          {m.sharedWith.length > 0 && ` · Shared with ${m.sharedWith.length}`}
                           {draftIds.has(m.id) && <span className="text-accent font-semibold"> · Unsaved draft</span>}
                         </p>
                       </button>
@@ -560,6 +566,20 @@ export function MeetingNotesClient({
                 </select>
               </Field>
             </div>
+            <Field
+              label="Share with"
+              hint="They can read this meeting under My Workspace → Meetings. They can't edit it."
+            >
+              <MultiSelect
+                options={users.map((u) => ({ value: u.id, label: u.username }))}
+                selected={editing.draft.sharedWith}
+                onChange={(sharedWith) => setDraft({ sharedWith })}
+                placeholder="Only admins"
+                icon="group_add"
+                searchable
+                className="w-full"
+              />
+            </Field>
             <Field label="Attendees" hint="Comma-separated. Anyone — they don't need a login.">
               <input
                 className={inputCls}
@@ -597,7 +617,7 @@ export function MeetingNotesClient({
                     setDraft({
                       actions: [
                         ...editing.draft.actions,
-                        { key: newKey(), text: "", owner: "", dueOn: "", done: false },
+                        { key: newKey(), text: "", owner: "", ownerUserId: "", dueOn: "", done: false },
                       ],
                     })
                   }
@@ -639,12 +659,19 @@ export function MeetingNotesClient({
                     </button>
                   </div>
                   <div className="grid grid-cols-2 gap-sm pl-6">
-                    <input
+                    <select
                       className={inputCls}
-                      value={a.owner}
-                      onChange={(e) => setAction(a.key, { owner: e.target.value })}
-                      placeholder="Owner"
-                    />
+                      value={a.ownerUserId}
+                      onChange={(e) => setAction(a.key, { ownerUserId: e.target.value })}
+                      aria-label="Owner"
+                    >
+                      <option value="">Owner: no login</option>
+                      {users.map((u) => (
+                        <option key={u.id} value={u.id}>
+                          {u.username}
+                        </option>
+                      ))}
+                    </select>
                     <input
                       type="date"
                       className={inputCls}
@@ -653,6 +680,24 @@ export function MeetingNotesClient({
                       aria-label="Due date"
                     />
                   </div>
+                  {!a.ownerUserId && (
+                    <div className="pl-6">
+                      <input
+                        className={inputCls}
+                        value={a.owner}
+                        onChange={(e) => setAction(a.key, { owner: e.target.value })}
+                        placeholder="Or type a name (no reminders)"
+                      />
+                    </div>
+                  )}
+                  {a.ownerUserId && a.dueOn && !a.done && (
+                    <p className="pl-6 text-caption text-on-surface-variant inline-flex items-center gap-xs">
+                      <span className="material-symbols-outlined" style={{ fontSize: 14 }}>
+                        notifications_active
+                      </span>
+                      Reminder pops up for them from {formatIstShort(a.dueOn)} until they update it.
+                    </p>
+                  )}
                 </div>
               ))}
             </div>
@@ -685,113 +730,5 @@ function TextArea({
         className="w-full px-md py-sm rounded-lg border border-outline-variant bg-surface-container-lowest focus:border-primary focus:ring-2 focus:ring-primary/20 outline-none transition text-body-md"
       />
     </Field>
-  );
-}
-
-function MeetingDetail({
-  meeting: m,
-  today,
-  onEdit,
-  onDelete,
-  onToggle,
-}: {
-  meeting: MeetingRow;
-  today: string;
-  onEdit: () => void;
-  onDelete: () => void;
-  onToggle: (id: string, done: boolean) => void;
-}) {
-  const byline = [
-    m.createdBy ? `Recorded by ${m.createdBy}` : null,
-    m.updatedBy && m.updatedBy !== m.createdBy ? `last edited by ${m.updatedBy}` : null,
-  ]
-    .filter(Boolean)
-    .join(", ");
-
-  return (
-    <article className="bg-surface-container-lowest border border-outline-variant rounded-xl shadow-sm p-lg space-y-lg min-w-0">
-      <header className="flex flex-wrap items-start justify-between gap-md">
-        <div className="min-w-0">
-          <p className="text-label-sm uppercase tracking-wider text-on-surface-variant">
-            {meetingKindLabel(m.kind)} · {formatIstShort(m.meetingOn)}
-          </p>
-          <h3 className="text-h2 text-on-surface break-words">{m.title}</h3>
-          {m.attendees && (
-            <p className="text-body-md text-on-surface-variant mt-xs">
-              <span className="font-semibold">Attendees:</span> {m.attendees}
-            </p>
-          )}
-          {byline && <p className="text-caption text-on-surface-variant mt-xs">{byline}</p>}
-        </div>
-        <div className="flex items-center gap-sm">
-          <button type="button" onClick={onEdit} className={secondaryBtn}>
-            Edit
-          </button>
-          <button
-            type="button"
-            onClick={onDelete}
-            aria-label="Delete meeting"
-            className="h-10 w-10 grid place-items-center rounded-lg border border-outline-variant text-error hover:bg-error-container/40"
-          >
-            <span className="material-symbols-outlined" style={{ fontSize: 18 }}>
-              delete
-            </span>
-          </button>
-        </div>
-      </header>
-
-      <NoteBlock title="Agenda" body={m.agenda} />
-      <NoteBlock title="Notes" body={m.notes} />
-      <NoteBlock title="Decisions" body={m.decisions} />
-
-      <div>
-        <h4 className="text-label-sm uppercase tracking-wider text-on-surface-variant mb-sm">Action items</h4>
-        {m.actions.length === 0 ? (
-          <p className="text-body-md text-on-surface-variant">None recorded.</p>
-        ) : (
-          <ul className="divide-y divide-outline-variant">
-            {m.actions.map((a: MeetingActionRow) => {
-              const state = actionState(a, today);
-              return (
-                <li key={a.id} className="flex items-start gap-md py-sm">
-                  <input
-                    type="checkbox"
-                    className="mt-1 h-4 w-4 accent-primary"
-                    checked={a.done}
-                    onChange={(e) => onToggle(a.id, e.target.checked)}
-                    aria-label={`Mark "${a.text}" ${a.done ? "not done" : "done"}`}
-                  />
-                  <div className="min-w-0 flex-1">
-                    <p
-                      className={
-                        "text-body-md " + (a.done ? "line-through text-on-surface-variant" : "text-on-surface")
-                      }
-                    >
-                      {a.text}
-                    </p>
-                    {(a.owner || a.dueOn) && (
-                      <p className="text-caption text-on-surface-variant">
-                        {[a.owner, a.dueOn ? `Due ${formatIstShort(a.dueOn)}` : null].filter(Boolean).join(" · ")}
-                      </p>
-                    )}
-                  </div>
-                  <StateChip state={state} />
-                </li>
-              );
-            })}
-          </ul>
-        )}
-      </div>
-    </article>
-  );
-}
-
-function NoteBlock({ title, body }: { title: string; body: string | null }) {
-  if (!body) return null;
-  return (
-    <div>
-      <h4 className="text-label-sm uppercase tracking-wider text-on-surface-variant mb-sm">{title}</h4>
-      <Markdown source={body} />
-    </div>
   );
 }
