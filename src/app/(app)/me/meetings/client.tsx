@@ -6,7 +6,6 @@ import { TopBar } from "@/components/TopBar";
 import { formatIstShort } from "@/lib/lead-pulse-dates";
 import {
   actionState,
-  editorOwnerChoices,
   meetingKindLabel,
   meetingMatches,
   type MeetingRow,
@@ -18,15 +17,17 @@ import { MeetingEditor } from "../../executive/meetings/_editor";
 export function MyMeetingsClient({
   meetings,
   today,
-  self,
+  userId,
+  users,
   initialSelectedId,
 }: {
   meetings: MeetingRow[];
   today: string;
-  self: ShareUser;
+  userId: string;
+  /** Active logins, for the action-owner picker (empty unless the viewer can edit). */
+  users: ShareUser[];
   initialSelectedId: string | null;
 }) {
-  const userId = self.id;
   const router = useRouter();
   const [, startTransition] = useTransition();
   const [query, setQuery] = useState("");
@@ -175,7 +176,7 @@ export function MyMeetingsClient({
         <MeetingEditor
           meeting={editing}
           today={today}
-          ownerChoices={editorOwnerChoices(editing, self)}
+          ownerChoices={users}
           onClose={() => setEditing(null)}
           onSaved={() => {
             setEditing(null);

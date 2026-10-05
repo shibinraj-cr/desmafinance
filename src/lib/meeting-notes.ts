@@ -63,8 +63,7 @@ export async function listMeetings(): Promise<MeetingRow[]> {
  * The meetings this user may read in My Workspace: shared with them, or with
  * an action item they own (they need the context to act on it). The share list
  * is blanked for read-only viewers — a reader learns what was discussed, not
- * who else was given the same notes. Editors keep it: they need it to pick
- * action owners (see editorOwnerChoices).
+ * who else was given the same notes. Editors keep it.
  */
 export async function listMeetingsSharedWith(userId: string): Promise<MeetingRow[]> {
   const rows = await toRows(
@@ -214,24 +213,15 @@ export async function updateMeeting(
     const existing = await tx.execMeeting.findUnique({
       where: { id },
       select: {
-        actions: { select: { id: true, doneAt: true, dueOn: true, ownerUserId: true } },
+        actions: { select: { id: true, doneAt: true, dueOn: true } },
         shares: { select: { userId: true, canEdit: true } },
       },
     });
     if (!existing) throw notFound();
 
-    // A non-admin editor may only name owners who can already see the meeting
-    // (see editorOwnerChoices) — otherwise assigning an item would re-share it.
-    if (!actor.isAdmin) {
-      const allowed = new Set<string>([
-        userId,
-        ...existing.shares.map((s) => s.userId),
-        ...existing.actions.map((a) => a.ownerUserId).filter((x): x is string => !!x),
-      ]);
-      if (body.actions.some((a) => a.ownerUserId && !allowed.has(a.ownerUserId))) {
-        throw forbidden("You can only assign action items to people this meeting is shared with.");
-      }
-    }
+    // Editors may assign action items to any active login, like admins. Note
+    // that an owner can read the meeting from My Workspace (they need the
+    // context), so assigning someone also lets them see it — by design.
 
     const current = new Map(existing.actions.map((a) => [a.id, a]));
     const keep = new Set(body.actions.map((a) => a.id).filter((x): x is string => !!x && current.has(x)));
