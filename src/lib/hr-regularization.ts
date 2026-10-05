@@ -10,10 +10,14 @@ import { prisma } from "./prisma";
  * the attendance rows the apply form is built from, not this window.
  *
  * Settable per deployment without a code change; the default is the policy
- * value agreed with the business.
+ * value agreed with the business — 7 working days, i.e. a discrepancy has to
+ * be raised inside roughly a week and a day of calendar time.
+ *
+ * NOTE: `HR_REGULARIZATION_WINDOW_DAYS` OVERRIDES this. If a deployment sets
+ * it, changing the default here does nothing there.
  */
 export const REGULARIZATION_WINDOW_WORKING_DAYS = Number(
-  process.env.HR_REGULARIZATION_WINDOW_DAYS ?? 10,
+  process.env.HR_REGULARIZATION_WINDOW_DAYS ?? 7,
 );
 
 /**
