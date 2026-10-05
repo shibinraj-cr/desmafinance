@@ -3,7 +3,7 @@ import { TopBar } from "@/components/TopBar";
 import { Section } from "@/components/Cards";
 import { getCurrentUserAndPermissions } from "@/lib/permissions";
 import { todayIst } from "@/lib/lead-pulse-dates";
-import { listMeetings } from "@/lib/meeting-notes";
+import { listMeetings, listShareableUsers } from "@/lib/meeting-notes";
 import { MeetingNotesClient } from "./client";
 
 export const dynamic = "force-dynamic";
@@ -36,9 +36,14 @@ export default async function MeetingNotesPage({
     );
   }
 
-  const meetings = await listMeetings();
+  const [meetings, users] = await Promise.all([listMeetings(), listShareableUsers()]);
 
   return (
-    <MeetingNotesClient meetings={meetings} today={todayIst()} initialSelectedId={searchParams?.m ?? null} />
+    <MeetingNotesClient
+      meetings={meetings}
+      today={todayIst()}
+      initialSelectedId={searchParams?.m ?? null}
+      users={users}
+    />
   );
 }
