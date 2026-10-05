@@ -82,6 +82,10 @@ export const ALWAYS_VISIBLE_PAGES = [
   "/me/attendance",
   "/me/regularization",
   "/me/account",
+  // Executive meetings shared with this user (or holding an action item they
+  // own). Every login can open it; the page itself only ever lists meetings
+  // explicitly shared with the viewer, so an empty grant leaks nothing.
+  "/me/meetings",
   // News & Updates is a company-wide broadcast: gating it behind a per-role
   // page grant would mean an announcement silently reaching only some staff.
   // Its admin surface stays out via ADMIN_RESTRICTED_PAGES below.

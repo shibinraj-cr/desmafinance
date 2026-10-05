@@ -468,6 +468,7 @@ export const MODULES: AppModule[] = [
       { href: "/me/regularization", label: "Regularization", icon: "edit_calendar", group: "TIME & LEAVE" },
       { href: "/me/leave", label: "My Leave", icon: "event_busy", group: "TIME & LEAVE" },
       { href: "/me/payslips", label: "Payslips", icon: "receipt_long", group: "PAY" },
+      { href: "/me/meetings", label: "Meetings", icon: "edit_note", group: "WORK" },
       { href: "/me/birthdays", label: "Celebrations", icon: "celebration", group: "RESOURCES" },
       { href: "/me/policies", label: "Policies", icon: "menu_book", group: "RESOURCES" },
       { href: "/me/trainings", label: "Trainings", icon: "school", group: "RESOURCES" },
