@@ -3,7 +3,6 @@
 import { useEffect, useMemo, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import { TopBar } from "@/components/TopBar";
-import { MultiSelect } from "@/components/MultiSelect";
 import { formatIstShort } from "@/lib/lead-pulse-dates";
 import {
   MEETING_KINDS,
@@ -12,152 +11,13 @@ import {
   meetingMatches,
   openActions,
   ownerLabel,
-  type MeetingKind,
   type MeetingRow,
   type ShareUser,
 } from "@/lib/meeting-notes-model";
-import { clearDraft, isStale, listDraftIds, readDraft, writeDraft } from "@/lib/meeting-notes-draft";
+import { clearDraft, listDraftIds } from "@/lib/meeting-notes-draft";
 import { MeetingDetail, StateChip } from "./_detail";
-import { Drawer, ErrorNote, Field, inputCls, primaryBtn, secondaryBtn } from "../wealth/editors";
-
-// ── plumbing ────────────────────────────────────────────────────────────────
-
-const API_ERRORS: Record<string, string> = {
-  validation_error: "Please check the fields — a title and date are required, and every action item needs text.",
-  not_found: "That meeting no longer exists — refresh the page.",
-  forbidden: "You don't have access to this page.",
-  unauthorized: "Your session expired. Sign in again.",
-};
-
-async function call(
-  url: string,
-  method: "POST" | "PUT" | "PATCH" | "DELETE",
-  body?: unknown,
-): Promise<{ ok: true; data: Record<string, unknown> } | { ok: false; message: string }> {
-  try {
-    const res = await fetch(url, {
-      method,
-      headers: body ? { "Content-Type": "application/json" } : undefined,
-      body: body ? JSON.stringify(body) : undefined,
-    });
-    const data = await res.json().catch(() => ({}));
-    if (!res.ok) {
-      const code = typeof data.error === "string" ? data.error : "";
-      return { ok: false, message: API_ERRORS[code] ?? data.message ?? "That didn't save. Try again." };
-    }
-    return { ok: true, data };
-  } catch {
-    return { ok: false, message: "Couldn't reach the server. Check your connection and try again." };
-  }
-}
-
-// ── drafts ──────────────────────────────────────────────────────────────────
-
-type ActionDraft = {
-  key: string;
-  id?: string;
-  text: string;
-  /** Free-text name, used only when no login is picked. */
-  owner: string;
-  /** "" = no login. */
-  ownerUserId: string;
-  dueOn: string;
-  done: boolean;
-};
-type MeetingDraft = {
-  title: string;
-  meetingOn: string;
-  kind: MeetingKind;
-  attendees: string;
-  agenda: string;
-  notes: string;
-  decisions: string;
-  actions: ActionDraft[];
-  /** User ids. */
-  sharedWith: string[];
-};
-
-let draftSeq = 0;
-const newKey = () => `new-${++draftSeq}`;
-
-function emptyDraft(today: string): MeetingDraft {
-  return {
-    title: "",
-    meetingOn: today,
-    kind: "leadership",
-    attendees: "",
-    agenda: "",
-    notes: "",
-    decisions: "",
-    actions: [],
-    sharedWith: [],
-  };
-}
-
-function draftFrom(m: MeetingRow): MeetingDraft {
-  return {
-    title: m.title,
-    meetingOn: m.meetingOn,
-    kind: (MEETING_KINDS as readonly string[]).includes(m.kind) ? (m.kind as MeetingKind) : "other",
-    attendees: m.attendees ?? "",
-    agenda: m.agenda ?? "",
-    notes: m.notes ?? "",
-    decisions: m.decisions ?? "",
-    actions: m.actions.map((a) => ({
-      key: a.id,
-      id: a.id,
-      text: a.text,
-      owner: a.owner ?? "",
-      ownerUserId: a.ownerUserId ?? "",
-      dueOn: a.dueOn ?? "",
-      done: a.done,
-    })),
-    sharedWith: m.sharedWith.map((u) => u.id),
-  };
-}
-
-/**
- * A draft read back from storage may come from an older build or a different
- * tab: fill any missing field from an empty draft, and give action rows fresh
- * keys — the `new-N` counter restarts on reload, so stored keys could collide.
- */
-function reviveDraft(stored: Partial<MeetingDraft>, today: string): MeetingDraft {
-  const base = emptyDraft(today);
-  return {
-    ...base,
-    ...stored,
-    sharedWith: Array.isArray(stored.sharedWith) ? stored.sharedWith : [],
-    actions: Array.isArray(stored.actions)
-      ? stored.actions.map((a) => ({ ...a, ownerUserId: a.ownerUserId ?? "", key: a.id ?? newKey() }))
-      : [],
-  };
-}
-
-const timeFmt = new Intl.DateTimeFormat("en-IN", { hour: "numeric", minute: "2-digit", timeZone: "Asia/Kolkata" });
-
-function payloadFrom(d: MeetingDraft) {
-  return {
-    title: d.title,
-    meetingOn: d.meetingOn,
-    kind: d.kind,
-    attendees: d.attendees,
-    agenda: d.agenda,
-    notes: d.notes,
-    decisions: d.decisions,
-    // A row the user added and never typed into is noise, not an error.
-    actions: d.actions
-      .filter((a) => a.text.trim())
-      .map((a) => ({
-        id: a.id,
-        text: a.text,
-        owner: a.ownerUserId ? null : a.owner || null,
-        ownerUserId: a.ownerUserId || null,
-        dueOn: a.dueOn || null,
-        done: a.done,
-      })),
-    sharedWith: d.sharedWith,
-  };
-}
+import { MeetingEditor, call } from "./_editor";
+import { ErrorNote, inputCls, primaryBtn, secondaryBtn } from "../wealth/editors";
 
 // ── page ────────────────────────────────────────────────────────────────────
 
@@ -185,32 +45,11 @@ export function MeetingNotesClient({
       : (meetings[0]?.id ?? null),
   );
 
-  const [editing, setEditing] = useState<{
-    id: string | null;
-    draft: MeetingDraft;
-    /** The meeting's updatedAt when editing began, for the stale-draft check. */
-    base: string | null;
-    /** Set on the first keystroke (or a restore) — only then is there a draft worth keeping. */
-    touched: boolean;
-  } | null>(null);
-  const [draftSavedAt, setDraftSavedAt] = useState<string | null>(null);
-  const [restoredNote, setRestoredNote] = useState<string | null>(null);
+  /** The editor is open on this meeting ("new" for a new one), or closed. */
+  const [editing, setEditing] = useState<MeetingRow | "new" | null>(null);
   // Read after mount: localStorage does not exist during the server render.
   const [draftIds, setDraftIds] = useState<Set<string>>(new Set());
   useEffect(() => setDraftIds(listDraftIds()), []);
-
-  // Autosave: write the draft shortly after typing pauses. Changing `editing`
-  // again cancels the pending write, so a burst of keystrokes is one write.
-  useEffect(() => {
-    if (!editing?.touched) return;
-    const t = window.setTimeout(() => {
-      const at = writeDraft(editing.id, editing.draft, editing.base);
-      if (at) setDraftSavedAt(at);
-    }, 800);
-    return () => window.clearTimeout(t);
-  }, [editing]);
-  const [saving, setSaving] = useState(false);
-  const [error, setError] = useState<string | null>(null);
   const [toggleError, setToggleError] = useState<string | null>(null);
   const [showAllOpen, setShowAllOpen] = useState(false);
 
@@ -229,73 +68,17 @@ export function MeetingNotesClient({
     window.history.replaceState(null, "", url);
   }
 
-  function openNew() {
-    setError(null);
-    const stored = readDraft<MeetingDraft>(null);
-    setDraftSavedAt(stored?.savedAt ?? null);
-    setRestoredNote(stored ? `Restored your unsaved draft from ${timeFmt.format(new Date(stored.savedAt))}.` : null);
-    setEditing({
-      id: null,
-      draft: stored ? reviveDraft(stored.draft, today) : emptyDraft(today),
-      base: null,
-      touched: !!stored,
-    });
-  }
+  const openNew = () => setEditing("new");
+  const openEdit = (m: MeetingRow) => setEditing(m);
 
-  function openEdit(m: MeetingRow) {
-    setError(null);
-    const stored = readDraft<MeetingDraft>(m.id);
-    setDraftSavedAt(stored?.savedAt ?? null);
-    setRestoredNote(
-      stored
-        ? `Restored your unsaved changes from ${timeFmt.format(new Date(stored.savedAt))}.` +
-            (isStale(stored, m.updatedAt)
-              ? " This meeting has been edited since — saving will overwrite those edits."
-              : "")
-        : null,
-    );
-    setEditing({
-      id: m.id,
-      draft: stored ? reviveDraft(stored.draft, today) : draftFrom(m),
-      base: stored ? stored.base : m.updatedAt,
-      touched: !!stored,
-    });
-  }
-
-  /** Close the drawer, keeping the draft — flushed now so the debounce can't lose the last keystrokes. */
   function closeEditor() {
-    if (saving) return;
-    if (editing?.touched) writeDraft(editing.id, editing.draft, editing.base);
     setEditing(null);
     setDraftIds(listDraftIds());
   }
 
-  function discardDraft() {
-    if (!editing) return;
-    if (!window.confirm("Discard this draft? What you typed since the last save will be lost.")) return;
-    clearDraft(editing.id);
-    setEditing(null);
-    setDraftIds(listDraftIds());
-  }
-
-  async function save() {
-    if (!editing) return;
-    setSaving(true);
-    setError(null);
-    const body = payloadFrom(editing.draft);
-    const res = editing.id
-      ? await call(`/api/executive/meetings/${editing.id}`, "PUT", body)
-      : await call("/api/executive/meetings", "POST", body);
-    setSaving(false);
-    if (!res.ok) {
-      setError(res.message);
-      return;
-    }
-    const id = editing.id ?? (typeof res.data.id === "string" ? res.data.id : null);
-    clearDraft(editing.id);
-    setEditing(null);
-    setDraftIds(listDraftIds());
-    if (id) select(id);
+  function onSaved(id: string) {
+    closeEditor();
+    select(id);
     refresh();
   }
 
@@ -320,22 +103,6 @@ export function MeetingNotesClient({
     if (!res.ok) setToggleError(res.message);
     refresh();
   }
-
-  const setDraft = (patch: Partial<MeetingDraft>) =>
-    setEditing((e) => (e ? { ...e, touched: true, draft: { ...e.draft, ...patch } } : e));
-  const setAction = (key: string, patch: Partial<ActionDraft>) =>
-    setEditing((e) =>
-      e
-        ? {
-            ...e,
-            touched: true,
-            draft: {
-              ...e.draft,
-              actions: e.draft.actions.map((a) => (a.key === key ? { ...a, ...patch } : a)),
-            },
-          }
-        : e,
-    );
 
   const visibleOpen = showAllOpen ? pending : pending.slice(0, 6);
 
@@ -492,243 +259,16 @@ export function MeetingNotesClient({
         </div>
       </div>
 
-      <Drawer
-        open={!!editing}
-        title={editing?.id ? "Edit meeting" : "New meeting"}
-        eyebrow="Meeting Notes"
-        onClose={closeEditor}
-        footer={
-          <>
-            <button type="button" onClick={save} disabled={saving} className={primaryBtn}>
-              {saving ? "Saving…" : "Save"}
-            </button>
-            <button type="button" onClick={closeEditor} disabled={saving} className={secondaryBtn}>
-              Close
-            </button>
-            {editing?.touched && (
-              <button
-                type="button"
-                onClick={discardDraft}
-                disabled={saving}
-                className="h-10 px-md rounded-lg text-error text-label-sm font-semibold hover:bg-error-container/40 disabled:opacity-60"
-              >
-                Discard
-              </button>
-            )}
-            {editing?.touched && draftSavedAt && (
-              <span className="ml-auto text-caption text-on-surface-variant inline-flex items-center gap-xs">
-                <span className="material-symbols-outlined" style={{ fontSize: 16 }}>
-                  check_circle
-                </span>
-                Draft saved {timeFmt.format(new Date(draftSavedAt))}
-              </span>
-            )}
-          </>
-        }
-      >
-        {editing && (
-          <>
-            <ErrorNote message={error} />
-            {restoredNote && (
-              <p className="text-body-md text-on-surface bg-primary/10 border border-primary/30 rounded-lg px-md py-sm">
-                {restoredNote}
-              </p>
-            )}
-            <Field label="Title">
-              <input
-                className={inputCls}
-                value={editing.draft.title}
-                onChange={(e) => setDraft({ title: e.target.value })}
-                placeholder="Monthly leadership review"
-                autoFocus
-              />
-            </Field>
-            <div className="grid grid-cols-2 gap-md">
-              <Field label="Date">
-                <input
-                  type="date"
-                  className={inputCls}
-                  value={editing.draft.meetingOn}
-                  onChange={(e) => setDraft({ meetingOn: e.target.value })}
-                />
-              </Field>
-              <Field label="Type">
-                <select
-                  className={inputCls}
-                  value={editing.draft.kind}
-                  onChange={(e) => setDraft({ kind: e.target.value as MeetingKind })}
-                >
-                  {MEETING_KINDS.map((k) => (
-                    <option key={k} value={k}>
-                      {MEETING_KIND_LABEL[k]}
-                    </option>
-                  ))}
-                </select>
-              </Field>
-            </div>
-            <Field
-              label="Share with"
-              hint="They can read this meeting under My Workspace → Meetings. They can't edit it."
-            >
-              <MultiSelect
-                options={users.map((u) => ({ value: u.id, label: u.username }))}
-                selected={editing.draft.sharedWith}
-                onChange={(sharedWith) => setDraft({ sharedWith })}
-                placeholder="Only admins"
-                icon="group_add"
-                searchable
-                className="w-full"
-              />
-            </Field>
-            <Field label="Attendees" hint="Comma-separated. Anyone — they don't need a login.">
-              <input
-                className={inputCls}
-                value={editing.draft.attendees}
-                onChange={(e) => setDraft({ attendees: e.target.value })}
-              />
-            </Field>
-            <TextArea
-              label="Agenda"
-              rows={3}
-              value={editing.draft.agenda}
-              onChange={(agenda) => setDraft({ agenda })}
-            />
-            <TextArea
-              label="Notes"
-              rows={8}
-              value={editing.draft.notes}
-              onChange={(notes) => setDraft({ notes })}
-              hint="Supports ## headings, - bullets, 1. lists and **bold**."
-            />
-            <TextArea
-              label="Decisions"
-              rows={4}
-              value={editing.draft.decisions}
-              onChange={(decisions) => setDraft({ decisions })}
-              hint="One per line as - bullets reads best."
-            />
-
-            <div className="space-y-sm">
-              <div className="flex items-center justify-between">
-                <span className="text-label-sm text-on-surface-variant">Action items</span>
-                <button
-                  type="button"
-                  onClick={() =>
-                    setDraft({
-                      actions: [
-                        ...editing.draft.actions,
-                        { key: newKey(), text: "", owner: "", ownerUserId: "", dueOn: "", done: false },
-                      ],
-                    })
-                  }
-                  className="text-accent text-label-sm font-semibold hover:underline"
-                >
-                  + Add item
-                </button>
-              </div>
-              {editing.draft.actions.length === 0 && (
-                <p className="text-caption text-on-surface-variant">No action items.</p>
-              )}
-              {editing.draft.actions.map((a) => (
-                <div key={a.key} className="rounded-lg border border-outline-variant p-sm space-y-sm">
-                  <div className="flex items-start gap-sm">
-                    <input
-                      type="checkbox"
-                      className="mt-3 h-4 w-4 accent-primary"
-                      checked={a.done}
-                      onChange={(e) => setAction(a.key, { done: e.target.checked })}
-                      aria-label="Done"
-                    />
-                    <input
-                      className={inputCls}
-                      value={a.text}
-                      onChange={(e) => setAction(a.key, { text: e.target.value })}
-                      placeholder="What needs to happen"
-                    />
-                    <button
-                      type="button"
-                      onClick={() =>
-                        setDraft({ actions: editing.draft.actions.filter((x) => x.key !== a.key) })
-                      }
-                      aria-label="Remove action item"
-                      className="h-10 w-10 shrink-0 grid place-items-center rounded-lg hover:bg-surface-container-low text-on-surface-variant"
-                    >
-                      <span className="material-symbols-outlined" style={{ fontSize: 18 }}>
-                        delete
-                      </span>
-                    </button>
-                  </div>
-                  <div className="grid grid-cols-2 gap-sm pl-6">
-                    <select
-                      className={inputCls}
-                      value={a.ownerUserId}
-                      onChange={(e) => setAction(a.key, { ownerUserId: e.target.value })}
-                      aria-label="Owner"
-                    >
-                      <option value="">Owner: no login</option>
-                      {users.map((u) => (
-                        <option key={u.id} value={u.id}>
-                          {u.username}
-                        </option>
-                      ))}
-                    </select>
-                    <input
-                      type="date"
-                      className={inputCls}
-                      value={a.dueOn}
-                      onChange={(e) => setAction(a.key, { dueOn: e.target.value })}
-                      aria-label="Due date"
-                    />
-                  </div>
-                  {!a.ownerUserId && (
-                    <div className="pl-6">
-                      <input
-                        className={inputCls}
-                        value={a.owner}
-                        onChange={(e) => setAction(a.key, { owner: e.target.value })}
-                        placeholder="Or type a name (no reminders)"
-                      />
-                    </div>
-                  )}
-                  {a.ownerUserId && a.dueOn && !a.done && (
-                    <p className="pl-6 text-caption text-on-surface-variant inline-flex items-center gap-xs">
-                      <span className="material-symbols-outlined" style={{ fontSize: 14 }}>
-                        notifications_active
-                      </span>
-                      Reminder pops up for them from {formatIstShort(a.dueOn)} until they update it.
-                    </p>
-                  )}
-                </div>
-              ))}
-            </div>
-          </>
-        )}
-      </Drawer>
+      {editing && (
+        <MeetingEditor
+          meeting={editing === "new" ? null : editing}
+          today={today}
+          ownerChoices={users}
+          shareChoices={users}
+          onClose={closeEditor}
+          onSaved={onSaved}
+        />
+      )}
     </>
-  );
-}
-
-function TextArea({
-  label,
-  value,
-  onChange,
-  rows,
-  hint,
-}: {
-  label: string;
-  value: string;
-  onChange: (v: string) => void;
-  rows: number;
-  hint?: string;
-}) {
-  return (
-    <Field label={label} hint={hint}>
-      <textarea
-        rows={rows}
-        value={value}
-        onChange={(e) => onChange(e.target.value)}
-        className="w-full px-md py-sm rounded-lg border border-outline-variant bg-surface-container-lowest focus:border-primary focus:ring-2 focus:ring-primary/20 outline-none transition text-body-md"
-      />
-    </Field>
   );
 }

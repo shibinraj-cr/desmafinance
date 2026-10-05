@@ -4,24 +4,35 @@ import { useMemo, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import { TopBar } from "@/components/TopBar";
 import { formatIstShort } from "@/lib/lead-pulse-dates";
-import { actionState, meetingKindLabel, meetingMatches, type MeetingRow } from "@/lib/meeting-notes-model";
+import {
+  actionState,
+  editorOwnerChoices,
+  meetingKindLabel,
+  meetingMatches,
+  type MeetingRow,
+  type ShareUser,
+} from "@/lib/meeting-notes-model";
 import { MeetingDetail, StateChip } from "../../executive/meetings/_detail";
+import { MeetingEditor } from "../../executive/meetings/_editor";
 
 export function MyMeetingsClient({
   meetings,
   today,
-  userId,
+  self,
   initialSelectedId,
 }: {
   meetings: MeetingRow[];
   today: string;
-  userId: string;
+  self: ShareUser;
   initialSelectedId: string | null;
 }) {
+  const userId = self.id;
   const router = useRouter();
   const [, startTransition] = useTransition();
   const [query, setQuery] = useState("");
   const [error, setError] = useState<string | null>(null);
+  /** Open only for a meeting shared with this user as an editor. */
+  const [editing, setEditing] = useState<MeetingRow | null>(null);
   const [selectedId, setSelectedId] = useState<string | null>(
     initialSelectedId && meetings.some((m) => m.id === initialSelectedId)
       ? initialSelectedId
@@ -138,6 +149,7 @@ export function MyMeetingsClient({
                           <p className="text-caption text-on-surface-variant">
                             {formatIstShort(m.meetingOn)} · {meetingKindLabel(m.kind)}
                             {own > 0 && <span className="text-accent font-semibold"> · {own} for you</span>}
+                            {m.canEdit && " · You can edit"}
                           </p>
                         </button>
                       </li>
@@ -150,6 +162,7 @@ export function MyMeetingsClient({
               <MeetingDetail
                 meeting={selected}
                 today={today}
+                onEdit={selected.canEdit ? () => setEditing(selected) : undefined}
                 onToggle={toggle}
                 canToggle={(a) => a.ownerUserId === userId}
               />
@@ -157,6 +170,19 @@ export function MyMeetingsClient({
           </div>
         )}
       </div>
+
+      {editing && (
+        <MeetingEditor
+          meeting={editing}
+          today={today}
+          ownerChoices={editorOwnerChoices(editing, self)}
+          onClose={() => setEditing(null)}
+          onSaved={() => {
+            setEditing(null);
+            startTransition(() => router.refresh());
+          }}
+        />
+      )}
     </>
   );
 }

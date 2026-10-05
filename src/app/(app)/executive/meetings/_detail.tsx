@@ -85,29 +85,33 @@ export function MeetingDetail({
               <span className="material-symbols-outlined" style={{ fontSize: 14 }}>
                 group
               </span>
-              Shared with {m.sharedWith.map((u) => u.username).join(", ")}
+              Shared with {m.sharedWith.map((u) => (u.canEdit ? `${u.username} (can edit)` : u.username)).join(", ")}
             </p>
           )}
         </div>
         {(onEdit || onDelete) && (
           <div className="flex items-center gap-sm">
-            <button
-              type="button"
-              onClick={onEdit}
-              className="h-10 px-lg rounded-lg border border-outline-variant text-on-surface-variant hover:bg-surface-container-low transition"
-            >
-              Edit
-            </button>
-            <button
-              type="button"
-              onClick={onDelete}
-              aria-label="Delete meeting"
-              className="h-10 w-10 grid place-items-center rounded-lg border border-outline-variant text-error hover:bg-error-container/40"
-            >
-              <span className="material-symbols-outlined" style={{ fontSize: 18 }}>
-                delete
-              </span>
-            </button>
+            {onEdit && (
+              <button
+                type="button"
+                onClick={onEdit}
+                className="h-10 px-lg rounded-lg border border-outline-variant text-on-surface-variant hover:bg-surface-container-low transition"
+              >
+                Edit
+              </button>
+            )}
+            {onDelete && (
+              <button
+                type="button"
+                onClick={onDelete}
+                aria-label="Delete meeting"
+                className="h-10 w-10 grid place-items-center rounded-lg border border-outline-variant text-error hover:bg-error-container/40"
+              >
+                <span className="material-symbols-outlined" style={{ fontSize: 18 }}>
+                  delete
+                </span>
+              </button>
+            )}
           </div>
         )}
       </header>

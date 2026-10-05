@@ -3,6 +3,7 @@ import {
   MeetingInputSchema,
   OwnerActionUpdateSchema,
   actionState,
+  editorOwnerChoices,
   isReminderDue,
   ownerLabel,
   blankToNull,
@@ -136,5 +137,27 @@ describe("ownerLabel", () => {
     expect(ownerLabel({ owner: "Typed", ownerName: "login1" })).toBe("login1");
     expect(ownerLabel({ owner: "Typed", ownerName: null })).toBe("Typed");
     expect(ownerLabel({ owner: null, ownerName: null })).toBeNull();
+  });
+});
+
+describe("sharing with edit access", () => {
+  it("defaults editors to none", () => {
+    expect(MeetingInputSchema.parse({ title: "x", meetingOn: "2026-10-05" }).editors).toEqual([]);
+  });
+
+  it("limits an editor's owner picks to people who can already see the meeting", () => {
+    const m = meeting({
+      sharedWith: [
+        { id: "u2", username: "viewer", canEdit: false },
+        { id: "u3", username: "coeditor", canEdit: true },
+      ],
+      actions: [
+        { id: "a1", text: "x", owner: null, ownerUserId: "u9", ownerName: "assigned", dueOn: null, done: false },
+        { id: "a2", text: "y", owner: "Typed", ownerUserId: null, ownerName: null, dueOn: null, done: false },
+      ],
+    });
+    const choices = editorOwnerChoices(m, { id: "u1", username: "me" });
+    expect(choices.map((u) => u.id).sort()).toEqual(["u1", "u2", "u3", "u9"]);
+    expect(choices.map((u) => u.username)).toEqual(["assigned", "coeditor", "me", "viewer"]);
   });
 });

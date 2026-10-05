@@ -48,11 +48,17 @@ export type MeetingRow = {
   updatedBy: string | null;
   updatedAt: string;
   actions: MeetingActionRow[];
-  /** Users this meeting is shared with (read-only, under My Workspace). */
-  sharedWith: ShareUser[];
+  /** Users this meeting is shared with (under My Workspace). */
+  sharedWith: SharedUser[];
+  /**
+   * The VIEWER's own access, set only on the My Workspace list: true when the
+   * meeting was shared with them as an editor. Admins don't need it.
+   */
+  canEdit?: boolean;
 };
 
 export type ShareUser = { id: string; username: string };
+export type SharedUser = ShareUser & { canEdit: boolean };
 
 // ── Request shapes ──────────────────────────────────────────────────────────
 
@@ -82,6 +88,8 @@ export const MeetingInputSchema = z.object({
   actions: z.array(ActionInputSchema).max(100).default([]),
   /** User ids to share with — the full list; anyone left out loses access. */
   sharedWith: z.array(z.string().min(1).max(64)).max(200).default([]),
+  /** The subset of sharedWith who may also edit (never delete or re-share). */
+  editors: z.array(z.string().min(1).max(64)).max(200).default([]),
 });
 export type MeetingInput = z.infer<typeof MeetingInputSchema>;
 
@@ -172,4 +180,19 @@ export function meetingMatches(m: MeetingRow, query: string): boolean {
     .join("\n")
     .toLowerCase();
   return q.split(/\s+/).every((word) => hay.includes(word));
+}
+
+/**
+ * Who a non-admin editor may name as an action owner: people who can already
+ * read the meeting (its shares), themselves, and anyone already owning an item
+ * on it. Naming an owner lets that person read the meeting, so an editor
+ * picking freely would be re-sharing by the back door — which stays admin-only.
+ */
+export function editorOwnerChoices(m: Pick<MeetingRow, "sharedWith" | "actions">, self: ShareUser): ShareUser[] {
+  const byId = new Map<string, string>([[self.id, self.username]]);
+  for (const u of m.sharedWith) byId.set(u.id, u.username);
+  for (const a of m.actions) if (a.ownerUserId && a.ownerName) byId.set(a.ownerUserId, a.ownerName);
+  return Array.from(byId, ([id, username]) => ({ id, username })).sort((a, b) =>
+    a.username.localeCompare(b.username),
+  );
 }

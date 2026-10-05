@@ -5077,14 +5077,17 @@ model ExecMeeting {
   @@index([meetingOn])
 }
 
-/// A non-admin user who may read one meeting from My Workspace → Meetings.
-/// Read-only: sharing never grants edit, delete or the Executive module.
+/// A non-admin user who may read one meeting from My Workspace → Meetings,
+/// and edit it when canEdit. Never delete, never re-share, never the
+/// Executive module itself — those stay with admins.
 /// userId is a plain string like the author ids, so User needs no back-relation;
 /// a deleted user's share rows are inert (nobody can sign in as them).
 model ExecMeetingShare {
   meetingId  String
   meeting    ExecMeeting @relation(fields: [meetingId], references: [id], onDelete: Cascade)
   userId     String
+  /// Edit the meeting's content and action items (not delete, not sharing).
+  canEdit    Boolean     @default(false)
   sharedById String?
   createdAt  DateTime    @default(now())
 
