@@ -60,6 +60,12 @@ export const MODULES: AppModule[] = [
         adminOnly: true,
       },
       {
+        href: "/executive/meetings",
+        label: "Meeting Notes",
+        icon: "edit_note",
+        adminOnly: true,
+      },
+      {
         href: "/executive/wealth",
         label: "Personal Wealth",
         icon: "savings",
