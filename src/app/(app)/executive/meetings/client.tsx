@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState, useTransition } from "react";
+import { useEffect, useMemo, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import { TopBar } from "@/components/TopBar";
 import { Markdown } from "@/components/hiring/Markdown";
@@ -17,6 +17,7 @@ import {
   type MeetingKind,
   type MeetingRow,
 } from "@/lib/meeting-notes-model";
+import { clearDraft, isStale, listDraftIds, readDraft, writeDraft } from "@/lib/meeting-notes-draft";
 import { Drawer, ErrorNote, Field, inputCls, primaryBtn, secondaryBtn } from "../wealth/editors";
 
 // ── plumbing ────────────────────────────────────────────────────────────────
@@ -116,6 +117,24 @@ function draftFrom(m: MeetingRow): MeetingDraft {
   };
 }
 
+/**
+ * A draft read back from storage may come from an older build or a different
+ * tab: fill any missing field from an empty draft, and give action rows fresh
+ * keys — the `new-N` counter restarts on reload, so stored keys could collide.
+ */
+function reviveDraft(stored: Partial<MeetingDraft>, today: string): MeetingDraft {
+  const base = emptyDraft(today);
+  return {
+    ...base,
+    ...stored,
+    actions: Array.isArray(stored.actions)
+      ? stored.actions.map((a) => ({ ...a, key: a.id ?? newKey() }))
+      : [],
+  };
+}
+
+const timeFmt = new Intl.DateTimeFormat("en-IN", { hour: "numeric", minute: "2-digit", timeZone: "Asia/Kolkata" });
+
 function payloadFrom(d: MeetingDraft) {
   return {
     title: d.title,
@@ -161,7 +180,30 @@ export function MeetingNotesClient({
       : (meetings[0]?.id ?? null),
   );
 
-  const [editing, setEditing] = useState<{ id: string | null; draft: MeetingDraft } | null>(null);
+  const [editing, setEditing] = useState<{
+    id: string | null;
+    draft: MeetingDraft;
+    /** The meeting's updatedAt when editing began, for the stale-draft check. */
+    base: string | null;
+    /** Set on the first keystroke (or a restore) — only then is there a draft worth keeping. */
+    touched: boolean;
+  } | null>(null);
+  const [draftSavedAt, setDraftSavedAt] = useState<string | null>(null);
+  const [restoredNote, setRestoredNote] = useState<string | null>(null);
+  // Read after mount: localStorage does not exist during the server render.
+  const [draftIds, setDraftIds] = useState<Set<string>>(new Set());
+  useEffect(() => setDraftIds(listDraftIds()), []);
+
+  // Autosave: write the draft shortly after typing pauses. Changing `editing`
+  // again cancels the pending write, so a burst of keystrokes is one write.
+  useEffect(() => {
+    if (!editing?.touched) return;
+    const t = window.setTimeout(() => {
+      const at = writeDraft(editing.id, editing.draft, editing.base);
+      if (at) setDraftSavedAt(at);
+    }, 800);
+    return () => window.clearTimeout(t);
+  }, [editing]);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [toggleError, setToggleError] = useState<string | null>(null);
@@ -184,12 +226,51 @@ export function MeetingNotesClient({
 
   function openNew() {
     setError(null);
-    setEditing({ id: null, draft: emptyDraft(today) });
+    const stored = readDraft<MeetingDraft>(null);
+    setDraftSavedAt(stored?.savedAt ?? null);
+    setRestoredNote(stored ? `Restored your unsaved draft from ${timeFmt.format(new Date(stored.savedAt))}.` : null);
+    setEditing({
+      id: null,
+      draft: stored ? reviveDraft(stored.draft, today) : emptyDraft(today),
+      base: null,
+      touched: !!stored,
+    });
   }
 
   function openEdit(m: MeetingRow) {
     setError(null);
-    setEditing({ id: m.id, draft: draftFrom(m) });
+    const stored = readDraft<MeetingDraft>(m.id);
+    setDraftSavedAt(stored?.savedAt ?? null);
+    setRestoredNote(
+      stored
+        ? `Restored your unsaved changes from ${timeFmt.format(new Date(stored.savedAt))}.` +
+            (isStale(stored, m.updatedAt)
+              ? " This meeting has been edited since — saving will overwrite those edits."
+              : "")
+        : null,
+    );
+    setEditing({
+      id: m.id,
+      draft: stored ? reviveDraft(stored.draft, today) : draftFrom(m),
+      base: stored ? stored.base : m.updatedAt,
+      touched: !!stored,
+    });
+  }
+
+  /** Close the drawer, keeping the draft — flushed now so the debounce can't lose the last keystrokes. */
+  function closeEditor() {
+    if (saving) return;
+    if (editing?.touched) writeDraft(editing.id, editing.draft, editing.base);
+    setEditing(null);
+    setDraftIds(listDraftIds());
+  }
+
+  function discardDraft() {
+    if (!editing) return;
+    if (!window.confirm("Discard this draft? What you typed since the last save will be lost.")) return;
+    clearDraft(editing.id);
+    setEditing(null);
+    setDraftIds(listDraftIds());
   }
 
   async function save() {
@@ -206,7 +287,9 @@ export function MeetingNotesClient({
       return;
     }
     const id = editing.id ?? (typeof res.data.id === "string" ? res.data.id : null);
+    clearDraft(editing.id);
     setEditing(null);
+    setDraftIds(listDraftIds());
     if (id) select(id);
     refresh();
   }
@@ -220,6 +303,8 @@ export function MeetingNotesClient({
       setToggleError(res.message);
       return;
     }
+    clearDraft(m.id);
+    setDraftIds(listDraftIds());
     setSelectedId(null);
     refresh();
   }
@@ -232,12 +317,13 @@ export function MeetingNotesClient({
   }
 
   const setDraft = (patch: Partial<MeetingDraft>) =>
-    setEditing((e) => (e ? { ...e, draft: { ...e.draft, ...patch } } : e));
+    setEditing((e) => (e ? { ...e, touched: true, draft: { ...e.draft, ...patch } } : e));
   const setAction = (key: string, patch: Partial<ActionDraft>) =>
     setEditing((e) =>
       e
         ? {
             ...e,
+            touched: true,
             draft: {
               ...e.draft,
               actions: e.draft.actions.map((a) => (a.key === key ? { ...a, ...patch } : a)),
@@ -258,7 +344,7 @@ export function MeetingNotesClient({
             <span className="material-symbols-outlined" style={{ fontSize: 18 }}>
               add
             </span>
-            New meeting
+            {draftIds.has("new") ? "Resume draft" : "New meeting"}
           </button>
         }
       />
@@ -373,6 +459,7 @@ export function MeetingNotesClient({
                         <p className="text-caption text-on-surface-variant">
                           {formatIstShort(m.meetingOn)} · {meetingKindLabel(m.kind)}
                           {open > 0 && ` · ${open} open`}
+                          {draftIds.has(m.id) && <span className="text-accent font-semibold"> · Unsaved draft</span>}
                         </p>
                       </button>
                     </li>
@@ -403,21 +490,44 @@ export function MeetingNotesClient({
         open={!!editing}
         title={editing?.id ? "Edit meeting" : "New meeting"}
         eyebrow="Meeting Notes"
-        onClose={() => !saving && setEditing(null)}
+        onClose={closeEditor}
         footer={
           <>
             <button type="button" onClick={save} disabled={saving} className={primaryBtn}>
               {saving ? "Saving…" : "Save"}
             </button>
-            <button type="button" onClick={() => setEditing(null)} disabled={saving} className={secondaryBtn}>
-              Cancel
+            <button type="button" onClick={closeEditor} disabled={saving} className={secondaryBtn}>
+              Close
             </button>
+            {editing?.touched && (
+              <button
+                type="button"
+                onClick={discardDraft}
+                disabled={saving}
+                className="h-10 px-md rounded-lg text-error text-label-sm font-semibold hover:bg-error-container/40 disabled:opacity-60"
+              >
+                Discard
+              </button>
+            )}
+            {editing?.touched && draftSavedAt && (
+              <span className="ml-auto text-caption text-on-surface-variant inline-flex items-center gap-xs">
+                <span className="material-symbols-outlined" style={{ fontSize: 16 }}>
+                  check_circle
+                </span>
+                Draft saved {timeFmt.format(new Date(draftSavedAt))}
+              </span>
+            )}
           </>
         }
       >
         {editing && (
           <>
             <ErrorNote message={error} />
+            {restoredNote && (
+              <p className="text-body-md text-on-surface bg-primary/10 border border-primary/30 rounded-lg px-md py-sm">
+                {restoredNote}
+              </p>
+            )}
             <Field label="Title">
               <input
                 className={inputCls}
