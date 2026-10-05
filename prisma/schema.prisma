@@ -1303,6 +1303,9 @@ model Employee {
   salaryAdjustments      HrSalaryAdjustment[]
   policyAcks             HrPolicyAcknowledgement[]
   trainingProgress       HrTrainingProgress[]
+  salesTrainingLearner   SalesTrainingLearner?
+  salesTrainingAttempts  SalesTrainingAttempt[]
+  salesTrainingWatches   SalesTrainingWatch[]
   notificationReceipts   HrNotificationReceipt[]
   departments            HrEmployeeDepartment[]
   roleMemberships        HrEmployeeRole[]
@@ -1845,6 +1848,118 @@ model HrTrainingProgress {
   updatedAt   DateTime   @updatedAt
 
   @@unique([trainingId, employeeId])
+  @@index([employeeId])
+}
+
+/// Sales Consultant Training & Development. A curriculum of ordered modules;
+/// each module is one or more (unlisted) YouTube videos followed by an
+/// auto-scored question bank. Learners are enrolled into the whole programme,
+/// so every published module applies to every active learner.
+model SalesTrainingModule {
+  id           String                       @id @default(cuid())
+  title        String
+  description  String?
+  sortOrder    Int                          @default(0)
+  /// [{ id, title, youtubeId }] — stored as the parsed video id, not the URL,
+  /// so share links / watch links / youtu.be links all normalise to one form.
+  videos       Json                         @default("[]")
+  /// Percent of available points needed to pass (0–100).
+  passMark     Int                          @default(70)
+  /// null = unlimited retakes.
+  maxAttempts  Int?
+  /// When true the quiz stays locked until every video is ≥ WATCH_THRESHOLD watched.
+  requireWatch Boolean                      @default(true)
+  /// draft | published | archived
+  status       String                       @default("draft")
+  createdById  String?
+  createdAt    DateTime                     @default(now())
+  updatedAt    DateTime                     @updatedAt
+  questions    SalesTrainingQuestion[]
+  attempts     SalesTrainingAttempt[]
+  watches      SalesTrainingWatch[]
+
+  @@index([status, sortOrder])
+}
+
+model SalesTrainingQuestion {
+  id          String              @id @default(cuid())
+  moduleId    String
+  module      SalesTrainingModule @relation(fields: [moduleId], references: [id], onDelete: Cascade)
+  sortOrder   Int                 @default(0)
+  /// single (one right option) | multi (all right options, no wrong ones)
+  kind        String              @default("single")
+  prompt      String
+  /// string[]
+  options     Json
+  /// number[] — indexes into options
+  correct     Json
+  points      Int                 @default(1)
+  /// Shown to the learner once they pass or run out of attempts.
+  explanation String?
+  createdAt   DateTime            @default(now())
+  updatedAt   DateTime            @updatedAt
+
+  @@index([moduleId, sortOrder])
+}
+
+/// Programme enrolment. One row per employee; `active=false` removes them from
+/// the learner list without losing their attempt history.
+model SalesTrainingLearner {
+  id           String    @id @default(cuid())
+  employeeId   String    @unique
+  employee     Employee  @relation(fields: [employeeId], references: [id], onDelete: Cascade)
+  active       Boolean   @default(true)
+  dueDate      DateTime?
+  enrolledById String?
+  enrolledAt   DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
+
+  @@index([active])
+}
+
+/// One submitted quiz attempt. The questions are snapshotted (with the answer
+/// key) at submission so later edits to the bank never rewrite a past score.
+model SalesTrainingAttempt {
+  id          String              @id @default(cuid())
+  moduleId    String
+  module      SalesTrainingModule @relation(fields: [moduleId], references: [id], onDelete: Cascade)
+  employeeId  String
+  employee    Employee            @relation(fields: [employeeId], references: [id], onDelete: Cascade)
+  /// { [questionId]: number[] }
+  answers     Json
+  /// GradedQuestion[] — see src/lib/sales-training.ts
+  graded      Json
+  score       Int
+  maxScore    Int
+  percent     Int
+  passed      Boolean
+  submittedAt DateTime            @default(now())
+  /// Set when HR resets the module for this learner: the attempt stays on
+  /// record but no longer counts toward attempts used or the best score.
+  voidedAt    DateTime?
+  voidedById  String?
+
+  @@index([moduleId, employeeId])
+  @@index([employeeId])
+}
+
+/// How much of one video a learner has actually played. `ranges` is the merged
+/// set of watched [start, end] second spans, so seeking ahead earns nothing and
+/// progress survives reloads.
+model SalesTrainingWatch {
+  id          String              @id @default(cuid())
+  moduleId    String
+  module      SalesTrainingModule @relation(fields: [moduleId], references: [id], onDelete: Cascade)
+  employeeId  String
+  employee    Employee            @relation(fields: [employeeId], references: [id], onDelete: Cascade)
+  videoId     String
+  ranges      Json                @default("[]")
+  durationSec Int                 @default(0)
+  watchedPct  Int                 @default(0)
+  completedAt DateTime?
+  updatedAt   DateTime            @updatedAt
+
+  @@unique([moduleId, employeeId, videoId])
   @@index([employeeId])
 }
 

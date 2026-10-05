@@ -2,10 +2,16 @@
 
 const csp = [
   "default-src 'self'",
-  "script-src 'self' 'unsafe-inline' 'unsafe-eval'",
+  // YouTube's IFrame Player API (Sales Training tracks how much of each video
+  // actually played) loads its script from youtube.com, which pulls the
+  // player code from s.ytimg.com.
+  "script-src 'self' 'unsafe-inline' 'unsafe-eval' https://www.youtube.com https://s.ytimg.com",
   "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com",
   "font-src 'self' https://fonts.gstatic.com data:",
-  "img-src 'self' data: blob:",
+  "img-src 'self' data: blob: https://i.ytimg.com",
+  // Training videos are unlisted YouTube embeds. Without this, frames fall
+  // back to default-src 'self' and the player is blocked outright.
+  "frame-src https://www.youtube.com https://www.youtube-nocookie.com",
   // Finance Documents uploads go straight from the browser to Vercel Blob
   // (the only way past the 4.5 MB request cap), so the browser must be able to
   // reach the Blob API. Scoped to that path, not the whole of vercel.com; the
