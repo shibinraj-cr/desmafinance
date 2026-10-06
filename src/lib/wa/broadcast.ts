@@ -92,6 +92,22 @@ export function headerMediaConsistent(v: Record<string, unknown>, ctx: z.Refinem
   }
 }
 
+/**
+ * A campaign's sent/failed as a final outcome rather than a send-time one.
+ *
+ * `lateFailed` is recipients Meta accepted (so counted in `sent`) and then
+ * reported failed by webhook. Moving them across keeps sent + failed unchanged,
+ * which the list's "Send next N" (total − sent − failed) relies on.
+ */
+export function finalOutcomeCounts(
+  sent: number,
+  failed: number,
+  lateFailed: number,
+): { sentCount: number; failedCount: number } {
+  const moved = Math.min(Math.max(lateFailed, 0), sent);
+  return { sentCount: sent - moved, failedCount: failed + moved };
+}
+
 export type BroadcastConfig = { enabled: boolean; batchSize: number };
 
 export async function getBroadcastConfig(): Promise<BroadcastConfig> {

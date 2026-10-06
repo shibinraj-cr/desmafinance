@@ -5,7 +5,7 @@ import { withApiHandler } from "@/lib/api";
 import { unauthorized, forbidden, badRequest } from "@/lib/http-error";
 import { getCurrentUserAndPermissions } from "@/lib/permissions";
 import { getCrmAccess } from "@/lib/crm-rbac";
-import { countSegment, materialiseAudience, headerMediaConsistent } from "@/lib/wa/broadcast";
+import { countSegment, materialiseAudience, headerMediaConsistent, finalOutcomeCounts } from "@/lib/wa/broadcast";
 import { getWaProvider } from "@/lib/wa/registry";
 import type { LeadFilterParams } from "@/lib/crm-leads";
 
@@ -47,9 +47,21 @@ export const GET = withApiHandler(async (_req: Request) => {
     },
   });
 
+  // `sentCount`/`failedCount` are written at SEND time, but Meta reports some
+  // failures later by webhook (131026 not on WhatsApp arrives after Meta accepted
+  // the send), which leaves the row `status: sent, waStatus: failed`. Folded in
+  // here so the list shows the same final outcome as the delivery report.
+  const lateFailures = await prisma.waBroadcastRecipient.groupBy({
+    by: ["broadcastId"],
+    where: { broadcastId: { in: broadcasts.map((b) => b.id) }, status: "sent", waStatus: "failed" },
+    _count: { _all: true },
+  });
+  const lateByBroadcast = new Map(lateFailures.map((g) => [g.broadcastId, g._count._all]));
+
   return NextResponse.json({
     broadcasts: broadcasts.map((b) => ({
       ...b,
+      ...finalOutcomeCounts(b.sentCount, b.failedCount, lateByBroadcast.get(b.id) ?? 0),
       createdByName: b.createdBy?.leadPulseRole?.displayName ?? b.createdBy?.username ?? null,
       createdBy: undefined,
     })),
