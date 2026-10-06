@@ -1271,6 +1271,11 @@ model Employee {
   bankName           String?
   branch             String?
   joinDate           DateTime?      @db.Date
+  /// Last working day of an employee who has left (set by HR). Days after it
+  /// are loss-of-pay in that cycle's salary, biometric punches after it are
+  /// ignored, and once it has passed the employee (and their login) are
+  /// deactivated automatically — see src/lib/hr-relieving.ts.
+  relievingDate      DateTime?      @db.Date
   /// Legacy single-shift FK. New code must use HrShiftAssignment +
   /// resolveShiftForDate() so old payroll cycles keep using the shift
   /// that applied at the time of the cycle even after future shift

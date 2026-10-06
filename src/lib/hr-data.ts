@@ -12,6 +12,7 @@ export type EmployeeListRow = {
   officialEmail: string | null;
   phone: string | null;
   joinDate: Date | null;
+  relievingDate: Date | null;
   bankName: string | null;
   accountNumber: string | null;
   ifsc: string | null;
@@ -39,6 +40,7 @@ export async function loadEmployees(): Promise<EmployeeListRow[]> {
     officialEmail: e.officialEmail,
     phone: e.phone,
     joinDate: e.joinDate,
+    relievingDate: e.relievingDate,
     bankName: e.bankName,
     accountNumber: e.accountNumber,
     ifsc: e.ifsc,

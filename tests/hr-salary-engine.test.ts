@@ -29,6 +29,7 @@ import {
   summarizeAdjustments,
   calcLine,
   daysBeforeJoining,
+  daysAfterRelieving,
   DEFAULT_ALLOWANCE_PCTS,
   ESI_EMPLOYEE_RATE,
   ESI_EMPLOYER_RATE,
@@ -808,5 +809,64 @@ describe("calcLine — pre-joining days", () => {
     expect(calcLine({ ...base, daysAbsent: 1 })).toEqual(
       calcLine({ ...base, daysAbsent: 1, daysBeforeJoining: 0 }),
     );
+  });
+});
+
+describe("daysAfterRelieving — mid-cycle leaver", () => {
+  // Sep-2026 cycle: 26 Aug → 25 Sep (31 calendar days).
+  const start = new Date(Date.UTC(2026, 7, 26));
+  const end = new Date(Date.UTC(2026, 8, 25));
+  const d = (m: number, day: number) => new Date(Date.UTC(2026, m - 1, day));
+
+  it("counts the calendar days after the relieving date up to the cycle end", () => {
+    expect(daysAfterRelieving(d(9, 10), start, end)).toBe(15); // 11–25 Sep
+    expect(daysAfterRelieving(d(9, 24), start, end)).toBe(1);
+    expect(daysAfterRelieving(d(8, 26), start, end)).toBe(30); // worked only day 1
+  });
+
+  it("is 0 with no relieving date, or one on/after the cycle end", () => {
+    expect(daysAfterRelieving(null, start, end)).toBe(0);
+    expect(daysAfterRelieving(undefined, start, end)).toBe(0);
+    expect(daysAfterRelieving(d(9, 25), start, end)).toBe(0);
+    expect(daysAfterRelieving(d(12, 31), start, end)).toBe(0);
+  });
+
+  it("covers the whole cycle when relieved before it began", () => {
+    expect(daysAfterRelieving(d(8, 20), start, end)).toBe(31);
+  });
+});
+
+describe("calcLine — post-relieving days", () => {
+  const base = {
+    workingDaysBase: 30,
+    basic: 10000, // gross 20000
+    esiApplicable: true,
+    pfApplicable: true,
+    professionalTax: 125,
+    daysPresent: 16,
+    daysHalfDay: 0,
+    daysAbsent: 0,
+    daysPaidLeave: 0,
+    carriedBalanceBefore: 0,
+  };
+
+  it("a leaver relieved 10 Sep with full attendance is paid 15/30", () => {
+    const c = calcLine({ ...base, daysAfterRelieving: 15 });
+    expect(c.totalLeaveForLop).toBe(15);
+    expect(c.daysAttended).toBe(15);
+    expect(c.salaryBeforeEsi).toBeCloseTo(20000 - 666.67 * 15, 2);
+  });
+
+  it("the paid-leave allocation never covers the post-relieving days", () => {
+    const c = calcLine({ ...base, daysAbsent: 1, paidLeaveCoverForLop: 5, daysAfterRelieving: 15 });
+    expect(c.totalLeaveForLop).toBe(15);
+  });
+
+  it("stacks with pre-joining days, capped at the working-days base", () => {
+    // Joined 1 Sep, relieved 10 Sep: 6 + 15 not employed.
+    expect(calcLine({ ...base, daysBeforeJoining: 6, daysAfterRelieving: 15 }).totalLeaveForLop).toBe(21);
+    const all = calcLine({ ...base, daysBeforeJoining: 20, daysAfterRelieving: 20 });
+    expect(all.totalLeaveForLop).toBe(30);
+    expect(all.salaryBeforeEsi).toBe(0);
   });
 });

@@ -37,6 +37,7 @@ type EmpDraft = {
   bankName: string;
   branch: string;
   joinDate: string;
+  relievingDate: string;
   shiftId: string;
   halfHourConcession: boolean;
   active: boolean;
@@ -196,6 +197,19 @@ export function EmployeeEditor({
   async function saveProfile() {
     setError(null);
     setSaved(false);
+    // Setting a relieving date that has already passed deactivates the
+    // employee and their login on save — make that explicit.
+    if (draft.relievingDate && draft.relievingDate !== employee.relievingDate) {
+      const istToday = new Date(Date.now() + 330 * 60_000).toISOString().slice(0, 10);
+      if (
+        draft.relievingDate < istToday &&
+        !window.confirm(
+          `Relieving date ${draft.relievingDate} has passed. Saving will deactivate ${employee.name} and their login now, and pay them only up to that date. Continue?`,
+        )
+      ) {
+        return;
+      }
+    }
     const res = await fetch(`/api/hr/employees/${employee.id}`, {
       method: "PATCH",
       headers: { "content-type": "application/json" },
@@ -204,6 +218,7 @@ export function EmployeeEditor({
         shiftId: draft.shiftId || null,
         dob: draft.dob || null,
         joinDate: draft.joinDate || null,
+        relievingDate: draft.relievingDate || null,
       }),
     });
     if (!res.ok) {
@@ -372,6 +387,19 @@ export function EmployeeEditor({
                 value={draft.joinDate}
                 onChange={(e) => setDraft({ ...draft, joinDate: e.target.value })}
               />
+            </Field>
+            <Field label="Relieving Date (last working day)">
+              <input
+                type="date"
+                className="w-full px-sm py-sm rounded border border-outline-variant bg-surface"
+                value={draft.relievingDate}
+                min={draft.joinDate || undefined}
+                onChange={(e) => setDraft({ ...draft, relievingDate: e.target.value })}
+              />
+              <span className="text-caption text-on-surface-variant">
+                Paid up to this date; biometric punches after it are ignored, and the employee and
+                their login are deactivated the day after.
+              </span>
             </Field>
             <Field label="Address" className="md:col-span-3">
               <textarea

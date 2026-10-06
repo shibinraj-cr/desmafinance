@@ -3,9 +3,11 @@ import { z } from "zod";
 import { prisma } from "@/lib/prisma";
 import { getCurrentUserAndPermissions } from "@/lib/permissions";
 import { canApproveHr } from "@/lib/hr-rbac";
-import { parseHumanDate } from "@/lib/hr-data";
+import { cycleMonthForDate, parseHumanDate } from "@/lib/hr-data";
 import { changeEmployeeShift } from "@/lib/hr-shift";
 import { recomputeAfterShiftChange } from "@/lib/hr-attendance-ingest";
+import { deactivateRelievedEmployees } from "@/lib/hr-relieving";
+import { computeSalaryRun } from "@/lib/hr-salary-engine";
 
 // A shift change here re-derives stored attendance cycle by cycle.
 export const maxDuration = 120;
@@ -36,6 +38,7 @@ const Patch = z.object({
   bankName: z.string().nullable().optional(),
   branch: z.string().nullable().optional(),
   joinDate: z.string().nullable().optional(),
+  relievingDate: z.string().nullable().optional(),
   shiftId: z.string().nullable().optional(),
   halfHourConcession: z.boolean().optional(),
   active: z.boolean().optional(),
@@ -54,6 +57,22 @@ export async function PATCH(req: Request, { params }: { params: { id: string } }
   const data: Record<string, unknown> = { ...d };
   if ("dob" in d) data.dob = parseHumanDate(d.dob ?? null);
   if ("joinDate" in d) data.joinDate = parseHumanDate(d.joinDate ?? null);
+  if ("relievingDate" in d) data.relievingDate = parseHumanDate(d.relievingDate ?? null);
+
+  const before = await prisma.employee.findUnique({
+    where: { id: params.id },
+    select: { joinDate: true, relievingDate: true },
+  });
+  if (!before) return NextResponse.json({ error: "not found" }, { status: 404 });
+  const nextJoin = "joinDate" in data ? (data.joinDate as Date | null) : before.joinDate;
+  const nextRelieving =
+    "relievingDate" in data ? (data.relievingDate as Date | null) : before.relievingDate;
+  if (nextJoin && nextRelieving && nextRelieving < nextJoin) {
+    return NextResponse.json(
+      { error: "Relieving date cannot be before the join date." },
+      { status: 400 },
+    );
+  }
   for (const k of [
     "email", "officialEmail", "phone", "emergencyContact", "officeNumber",
     "address", "designation", "department", "highestEducation", "maritalStatus",
@@ -96,8 +115,35 @@ export async function PATCH(req: Request, { params }: { params: { id: string } }
     }
   }
 
-  const employee = await prisma.employee.update({ where: { id: params.id }, data });
-  return NextResponse.json({ employee, shiftChange });
+  await prisma.employee.update({ where: { id: params.id }, data });
+
+  // A relieving date already in the past takes effect now rather than on the
+  // next cron tick: employee and login are deactivated immediately.
+  const relieved = await deactivateRelievedEmployees({
+    employeeId: params.id,
+    actorUserId: userId ?? null,
+  });
+
+  // Re-pay the affected cycle(s) if their salary run is still a draft — the
+  // cycle of the new relieving date and, when it moved, of the old one.
+  const relievingChanged =
+    (before.relievingDate?.getTime() ?? null) !== (nextRelieving?.getTime() ?? null);
+  const recomputedRuns: string[] = [];
+  if (relievingChanged) {
+    const months = new Set(
+      [before.relievingDate, nextRelieving].filter((x): x is Date => !!x).map(cycleMonthForDate),
+    );
+    for (const monthKey of months) {
+      const run = await prisma.hrSalaryRun.findUnique({ where: { monthKey }, select: { status: true } });
+      if (run?.status === "draft") {
+        await computeSalaryRun(monthKey, userId ?? null);
+        recomputedRuns.push(monthKey);
+      }
+    }
+  }
+
+  const employee = await prisma.employee.findUnique({ where: { id: params.id } });
+  return NextResponse.json({ employee, shiftChange, deactivated: relieved.length > 0, recomputedRuns });
 }
 
 export async function DELETE(_req: Request, { params }: { params: { id: string } }) {
