@@ -6,6 +6,7 @@ import {
   broadcastLeadWhere,
   headerMediaConsistent,
   resendScopeWhere,
+  finalOutcomeCounts,
 } from "@/lib/wa/broadcast";
 import { isOptOutMessage } from "@/lib/wa/inbound";
 import {
@@ -296,5 +297,22 @@ describe("verifyMetaSignature", () => {
   it("reports an absent app secret as not_configured", () => {
     expect(verifyMetaSignature(body, good, null)).toBe("not_configured");
     expect(verifyMetaSignature(body, good, "   ")).toBe("not_configured");
+  });
+});
+
+describe("finalOutcomeCounts", () => {
+  it("moves webhook-reported failures from sent to failed, matching the delivery report", () => {
+    // 909 accepted at send time, 1 rejected at send time, 55 later reported 131026.
+    expect(finalOutcomeCounts(909, 1, 55)).toEqual({ sentCount: 854, failedCount: 56 });
+  });
+
+  it("keeps sent + failed unchanged so the remaining count is unaffected", () => {
+    const { sentCount, failedCount } = finalOutcomeCounts(500, 3, 40);
+    expect(sentCount + failedCount).toBe(503);
+  });
+
+  it("is a no-op with no late failures and never goes negative", () => {
+    expect(finalOutcomeCounts(10, 2, 0)).toEqual({ sentCount: 10, failedCount: 2 });
+    expect(finalOutcomeCounts(3, 0, 9)).toEqual({ sentCount: 0, failedCount: 3 });
   });
 });
