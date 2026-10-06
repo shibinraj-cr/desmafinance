@@ -46,6 +46,7 @@ export const GET = withApiHandler(async (req: Request) => {
     Department: e.department ?? "",
     Shift: e.shiftName ?? e.shiftCode ?? "",
     "Join Date": fmtDate(e.joinDate),
+    "Relieving Date": fmtDate(e.relievingDate),
     Email: e.email ?? "",
     "Official Email": e.officialEmail ?? "",
     Phone: e.phone ?? "",

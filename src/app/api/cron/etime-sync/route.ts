@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { getEtimeConfig, fetchInOutPunchData } from "@/lib/etimeoffice";
 import { ingestParsedAttendance, ATTENDANCE_API_CUTOVER } from "@/lib/hr-attendance-ingest";
 import { checkAndNotifyExpiry } from "@/lib/etimeoffice-subscription";
+import { deactivateRelievedEmployees } from "@/lib/hr-relieving";
 
 export const dynamic = "force-dynamic";
 // Give the payroll-touching pipeline room to run on the platform's cron.
@@ -35,9 +36,16 @@ async function handle(req: Request): Promise<NextResponse> {
   // sync credentials (best-effort, deduped so it fires once per threshold).
   const expiryAlert = await checkAndNotifyExpiry();
 
+  // Deactivate employees (and their logins) whose relieving date has passed.
+  // Runs before the sync and regardless of its credentials.
+  const relieved = await deactivateRelievedEmployees();
+
   const cfg = await getEtimeConfig();
   if (!cfg) {
-    return NextResponse.json({ ok: false, skipped: "eTimeOffice not configured", expiryAlert }, { status: 200 });
+    return NextResponse.json(
+      { ok: false, skipped: "eTimeOffice not configured", expiryAlert, relieved },
+      { status: 200 },
+    );
   }
 
   const n = new Date();
@@ -68,6 +76,7 @@ async function handle(req: Request): Promise<NextResponse> {
       months: result.months.map((m) => ({ monthKey: m.monthKey, inserted: m.inserted, unmatched: m.unmatched })),
       unmatchedNames: result.unmatchedNames,
       expiryAlert,
+      relieved,
     });
   } catch (e) {
     return NextResponse.json(

@@ -238,6 +238,13 @@ export function calcLine(args: {
    */
   daysBeforeJoining?: number;
   /**
+   * Calendar days of the cycle after the employee's relieving date (see
+   * `daysAfterRelieving`) — the leaver's mirror of `daysBeforeJoining`, docked
+   * the same way: loss-of-pay on the working-days base, after the paid-leave
+   * cover. Defaults to 0 (no change).
+   */
+  daysAfterRelieving?: number;
+  /**
    * Statutory PF rule configuration for this payroll window: the effective-
    * dated rule segments covering the cycle (built once per run via
    * pfSegmentsForWindow), the cycle's calendar-day total, and this employee's
@@ -278,8 +285,9 @@ export function calcLine(args: {
   const lopBeforeCover =
     args.daysAbsent + paidUncovered + (args.daysHalfDay - halfDayPaid) * 0.5;
   const lopCover = Math.min(Math.max(0, args.paidLeaveCoverForLop ?? 0), lopBeforeCover);
-  const preJoin = Math.max(0, args.daysBeforeJoining ?? 0);
-  const totalLeaveForLop = round2(Math.min(wd, lopBeforeCover - lopCover + preJoin));
+  const notEmployed =
+    Math.max(0, args.daysBeforeJoining ?? 0) + Math.max(0, args.daysAfterRelieving ?? 0);
+  const totalLeaveForLop = round2(Math.min(wd, lopBeforeCover - lopCover + notEmployed));
   // Paid days = working-days base − loss-of-pay. We derive attended days
   // from LOP rather than summing present-marked rows, so the PF base stays
   // consistent with the gross/LOP side: an employee paid the full month
@@ -523,6 +531,19 @@ export function daysBeforeJoining(joinDate: Date | null | undefined, start: Date
   return Math.round((lastUnpaid - start.getTime()) / DAY) + 1;
 }
 
+/**
+ * Calendar days of the cycle `[start, end]` that fall after `relievingDate` —
+ * the leaver's mirror of `daysBeforeJoining`. The relieving date is the last
+ * working day, so it is itself paid. No relieving date, or one on/after the
+ * cycle end → 0. A relieving date before the cycle start → every day.
+ */
+export function daysAfterRelieving(relievingDate: Date | null | undefined, start: Date, end: Date): number {
+  if (!relievingDate || relievingDate.getTime() >= end.getTime()) return 0;
+  const DAY = 86_400_000;
+  const firstUnpaid = Math.max(relievingDate.getTime() + DAY, start.getTime());
+  return Math.round((end.getTime() - firstUnpaid) / DAY) + 1;
+}
+
 export async function computeSalaryRun(monthKey: string, userId: string | null): Promise<{
   runId: string;
   lineCount: number;
@@ -558,8 +579,16 @@ export async function computeSalaryRun(monthKey: string, userId: string | null):
 
   await prisma.hrSalaryRunLine.deleteMany({ where: { runId: run.id } });
 
+  // Active employees, plus anyone relieved during this cycle: a leaver is
+  // deactivated the day after their relieving date but is still owed the days
+  // they worked in it. Anyone relieved before the cycle began is out.
   const employees = await prisma.employee.findMany({
-    where: { active: true },
+    where: {
+      AND: [
+        { OR: [{ active: true }, { relievingDate: { gte: start } }] },
+        { OR: [{ relievingDate: null }, { relievingDate: { gte: start } }] },
+      ],
+    },
     include: { designationRef: true },
   });
 
@@ -614,14 +643,17 @@ export async function computeSalaryRun(monthKey: string, userId: string | null):
     // the "Paid taken / Unpaid taken" ledger agree exactly.
     let lopCover = 0;
     let preJoin = 0;
+    let postRelieving = 0;
     if (isOwner) {
       buckets = { daysPresent: 0, daysAbsent: 0, daysHalfDay: 0, daysHalfDayPaid: 0, daysPaidLeave: 0 };
     } else {
       // Nothing before the join date counts: a holiday / week-off / stray punch
       // row there is not a day of employment. Those days are docked below.
+      // Likewise nothing after the relieving date counts.
       const from = e.joinDate && e.joinDate > start ? e.joinDate : start;
+      const to = e.relievingDate && e.relievingDate < end ? e.relievingDate : end;
       const attendance = await prisma.hrAttendanceDay.findMany({
-        where: { employeeId: e.id, date: { gte: from, lte: end } },
+        where: { employeeId: e.id, date: { gte: from, lte: to } },
       });
       if (attendance.length === 0) {
         warnings.push(`No attendance for ${e.empCode} ${e.name} in ${monthKey} — skipped.`);
@@ -667,6 +699,12 @@ export async function computeSalaryRun(monthKey: string, userId: string | null):
           `${e.empCode} ${e.name} joined ${e.joinDate!.toISOString().slice(0, 10)} — ${preJoin} day(s) before joining docked as loss-of-pay.`,
         );
       }
+      postRelieving = daysAfterRelieving(e.relievingDate, start, end);
+      if (postRelieving > 0) {
+        warnings.push(
+          `${e.empCode} ${e.name} relieved ${e.relievingDate!.toISOString().slice(0, 10)} — ${postRelieving} day(s) after relieving docked as loss-of-pay.`,
+        );
+      }
     }
 
     // Trainees are paid on BASIC ONLY — the engine forces allowances/ESI/PF/PT
@@ -699,6 +737,7 @@ export async function computeSalaryRun(monthKey: string, userId: string | null):
       // "penalty"-category deductions reduce the salary before ESI/PF/PT.
       penaltyBeforeStatutory: adj.penaltyTotal,
       daysBeforeJoining: preJoin,
+      daysAfterRelieving: postRelieving,
       pf: {
         segments: pfSegments,
         totalDays: cycleDayTotal,

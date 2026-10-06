@@ -190,8 +190,12 @@ export async function ingestParsedAttendance(
   const eligibleRows = filterRowsFromFloor(rows, dateFloor);
 
   const employees = await prisma.employee.findMany({
-    select: { id: true, empCode: true, name: true },
+    select: { id: true, empCode: true, name: true, relievingDate: true },
   });
+  const relievingById = new Map(employees.map((e) => [e.id, e.relievingDate]));
+  // Employees still on the rolls on `date` (not relieved before it).
+  const employedOn = (date: Date) =>
+    employees.filter((e) => !e.relievingDate || date <= e.relievingDate);
 
   /**
    * Match a biometric row to an HR master employee. The biometric system uses
@@ -205,12 +209,16 @@ export async function ingestParsedAttendance(
    *   3. any-token overlap → overlap / min(tokenCount)
    *   threshold ≥ 0.5
    */
-  function fuzzyMatchEmployee(_empCode: string, rawName: string): string | null {
+  function fuzzyMatchEmployee(
+    _empCode: string,
+    rawName: string,
+    pool: { id: string; name: string }[] = employees,
+  ): string | null {
     const aTokens = nameTokens(rawName);
     if (aTokens.length === 0) return null;
     const aFirst = aTokens[0];
     let best: { id: string; score: number } | null = null;
-    for (const e of employees) {
+    for (const e of pool) {
       const bTokens = nameTokens(e.name);
       if (bTokens.length === 0) continue;
       const bFirst = bTokens[0];
@@ -242,6 +250,8 @@ export async function ingestParsedAttendance(
 
   const monthSummaries: MonthSummary[] = [];
   const allUnmatchedNames = new Set<string>();
+  // Punches dated after the matched employee's relieving date, per name.
+  const afterRelieving = new Map<string, number>();
   let rangeStart: Date | null = null;
   let rangeEnd: Date | null = null;
 
@@ -295,6 +305,20 @@ export async function ingestParsedAttendance(
       if (empId === undefined) {
         empId = fuzzyMatchEmployee(r.empCode, r.rawName);
         resolveCache.set(cacheKey, empId);
+      }
+      // A relieved employee generates no attendance after their relieving
+      // date. Re-match among those still employed that day (a colleague with
+      // the same first name must not lose their punch to the leaver); if
+      // nobody else fits, the punch is dropped and reported.
+      const relievedOn = empId ? relievingById.get(empId) : null;
+      if (empId && relievedOn && r.date > relievedOn) {
+        const other = fuzzyMatchEmployee(r.empCode, r.rawName, employedOn(r.date));
+        if (!other) {
+          const label = r.rawName || r.empCode;
+          afterRelieving.set(label, (afterRelieving.get(label) ?? 0) + 1);
+          continue;
+        }
+        empId = other;
       }
       if (!empId) {
         unmatched++;
@@ -384,6 +408,10 @@ export async function ingestParsedAttendance(
       unmatched,
       unmatchedNames: [...unmatchedNames],
     });
+  }
+
+  for (const [name, n] of afterRelieving) {
+    warnings.push(`${name}: ${n} biometric day(s) after their relieving date ignored.`);
   }
 
   // Audit log.

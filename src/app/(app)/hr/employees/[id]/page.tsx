@@ -124,6 +124,7 @@ export default async function EmployeeDetailPage({ params }: { params: { id: str
             bankName: employee.bankName ?? "",
             branch: employee.branch ?? "",
             joinDate: employee.joinDate ? employee.joinDate.toISOString().slice(0, 10) : "",
+            relievingDate: employee.relievingDate ? employee.relievingDate.toISOString().slice(0, 10) : "",
             shiftId: employee.shiftId ?? "",
             halfHourConcession: employee.halfHourConcession,
             active: employee.active,
