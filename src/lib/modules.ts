@@ -54,6 +54,12 @@ export const MODULES: AppModule[] = [
         adminOnly: true,
       },
       {
+        href: "/executive/sales-analysis",
+        label: "Sales Analysis",
+        icon: "query_stats",
+        adminOnly: true,
+      },
+      {
         href: "/executive/sales-objective",
         label: "Sales Objective",
         icon: "flag",
