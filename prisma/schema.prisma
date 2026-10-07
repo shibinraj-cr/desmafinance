@@ -221,6 +221,8 @@ model Transaction {
 
   pendingApprovals      PendingApproval[]          @relation("targetTransaction")
   collectionInstallment CollectionPlanInstallment? @relation("InstallmentTransaction")
+  // Bank-statement lines reconciled against this ledger row.
+  bankMatches           BankTransactionMatch[]
 
   @@index([date])
   @@index([month])
@@ -853,14 +855,14 @@ model Holiday {
 /// production board render. Dates are IST calendar days stored as
 /// UTC-midnight `@db.Date` (the `toPrismaDate` convention).
 model MediaPlanItem {
-  id     String @id @default(cuid())
-  title  String
+  id          String    @id @default(cuid())
+  title       String
   // 'short' | 'video' | 'reel' | 'poster'
-  format String
+  format      String
   // Production stage: 'idea' | 'script' | 'shoot' | 'edit' | 'approval' |
   // 'scheduled' | 'published'. A string union like CrmTask.status, not an
   // enum, so a stage can be added without a migration.
-  status String @default("idea")
+  status      String    @default("idea")
   // The calendar day the piece should go live; null while it is only an idea.
   publishDate DateTime? @db.Date
   // Display slot like "18:00" (IST) — a label for the publish day, not a
@@ -1861,24 +1863,24 @@ model HrTrainingProgress {
 /// auto-scored question bank. Learners are enrolled into the whole programme,
 /// so every published module applies to every active learner.
 model SalesTrainingModule {
-  id           String                       @id @default(cuid())
+  id           String                  @id @default(cuid())
   title        String
   description  String?
-  sortOrder    Int                          @default(0)
+  sortOrder    Int                     @default(0)
   /// [{ id, title, youtubeId }] — stored as the parsed video id, not the URL,
   /// so share links / watch links / youtu.be links all normalise to one form.
-  videos       Json                         @default("[]")
+  videos       Json                    @default("[]")
   /// Percent of available points needed to pass (0–100).
-  passMark     Int                          @default(70)
+  passMark     Int                     @default(70)
   /// null = unlimited retakes.
   maxAttempts  Int?
   /// When true the quiz stays locked until every video is ≥ WATCH_THRESHOLD watched.
-  requireWatch Boolean                      @default(true)
+  requireWatch Boolean                 @default(true)
   /// draft | published | archived
-  status       String                       @default("draft")
+  status       String                  @default("draft")
   createdById  String?
-  createdAt    DateTime                     @default(now())
-  updatedAt    DateTime                     @updatedAt
+  createdAt    DateTime                @default(now())
+  updatedAt    DateTime                @updatedAt
   questions    SalesTrainingQuestion[]
   attempts     SalesTrainingAttempt[]
   watches      SalesTrainingWatch[]
@@ -2532,20 +2534,20 @@ model Lead {
   altPhoneE164  String?
 
   // Classification (FKs to reusable masters)
-  sourceId         String?
-  source           LeadPulseSource?  @relation("LeadSource", fields: [sourceId], references: [id], onDelete: SetNull)
+  sourceId           String?
+  source             LeadPulseSource?  @relation("LeadSource", fields: [sourceId], references: [id], onDelete: SetNull)
   // Preserved original acquisition source on a RE-ENROLLMENT lead. When an
   // existing candidate enrolls in a second service, the lead's primary `source`
   // is set to "Existing Candidate" (so repeat business shows as its own bucket
   // in the source funnel / reports) while `originalSource` keeps the channel the
   // candidate first came in through — so their original attribution is never
   // lost. Null on ordinary (first-time) leads.
-  originalSourceId String?
-  originalSource   LeadPulseSource?  @relation("LeadOriginalSource", fields: [originalSourceId], references: [id], onDelete: SetNull)
-  serviceId        String?
-  service          Service?          @relation(fields: [serviceId], references: [id], onDelete: SetNull)
-  qualificationId  String?
-  qualification    CrmQualification? @relation(fields: [qualificationId], references: [id], onDelete: SetNull)
+  originalSourceId   String?
+  originalSource     LeadPulseSource?  @relation("LeadOriginalSource", fields: [originalSourceId], references: [id], onDelete: SetNull)
+  serviceId          String?
+  service            Service?          @relation(fields: [serviceId], references: [id], onDelete: SetNull)
+  qualificationId    String?
+  qualification      CrmQualification? @relation(fields: [qualificationId], references: [id], onDelete: SetNull)
   // Free-text detail captured when the chosen qualification is the catch-all
   // "Others" row — the candidate's actual qualification, kept short on purpose
   // (QUALIFICATION_OTHER_MAX in crm.ts) so it stays a label, not a paragraph.
@@ -5216,24 +5218,323 @@ model ExecMeetingShare {
 }
 
 model ExecMeetingAction {
-  id        String      @id @default(cuid())
-  meetingId String
-  meeting   ExecMeeting @relation(fields: [meetingId], references: [id], onDelete: Cascade)
-  text      String
+  id           String      @id @default(cuid())
+  meetingId    String
+  meeting      ExecMeeting @relation(fields: [meetingId], references: [id], onDelete: Cascade)
+  text         String
   /// Free text, like attendees — the owner may be someone without a login.
-  owner     String?
+  owner        String?
   /// The owner's login, when they have one. Only a linked owner gets the
   /// due-date reminder pop-up and can update the item from My Workspace.
   ownerUserId  String?
-  dueOn     DateTime?   @db.Date
+  dueOn        DateTime?   @db.Date
   /// "Remind me tomorrow": no pop-up before this IST date.
-  snoozedUntil DateTime? @db.Date
-  doneAt    DateTime?
-  sortOrder Int         @default(0)
-  createdAt DateTime    @default(now())
-  updatedAt DateTime    @updatedAt
+  snoozedUntil DateTime?   @db.Date
+  doneAt       DateTime?
+  sortOrder    Int         @default(0)
+  createdAt    DateTime    @default(now())
+  updatedAt    DateTime    @updatedAt
 
   @@index([meetingId])
   @@index([doneAt, dueOn])
   @@index([ownerUserId, doneAt])
+}
+
+// ─── Bank Statement Automation ──────────────────────────────────────────────
+// Daily bank statements pulled from the bank's statement e-mail, archived as
+// the original PDF in the private Blob store, parsed into one row per bank
+// transaction, and kept reconciliation-ready against the ledger.
+//
+// Duplicate protection is layered and enforced by the database, not just the
+// code: one statement per (integration, Gmail message), one per (integration,
+// PDF SHA-256), one transaction per (integration, transaction hash).
+//
+// Secrets (statement password, Gmail refresh token, the statement link) are
+// stored sealed with AES-256-GCM (src/lib/bank/secrets.ts) and never selected
+// into anything that reaches the browser.
+
+/// The Gmail mailbox a bank integration reads its statement e-mails from.
+model BankMailboxConnection {
+  id              String            @id @default(cuid())
+  // "gmail" today; the column is here so another provider is additive.
+  provider        String            @default("gmail")
+  emailAddress    String            @unique
+  refreshTokenEnc String
+  // Space-separated scopes Google granted (gmail.readonly, optionally sheets).
+  scope           String?
+  // Plain id, no relation: who connected it is audit context, not a join.
+  connectedById   String?
+  lastCheckedAt   DateTime?
+  lastError       String?
+  createdAt       DateTime          @default(now())
+  updatedAt       DateTime          @updatedAt
+  integrations    BankIntegration[]
+}
+
+/// One bank account whose statements are imported. `bankCode` picks the
+/// downloader and parser (src/lib/bank/parsers), so another bank or another
+/// account is a new row, not new code paths.
+model BankIntegration {
+  id                       String                 @id @default(cuid())
+  // "HDFC" — selects the statement parser and SmartStatement downloader.
+  bankCode                 String
+  bankName                 String
+  accountName              String
+  accountLastFour          String
+  currency                 String                 @default("INR")
+  emailSender              String
+  emailRecipient           String?
+  // Matched as "subject contains", never literally: the period in the
+  // subject changes every day.
+  emailSubjectPattern      String
+  mailProvider             String                 @default("gmail")
+  mailboxConnectionId      String?
+  mailbox                  BankMailboxConnection? @relation(fields: [mailboxConnectionId], references: [id], onDelete: SetNull)
+  // Where the statement password lives: "env:VARIABLE_NAME" (a deployment
+  // secret) or "db" (sealed in BankIntegrationSecret). Never the value.
+  passwordSecretRef        String                 @default("env:HDFC_STATEMENT_PASSWORD")
+  automationEnabled        Boolean                @default(false)
+  statementFrequency       String                 @default("daily")
+  // Local time-of-day in `timezone` the daily run becomes due, "HH:MM".
+  runTime                  String                 @default("09:30")
+  timezone                 String                 @default("Asia/Kolkata")
+  lookbackDays             Int                    @default(3)
+  browserAutomationEnabled Boolean                @default(true)
+  pdfArchiveEnabled        Boolean                @default(true)
+  // Off by default: a failure screenshot can show transactions, so it is
+  // only captured when an administrator opts in for diagnosis.
+  failureScreenshots       Boolean                @default(false)
+  sheetSyncEnabled         Boolean                @default(false)
+  sheetId                  String?
+  sheetTab                 String                 @default("Bank Transactions")
+  // Alert when no statement has arrived for this many business days.
+  alertAfterBusinessDays   Int                    @default(2)
+  lastEmailCheckedAt       DateTime?
+  lastStatementReceivedAt  DateTime?
+  lastSuccessfulSyncAt     DateTime?
+  lastSheetSyncAt          DateTime?
+  lastSheetSyncError       String?
+  // IST calendar days (UTC-midnight @db.Date, the toPrismaDate convention).
+  lastStatementDate        DateTime?              @db.Date
+  lastScheduledRunOn       DateTime?              @db.Date
+  lastMissingAlertOn       DateTime?              @db.Date
+  createdById              String?
+  updatedById              String?
+  createdAt                DateTime               @default(now())
+  updatedAt                DateTime               @updatedAt
+
+  secrets      BankIntegrationSecret[]
+  runs         BankStatementRun[]
+  statements   BankStatement[]
+  transactions BankTransaction[]
+
+  @@unique([bankCode, accountLastFour])
+}
+
+/// Sealed secrets for an integration, kept in their own table so no
+/// `include` of the integration can ever carry them along.
+model BankIntegrationSecret {
+  id            String          @id @default(cuid())
+  integrationId String
+  integration   BankIntegration @relation(fields: [integrationId], references: [id], onDelete: Cascade)
+  // "statement_password"
+  kind          String
+  valueEnc      String
+  updatedById   String?
+  createdAt     DateTime        @default(now())
+  updatedAt     DateTime        @updatedAt
+
+  @@unique([integrationId, kind])
+}
+
+/// One execution of the automation — also the job record the worker drains.
+/// trigger: SCHEDULED | MANUAL | BACKFILL | RETRY | TEST
+/// status:  QUEUED | RUNNING | COMPLETED | COMPLETED_WITH_ERRORS | NO_NEW | FAILED
+model BankStatementRun {
+  id                  String          @id @default(cuid())
+  integrationId       String
+  integration         BankIntegration @relation(fields: [integrationId], references: [id], onDelete: Cascade)
+  trigger             String
+  status              String          @default("QUEUED")
+  // Human-readable current step ("Downloading PDF…") for the live progress view.
+  phase               String?
+  // BACKFILL window (IST days).
+  fromDate            DateTime?       @db.Date
+  toDate              DateTime?       @db.Date
+  // TEST runs never write statements or transactions; the preview lands here.
+  testResult          Json?
+  discoveredAt        DateTime?
+  // Worker lease: a run is advanced by one worker at a time.
+  lockedUntil         DateTime?
+  startedAt           DateTime?
+  completedAt         DateTime?
+  gmailMessagesFound  Int             @default(0)
+  statementsProcessed Int             @default(0)
+  statementsFailed    Int             @default(0)
+  transactionsCreated Int             @default(0)
+  transactionsSkipped Int             @default(0)
+  transactionsFailed  Int             @default(0)
+  errorSummary        String?
+  initiatedById       String?
+  createdAt           DateTime        @default(now())
+  updatedAt           DateTime        @updatedAt
+
+  statements BankStatement[]
+  events     BankAutomationEvent[]
+
+  @@index([integrationId, createdAt])
+  @@index([status])
+}
+
+/// One statement e-mail / PDF. Statuses: NEW, EMAIL_FOUND, DOWNLOADING,
+/// PDF_DOWNLOADED, PARSING, PROCESSED, NO_TRANSACTIONS, REVIEW_REQUIRED,
+/// FAILED, MANUAL_ACTION_REQUIRED, DUPLICATE.
+model BankStatement {
+  id               String            @id @default(cuid())
+  integrationId    String
+  integration      BankIntegration   @relation(fields: [integrationId], references: [id], onDelete: Cascade)
+  // The run currently responsible for it (re-pointed by a retry).
+  runId            String?
+  run              BankStatementRun? @relation(fields: [runId], references: [id], onDelete: SetNull)
+  // "gmail" | "upload" (a PDF a Finance user uploaded by hand)
+  source           String            @default("gmail")
+  gmailMessageId   String?
+  gmailReceivedAt  DateTime?
+  sourceSubject    String?
+  // Sealed: the SmartStatement link is a bearer link to the statement page.
+  statementUrlEnc  String?
+  // Gmail attachment id when the bank attached the PDF itself.
+  attachmentId     String?
+  periodStart      DateTime?         @db.Date
+  periodEnd        DateTime?         @db.Date
+  status           String            @default("NEW")
+  attempts         Int               @default(0)
+  nextAttemptAt    DateTime?
+  lockedUntil      DateTime?
+  lastErrorCode    String?
+  lastError        String?
+  duplicateOfId    String?
+  fileName         String?
+  fileSha256       String?
+  fileSize         Int?
+  blobPathname     String?
+  openingBalance   Decimal?          @db.Decimal(16, 2)
+  closingBalance   Decimal?          @db.Decimal(16, 2)
+  totalDebit       Decimal?          @db.Decimal(16, 2)
+  totalCredit      Decimal?          @db.Decimal(16, 2)
+  debitCount       Int?
+  creditCount      Int?
+  transactionCount Int?
+  insertedCount    Int?
+  duplicateCount   Int?
+  // { errors: string[], warnings: string[] } from the last validation.
+  validation       Json?
+  // REVIEW_REQUIRED only: the extracted rows, held until a manager approves
+  // or rejects them. Nothing suspicious reaches BankTransaction unreviewed.
+  reviewPayload    Json?
+  reviewedById     String?
+  reviewedAt       DateTime?
+  processedAt      DateTime?
+  createdById      String?
+  createdAt        DateTime          @default(now())
+  updatedAt        DateTime          @updatedAt
+
+  transactions BankTransaction[]
+  events       BankAutomationEvent[]
+
+  @@unique([integrationId, gmailMessageId])
+  @@unique([integrationId, fileSha256])
+  @@index([integrationId, periodEnd])
+  @@index([status])
+  @@index([runId])
+}
+
+/// One bank transaction. Amounts are fixed-precision decimals; the raw
+/// narration is kept untouched beside the derived classification.
+/// reconciliationStatus: UNMATCHED | MATCHED | PARTIALLY_MATCHED | IGNORED | MANUAL_REVIEW
+model BankTransaction {
+  id                   String          @id @default(cuid())
+  integrationId        String
+  integration          BankIntegration @relation(fields: [integrationId], references: [id], onDelete: Cascade)
+  statementId          String
+  statement            BankStatement   @relation(fields: [statementId], references: [id], onDelete: Restrict)
+  // Position within its statement — keeps same-day rows in bank order.
+  rowIndex             Int
+  txnDate              DateTime        @db.Date
+  valueDate            DateTime?       @db.Date
+  description          String
+  referenceNumber      String?
+  chequeNumber         String?
+  // "DEBIT" | "CREDIT"
+  direction            String
+  debitAmount          Decimal         @default(0) @db.Decimal(14, 2)
+  creditAmount         Decimal         @default(0) @db.Decimal(14, 2)
+  runningBalance       Decimal?        @db.Decimal(16, 2)
+  currency             String          @default("INR")
+  // UPI | NEFT | RTGS | IMPS | ACH | NACH | CHEQUE | CARD | ATM |
+  // BANK_CHARGES | INTEREST | CASH | TRANSFER | OTHER
+  transactionType      String
+  paymentMode          String?
+  counterpartyName     String?
+  upiReference         String?
+  bankReference        String?
+  statementDate        DateTime?       @db.Date
+  gmailMessageId       String?
+  sourceSubject        String?
+  rawText              String
+  transactionHash      String
+  reconciliationStatus String          @default("UNMATCHED")
+  reconciliationNote   String?
+  reconciledById       String?
+  reconciledAt         DateTime?
+  sheetSyncedAt        DateTime?
+  createdAt            DateTime        @default(now())
+  updatedAt            DateTime        @updatedAt
+
+  matches BankTransactionMatch[]
+
+  @@unique([integrationId, transactionHash])
+  @@index([integrationId, txnDate])
+  @@index([statementId])
+  @@index([txnDate])
+  @@index([reconciliationStatus])
+  @@index([transactionType])
+}
+
+/// A bank transaction associated with a ledger Transaction. Several matches
+/// against one bank line make a partial/split reconciliation.
+model BankTransactionMatch {
+  id                String          @id @default(cuid())
+  bankTransactionId String
+  bankTransaction   BankTransaction @relation(fields: [bankTransactionId], references: [id], onDelete: Cascade)
+  transactionId     String
+  transaction       Transaction     @relation(fields: [transactionId], references: [id], onDelete: Cascade)
+  amount            Decimal         @db.Decimal(14, 2)
+  note              String?
+  createdById       String?
+  createdAt         DateTime        @default(now())
+
+  @@unique([bankTransactionId, transactionId])
+  @@index([transactionId])
+}
+
+/// Timeline + audit trail for runs and statements. Messages are written
+/// through a redactor and never carry passwords, tokens, cookies or links.
+/// level: info | warn | error
+model BankAutomationEvent {
+  id            String            @id @default(cuid())
+  integrationId String?
+  runId         String?
+  run           BankStatementRun? @relation(fields: [runId], references: [id], onDelete: Cascade)
+  statementId   String?
+  statement     BankStatement?    @relation(fields: [statementId], references: [id], onDelete: Cascade)
+  level         String            @default("info")
+  step          String
+  message       String
+  userId        String?
+  createdAt     DateTime          @default(now())
+
+  @@index([runId, createdAt])
+  @@index([statementId, createdAt])
+  @@index([integrationId, createdAt])
 }
