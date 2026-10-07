@@ -100,6 +100,16 @@ export const MODULES: AppModule[] = [
         group: "MONEY OUT",
       },
       { href: "/finance/cashflow", label: "Cash Flow", icon: "account_balance", group: "MONEY OUT" },
+      // Bank data: granted to a role deliberately, never by default (the New
+      // Role form leaves it unticked). Approver roles with the grant also get
+      // the manage actions — see src/lib/bank/access.ts.
+      {
+        href: "/finance/bank-statements",
+        label: "Bank Statements",
+        icon: "account_balance_wallet",
+        group: "OPERATIONS",
+        adminOnly: true,
+      },
       { href: "/finance/daily-tracker", label: "Daily Tracker", icon: "edit_calendar", group: "OPERATIONS" },
       { href: "/finance/parties", label: "Parties", icon: "groups", group: "OPERATIONS" },
       { href: "/finance/documents", label: "Documents", icon: "folder_open", group: "OPERATIONS" },

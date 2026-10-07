@@ -72,6 +72,10 @@
     {
       "path": "/api/cron/youtube-sync",
       "schedule": "30 2 * * *"
+    },
+    {
+      "path": "/api/cron/bank-statements",
+      "schedule": "*/5 * * * *"
     }
   ]
 }

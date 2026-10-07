@@ -40,9 +40,30 @@ const securityHeaders = [
   { key: "Content-Security-Policy", value: csp },
 ];
 
+// Routes that may launch headless Chromium for Bank Statement Automation —
+// each needs the packed browser binary traced into its function bundle, and
+// all of playwright-core: it loads parts of itself by computed path at
+// runtime, which the tracer cannot follow (only 7 of its files get traced
+// otherwise, and the launch fails in production).
+const CHROMIUM_BIN = ["./node_modules/@sparticuz/chromium/bin/**", "./node_modules/playwright-core/**"];
+const BANK_BROWSER_ROUTES = [
+  "/api/cron/bank-statements",
+  "/api/finance/bank-automation/run",
+  "/api/finance/bank-automation/backfill",
+  "/api/finance/bank-automation/test-statement-access",
+  "/api/finance/bank-statements/retry",
+  "/api/finance/bank-statements/upload",
+];
+
 const nextConfig = {
   reactStrictMode: true,
   poweredByHeader: false,
+  experimental: {
+    // Loaded at runtime from node_modules rather than bundled: the browser
+    // binary is brotli-packed data webpack must not touch.
+    serverComponentsExternalPackages: ["@sparticuz/chromium", "playwright-core"],
+    outputFileTracingIncludes: Object.fromEntries(BANK_BROWSER_ROUTES.map((r) => [r, CHROMIUM_BIN])),
+  },
   async headers() {
     return [
       {

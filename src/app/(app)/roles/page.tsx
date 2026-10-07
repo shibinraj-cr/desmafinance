@@ -5,6 +5,11 @@ import { getCurrentUserAndPermissions } from "@/lib/permissions";
 import { TopBar } from "@/components/TopBar";
 import { Section } from "@/components/Cards";
 import { APP_PAGES, ALL_PAGE_HREFS } from "@/lib/pages";
+import { BANK_PAGE } from "@/lib/bank/access";
+
+// A new role starts with every page ticked — except bank statements, which
+// expose the company's bank transactions and must be granted on purpose.
+const NEW_ROLE_DEFAULT_PAGES = ALL_PAGE_HREFS.filter((p) => p !== BANK_PAGE);
 import { RolesEditor, NewRoleButton } from "./client";
 
 export const dynamic = "force-dynamic";
@@ -37,7 +42,7 @@ export default async function RolesPage() {
       <TopBar
         title="Role Management"
         subtitle={`${roles.length} role${roles.length === 1 ? "" : "s"}`}
-        action={<NewRoleButton allPages={APP_PAGES} defaultPages={ALL_PAGE_HREFS} />}
+        action={<NewRoleButton allPages={APP_PAGES} defaultPages={NEW_ROLE_DEFAULT_PAGES} />}
       />
       <div className="p-margin space-y-lg">
         <RolesEditor
