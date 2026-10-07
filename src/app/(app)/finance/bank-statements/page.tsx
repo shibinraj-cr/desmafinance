@@ -10,6 +10,7 @@ import { BANK_DEFAULTS } from "@/lib/bank/integration";
 import {
   RECON_STATUSES,
   STATEMENT_SELECT,
+  consolidatedStatement,
   listTransactions,
   parseTxnFilters,
   serializeStatement,
@@ -21,6 +22,7 @@ import { TransactionsView } from "./transactions";
 import { StatementsView } from "./statements";
 import { AutomationView } from "./automation";
 import { AuditView } from "./audit";
+import { ConsolidatedView, StatementUploader } from "./consolidated";
 
 export const dynamic = "force-dynamic";
 
@@ -42,8 +44,22 @@ export default async function BankStatementsPage({ searchParams }: { searchParam
     return (
       <>
         <TopBar title="Bank Statements" subtitle="Automated statement import & reconciliation" />
-        <div className="p-margin space-y-md max-w-2xl">
-          <SetupIntegration canManage={caps.manage} banks={banks} />
+        <div className="p-margin space-y-lg">
+          {caps.manage ? (
+            <>
+              <StatementUploader integrationId={null} />
+              <details className="max-w-2xl group">
+                <summary className="cursor-pointer text-body-md font-semibold text-on-surface-variant hover:text-on-surface">
+                  Or set up automatic daily import from the bank&apos;s statement e-mail
+                </summary>
+                <div className="mt-md">
+                  <SetupIntegration canManage banks={banks} />
+                </div>
+              </details>
+            </>
+          ) : (
+            <SetupIntegration canManage={false} banks={banks} />
+          )}
         </div>
       </>
     );
@@ -51,14 +67,23 @@ export default async function BankStatementsPage({ searchParams }: { searchParam
 
   const one = (k: string) => (Array.isArray(searchParams[k]) ? searchParams[k]![0] : (searchParams[k] as string | undefined));
   const tabParam = one("tab");
-  const tab: TabKey = TABS.some((t) => t.key === tabParam) ? (tabParam as TabKey) : "transactions";
+  const tab: TabKey = TABS.some((t) => t.key === tabParam) ? (tabParam as TabKey) : "consolidated";
   const integration = integrations.find((i) => i.id === one("account")) ?? integrations[0];
   const page = Math.max(1, Number(one("page")) || 1);
   const accounts = integrations.map((i) => ({ id: i.id, label: `${i.bankName} ••••${i.accountLastFour}`, name: i.accountName }));
 
   let body: React.ReactNode = null;
 
-  if (tab === "transactions" || tab === "reconciliation") {
+  if (tab === "consolidated") {
+    const iso = (v?: string) => (v && /^\d{4}-\d{2}-\d{2}$/.test(v) ? v : null);
+    const data = await consolidatedStatement(integration.id, iso(one("from")), iso(one("to")));
+    body = (
+      <>
+        {caps.manage && <StatementUploader integrationId={null} />}
+        <ConsolidatedView data={data} canDownload={caps.download} />
+      </>
+    );
+  } else if (tab === "transactions" || tab === "reconciliation") {
     const filters = parseTxnFilters({ ...searchParams, account: integration.id });
     if (tab === "reconciliation" && filters.recon.length === 0) filters.recon = ["UNMATCHED", "MANUAL_REVIEW", "PARTIALLY_MATCHED"];
     const [list, recon] = await Promise.all([

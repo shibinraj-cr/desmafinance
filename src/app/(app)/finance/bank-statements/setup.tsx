@@ -117,7 +117,7 @@ export function AccountPicker({
           className="h-9 px-md rounded-lg border border-outline-variant bg-surface-container-lowest text-label-sm font-semibold"
           value={current}
           onChange={(e) => {
-            const p = new URLSearchParams({ tab: search.get("tab") ?? "transactions", account: e.target.value });
+            const p = new URLSearchParams({ tab: search.get("tab") ?? "consolidated", account: e.target.value });
             router.push(`${pathname}?${p.toString()}`);
           }}
         >

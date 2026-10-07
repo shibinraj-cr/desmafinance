@@ -97,7 +97,7 @@ vi.mock("@/lib/bank/notify", () => ({
   }),
 }));
 
-import { advanceRun, createRun, reviewStatement } from "@/lib/bank/engine";
+import { advanceRun, createRun, importUploadedPdf, reviewStatement } from "@/lib/bank/engine";
 import { seal } from "@/lib/bank/secrets";
 import { generateRows, hdfcFixture, type FixtureRow } from "./fixtures/hdfc-statement";
 
@@ -315,3 +315,53 @@ describe("bank automation engine — acceptance", () => {
     expect(b).toEqual({ runId: a.runId, existing: true });
   });
 });
+
+describe("manual upload → consolidated statement", () => {
+  const pdf = (key: string) => new Uint8Array(Buffer.from(`%PDF-1.4 ${key}`));
+  /** 10 chained rows: 7 on 5 Oct, 3 on 6 Oct, account ending 5678. */
+  function overlapping() {
+    const all = generateRows(10, 2_00_000_00).map((r, i) => ({ ...r, date: i < 7 ? "05/10/26" : "06/10/26" }));
+    h.items.month = hdfcFixture({ account: "50100000005678", rows: all, from: "05/10/2026", to: "06/10/2026" });
+    h.items.day = hdfcFixture({ account: "50100000005678", rows: all.slice(7), from: "06/10/2026", to: "06/10/2026" });
+  }
+
+  it("reads the account off the PDF and creates it on first upload", async () => {
+    overlapping();
+    const r = await importUploadedPdf(pdf("month"), "user-1");
+    expect(r).toMatchObject({ createdAccount: true, status: "PROCESSED", inserted: 10, duplicates: 0, periodStart: "2026-10-05", periodEnd: "2026-10-06" });
+    const acct = table("bankIntegration").find((i) => i.accountLastFour === "5678")!;
+    expect(acct.automationEnabled).toBe(false);
+    expect(r.integrationId).toBe(acct.id);
+  });
+
+  it("uploading the same file again adds nothing", async () => {
+    overlapping();
+    await importUploadedPdf(pdf("month"), "user-1");
+    const again = await importUploadedPdf(pdf("month"), "user-1");
+    expect(again).toMatchObject({ duplicate: true, inserted: 0, createdAccount: false });
+    expect(table("bankTransaction")).toHaveLength(10);
+  });
+
+  it("a daily statement inside an already-uploaded monthly one adds zero rows", async () => {
+    overlapping();
+    await importUploadedPdf(pdf("month"), "user-1");
+    const daily = await importUploadedPdf(pdf("day"), "user-1");
+    expect(daily).toMatchObject({ duplicate: false, status: "PROCESSED", inserted: 0, duplicates: 3 });
+    expect(table("bankTransaction")).toHaveLength(10);
+  });
+
+  it("and the other way round: the monthly adds only the days the daily did not have", async () => {
+    overlapping();
+    expect((await importUploadedPdf(pdf("day"), "user-1")).inserted).toBe(3);
+    expect(await importUploadedPdf(pdf("month"), "user-1")).toMatchObject({ inserted: 7, duplicates: 3 });
+    expect(table("bankTransaction")).toHaveLength(10);
+    expect(table("bankIntegration").filter((i) => i.accountLastFour === "5678")).toHaveLength(1);
+  });
+
+  it("refuses an unreadable PDF without creating anything", async () => {
+    h.items.junk = [{ str: "Not a bank statement", x: 10, y: 10, w: 80, page: 1 }];
+    await expect(importUploadedPdf(pdf("junk"), "user-1")).rejects.toMatchObject({ code: "PARSE_FAILED" });
+    expect(table("bankStatement")).toHaveLength(0);
+  });
+});
+

@@ -80,6 +80,7 @@ export function StatusChip({ status, title }: { status: string; title?: string }
 }
 
 export const TABS = [
+  { key: "consolidated", label: "Consolidated", icon: "summarize" },
   { key: "transactions", label: "Transactions", icon: "receipt" },
   { key: "statements", label: "Statements", icon: "description" },
   { key: "automation", label: "Automation", icon: "autorenew" },

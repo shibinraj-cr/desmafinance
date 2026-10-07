@@ -16,13 +16,13 @@ import {
 import { getAttachment, getMessage, gmailAccessToken, gmailProfileEmail, searchMessageIds, type StatementMessage } from "./gmail";
 import { downloaderFor } from "./downloaders";
 import { assertLooksLikePdf, extractTextItems } from "./pdf";
-import { parserFor } from "./parsers";
+import { SUPPORTED_BANKS, parserFor } from "./parsers";
 import type { ParsedRow, ParsedStatement } from "./parsers/base";
 import { validateStatement } from "./validate";
 import { sha256Hex } from "./hash";
 import { importRows } from "./import";
 import { archivePdf, isArchiveConfigured, readArchivedPdf, statementBlobPath, statementFileName } from "./storage";
-import { getStatementPassword, maskedAccount } from "./integration";
+import { BANK_DEFAULTS, getStatementPassword, maskedAccount } from "./integration";
 import { isScheduledRunDue, missedBusinessDays } from "./schedule";
 import { syncIntegrationToSheet } from "./sheets";
 import { fromDecimal, paiseToRupees, toDecimalString } from "./money";
@@ -444,7 +444,13 @@ async function discover(run: { id: string; trigger: string; fromDate: Date | nul
 // ─── One statement ──────────────────────────────────────────────────────────
 
 /** Fetch, archive, parse, validate and import one statement. Never throws. */
-export async function processStatement(statementId: string, integration: Integration, runId: string | null): Promise<void> {
+export async function processStatement(
+  statementId: string,
+  integration: Integration,
+  runId: string | null,
+  /** Uploads hand over their bytes and, optionally, a one-time password (never stored). */
+  opts: { pdf?: Uint8Array; password?: string | null } = {},
+): Promise<void> {
   const now = new Date();
   const { count } = await prisma.bankStatement.updateMany({
     where: { id: statementId, OR: [{ lockedUntil: null }, { lockedUntil: { lt: now } }] },
@@ -460,10 +466,12 @@ export async function processStatement(statementId: string, integration: Integra
 
   let password: string | null = null;
   try {
-    password = await getStatementPassword(integration);
+    password = opts.password || (await getStatementPassword(integration));
     let pdf: Uint8Array;
 
-    if (s.blobPathname) {
+    if (opts.pdf && s.fileSha256) {
+      pdf = opts.pdf;
+    } else if (s.blobPathname) {
       pdf = await readArchivedPdf(s.blobPathname);
       await ev("pdf", "Re-using the archived PDF");
     } else {
@@ -788,55 +796,168 @@ export async function reviewStatement(statementId: string, action: "approve" | "
   return res;
 }
 
-/**
- * A PDF uploaded by hand (e.g. downloaded from net banking when the link
- * expired). Archived, then queued like any other statement.
- */
-export async function ingestUploadedPdf(integrationId: string, pdf: Uint8Array, userId: string) {
-  const integration = await prisma.bankIntegration.findUniqueOrThrow({ where: { id: integrationId } });
-  assertLooksLikePdf(pdf);
-  const sha = sha256Hex(pdf);
-  const dup = await prisma.bankStatement.findFirst({ where: { integrationId, fileSha256: sha }, select: { id: true } });
-  if (dup) return { duplicate: true as const, statementId: dup.id, runId: null };
+export type UploadResult = {
+  statementId: string;
+  integrationId: string;
+  account: string;
+  createdAccount: boolean;
+  duplicate: boolean;
+  status: string;
+  periodStart: string | null;
+  periodEnd: string | null;
+  transactionCount: number;
+  inserted: number;
+  duplicates: number;
+  errors: string[];
+  lastError: string | null;
+};
 
-  // Read the period off the PDF so the file is named and dated properly.
-  let period: { start: string | null; end: string | null } = { start: null, end: null };
-  try {
-    const password = await getStatementPassword(integration);
-    const { items } = await extractTextItems(pdf, password);
-    const p = parserFor(integration.bankCode).parse(items);
-    period = { start: p.periodStart, end: p.periodEnd };
-  } catch {
-    /* processing will surface the real error */
+/**
+ * Import a statement PDF uploaded by hand — the path for statements downloaded
+ * from net banking, older months, or when the e-mailed link has expired.
+ *
+ * The PDF identifies itself: the bank is whichever parser reads it, and the
+ * account is the number printed on it, so no account has to be set up first —
+ * one is created on the first upload for that account (automation off). It is
+ * then processed right away (no browser needed): archived, parsed, validated,
+ * and imported through the same three duplicate guards as the daily run, so
+ * re-uploading or uploading overlapping statements adds nothing twice.
+ *
+ * `password` opens an encrypted PDF for this upload only; it is never stored.
+ */
+export async function importUploadedPdf(
+  pdf: Uint8Array,
+  userId: string,
+  opts: { integrationId?: string | null; password?: string | null } = {},
+): Promise<UploadResult> {
+  assertLooksLikePdf(pdf);
+  const preset = opts.integrationId
+    ? await prisma.bankIntegration.findUniqueOrThrow({ where: { id: opts.integrationId } })
+    : null;
+
+  // Identify bank + account by reading the PDF.
+  const banks = preset ? [preset.bankCode] : SUPPORTED_BANKS;
+  let parsed: ParsedStatement | null = null;
+  let bankCode = banks[0];
+  let lastErr: unknown = null;
+  for (const code of banks) {
+    const stored = preset ? await getStatementPassword(preset) : process.env[BANK_DEFAULTS[code]?.passwordEnvVar ?? ""] || null;
+    const password = opts.password || stored;
+    try {
+      const { items } = await extractTextItems(pdf, password);
+      parsed = parserFor(code).parse(items);
+      bankCode = code;
+      break;
+    } catch (e) {
+      lastErr = e;
+      // A password problem is about this PDF, not this bank — report it as is.
+      if (e instanceof BankAutomationError && (e.code === "PDF_PASSWORD" || e.code === "PDF_INVALID")) throw e;
+    }
   }
-  const blobPathname = statementBlobPath({ bankCode: integration.bankCode, last4: integration.accountLastFour, statementDate: period.end, sha256: sha });
-  await archivePdf(blobPathname, pdf);
-  const active = await prisma.bankStatementRun.findFirst({
-    where: { integrationId, status: { in: [...RUN_ACTIVE] }, trigger: { not: "TEST" } },
-    select: { id: true },
+  if (!parsed) {
+    throw lastErr instanceof BankAutomationError
+      ? lastErr
+      : new BankAutomationError("PARSE_FAILED", "This PDF is not a statement layout DesGro can read yet");
+  }
+
+  let integration = preset;
+  let createdAccount = false;
+  const digits = (parsed.accountNumber ?? "").replace(/\D/g, "");
+  if (!integration) {
+    if (digits.length < 4) {
+      throw new BankAutomationError("PARSE_FAILED", "The account number could not be read from this PDF");
+    }
+    const last4 = digits.slice(-4);
+    integration = await prisma.bankIntegration.findUnique({
+      where: { bankCode_accountLastFour: { bankCode, accountLastFour: last4 } },
+    });
+    if (!integration) {
+      const d = BANK_DEFAULTS[bankCode];
+      try {
+        integration = await prisma.bankIntegration.create({
+          data: {
+            bankCode,
+            bankName: d.bankName,
+            accountName: `${d.bankName} account`,
+            accountLastFour: last4,
+            emailSender: d.emailSender,
+            emailSubjectPattern: d.emailSubjectPattern,
+            passwordSecretRef: `env:${d.passwordEnvVar}`,
+            automationEnabled: false,
+            createdById: userId,
+            updatedById: userId,
+          },
+        });
+        createdAccount = true;
+        await logEvent({ integrationId: integration.id, step: "upload", message: "Account added from an uploaded statement", userId });
+      } catch (e) {
+        if (!(e instanceof Prisma.PrismaClientKnownRequestError && e.code === "P2002")) throw e;
+        integration = await prisma.bankIntegration.findUniqueOrThrow({
+          where: { bankCode_accountLastFour: { bankCode, accountLastFour: last4 } },
+        });
+      }
+    }
+  }
+  const account = `${integration.bankName} ${maskedAccount(integration.accountLastFour)}`;
+  const base = { integrationId: integration.id, account, createdAccount, periodStart: parsed.periodStart, periodEnd: parsed.periodEnd };
+
+  // Level 2 guard: this exact file was imported before.
+  const sha = sha256Hex(pdf);
+  const dup = await prisma.bankStatement.findFirst({
+    where: { integrationId: integration.id, fileSha256: sha },
+    select: { id: true, status: true, transactionCount: true },
   });
-  const runId =
-    active?.id ??
-    (await prisma.bankStatementRun.create({
-      data: { integrationId, trigger: "MANUAL", status: "QUEUED", phase: "Queued", discoveredAt: new Date(), initiatedById: userId },
-    })).id;
-  const stmt = await prisma.bankStatement.create({
-    data: {
-      integrationId,
-      runId,
-      source: "upload",
-      status: "PDF_DOWNLOADED",
-      fileSha256: sha,
-      fileSize: pdf.byteLength,
-      fileName: statementFileName(integration.bankCode, integration.accountLastFour, period.end),
-      blobPathname,
-      periodStart: period.start ? toPrismaDate(period.start) : null,
-      periodEnd: period.end ? toPrismaDate(period.end) : null,
-      createdById: userId,
-    },
-  });
-  await logEvent({ integrationId, runId, statementId: stmt.id, step: "upload", message: "Statement PDF uploaded by hand", userId });
-  return { duplicate: false as const, statementId: stmt.id, runId };
+  if (dup) {
+    return { ...base, statementId: dup.id, duplicate: true, status: dup.status, transactionCount: dup.transactionCount ?? 0, inserted: 0, duplicates: dup.transactionCount ?? 0, errors: [], lastError: null };
+  }
+
+  let blobPathname: string | null = null;
+  if (integration.pdfArchiveEnabled && isArchiveConfigured()) {
+    blobPathname = statementBlobPath({ bankCode, last4: integration.accountLastFour, statementDate: parsed.periodEnd, sha256: sha });
+    await archivePdf(blobPathname, pdf);
+  }
+  let stmt;
+  try {
+    stmt = await prisma.bankStatement.create({
+      data: {
+        integrationId: integration.id,
+        source: "upload",
+        status: "PDF_DOWNLOADED",
+        fileSha256: sha,
+        fileSize: pdf.byteLength,
+        fileName: statementFileName(bankCode, integration.accountLastFour, parsed.periodEnd),
+        blobPathname,
+        periodStart: parsed.periodStart ? toPrismaDate(parsed.periodStart) : null,
+        periodEnd: parsed.periodEnd ? toPrismaDate(parsed.periodEnd) : null,
+        createdById: userId,
+      },
+    });
+  } catch (e) {
+    if (e instanceof Prisma.PrismaClientKnownRequestError && e.code === "P2002") {
+      return importUploadedPdf(pdf, userId, { integrationId: integration.id, password: opts.password });
+    }
+    throw e;
+  }
+  await logEvent({ integrationId: integration.id, statementId: stmt.id, step: "upload", message: "Statement PDF uploaded by hand", userId });
+
+  const full = await prisma.bankIntegration.findUniqueOrThrow({ where: { id: integration.id }, include: { mailbox: true } });
+  await processStatement(stmt.id, full, null, { pdf, password: opts.password ?? null });
+
+  const done = await prisma.bankStatement.findUniqueOrThrow({ where: { id: stmt.id } });
+  const v = (done.validation ?? {}) as { errors?: string[] };
+  return {
+    ...base,
+    statementId: done.id,
+    duplicate: false,
+    status: done.status,
+    periodStart: done.periodStart ? fromPrismaDate(done.periodStart) : base.periodStart,
+    periodEnd: done.periodEnd ? fromPrismaDate(done.periodEnd) : base.periodEnd,
+    transactionCount: done.transactionCount ?? 0,
+    inserted: done.insertedCount ?? 0,
+    duplicates: done.duplicateCount ?? 0,
+    errors: v.errors ?? [],
+    lastError: done.lastError,
+  };
 }
 
 // ─── Test mode ──────────────────────────────────────────────────────────────
