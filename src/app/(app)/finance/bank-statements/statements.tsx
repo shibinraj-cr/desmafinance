@@ -52,9 +52,15 @@ export function StatementsView({
       fd.set("integrationId", integrationId);
       fd.set("file", file);
       const res = await fetch("/api/finance/bank-statements/upload", { method: "POST", body: fd });
-      const data = (await res.json().catch(() => ({}))) as { message?: string };
+      const data = (await res.json().catch(() => ({}))) as { message?: string; duplicate?: boolean; status?: string; inserted?: number; duplicates?: number };
       if (!res.ok) throw new Error(data.message ?? "Upload failed");
-      setMsg({ tone: "ok", text: "PDF uploaded — it is being parsed and validated now." });
+      setMsg(
+        data.duplicate
+          ? { tone: "ok", text: "This PDF was already imported — nothing added." }
+          : data.status === "REVIEW_REQUIRED"
+            ? { tone: "error", text: "Imported for review — validation found a problem. Open Review on the statement." }
+            : { tone: "ok", text: `Imported — ${data.inserted ?? 0} new transaction(s), ${data.duplicates ?? 0} already present.` },
+      );
       router.refresh();
     } catch (e) {
       setMsg({ tone: "error", text: e instanceof Error ? e.message : "Upload failed" });

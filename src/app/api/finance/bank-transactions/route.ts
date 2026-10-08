@@ -4,7 +4,7 @@ import { prisma } from "@/lib/prisma";
 import { withApiHandler } from "@/lib/api";
 import { recordAudit } from "@/lib/audit";
 import { requireBank } from "@/lib/bank/access";
-import { TXN_SELECT, listTransactions, parseTxnFilters, serializeTxn, txnWhere } from "@/lib/bank/queries";
+import { CONSOLIDATED_ORDER, TXN_SELECT, listTransactions, parseTxnFilters, serializeTxn, txnWhere } from "@/lib/bank/queries";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 60;
@@ -31,7 +31,7 @@ export const GET = withApiHandler(async (req: Request) => {
     await prisma.bankTransaction.findMany({
       where: txnWhere(filters),
       select: TXN_SELECT,
-      orderBy: [{ txnDate: "asc" }, { rowIndex: "asc" }],
+      orderBy: CONSOLIDATED_ORDER,
       take: EXPORT_CAP,
     })
   ).map(serializeTxn);

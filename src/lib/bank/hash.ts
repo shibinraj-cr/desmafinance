@@ -10,7 +10,8 @@ import { toDecimalString, type Paise } from "./money";
  * same-day payments of the same amount to the same payee still leave
  * different balances behind, so they stay two rows, while the same line read
  * again from a re-sent or overlapping statement hashes identically and is
- * skipped.
+ * skipped — including when the same day turns up in two different statements
+ * (a daily e-mail and a monthly download overlap).
  */
 export function transactionHash(t: {
   integrationId: string;
@@ -26,8 +27,11 @@ export function transactionHash(t: {
     t.integrationId,
     t.txnDate,
     t.valueDate ?? "",
-    normalizeNarration(t.description),
-    (t.referenceNumber ?? "").trim().toUpperCase(),
+    // Whitespace dropped entirely: the same narration wraps differently in a
+    // daily SmartStatement and a monthly net-banking PDF.
+    normalizeNarration(t.description).replace(/\s+/g, ""),
+    // Leading zeros dropped: one statement prints 0000612345678901, another 612345678901.
+    (t.referenceNumber ?? "").trim().toUpperCase().replace(/^0+/, ""),
     toDecimalString(t.debit),
     toDecimalString(t.credit),
     t.balance === null ? "" : toDecimalString(t.balance),

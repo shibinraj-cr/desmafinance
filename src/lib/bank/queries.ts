@@ -267,3 +267,59 @@ export function reconStatusFor(amount: number, matched: number): ReconStatus {
   if (matched <= 0) return "UNMATCHED";
   return Math.round(matched * 100) >= Math.round(amount * 100) ? "MATCHED" : "PARTIALLY_MATCHED";
 }
+
+/** Ledger order for a consolidated view: by day, then by statement, then bank row order. */
+export const CONSOLIDATED_ORDER = [
+  { txnDate: "asc" },
+  { statement: { periodStart: "asc" } },
+  { statementId: "asc" },
+  { rowIndex: "asc" },
+] satisfies Prisma.BankTransactionOrderByWithRelationInput[];
+
+export const CONSOLIDATED_CAP = 5000;
+
+/** Everything the Consolidated tab shows for one account and date range. */
+export async function consolidatedStatement(integrationId: string, from: string | null, to: string | null) {
+  const { consolidate } = await import("./consolidate");
+  const where = txnWhere({ integrationId, from: from ?? undefined, to: to ?? undefined, types: [], recon: [] });
+  const [rows, total, statements] = await Promise.all([
+    prisma.bankTransaction.findMany({ where, select: TXN_SELECT, orderBy: CONSOLIDATED_ORDER, take: CONSOLIDATED_CAP }),
+    prisma.bankTransaction.count({ where }),
+    prisma.bankStatement.findMany({
+      where: {
+        integrationId,
+        status: { in: ["PROCESSED", "NO_TRANSACTIONS"] },
+        periodStart: { not: null },
+        periodEnd: { not: null },
+        ...(from ? { periodEnd: { gte: toPrismaDate(from) } } : {}),
+        ...(to ? { periodStart: { lte: toPrismaDate(to) } } : {}),
+      },
+      select: { periodStart: true, periodEnd: true },
+    }),
+  ]);
+  const txns = rows.map(serializeTxn);
+  const paise = (n: number) => Math.round(n * 100);
+  // Gaps/breaks are judged on the full range only when every row was loaded.
+  const summary = consolidate(
+    txns.map((t) => ({ id: t.id, txnDate: t.txnDate, debit: paise(t.debit), credit: paise(t.credit), balance: t.balance === null ? null : paise(t.balance), description: t.description })),
+    statements.map((s) => ({ start: fromPrismaDate(s.periodStart!), end: fromPrismaDate(s.periodEnd!) })),
+    { from, to },
+  );
+  const sums = total > txns.length ? await prisma.bankTransaction.aggregate({ where, _sum: { debitAmount: true, creditAmount: true } }) : null;
+  return {
+    rows: txns,
+    total,
+    truncated: total > txns.length,
+    statementsCount: statements.length,
+    summary: {
+      ...summary,
+      opening: summary.opening === null ? null : summary.opening / 100,
+      closing: summary.closing === null ? null : summary.closing / 100,
+      totalDebit: sums ? Number(sums._sum.debitAmount ?? 0) : summary.totalDebit / 100,
+      totalCredit: sums ? Number(sums._sum.creditAmount ?? 0) : summary.totalCredit / 100,
+      breaks: summary.breaks.map((b) => ({ ...b, expected: b.expected / 100, actual: b.actual / 100 })),
+    },
+  };
+}
+
+export type Consolidated = Awaited<ReturnType<typeof consolidatedStatement>>;

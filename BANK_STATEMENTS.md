@@ -28,6 +28,23 @@ BankStatementRun (job) ──▶ BankStatement ──▶ private Blob archive (S
               optional Google Sheet copy
 ```
 
+## Upload & consolidate (no setup needed)
+
+Bank Statements → **Consolidated** (the first tab, and the whole page before any account
+exists). Drop one or many statement PDFs — daily, monthly, any order, overlapping is fine.
+For each file DesGro reads the bank and account number off the PDF (creating the account on
+first sight, automation off), archives it, parses and validates it, and imports it through the
+same duplicate guards as the daily run. Each file reports *N new · M already present*. A
+password-protected PDF asks for its password, which is used for that upload only and never
+stored.
+
+The consolidated statement is every imported transaction for the account in date order, with
+opening balance, total credits/debits, closing balance, Excel/CSV download and print. It also
+says whether the ledger is complete: **coverage gaps** (days no uploaded statement covers) and
+**balance breaks** (a row whose balance does not follow from the previous one — transactions
+missing between two statements). The transaction hash ignores whitespace and leading zeros in
+references, so the same day read from a daily e-mail and a monthly net-banking PDF matches.
+
 ## Where things live
 
 | Concern | Code |
