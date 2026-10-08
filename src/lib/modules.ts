@@ -206,6 +206,15 @@ export const MODULES: AppModule[] = [
         group: "CONTENT",
       },
       {
+        // Campaign + brand planner with budget tracking. Page-grant gated like
+        // the Media Planner so the Marketing Admin role holds it; deciding money
+        // (approvals, the allocation grid, channel mapping) stays with Admins.
+        href: "/marketing/planner",
+        label: "Marketing Planner",
+        icon: "account_balance_wallet",
+        group: "CONTENT",
+      },
+      {
         // Channel views/uploads vs YouTube + Voxbay leads. Page-grant gated
         // like the Media Planner, so the Marketing Admin role holds it.
         href: "/marketing/youtube-insights",

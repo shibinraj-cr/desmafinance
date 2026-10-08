@@ -47,6 +47,8 @@ model User {
   mediaPlanItemsCreated   MediaPlanItem[]       @relation("MediaPlanItemCreatedBy")
   mediaPlanTasksAssigned  MediaPlanTask[]       @relation("MediaPlanTaskAssignee")
   mediaPlanTasksDone      MediaPlanTask[]       @relation("MediaPlanTaskDoneBy")
+  mktCampaignsOwned       MktCampaign[]         @relation("MktCampaignOwner")
+  mktDeliverablesOwned    MktDeliverable[]      @relation("MktDeliverableOwner")
   // Voxbay CSV uploads
   voxbayUploads           VoxbayUpload[]        @relation("VoxbayUploads")
   financeDocFolders       FinanceDocFolder[]    @relation("FinanceDocFolderCreatedBy")
@@ -223,6 +225,8 @@ model Transaction {
   collectionInstallment CollectionPlanInstallment? @relation("InstallmentTransaction")
   // Bank-statement lines reconciled against this ledger row.
   bankMatches           BankTransactionMatch[]
+  // Marketing Planner: the campaign this Marketing expense row paid for.
+  mktSpendTag           MktSpendTag?
 
   @@index([date])
   @@index([month])
@@ -914,6 +918,222 @@ model MediaPlanTask {
   @@index([itemId, status])
   // The reminder cron's drain: open tasks whose due date has arrived.
   @@index([status, dueDate])
+}
+
+// ─────────────────────────────────────────────────────────────────────────
+// Marketing & Branding Planner (/marketing/planner).
+//
+// Budget is allocated per channel per fiscal month. Actual spend is NEVER
+// entered here: it is read from the finance ledger (Expense rows under the
+// "Marketing" category), mapped to a channel through the channel's ledger
+// sub-items, and attributed to a campaign through MktSpendTag. Committed spend
+// (quotes, bookings, POs) is the only money Marketing records itself, and it
+// nets off automatically as the ledger shows it paid.
+// ─────────────────────────────────────────────────────────────────────────
+
+/// A spend channel (Meta Ads, Events & seminars, …). Admin-managed.
+model MktChannel {
+  id             String   @id @default(cuid())
+  name           String   @unique
+  sortOrder      Int      @default(0)
+  /// SubCategory names under the "Marketing" expense category whose ledger
+  /// rows count as this channel's spend. A sub-item belongs to one channel at
+  /// most — the app layer rejects a second claim.
+  ledgerSubItems String[] @default([])
+  /// LeadPulseSource ids whose CRM leads and closed-won pipelines count as this
+  /// channel's return (cost per lead / per enrollment). Empty for channels that
+  /// don't generate leads directly (agency retainer, branding).
+  leadSourceIds  String[] @default([])
+  active         Boolean  @default(true)
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  allocations MktBudgetAllocation[]
+  campaigns   MktCampaign[]
+  reallocFrom MktReallocation[]     @relation("MktReallocFrom")
+  reallocTo   MktReallocation[]     @relation("MktReallocTo")
+
+  @@index([active, sortOrder])
+}
+
+/// Planned budget for one channel in one fiscal month, whole rupees.
+model MktBudgetAllocation {
+  id          String     @id @default(cuid())
+  channelId   String
+  channel     MktChannel @relation(fields: [channelId], references: [id], onDelete: Cascade)
+  /// Fiscal year by its opening calendar year: 2026 = FY 2026-27 (Apr–Mar).
+  fy          Int
+  /// 0 = April … 11 = March.
+  monthIdx    Int
+  amount      Int
+  updatedById String?
+  createdAt   DateTime   @default(now())
+  updatedAt   DateTime   @updatedAt
+
+  @@unique([channelId, fy, monthIdx])
+  @@index([fy])
+}
+
+/// A campaign or brand workstream on the planner.
+model MktCampaign {
+  id                String      @id @default(cuid())
+  name              String
+  // 'performance' | 'brand' | 'event' | 'content' | 'partnerships'
+  type              String
+  // 'idea' | 'draft' | 'awaiting' | 'approved' | 'done' | 'cancelled'. "Live"
+  // is not stored: an approved campaign is live while today is inside its
+  // dates, so it can never be left showing Live after it ends.
+  status            String      @default("draft")
+  /// The channel budget this campaign draws from.
+  channelId         String?
+  channel           MktChannel? @relation(fields: [channelId], references: [id], onDelete: SetNull)
+  ownerId           String?
+  owner             User?       @relation("MktCampaignOwner", fields: [ownerId], references: [id], onDelete: SetNull)
+  /// Null while the campaign is only an unscheduled idea.
+  startDate         DateTime?   @db.Date
+  endDate           DateTime?   @db.Date
+  /// Total planned budget, whole rupees.
+  budget            Int         @default(0)
+  /// The CRM `Lead.campaign` value whose leads roll up to this campaign.
+  code              String?     @unique
+  brief             String?
+  audience          String?
+  services          String?
+  targetLeads       Int?
+  targetEnrollments Int?
+  submittedAt       DateTime?
+  decidedAt         DateTime?
+  decidedById       String?
+  decisionNote      String?
+  createdById       String?
+  createdAt         DateTime    @default(now())
+  updatedAt         DateTime    @updatedAt
+
+  lines        MktBudgetLine[]
+  commitments  MktCommitment[]
+  spendTags    MktSpendTag[]
+  deliverables MktDeliverable[]
+  events       MktCampaignEvent[]
+
+  @@index([status, startDate])
+  @@index([channelId])
+  @@index([startDate, endDate])
+}
+
+/// One planned line inside a campaign's budget (venue, brochures, …).
+model MktBudgetLine {
+  id         String      @id @default(cuid())
+  campaignId String
+  campaign   MktCampaign @relation(fields: [campaignId], references: [id], onDelete: Cascade)
+  seq        Int         @default(0)
+  label      String
+  vendor     String?
+  planned    Int         @default(0)
+  createdAt  DateTime    @default(now())
+  updatedAt  DateTime    @updatedAt
+
+  commitments MktCommitment[]
+  spendTags   MktSpendTag[]
+
+  @@index([campaignId, seq])
+}
+
+/// Money promised but not yet paid: an accepted quote, a booking, a PO.
+/// Never "cleared" by hand — a line's unpaid commitment is its committed total
+/// minus what the ledger shows paid against it, so paying it nets it off.
+model MktCommitment {
+  id          String         @id @default(cuid())
+  campaignId  String
+  campaign    MktCampaign    @relation(fields: [campaignId], references: [id], onDelete: Cascade)
+  lineId      String?
+  line        MktBudgetLine? @relation(fields: [lineId], references: [id], onDelete: SetNull)
+  amount      Int
+  // 'quote' | 'booking' | 'po' | 'advance'
+  kind        String         @default("quote")
+  vendor      String?
+  dueDate     DateTime?      @db.Date
+  note        String?
+  // 'open' | 'cancelled'
+  status      String         @default("open")
+  createdById String?
+  createdAt   DateTime       @default(now())
+  updatedAt   DateTime       @updatedAt
+
+  @@index([campaignId, status])
+}
+
+/// Links one finance ledger row to the campaign it paid for. Finance owns the
+/// row; this is Marketing's annotation on it. `campaignId` null = reviewed and
+/// deliberately not a campaign's spend (stays at channel level).
+model MktSpendTag {
+  id            String         @id @default(cuid())
+  transactionId String         @unique
+  transaction   Transaction    @relation(fields: [transactionId], references: [id], onDelete: Cascade)
+  campaignId    String?
+  campaign      MktCampaign?   @relation(fields: [campaignId], references: [id], onDelete: Cascade)
+  lineId        String?
+  line          MktBudgetLine? @relation(fields: [lineId], references: [id], onDelete: SetNull)
+  taggedById    String?
+  createdAt     DateTime       @default(now())
+  updatedAt     DateTime       @updatedAt
+
+  @@index([campaignId])
+}
+
+/// A checklist deliverable on a campaign, with a 9 AM IST reminder on its due day.
+model MktDeliverable {
+  id         String      @id @default(cuid())
+  campaignId String
+  campaign   MktCampaign @relation(fields: [campaignId], references: [id], onDelete: Cascade)
+  seq        Int         @default(0)
+  title      String
+  ownerId    String?
+  owner      User?       @relation("MktDeliverableOwner", fields: [ownerId], references: [id], onDelete: SetNull)
+  dueDate    DateTime?   @db.Date
+  doneAt     DateTime?
+  // The IST day (UTC-midnight date) the last due/overdue reminder went out.
+  remindedOn DateTime?   @db.Date
+  createdAt  DateTime    @default(now())
+  updatedAt  DateTime    @updatedAt
+
+  @@index([campaignId, seq])
+  @@index([doneAt, dueDate])
+}
+
+/// A request to move budget between channel-months. Only an Admin decides;
+/// approval moves the money in the allocation grid in one transaction.
+model MktReallocation {
+  id            String     @id @default(cuid())
+  fy            Int
+  fromChannelId String
+  fromChannel   MktChannel @relation("MktReallocFrom", fields: [fromChannelId], references: [id], onDelete: Cascade)
+  fromMonthIdx  Int
+  toChannelId   String
+  toChannel     MktChannel @relation("MktReallocTo", fields: [toChannelId], references: [id], onDelete: Cascade)
+  toMonthIdx    Int
+  amount        Int
+  reason        String?
+  // 'pending' | 'approved' | 'rejected'
+  status        String     @default("pending")
+  requestedById String?
+  decidedById   String?
+  decidedAt     DateTime?
+  createdAt     DateTime   @default(now())
+  updatedAt     DateTime   @updatedAt
+
+  @@index([fy, status])
+}
+
+/// Campaign activity trail: approvals, budget changes, tagged payments.
+model MktCampaignEvent {
+  id         String      @id @default(cuid())
+  campaignId String
+  campaign   MktCampaign @relation(fields: [campaignId], references: [id], onDelete: Cascade)
+  userId     String?
+  text       String
+  createdAt  DateTime    @default(now())
+
+  @@index([campaignId, createdAt])
 }
 
 // Master: parties (candidates / vendors) referenced by transactions.
