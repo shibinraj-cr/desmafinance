@@ -15,6 +15,8 @@ import {
 import { AnnouncementBand } from "@/components/AnnouncementBand";
 import { CelebrationGreeting } from "@/components/CelebrationGreeting";
 import { MeetingActionReminder } from "@/components/MeetingActionReminder";
+import { UncontactedLeadAlarm } from "@/components/UncontactedLeadAlarm";
+import { uncontactedAlarmScope } from "@/lib/crm-uncontacted-alarm";
 import { dueRemindersFor } from "@/lib/meeting-notes";
 import { todayIst } from "@/lib/lead-pulse-dates";
 import { SideNav } from "@/components/SideNav";
@@ -44,6 +46,8 @@ export default async function AppLayout({ children }: { children: React.ReactNod
   // no daily job to babysit and a corrected date of birth is right immediately.
   // Meeting action items this user owns that are due (or overdue) and not yet
   // updated, for the reminder pop-up. One indexed query; [] on any error.
+  // The viewer's Lead Pulse role decides whether the uncontacted-lead alarm is
+  // mounted at all (BDEs for their own leads, Marketing Admin for the team's).
   const today = todayIst();
   const [
     pendingCount,
@@ -55,6 +59,7 @@ export default async function AppLayout({ children }: { children: React.ReactNod
     tickerItems,
     celebrations,
     dueMeetingActions,
+    leadPulseRole,
   ] = await Promise.all([
     prisma.pendingApproval.count({ where: { status: "pending" } }).catch(() => 0),
     prisma.pendingApproval
@@ -78,7 +83,11 @@ export default async function AppLayout({ children }: { children: React.ReactNod
           : [],
     })),
     dueRemindersFor(userId, today),
+    prisma.leadPulseRole
+      .findUnique({ where: { userId }, select: { role: true, active: true } })
+      .catch(() => null),
   ]);
+  const alarmScope = uncontactedAlarmScope(perms, leadPulseRole);
 
   // Only costs a further query when the viewer is actually one of today's
   // celebrants — on an ordinary day `today` is empty and this is free.
@@ -151,6 +160,10 @@ export default async function AppLayout({ children }: { children: React.ReactNod
       ) : null}
       {/* Owner's action-item reminders: from the due date until they update it. */}
       {dueMeetingActions.length > 0 ? <MeetingActionReminder items={dueMeetingActions} today={today} /> : null}
+      {/* Leads still in New two hours after assignment: every 20 minutes until
+          they move to Follow Up. Polls on its own, so it keeps nagging on a page
+          the user never leaves. */}
+      {alarmScope ? <UncontactedLeadAlarm userId={userId} scope={alarmScope} /> : null}
     </div>
   );
 }
