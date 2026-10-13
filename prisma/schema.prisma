@@ -171,6 +171,12 @@ model User {
   wealthSetting       WealthSetting?       @relation("WealthSettingOwner")
   wealthSecretReveals WealthSecretReveal[] @relation("WealthSecretRevealActor")
 
+  // Agreements (E-Sign)
+  esignTemplatesCreated        EsignTemplate[]        @relation("EsignTemplateCreatedBy")
+  esignTemplateVersionsCreated EsignTemplateVersion[] @relation("EsignTemplateVersionCreatedBy")
+  esignRequestsCreated         EsignRequest[]         @relation("EsignRequestCreatedBy")
+  esignImportsReviewed         EsignImportRecord[]    @relation("EsignImportReviewedBy")
+
   @@index([roleId])
 }
 
@@ -2910,6 +2916,7 @@ model Lead {
   waConversations       WaConversation[]
   waBroadcastRecipients WaBroadcastRecipient[]
   taskReminders         CrmTaskReminder[]
+  esignRequests         EsignRequest[]
 
   /// When the candidate asked to stop receiving marketing WhatsApp ("STOP",
   /// "unsubscribe"). Set by the conversation mirror on an opt-out keyword and
@@ -5757,4 +5764,345 @@ model BankAutomationEvent {
   @@index([runId, createdAt])
   @@index([statementId, createdAt])
   @@index([integrationId, createdAt])
+}
+
+// ─── Agreements (E-Sign) ────────────────────────────────────────────────────
+//
+// Replaces Odoo Sign. A handful of master templates (one PDF per version plus
+// the field boxes drawn on it) are filled from the CRM at send time, so staff
+// never upload a per-client PDF again. Pure rules live in src/lib/esign/*.
+//
+// Field geometry is stored as FRACTIONS of the displayed page (0–1, top-left
+// origin, pages 1-based) — the same convention as Odoo's sign.item posX/posY/
+// width/height, so imported Odoo layouts drop straight in. Field types keep
+// Odoo's lowercase item_type names for the same reason.
+//
+// Files live in the private Blob store under `esign/`; nothing here is a
+// storage URL, only a pathname that our own routes serve after an access check.
+
+enum EsignFieldType {
+  signature
+  initial
+  text
+  textarea
+  checkbox
+  radio
+  selection
+  date
+  name
+  email
+  phone
+}
+
+enum EsignRequestStatus {
+  draft
+  sent
+  viewed
+  partially_signed
+  signed
+  declined
+  expired
+  cancelled
+}
+
+enum EsignSignerStatus {
+  waiting
+  sent
+  viewed
+  signed
+  declined
+  cancelled
+}
+
+enum EsignReviewStatus {
+  pending
+  approved
+  rejected
+  needs_fix
+}
+
+/// A master agreement (e.g. "AHPRA Agreement"). Never hard-deleted: retiring
+/// one sets `active` false, because sent agreements keep pointing at its
+/// versions.
+model EsignTemplate {
+  id                   String                 @id @default(cuid())
+  name                 String
+  /// One of TEMPLATE_CATEGORIES in src/lib/esign/templates.ts.
+  category             String
+  description          String?
+  defaultExpiryDays    Int                    @default(14)
+  defaultReminderDays  Int                    @default(3)
+  emailSubject         String?
+  emailBody            String?
+  /// Approved Meta template used to send the signing link (Phase 2).
+  whatsappTemplateName String?
+  active               Boolean                @default(true)
+  /// The template this one was cloned from, kept for provenance only.
+  clonedFromId         String?
+  /// The version new agreements are sent from. A pointer rather than an
+  /// `isCurrent` flag on the versions, so "exactly one current" holds by
+  /// construction instead of by a partial index Prisma cannot express.
+  currentVersionId     String?                @unique
+  currentVersion       EsignTemplateVersion?  @relation("EsignTemplateCurrentVersion", fields: [currentVersionId], references: [id], onDelete: SetNull)
+  versions             EsignTemplateVersion[] @relation("EsignTemplateVersions")
+  createdById          String?
+  createdBy            User?                  @relation("EsignTemplateCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
+  createdAt            DateTime               @default(now())
+  updatedAt            DateTime               @updatedAt
+
+  @@index([category])
+  @@index([active])
+}
+
+/// One PDF + field layout of a template. Immutable once an agreement has been
+/// sent from it: editing the fields of an in-use version forks a new version
+/// instead, so every sent agreement keeps exactly the layout it was sent with.
+model EsignTemplateVersion {
+  id           String               @id @default(cuid())
+  templateId   String
+  template     EsignTemplate        @relation("EsignTemplateVersions", fields: [templateId], references: [id], onDelete: Cascade)
+  version      Int
+  /// Private Blob pathname. Several versions may share one file (a fields-only
+  /// fork, or a clone), so this is not unique.
+  blobPathname String
+  fileName     String
+  fileSha256   String
+  fileSize     Int
+  numPages     Int
+  /// Per page, as displayed: [{ w, h, rotate, box: [x, y, w, h] }] in PDF
+  /// points — the crop box and rotation the burn-in step needs to turn page
+  /// fractions back into PDF coordinates.
+  pages        Json
+  notes        String?
+  fields       EsignTemplateField[]
+  requests     EsignRequest[]
+  currentOf    EsignTemplate?       @relation("EsignTemplateCurrentVersion")
+  createdById  String?
+  createdBy    User?                @relation("EsignTemplateVersionCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
+  createdAt    DateTime             @default(now())
+
+  @@unique([templateId, version])
+  @@index([blobPathname])
+}
+
+/// A box on a template page. `mergeKey`, when set, is filled from the CRM at
+/// send time and is read-only for the signer (see src/lib/esign/merge-keys.ts).
+model EsignTemplateField {
+  id        String               @id @default(cuid())
+  versionId String
+  version   EsignTemplateVersion @relation(fields: [versionId], references: [id], onDelete: Cascade)
+  /// Stable machine name, unique within the version (e.g. client_signature).
+  key       String
+  label     String?
+  type      EsignFieldType
+  /// Who fills it: "Client" or "DESMA".
+  role      String               @default("Client")
+  page      Int
+  x         Float
+  y         Float
+  w         Float
+  h         Float
+  required  Boolean              @default(true)
+  /// Choices for radio / selection fields: string[].
+  options   Json?
+  mergeKey  String?
+  fontSize  Int                  @default(11)
+  alignment String               @default("left")
+  sortOrder Int                  @default(0)
+  values    EsignFieldValue[]
+
+  @@unique([versionId, key])
+}
+
+/// One agreement sent to a client. Once `signed` it is immutable; a correction
+/// is a new request whose `supersedesId` points back here.
+model EsignRequest {
+  id                  String                @id @default(cuid())
+  reference           String
+  subject             String?
+  message             String?
+  category            String?
+  tags                String[]              @default([])
+  leadId              String?
+  lead                Lead?                 @relation(fields: [leadId], references: [id], onDelete: SetNull)
+  templateVersionId   String?
+  templateVersion     EsignTemplateVersion? @relation(fields: [templateVersionId], references: [id], onDelete: Restrict)
+  status              EsignRequestStatus    @default(draft)
+  /// Snapshot of the CRM values used at send time.
+  mergeData           Json                  @default("{}")
+  originalPathname    String?
+  originalSha256      String?
+  signedPathname      String?
+  signedSha256        String?
+  certificatePathname String?
+  expiresAt           DateTime?
+  reminderDays        Int?
+  lastReminderAt      DateTime?
+  sentAt              DateTime?
+  completedAt         DateTime?
+  cancelledReason     String?
+  /// [{ name, email }]
+  cc                  Json                  @default("[]")
+  /// "desgro" | "odoo"
+  source              String                @default("desgro")
+  odooId              Int?                  @unique
+  supersedesId        String?
+  supersedes          EsignRequest?         @relation("EsignRequestCorrection", fields: [supersedesId], references: [id], onDelete: Restrict)
+  supersededBy        EsignRequest[]        @relation("EsignRequestCorrection")
+  signers             EsignSigner[]
+  values              EsignFieldValue[]
+  events              EsignEvent[]
+  importRecord        EsignImportRecord?
+  createdById         String?
+  createdBy           User?                 @relation("EsignRequestCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
+  createdAt           DateTime              @default(now())
+  updatedAt           DateTime              @updatedAt
+
+  @@index([leadId])
+  @@index([status])
+  @@index([templateVersionId])
+  @@index([createdAt])
+  @@index([tags], type: Gin)
+}
+
+/// One signer on a request. Only hashes of the link token and OTP are stored;
+/// the raw token exists only inside the link that was sent.
+model EsignSigner {
+  id             String            @id @default(cuid())
+  requestId      String
+  request        EsignRequest      @relation(fields: [requestId], references: [id], onDelete: Cascade)
+  /// "Client" | "DESMA" | …
+  role           String            @default("Client")
+  name           String
+  email          String?
+  phone          String?
+  signOrder      Int               @default(1)
+  status         EsignSignerStatus @default(waiting)
+  tokenHash      String?           @unique
+  tokenExpiresAt DateTime?
+  otpHash        String?
+  otpExpiresAt   DateTime?
+  otpAttempts    Int               @default(0)
+  /// Set after too many wrong codes; no OTP is accepted before it passes.
+  otpLockedUntil DateTime?
+  /// "email" | "whatsapp"
+  otpChannel     String?
+  viewedAt       DateTime?
+  signedAt       DateTime?
+  declinedAt     DateTime?
+  declineReason  String?
+  ip             String?
+  userAgent      String?
+  latitude       Float?
+  longitude      Float?
+  odooItemId     Int?              @unique
+  values         EsignFieldValue[]
+  events         EsignEvent[]
+  createdAt      DateTime          @default(now())
+
+  @@index([requestId])
+}
+
+/// What a signer filled in. Geometry is copied from the template field so the
+/// value can be burned in even if it was an ad-hoc box.
+model EsignFieldValue {
+  id        String              @id @default(cuid())
+  requestId String
+  request   EsignRequest        @relation(fields: [requestId], references: [id], onDelete: Cascade)
+  signerId  String?
+  signer    EsignSigner?        @relation(fields: [signerId], references: [id], onDelete: Cascade)
+  fieldId   String?
+  field     EsignTemplateField? @relation(fields: [fieldId], references: [id], onDelete: SetNull)
+  fieldKey  String?
+  fieldType EsignFieldType?
+  page      Int?
+  x         Float?
+  y         Float?
+  w         Float?
+  h         Float?
+  /// Text value, or the Blob pathname of a signature / initial image.
+  value     String?
+  createdAt DateTime            @default(now())
+
+  @@index([requestId])
+}
+
+/// Audit trail, append-only and hash-chained per request. Both are enforced in
+/// the database (see the 20261012120000_esign_agreements migration): an UPDATE,
+/// DELETE or TRUNCATE fails, and `seq` / `createdAt` / `prevHash` / `hash` are
+/// set by the insert trigger, never by the caller. The chain is walked by
+/// `seq`, which the trigger assigns under a per-request lock, so concurrent
+/// inserts cannot interleave. `SELECT esign_event_chain_break(<requestId>)`
+/// recomputes every hash and returns the id of the first bad row (NULL = intact).
+model EsignEvent {
+  id        Int          @id @default(autoincrement())
+  requestId String
+  request   EsignRequest @relation(fields: [requestId], references: [id], onDelete: Cascade)
+  /// 1, 2, 3… within the request. The default is a placeholder: the insert
+  /// trigger always overwrites it.
+  seq       Int          @default(0)
+  signerId  String?
+  signer    EsignSigner? @relation(fields: [signerId], references: [id], onDelete: Restrict)
+  /// created | sent | reminder | opened | otp_sent | otp_verified | otp_failed |
+  /// field_saved | signed | declined | completed | expired | cancelled |
+  /// downloaded | imported | imported:<odoo action>
+  action    String
+  /// Staff email, signer name, or "system".
+  actor     String?
+  ip        String?
+  userAgent String?
+  meta      Json         @default("{}")
+  prevHash  String?
+  hash      String?
+  createdAt DateTime     @default(now())
+
+  @@unique([requestId, seq])
+}
+
+/// One zip from the Odoo Sign export (integrations/odoo-sign/).
+model EsignImportBatch {
+  id          String              @id @default(cuid())
+  fileName    String              @unique
+  recordCount Int                 @default(0)
+  fileCount   Int                 @default(0)
+  failedFiles Int                 @default(0)
+  records     EsignImportRecord[]
+  importedAt  DateTime            @default(now())
+}
+
+/// One Odoo sign request in staging. It reaches EsignRequest only when a
+/// person approves it in the review screen (Phase 5).
+model EsignImportRecord {
+  id                String            @id @default(cuid())
+  batchId           String?
+  batch             EsignImportBatch? @relation(fields: [batchId], references: [id], onDelete: SetNull)
+  odooId            Int               @unique
+  reference         String?
+  odooState         String?
+  tags              String[]          @default([])
+  signerName        String?
+  signerEmail       String?
+  signerPhone       String?
+  /// The full record.json from the export.
+  payload           Json
+  /// [{ kind, name, pathname, sha256, size, verified }]
+  files             Json              @default("[]")
+  filesVerified     Boolean           @default(false)
+  /// matched | ambiguous | unmatched | manual
+  matchStatus       String            @default("unmatched")
+  /// Suggested Lead. A plain id, not a relation: it is only a suggestion until
+  /// approval, which re-checks the lead still exists.
+  matchedLeadId     String?
+  matchCandidates   Json              @default("[]")
+  reviewStatus      EsignReviewStatus @default(pending)
+  reviewNote        String?
+  reviewedById      String?
+  reviewedBy        User?             @relation("EsignImportReviewedBy", fields: [reviewedById], references: [id], onDelete: SetNull)
+  reviewedAt        DateTime?
+  promotedRequestId String?           @unique
+  promotedRequest   EsignRequest?     @relation(fields: [promotedRequestId], references: [id], onDelete: SetNull)
+  createdAt         DateTime          @default(now())
+
+  @@index([reviewStatus, matchStatus])
+  @@index([batchId])
 }

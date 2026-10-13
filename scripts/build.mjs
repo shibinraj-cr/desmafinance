@@ -53,4 +53,5 @@ if (process.env.VERCEL_ENV === "production") {
 }
 
 run("prisma generate");
+run("node scripts/copy-pdfjs-worker.mjs");
 run("next build");
