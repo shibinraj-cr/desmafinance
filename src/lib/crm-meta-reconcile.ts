@@ -4,6 +4,13 @@
 // DB: the pure parse/normalize/classify logic lives here so it's unit-testable;
 // the route layer batches the CRM lookups and the create/re-inquiry writes.
 //
+// Why the BROWSER parses the file: Vercel rejects any function request body over
+// 4.5 MB before our code runs, and the Meta export grows by ~1,500 leads a month
+// (3.6 MB / 19k rows in July 2026). Uploading the workbook stopped working once
+// it crossed that cap. So the client parses it here, sends only the match keys
+// to /api/crm/meta-reconcile in small batches, buckets the rows itself, and
+// imports the ticked rows in chunks. No request grows with the file.
+//
 // Why raw:true matters: Excel stores phone numbers as NUMBERS and DISPLAYS them
 // in scientific notation ("9.19746E+11"). Reading with raw:false yields that
 // useless string — the digits are gone. raw:true returns the underlying integer
@@ -160,8 +167,11 @@ function looksLikeNonLeadCampaign(sheetName: string, rows: MetaLeadRow[]): boole
   return /\bhiring\b|telesales|recruit/.test(sampleCampaign);
 }
 
-/** Read a workbook buffer into normalised per-sheet rows. Never touches the DB. */
-export function parseMetaWorkbook(buf: Buffer): ParsedMetaWorkbook {
+/**
+ * Read a workbook into normalised per-sheet rows. Never touches the DB. Takes a
+ * Node Buffer (tests) or the browser's bytes from `File.arrayBuffer()`.
+ */
+export function parseMetaWorkbook(buf: Buffer | Uint8Array | ArrayBuffer): ParsedMetaWorkbook {
   const wb = XLSX.read(buf, { cellDates: true });
   const sheets: ParsedMetaSheet[] = [];
 
@@ -378,6 +388,79 @@ export function reconcileRows(
     out.missing.push(row);
   }
 
+  return out;
+}
+
+// ── Summary (what the page shows) ───────────────────────────────────────────
+
+/** Most match keys one /api/crm/meta-reconcile request may carry. */
+export const KEY_LOOKUP_BATCH = 5000;
+
+/**
+ * Most rows one /api/crm/meta-reconcile/import request carries. ~650 bytes a
+ * row in JSON, so a chunk stays well under Vercel's 4.5 MB body cap.
+ */
+export const IMPORT_BATCH = 1000;
+
+// Above this many missing rows the table gets heavy; we still show them all
+// (completeness) but warn so the user can narrow the date.
+const LARGE_MISSING_WARN = 5000;
+
+export type ReconcileCounts = Record<keyof ReconcileBuckets, number>;
+
+export type SheetReport = MetaSheetSummary & { counts: ReconcileCounts };
+
+export type ReconcileSummary = {
+  totals: ReconcileCounts & { dataRows: number };
+  sheets: SheetReport[];
+  warnings: string[];
+};
+
+function zeroCounts(): ReconcileCounts {
+  return { missing: 0, matchedInCrm: 0, withinFileDupes: 0, beforeSince: 0, noDate: 0, unmatchable: 0 };
+}
+
+/** Totals plus a campaign-by-campaign tally of the buckets, for the UI. */
+export function summarizeReconcile(parsed: ParsedMetaWorkbook, buckets: ReconcileBuckets): ReconcileSummary {
+  const bySheet = new Map<string, SheetReport>();
+  for (const s of parsed.sheets) {
+    bySheet.set(s.sheetName, {
+      sheetName: s.sheetName,
+      headers: s.headers,
+      mapping: s.mapping,
+      dataRowCount: s.dataRowCount,
+      skipped: s.skipped,
+      skipReason: s.skipReason,
+      isLikelyNonLead: s.isLikelyNonLead,
+      warnings: s.warnings,
+      counts: zeroCounts(),
+    });
+  }
+  const totals = { dataRows: parsed.sheets.reduce((a, s) => a + s.dataRowCount, 0), ...zeroCounts() };
+  for (const key of Object.keys(buckets) as (keyof ReconcileBuckets)[]) {
+    totals[key] = buckets[key].length;
+    for (const r of buckets[key]) {
+      const rep = bySheet.get(r.sheetName);
+      if (rep) rep.counts[key]++;
+    }
+  }
+
+  const warnings: string[] = [];
+  const skippedSheets = parsed.sheets.filter((s) => s.skipped);
+  if (skippedSheets.length) {
+    warnings.push(`Skipped ${skippedSheets.length} non-lead sheet(s): ${skippedSheets.map((s) => `“${s.sheetName}”`).join(", ")}.`);
+  }
+  if (totals.missing > LARGE_MISSING_WARN) {
+    warnings.push(`${totals.missing.toLocaleString("en-IN")} missing leads — the table may be slow. Consider a later date to narrow it.`);
+  }
+
+  return { totals, sheets: [...bySheet.values()], warnings };
+}
+
+/** Split a list into consecutive slices of at most `size`. */
+export function chunked<T>(items: T[], size: number): T[][] {
+  const out: T[][] = [];
+  for (let i = 0; i < items.length; i += size) out.push(items.slice(i, i + size));
   return out;
 }
 

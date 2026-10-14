@@ -10,6 +10,8 @@ import {
   reconcileRows,
   metaRowKeys,
   isReconcilable,
+  summarizeReconcile,
+  chunked,
   type MetaLeadRow,
 } from "@/lib/crm-meta-reconcile";
 
@@ -137,6 +139,14 @@ describe("parseMetaWorkbook", () => {
     expect(d.skipped).toBe(true);
     expect(d.rows).toHaveLength(0);
   });
+
+  it("reads the browser's bytes (ArrayBuffer / Uint8Array) the same as a Buffer", () => {
+    // The page parses the file client-side from File.arrayBuffer().
+    const bytes = new Uint8Array(buf);
+    const ab = bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength);
+    expect(parseMetaWorkbook(ab)).toEqual({ sheets });
+    expect(parseMetaWorkbook(bytes)).toEqual({ sheets });
+  });
 });
 
 describe("reconcileRows", () => {
@@ -207,5 +217,55 @@ describe("row helpers", () => {
     const keys = metaRowKeys(row({ emailKey: "k@k.com", phoneE164: "+91a", altPhoneE164: "+91b" }));
     expect(keys.emailKey).toBe("k@k.com");
     expect(keys.phoneKeys).toEqual(["+91a", "+91b"]);
+  });
+});
+
+describe("summarizeReconcile", () => {
+  it("totals every bucket and tallies them per sheet", () => {
+    const buf = wbBuffer({
+      A: [
+        ["Date", "Full Name", "Phone Number"],
+        ["2026-06-05T10:00:00+0000", "In CRM", 919000000001],
+        ["2026-06-06T10:00:00+0000", "Missing", 919000000002],
+        ["2026-06-06T11:00:00+0000", "Dupe", 919000000002],
+        ["2026-05-01T10:00:00+0000", "Too old", 919000000003],
+      ],
+      B: [
+        ["Date", "Full Name", "Email"],
+        ["", "Undated", "u@example.com"],
+        ["2026-06-07T10:00:00+0000", "No contact", ""],
+      ],
+      "Daily Report": [["Date:25/08/2025", "No of Leads"], ["Open Group", 8]],
+    });
+    const parsed = parseMetaWorkbook(buf);
+    const rows = parsed.sheets.flatMap((s) => s.rows);
+    const buckets = reconcileRows(rows, parseSinceDate("2026-06-01")!, {
+      emailKeys: new Set(),
+      phoneKeys: new Set(["+919000000001"]),
+    });
+    const { totals, sheets, warnings } = summarizeReconcile(parsed, buckets);
+
+    expect(totals).toEqual({
+      dataRows: 7,
+      missing: 1,
+      matchedInCrm: 1,
+      withinFileDupes: 1,
+      beforeSince: 1,
+      noDate: 1,
+      unmatchable: 1,
+    });
+    const a = sheets.find((s) => s.sheetName === "A")!;
+    expect(a.counts).toEqual({ missing: 1, matchedInCrm: 1, withinFileDupes: 1, beforeSince: 1, noDate: 0, unmatchable: 0 });
+    expect(sheets.find((s) => s.sheetName === "B")!.counts).toMatchObject({ noDate: 1, unmatchable: 1 });
+    // The summary carries no row data — that stays in buckets.missing.
+    expect(a).not.toHaveProperty("rows");
+    expect(warnings).toEqual(["Skipped 1 non-lead sheet(s): “Daily Report”."]);
+  });
+});
+
+describe("chunked", () => {
+  it("splits into slices of at most n, keeping order", () => {
+    expect(chunked([1, 2, 3, 4, 5], 2)).toEqual([[1, 2], [3, 4], [5]]);
+    expect(chunked([], 3)).toEqual([]);
   });
 });
