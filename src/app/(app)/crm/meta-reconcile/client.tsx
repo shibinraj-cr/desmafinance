@@ -2,41 +2,11 @@
 
 import { useMemo, useRef, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
-import type { MetaLeadRow } from "@/lib/crm-meta-reconcile";
+import type { MetaLeadRow, ReconcileSummary } from "@/lib/crm-meta-reconcile";
 
-type SheetReport = {
-  sheetName: string;
-  mapping: Record<string, string>;
-  dataRowCount: number;
-  skipped: boolean;
-  skipReason?: string;
-  isLikelyNonLead: boolean;
-  warnings: string[];
-  counts: {
-    missing: number;
-    matchedInCrm: number;
-    withinFileDupes: number;
-    beforeSince: number;
-    noDate: number;
-    unmatchable: number;
-  };
-};
-
-type ReconcileResponse = {
-  sinceDate: string;
-  fileName: string | null;
-  totals: {
-    dataRows: number;
-    missing: number;
-    matchedInCrm: number;
-    withinFileDupes: number;
-    beforeSince: number;
-    noDate: number;
-    unmatchable: number;
-  };
-  sheets: SheetReport[];
+type ReconcileResult = ReconcileSummary & {
+  fileName: string;
   missingRows: MetaLeadRow[];
-  warnings: string[];
 };
 
 type ImportResponse = {
@@ -55,6 +25,18 @@ const fmtDate = (iso: string | null) => (iso ? iso.slice(0, 10) : "—");
 // How many missing rows to render at once (selection/import still cover them all).
 const PAGE_SIZE = 300;
 
+// The parser pulls in xlsx (~400 KB), so it loads only when someone reconciles.
+const loadReconcileLib = () => import("@/lib/crm-meta-reconcile");
+
+// Let the browser paint a progress message before a long synchronous parse.
+const nextPaint = () => new Promise<void>((resolve) => requestAnimationFrame(() => setTimeout(resolve, 0)));
+
+/** Our JSON error message, else the HTTP status (a 413 from Vercel isn't JSON). */
+async function failureMessage(res: Response, fallback: string): Promise<string> {
+  const d = (await res.json().catch(() => ({}))) as { error?: string; message?: string };
+  return d.message || d.error || `${fallback} (HTTP ${res.status}).`;
+}
+
 export function MetaReconcileClient() {
   const router = useRouter();
   const fileRef = useRef<HTMLInputElement | null>(null);
@@ -62,7 +44,8 @@ export function MetaReconcileClient() {
   const [file, setFile] = useState<File | null>(null);
   const [sinceDate, setSinceDate] = useState("");
   const [reconciling, startReconcile] = useTransition();
-  const [result, setResult] = useState<ReconcileResponse | null>(null);
+  const [progress, setProgress] = useState<string | null>(null);
+  const [result, setResult] = useState<ReconcileResult | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   // Per-sheet include toggles + explicitly-deselected rows.
@@ -71,35 +54,87 @@ export function MetaReconcileClient() {
   const [visibleCount, setVisibleCount] = useState(PAGE_SIZE);
 
   const [importing, startImport] = useTransition();
+  const [importProgress, setImportProgress] = useState<string | null>(null);
   const [importResult, setImportResult] = useState<ImportResponse | null>(null);
   const [importError, setImportError] = useState<string | null>(null);
 
+  // The file is parsed HERE, not uploaded — see src/lib/crm-meta-reconcile.ts.
+  // Only the match keys go to the server, in batches, to ask which are in the CRM.
   function runReconcile() {
     if (!file || !sinceDate) return;
     setError(null);
     setResult(null);
     setImportResult(null);
     setImportError(null);
-    const fd = new FormData();
-    fd.append("file", file);
-    fd.append("sinceDate", sinceDate);
     startReconcile(async () => {
-      const res = await fetch("/api/crm/meta-reconcile", { method: "POST", body: fd });
-      if (!res.ok) {
-        const d = (await res.json().catch(() => ({}))) as { error?: string; message?: string };
-        setError(d.message || d.error || "Reconciliation failed.");
-        return;
+      try {
+        const lib = await loadReconcileLib();
+        const sinceStart = lib.parseSinceDate(sinceDate);
+        if (!sinceStart) {
+          setError("Pick a valid reconciliation date.");
+          return;
+        }
+
+        setProgress("Reading the file…");
+        await nextPaint();
+        let parsed;
+        try {
+          parsed = lib.parseMetaWorkbook(await file.arrayBuffer());
+        } catch {
+          setError("Could not read the spreadsheet. Upload the original .xlsx (not a CSV re-export).");
+          return;
+        }
+        const allRows = parsed.sheets.filter((s) => !s.skipped).flatMap((s) => s.rows);
+        if (allRows.length === 0) {
+          setError("No lead rows found in any sheet. Check the file has Name / Phone / Email columns.");
+          return;
+        }
+
+        const { emailKeys, phoneKeys } = lib.collectLookupKeys(allRows, sinceStart);
+        const keys = [
+          ...emailKeys.map((key) => ({ kind: "email" as const, key })),
+          ...phoneKeys.map((key) => ({ kind: "phone" as const, key })),
+        ];
+        const batches = lib.chunked(keys, lib.KEY_LOOKUP_BATCH);
+        const existing = { emailKeys: new Set<string>(), phoneKeys: new Set<string>() };
+        for (let i = 0; i < batches.length; i++) {
+          setProgress(
+            `Checking ${fmtNum(keys.length)} phone numbers and emails against the CRM` +
+              (batches.length > 1 ? ` (batch ${i + 1} of ${batches.length})…` : "…"),
+          );
+          const res = await fetch("/api/crm/meta-reconcile", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              emailKeys: batches[i].filter((k) => k.kind === "email").map((k) => k.key),
+              phoneKeys: batches[i].filter((k) => k.kind === "phone").map((k) => k.key),
+            }),
+          });
+          if (!res.ok) {
+            setError(await failureMessage(res, "Reconciliation failed"));
+            return;
+          }
+          const found = (await res.json()) as { emailKeys: string[]; phoneKeys: string[] };
+          for (const k of found.emailKeys) existing.emailKeys.add(k);
+          for (const k of found.phoneKeys) existing.phoneKeys.add(k);
+        }
+
+        const buckets = lib.reconcileRows(allRows, sinceStart, existing);
+        const summary = lib.summarizeReconcile(parsed, buckets);
+        setResult({ ...summary, fileName: file.name, missingRows: buckets.missing });
+        // Default: include every lead sheet that has missing rows, except ones that
+        // look like non-lead campaigns (e.g. Hiring) — the user can re-tick those.
+        const included = new Set(
+          summary.sheets.filter((s) => !s.skipped && !s.isLikelyNonLead && s.counts.missing > 0).map((s) => s.sheetName),
+        );
+        setIncludedSheets(included);
+        setDeselected(new Set());
+        setVisibleCount(PAGE_SIZE);
+      } catch {
+        setError("Reconciliation failed — check your connection and try again.");
+      } finally {
+        setProgress(null);
       }
-      const data = (await res.json()) as ReconcileResponse;
-      setResult(data);
-      // Default: include every lead sheet that has missing rows, except ones that
-      // look like non-lead campaigns (e.g. Hiring) — the user can re-tick those.
-      const included = new Set(
-        data.sheets.filter((s) => !s.skipped && !s.isLikelyNonLead && s.counts.missing > 0).map((s) => s.sheetName),
-      );
-      setIncludedSheets(included);
-      setDeselected(new Set());
-      setVisibleCount(PAGE_SIZE);
     });
   }
 
@@ -141,24 +176,59 @@ export function MetaReconcileClient() {
     });
   }
 
+  // Sent in parts so a big selection can't hit the body cap either. Each part is
+  // its own import batch; the server folds any row already in the CRM into a
+  // re-inquiry, so a retry after a partial failure never duplicates a lead.
   function runImport() {
-    if (selectedRows.length === 0) return;
+    if (selectedRows.length === 0 || !result) return;
     setImportError(null);
     setImportResult(null);
+    const fileName = result.fileName;
     startImport(async () => {
-      const res = await fetch("/api/crm/meta-reconcile/import", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ fileName: result?.fileName ?? null, rows: selectedRows }),
-      });
-      if (!res.ok) {
-        const d = (await res.json().catch(() => ({}))) as { error?: string; message?: string };
-        setImportError(d.message || d.error || "Import failed.");
-        return;
+      const total: ImportResponse = { totalRows: 0, insertedRows: 0, reInquiryRows: 0, revivedRows: 0, errorRows: 0, errors: [] };
+      try {
+        const lib = await loadReconcileLib();
+        const parts = lib.chunked(selectedRows, lib.IMPORT_BATCH);
+        for (let i = 0; i < parts.length; i++) {
+          if (parts.length > 1) setImportProgress(`Importing part ${i + 1} of ${parts.length}…`);
+          const res = await fetch("/api/crm/meta-reconcile/import", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              fileName: parts.length > 1 ? `${fileName} (part ${i + 1} of ${parts.length})` : fileName,
+              rows: parts[i],
+            }),
+          });
+          if (!res.ok) {
+            const msg = await failureMessage(res, "Import failed");
+            setImportError(
+              i === 0
+                ? msg
+                : `${msg} ${i === 1 ? "Part 1" : `Parts 1–${i}`} of ${parts.length} were imported. Run Reconcile again to see what is still missing.`,
+            );
+            break;
+          }
+          const d = (await res.json()) as ImportResponse;
+          total.totalRows += d.totalRows;
+          total.insertedRows += d.insertedRows;
+          total.reInquiryRows += d.reInquiryRows;
+          total.revivedRows += d.revivedRows;
+          total.errorRows += d.errorRows;
+          total.errors.push(...d.errors);
+        }
+      } catch {
+        setImportError(
+          total.totalRows
+            ? "Import stopped part-way — check your connection, then run Reconcile again to see what is still missing."
+            : "Import failed — check your connection and try again.",
+        );
+      } finally {
+        setImportProgress(null);
       }
-      const data = (await res.json()) as ImportResponse;
-      setImportResult(data);
-      router.refresh();
+      if (total.totalRows > 0) {
+        setImportResult(total);
+        router.refresh();
+      }
     });
   }
 
@@ -228,6 +298,7 @@ export function MetaReconcileClient() {
           )}
         </div>
 
+        {reconciling && progress && <p className="mt-md text-body-sm text-on-surface-variant">{progress}</p>}
         {error && <div className="mt-md rounded-lg border border-error bg-error-container/30 px-md py-sm text-body-sm text-error">{error}</div>}
       </div>
 
@@ -333,7 +404,7 @@ export function MetaReconcileClient() {
                   <span className="material-symbols-outlined" style={{ fontSize: 18 }}>
                     person_add
                   </span>
-                  {importing ? "Importing…" : `Import ${fmtNum(selectedRows.length)} selected`}
+                  {importing ? importProgress ?? "Importing…" : `Import ${fmtNum(selectedRows.length)} selected`}
                 </button>
               </div>
             </div>
