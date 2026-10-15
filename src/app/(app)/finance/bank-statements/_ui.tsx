@@ -2,6 +2,7 @@
 
 import Link from "next/link";
 import { usePathname, useSearchParams } from "next/navigation";
+import { TABS, type TabKey } from "./tabs";
 
 export { inputCls, primaryBtn, secondaryBtn, api, Modal } from "../documents/_ui";
 
@@ -78,16 +79,6 @@ export function StatusChip({ status, title }: { status: string; title?: string }
     </span>
   );
 }
-
-export const TABS = [
-  { key: "consolidated", label: "Consolidated", icon: "summarize" },
-  { key: "transactions", label: "Transactions", icon: "receipt" },
-  { key: "statements", label: "Statements", icon: "description" },
-  { key: "automation", label: "Automation", icon: "autorenew" },
-  { key: "reconciliation", label: "Reconciliation", icon: "fact_check" },
-  { key: "audit", label: "Audit Log", icon: "history" },
-] as const;
-export type TabKey = (typeof TABS)[number]["key"];
 
 /** Tab strip; keeps the selected account, drops the other tab's filters. */
 export function BankTabs({ active }: { active: TabKey }) {

@@ -16,7 +16,8 @@ import {
   serializeStatement,
 } from "@/lib/bank/queries";
 import { automationStatus } from "@/lib/bank/status";
-import { BankTabs, TABS, type TabKey } from "./_ui";
+import { BankTabs } from "./_ui";
+import { TABS, type TabKey } from "./tabs";
 import { AccountPicker, SetupIntegration } from "./setup";
 import { TransactionsView } from "./transactions";
 import { StatementsView } from "./statements";
