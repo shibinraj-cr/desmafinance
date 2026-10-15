@@ -397,6 +397,13 @@ export const MODULES: AppModule[] = [
         adminOnly: true,
       },
       {
+        href: "/operations/agreements/templates",
+        label: "Agreement Templates",
+        icon: "draw",
+        group: "SETUP",
+        adminOnly: true,
+      },
+      {
         href: "/operations/settings",
         label: "Settings",
         icon: "tune",

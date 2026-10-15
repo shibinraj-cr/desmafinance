@@ -16,3 +16,6 @@ tsconfig.tsbuildinfo
 .vercel
 prisma/*.db
 prisma/*.db-journal
+
+# pdf.js worker, copied from node_modules at build/dev start (scripts/copy-pdfjs-worker.mjs)
+/public/pdfjs/
