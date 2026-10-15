@@ -28,7 +28,8 @@ import type { Prisma } from "@prisma/client";
 import { prisma } from "../prisma";
 import { logger } from "../logger";
 import { getWaProvider } from "./registry";
-import { isBlobConfigured, uploadProof } from "../ops-blob";
+import { isBlobConfigured } from "../ops-blob";
+import { storeWaMedia } from "./media-store";
 
 /** Stop well inside the platform's ceiling; the caller runs it again. */
 const TIME_BUDGET_MS = 45_000;
@@ -42,6 +43,9 @@ const CONCURRENCY = 4;
  * runaway download cannot spend the whole budget on one row.
  */
 const MAX_BYTES = 32 * 1024 * 1024;
+
+/** Upload failures are reported by reason, a few at most, so one fault is not repeated 400 times. */
+const MAX_ERRORS = 3;
 
 export type MediaArchiveSummary = {
   considered: number;
@@ -69,7 +73,7 @@ async function archiveOne(message: {
   mediaUrl: string | null;
   mediaMime: string | null;
   fileName: string | null;
-}): Promise<"stored" | "expired" | "failed"> {
+}): Promise<"stored" | "expired" | { failed: string }> {
   let bytes: ArrayBuffer | null = null;
   let mime = message.mediaMime;
 
@@ -114,42 +118,19 @@ async function archiveOne(message: {
   }
 
   try {
-    const url = await uploadProof(
-      // Namespaced by message so two attachments can never collide, and so a
-      // stray blob can be traced back to the conversation it belongs to.
-      `wa-media/${message.id}${extensionFor(mime)}`,
-      bytes,
-      mime || "application/octet-stream",
-    );
+    const pathname = await storeWaMedia(message.id, bytes, mime);
     await prisma.waMessage.update({
       where: { id: message.id },
-      data: { mediaStoredUrl: url, mediaStoredAt: new Date(), mediaMime: mime ?? undefined },
+      data: { mediaStoredUrl: pathname, mediaStoredAt: new Date(), mediaMime: mime ?? undefined },
     });
     return "stored";
   } catch (e) {
     // NOT stamped: an upload that failed for our own reasons is worth retrying,
     // unlike a file the provider has deleted.
-    logger.warn("wa_media_archive_failed", {
-      messageId: message.id,
-      message: e instanceof Error ? e.message : String(e),
-    });
-    return "failed";
+    const reason = e instanceof Error ? e.message : String(e);
+    logger.warn("wa_media_archive_failed", { messageId: message.id, message: reason });
+    return { failed: reason };
   }
-}
-
-/** A sensible file extension, so a stored blob is recognisable when downloaded. */
-function extensionFor(mime: string | null): string {
-  const m = (mime ?? "").toLowerCase();
-  if (m.includes("ogg")) return ".ogg";
-  if (m.includes("mpeg") || m.includes("mp3")) return ".mp3";
-  if (m.includes("mp4")) return ".mp4";
-  if (m.includes("aac")) return ".aac";
-  if (m.includes("amr")) return ".amr";
-  if (m.includes("jpeg") || m.includes("jpg")) return ".jpg";
-  if (m.includes("png")) return ".png";
-  if (m.includes("webp")) return ".webp";
-  if (m.includes("pdf")) return ".pdf";
-  return "";
 }
 
 /**
@@ -198,9 +179,21 @@ export async function archivePendingMedia(opts: { limit?: number } = {}): Promis
       break;
     }
     const slice = queue.slice(i, i + CONCURRENCY);
-    const results = await Promise.all(slice.map((m) => archiveOne(m).catch(() => "failed" as const)));
+    const results = await Promise.all(
+      slice.map((m) => archiveOne(m).catch((e: unknown) => ({ failed: e instanceof Error ? e.message : String(e) }))),
+    );
     summary.considered += slice.length;
-    for (const r of results) summary[r === "stored" ? "stored" : r === "expired" ? "expired" : "failed"]++;
+    for (const r of results) {
+      if (r === "stored" || r === "expired") {
+        summary[r]++;
+        continue;
+      }
+      summary.failed++;
+      // The reason, not just the count. Every copy failed for weeks on one
+      // configuration error and the panel said only "N failed", which reads as
+      // a flaky network rather than as nothing ever being kept.
+      if (summary.errors.length < MAX_ERRORS && !summary.errors.includes(r.failed)) summary.errors.push(r.failed);
+    }
   }
 
   summary.remaining = await prisma.waMessage.count({ where: pending }).catch(() => 0);

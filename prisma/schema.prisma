@@ -3449,6 +3449,10 @@ model WaMessage {
   /// `mediaUrl` on an imported row points at Wabis's storage, which outlives our
   /// subscription to them by nothing at all. Both are borrowed. Once this is
   /// set, the attachment survives the provider it came from.
+  ///
+  /// Holds a PRIVATE blob pathname (see src/lib/wa/media-store.ts), read back
+  /// with our token — the store refuses public uploads. A value starting with
+  /// http(s) would be a public URL from before that, and is read as one.
   mediaStoredUrl String?
   /// When the copy was taken. Null with a `mediaId` present means the archiver
   /// has not reached this message yet; the sweep selects on exactly that.

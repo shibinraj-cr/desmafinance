@@ -6,6 +6,7 @@ import { getCrmAccess } from "@/lib/crm-rbac";
 import { canViewConversation } from "@/lib/wa/access";
 import { leadOwnersForPhone } from "@/lib/wa/identity";
 import { getWaProvider } from "@/lib/wa/registry";
+import { openStoredWaMedia } from "@/lib/wa/media-store";
 import type { WaMediaStream } from "@/lib/wa/provider";
 import { logger } from "@/lib/logger";
 
@@ -110,7 +111,9 @@ async function openMedia(
   // clock — and preferring it also spares a Graph round trip on every single
   // play, since a Cloud API media id must be re-exchanged each time.
   if (message.mediaStoredUrl) {
-    const stored = await openUrl(message.mediaStoredUrl, range);
+    // A private blob pathname — or, from before the store went private, a URL.
+    const stored =
+      (await openStoredWaMedia(message.mediaStoredUrl, range)) ?? (await openUrl(message.mediaStoredUrl, range));
     if (stored) return stored;
     // Falls through rather than failing: if our own copy is unreachable, the
     // provider may still have the original, and that is worth trying before
