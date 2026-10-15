@@ -91,7 +91,15 @@ export type TemplateSettingsInput = z.input<typeof TemplateSettingsSchema>;
 
 /** Where the browser uploads a template PDF; the store adds a random suffix. */
 export function templateUploadPath(fileName: string): string {
-  return `${ESIGN_TEMPLATE_BLOB_PREFIX}${safeBlobFileName(fileName.replace(/\.pdf$/i, ""))}.pdf`;
+  // safeBlobFileName keeps a leading "_" and runs of dots ("_Agreement.pdf",
+  // "v1..final.pdf"), both of which isTemplateUploadPath rightly refuses — and
+  // a refused path surfaces only as the SDK's opaque "Failed to retrieve the
+  // client token". So finish the job here: the result must always pass.
+  const stem = safeBlobFileName(fileName.replace(/\.pdf$/i, ""))
+    .replace(/\.{2,}/g, ".")
+    .replace(/^[^a-z0-9]+/, "")
+    .replace(/[.]+$/, "");
+  return `${ESIGN_TEMPLATE_BLOB_PREFIX}${stem || "template"}.pdf`;
 }
 
 /**
