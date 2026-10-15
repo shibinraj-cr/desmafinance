@@ -58,6 +58,28 @@ describe("upload paths", () => {
     expect(isTemplateUploadPath(templateUploadPath("x y.pdf"))).toBe(true);
   });
 
+  it("always builds a path the upload check accepts, whatever the file is called", () => {
+    // Real names that used to be refused (surfacing as "Failed to retrieve the client token").
+    expect(templateUploadPath("_Client Name-AHPRA_DIRECT_DESMA_INTERNATIONAL 1.pdf")).toBe(
+      "esign/templates/client-name-ahpra_direct_desma_international-1.pdf",
+    );
+    expect(templateUploadPath("Agreement v1..final.pdf")).toBe("esign/templates/agreement-v1.final.pdf");
+    expect(templateUploadPath("___.pdf")).toBe("esign/templates/template.pdf");
+
+    // Fuzz: random names from an awkward alphabet, long and short.
+    const alphabet = "aZ09 _-.()[]#&'+,;=@~!$%^नर्सé\t";
+    let seed = 42;
+    const rand = () => ((seed = (seed * 1103515245 + 12345) % 2 ** 31) / 2 ** 31);
+    for (let i = 0; i < 2000; i++) {
+      const len = 1 + Math.floor(rand() * 120);
+      let name = "";
+      for (let j = 0; j < len; j++) name += alphabet[Math.floor(rand() * alphabet.length)];
+      if (rand() < 0.7) name += rand() < 0.5 ? ".pdf" : ".PDF";
+      const p = templateUploadPath(name);
+      if (!isTemplateUploadPath(p)) throw new Error(`refused path ${JSON.stringify(p)} for ${JSON.stringify(name)}`);
+    }
+  });
+
   it("refuses anything outside the prefix, nested, or not a pdf", () => {
     expect(isTemplateUploadPath("esign/templates/a-b_c.pdf")).toBe(true);
     // The pathname Blob hands back carries a mixed-case random suffix.
