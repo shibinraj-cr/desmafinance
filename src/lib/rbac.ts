@@ -167,6 +167,12 @@ export function canSeePage(p: Permissions, href: string): boolean {
   ) {
     return true;
   }
+  // Agreement templates are setup, not day-to-day work: a role granted
+  // /operations/agreements (send and track agreements) must not inherit the
+  // template editor through the prefix rule below. Templates need their own grant.
+  if (href === "/operations/agreements/templates" || href.startsWith("/operations/agreements/templates/")) {
+    return p.pages.some((pg) => pg === "/operations/agreements/templates" || pg.startsWith("/operations/agreements/templates/"));
+  }
   // Exact match or prefix match (e.g. allowing /daily-tracker permits
   // /daily-tracker/[id]/edit too).
   return p.pages.some((pg) => href === pg || href.startsWith(pg + "/"));

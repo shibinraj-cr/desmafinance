@@ -7,6 +7,7 @@ import { recordAudit } from "@/lib/audit";
 import { serveFinanceDoc } from "@/lib/finance-docs-store";
 import { HttpError, badRequest, conflict, forbidden, notFound, unauthorized, unprocessable } from "@/lib/http-error";
 import { PdfRejectedError, inspectPdf, sha256Hex } from "@/lib/esign/pdf";
+import { AGREEMENTS_PAGE } from "@/lib/esign/requests";
 import {
   AGREEMENT_TEMPLATES_PAGE,
   MAX_TEMPLATE_PDF_BYTES,
@@ -46,8 +47,19 @@ export async function requireTemplateManager(): Promise<{ userId: string }> {
   return { userId };
 }
 
+/**
+ * Reading a template's PDF: template managers, and anyone who sends
+ * agreements (the send wizard previews the template it will fill).
+ */
+export async function requireTemplateViewer(): Promise<{ userId: string }> {
+  const { perms, userId } = await getCurrentUserAndPermissions();
+  if (!userId) throw unauthorized();
+  if (!perms || !(canSeePage(perms, AGREEMENT_TEMPLATES_PAGE) || canSeePage(perms, AGREEMENTS_PAGE))) throw forbidden();
+  return { userId };
+}
+
 /** Best-effort: a stray blob costs storage, a failed request would cost more. */
-async function deleteBlobQuietly(pathname: string): Promise<void> {
+export async function deleteBlobQuietly(pathname: string): Promise<void> {
   try {
     await del(pathname);
   } catch {
@@ -81,9 +93,12 @@ export async function ingestTemplatePdf(pathname: string): Promise<IngestedPdf> 
     throw badRequest(`That PDF is over ${MAX_TEMPLATE_PDF_BYTES / (1024 * 1024)} MB.`);
   }
 
-  const result = await get(pathname, { access: "private" });
-  if (!result?.stream) throw badRequest("The upload did not finish. Try again.");
-  const bytes = new Uint8Array(await new Response(result.stream as ReadableStream).arrayBuffer());
+  let bytes: Uint8Array;
+  try {
+    bytes = await readBlobBytes(pathname);
+  } catch {
+    throw badRequest("The upload did not finish. Try again.");
+  }
 
   try {
     const { numPages, pages } = await inspectPdf(bytes);
@@ -97,17 +112,25 @@ export async function ingestTemplatePdf(pathname: string): Promise<IngestedPdf> 
   }
 }
 
-type ServableVersion = { blobPathname: string; fileName: string; fileSize: number };
+/** A private blob's bytes. Throws when it is not there. */
+export async function readBlobBytes(pathname: string): Promise<Uint8Array> {
+  const result = await get(pathname, { access: "private" });
+  if (!result?.stream) throw notFound("That file is no longer in storage.");
+  return new Uint8Array(await new Response(result.stream as ReadableStream).arrayBuffer());
+}
+
+type ServablePdf = { blobPathname: string; fileName: string; fileSize: number };
 
 /**
- * Hand a template PDF to a signed-in caller.
+ * Hand a stored PDF (a template version, or an agreement's original) to a
+ * signed-in caller whose access the route has already checked.
  *
  * With a `Range` header (the builder loading a large file in pieces) the bytes
  * are proxied through this function a chunk at a time, so they never leave via
  * a storage URL. Without one it behaves like a Finance Documents download:
  * small files stream, larger ones get a five-minute presigned link.
  */
-export async function serveTemplatePdf(version: ServableVersion, req: Request): Promise<Response> {
+export async function servePrivatePdf(version: ServablePdf, req: Request): Promise<Response> {
   const size = version.fileSize;
   const range = parseByteRange(req.headers.get("range"), size);
   if (range === "invalid") {

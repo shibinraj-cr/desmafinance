@@ -4,7 +4,8 @@ import { TopBar } from "@/components/TopBar";
 import { prisma } from "@/lib/prisma";
 import { getCurrentUserAndPermissions } from "@/lib/permissions";
 import { getCrmAccess, canEditLead } from "@/lib/crm-rbac";
-import { WA_UI_ADMIN_ONLY } from "@/lib/rbac";
+import { WA_UI_ADMIN_ONLY, canSeePage } from "@/lib/rbac";
+import { AGREEMENTS_PAGE } from "@/lib/esign/requests";
 import { recordLeadOpenedOncePerDay } from "@/lib/crm-activity";
 import {
   leadRowInclude,
@@ -204,6 +205,7 @@ export default async function LeadDetailPage({ params }: { params: { id: string 
             canSeeWhatsApp: !WA_UI_ADMIN_ONLY || access.isAdmin,
             canCreateLeads: access.canCreateLeads,
             canUnenroll: access.canUnenroll,
+            canSendAgreements: !!perms && canSeePage(perms, AGREEMENTS_PAGE),
             userId,
           }}
         />
