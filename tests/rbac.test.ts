@@ -154,3 +154,20 @@ describe("hr-rbac", () => {
     expect(isEmployeePortalUser(null)).toBe(false);
   });
 });
+
+describe("agreement templates need their own grant", () => {
+  it("sending agreements does not unlock the template editor", () => {
+    const sender = perms({ pages: ["/operations/agreements"] });
+    expect(canSeePage(sender, "/operations/agreements")).toBe(true);
+    expect(canSeePage(sender, "/operations/agreements/new")).toBe(true);
+    expect(canSeePage(sender, "/operations/agreements/templates")).toBe(false);
+    expect(canSeePage(sender, "/operations/agreements/templates/t1/builder")).toBe(false);
+  });
+
+  it("a template grant reaches its sub-pages, and admins see everything", () => {
+    const editor = perms({ pages: ["/operations/agreements/templates"] });
+    expect(canSeePage(editor, "/operations/agreements/templates/t1/builder")).toBe(true);
+    expect(canSeePage(editor, "/operations/agreements")).toBe(false);
+    expect(canSeePage(perms({ isAdmin: true }), "/operations/agreements/templates")).toBe(true);
+  });
+});

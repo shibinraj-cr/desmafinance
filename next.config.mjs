@@ -55,6 +55,12 @@ const BANK_BROWSER_ROUTES = [
   "/api/finance/bank-statements/upload",
 ];
 
+// Routes that stamp merge values into an agreement PDF read the font from
+// public/ on disk (src/lib/esign/font.ts). public/ is served by the CDN, not
+// deployed with functions, so the file is traced into these bundles.
+const ESIGN_STAMP_ROUTES = ["/api/esign/requests"];
+const ESIGN_FONT = ["./public/fonts/esign/**"];
+
 const nextConfig = {
   reactStrictMode: true,
   poweredByHeader: false,
@@ -62,7 +68,10 @@ const nextConfig = {
     // Loaded at runtime from node_modules rather than bundled: the browser
     // binary is brotli-packed data webpack must not touch.
     serverComponentsExternalPackages: ["@sparticuz/chromium", "playwright-core"],
-    outputFileTracingIncludes: Object.fromEntries(BANK_BROWSER_ROUTES.map((r) => [r, CHROMIUM_BIN])),
+    outputFileTracingIncludes: Object.fromEntries([
+      ...BANK_BROWSER_ROUTES.map((r) => [r, CHROMIUM_BIN]),
+      ...ESIGN_STAMP_ROUTES.map((r) => [r, ESIGN_FONT]),
+    ]),
   },
   async headers() {
     return [

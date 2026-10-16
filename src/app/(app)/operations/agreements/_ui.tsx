@@ -46,7 +46,7 @@ export async function api<T = unknown>(url: string, method: string, body?: unkno
     throw new Error(
       d.message ??
         d.issues?.[0]?.message ??
-        (res.status === 403 ? "You do not have access to agreement templates." : "Something went wrong. Try again."),
+        (res.status === 403 ? "You do not have access to this." : "Something went wrong. Try again."),
     );
   }
   return data as T;

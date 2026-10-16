@@ -49,6 +49,8 @@ export type DetailAccess = {
    * numbers and Operations. See CrmAccess.canUnenroll.
    */
   canUnenroll: boolean;
+  /** Has the Agreements grant — may send this lead an agreement for e-signature. */
+  canSendAgreements: boolean;
   userId: string;
 };
 
@@ -336,12 +338,27 @@ export function LeadDetail({
             </button>
           )}
         </div>
-        {canEdit && (
+        {(canEdit || access.canSendAgreements) && (
           <div className="flex items-center gap-base">
-            <CommButton icon="mail" label="Email" onClick={() => setComm("email")} />
-            <CommButton icon="chat" label="WhatsApp" onClick={() => setComm("whatsapp")} />
-            <CommButton icon="call" label="Call" onClick={() => setComm("call")} />
-            {studyAbroad.eligible && <StudyAbroadButton leadId={lead.id} alreadySent={studyAbroad.alreadySent} />}
+            {canEdit && (
+              <>
+                <CommButton icon="mail" label="Email" onClick={() => setComm("email")} />
+                <CommButton icon="chat" label="WhatsApp" onClick={() => setComm("whatsapp")} />
+                <CommButton icon="call" label="Call" onClick={() => setComm("call")} />
+              </>
+            )}
+            {access.canSendAgreements && (
+              <Link
+                href={`/operations/agreements/new?leadId=${lead.id}`}
+                className="inline-flex items-center gap-xs h-9 px-md rounded-lg border border-outline-variant text-on-surface-variant text-label-sm font-semibold hover:bg-surface-container-low transition"
+              >
+                <span className="material-symbols-outlined" style={{ fontSize: 18 }}>
+                  contract
+                </span>
+                Send agreement
+              </Link>
+            )}
+            {canEdit && studyAbroad.eligible && <StudyAbroadButton leadId={lead.id} alreadySent={studyAbroad.alreadySent} />}
           </div>
         )}
       </div>
