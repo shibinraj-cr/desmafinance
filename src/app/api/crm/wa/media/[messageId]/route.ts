@@ -70,8 +70,9 @@ export const GET = withApiHandler(async (req: Request, { params }: { params: { m
   const stream = await openMedia(message, req.headers.get("range"));
   if (!stream) throw notFound();
 
+  const contentType = message.mediaMime || stream.mime || "application/octet-stream";
   const headers = new Headers({
-    "content-type": message.mediaMime || stream.mime || "application/octet-stream",
+    "content-type": contentType,
     // Inline so an <audio> element plays it in place; a download would defeat
     // the point of a voice note. The filename still travels for the cases a
     // browser does offer to save.
@@ -83,8 +84,16 @@ export const GET = withApiHandler(async (req: Request, { params }: { params: { m
     // The bytes are a candidate's file of unknown provenance. Without this a
     // crafted upload could be served from our origin and run as our page.
     "x-content-type-options": "nosniff",
-    "content-security-policy": "default-src 'none'; sandbox",
   });
+  // Sandboxed — EXCEPT a PDF. Chrome will not run its PDF viewer in a sandboxed
+  // document: the tab shows "This page has been blocked by Chrome"
+  // (ERR_BLOCKED_BY_CLIENT), which is exactly how candidates' CVs failed to
+  // open. Dropping it for PDFs alone is safe because of `nosniff`: a file
+  // declared application/pdf goes to the PDF viewer or nowhere, never to the
+  // HTML parser. It is then served like a hiring résumé, under the site-wide
+  // policy. Every other type keeps the sandbox, since a crafted HTML or SVG
+  // "document" is the case the sandbox exists for.
+  if (!isPdf(contentType)) headers.set("content-security-policy", "default-src 'none'; sandbox");
   if (stream.contentLength) headers.set("content-length", stream.contentLength);
   if (stream.contentRange) headers.set("content-range", stream.contentRange);
   headers.set("accept-ranges", "bytes");
@@ -165,6 +174,11 @@ async function openUrl(url: string, range: string | null): Promise<WaMediaStream
     logger.warn("wa_media_url_failed", { message: e instanceof Error ? e.message : String(e) });
     return null;
   }
+}
+
+/** The essence of a mime type, without parameters — `application/pdf; x=y` is still a PDF. */
+function isPdf(mime: string): boolean {
+  return mime.split(";")[0].trim().toLowerCase() === "application/pdf";
 }
 
 /** Keep a provider-supplied name out of the header grammar it is interpolated into. */
