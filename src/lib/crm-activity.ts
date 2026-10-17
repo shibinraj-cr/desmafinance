@@ -43,6 +43,9 @@ export const CRM_ACTIVITY_TYPES = [
   "REMARKETING_TOUCH_FAILED",
   "REMARKETING_RESPONSE",
   "REMARKETING_ENDED",
+  // Agreements (e-sign): the client finished signing, or declined.
+  "AGREEMENT_SIGNED",
+  "AGREEMENT_DECLINED",
 ] as const;
 
 export type CrmActivityType = (typeof CRM_ACTIVITY_TYPES)[number];

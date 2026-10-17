@@ -50,7 +50,8 @@ type NotifyInput = {
   signer: { id: string; role: string; name: string; email: string | null; phone: string | null };
   link: string;
   token: string;
-  actorId: string;
+  /** Staff member sending, or null for an automatic hand-off. */
+  actorId: string | null;
 };
 
 export async function notifySigner(input: NotifyInput): Promise<ChannelResult[]> {
@@ -162,4 +163,102 @@ async function sendInviteWhatsApp(input: NotifyInput): Promise<ChannelResult> {
         ? "WhatsApp Cloud API is not switched on, so WhatsApp could not be used."
         : out.detail || "WhatsApp did not accept the message.",
   };
+}
+
+/** Email a DESMA signer that it is their turn, with a link into DesGro (not a credential). */
+export async function notifyInternalSigner(input: {
+  request: { id: string; reference: string; expiresAt: Date };
+  template: { name: string };
+  signer: { name: string; email: string | null };
+  clientName: string;
+  link: string;
+}): Promise<ChannelResult[]> {
+  if (!input.signer.email) return [];
+  const base = { channel: "email" as const, to: maskEmail(input.signer.email) };
+  const cfg = await getEmailConfig().catch(() => null);
+  if (!cfg) return [{ ...base, ok: false, detail: "Email is not set up (CRM → Settings → Integrations)." }];
+  const first = input.signer.name.split(/\s+/)[0] ?? input.signer.name;
+  try {
+    await sendEmail(cfg, {
+      to: input.signer.email,
+      subject: `Please sign: ${input.template.name} for ${input.clientName}`,
+      text: [
+        `Hi ${first},`,
+        "",
+        `The ${input.template.name} for ${input.clientName} needs DESMA's part before it goes to the client.`,
+        "",
+        "Open it in DesGro, fill in DESMA's fields and sign:",
+        input.link,
+        "",
+        `The client receives their link as soon as you finish. It has to be done by ${formatLongDate(input.request.expiresAt)}.`,
+      ].join("\n"),
+    });
+    return [{ ...base, ok: true }];
+  } catch (e) {
+    return [{ ...base, ok: false, detail: friendlySmtpError(e) }];
+  }
+}
+
+/** The one-time code that opens a signing session. */
+export async function sendOtpEmail(to: string, name: string, code: string, agreementName: string): Promise<void> {
+  const cfg = await getEmailConfig().catch(() => null);
+  if (!cfg) throw new Error("Email is not set up.");
+  await sendEmail(cfg, {
+    to,
+    subject: `${code} is your DESMA signing code`,
+    text: [
+      `Dear ${name},`,
+      "",
+      `Your one-time code to open and sign your ${agreementName} is:`,
+      "",
+      code,
+      "",
+      "It works for 10 minutes. If you did not ask for it, ignore this email — nobody can sign without it.",
+      "",
+      "DESMA International",
+    ].join("\n"),
+  });
+}
+
+/** Everyone gets the signed agreement, with the certificate inside. */
+export async function sendSignedCopies(input: {
+  reference: string;
+  templateName: string;
+  recipients: Array<{ name: string; email: string }>;
+  pdf: Uint8Array;
+  verifyUrl: string;
+}): Promise<ChannelResult[]> {
+  const cfg = await getEmailConfig().catch(() => null);
+  const out: ChannelResult[] = [];
+  const seen = new Set<string>();
+  for (const r of input.recipients) {
+    const key = r.email.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    const base = { channel: "email" as const, to: maskEmail(r.email) };
+    if (!cfg) {
+      out.push({ ...base, ok: false, detail: "Email is not set up." });
+      continue;
+    }
+    try {
+      await sendEmail(cfg, {
+        to: r.email,
+        subject: `Signed: ${input.templateName}`,
+        text: [
+          `Dear ${r.name || "Sir/Madam"},`,
+          "",
+          `The ${input.templateName} has been signed by everyone. The signed copy is attached; its last page is the certificate of completion.`,
+          "",
+          `Anyone can confirm the file is genuine and unchanged at: ${input.verifyUrl}`,
+          "",
+          "DESMA International",
+        ].join("\n"),
+        attachments: [{ filename: `${input.reference.replace(/[\\/:*?"<>|]+/g, "-")}.pdf`, content: Buffer.from(input.pdf), contentType: "application/pdf" }],
+      });
+      out.push({ ...base, ok: true });
+    } catch (e) {
+      out.push({ ...base, ok: false, detail: friendlySmtpError(e) });
+    }
+  }
+  return out;
 }

@@ -1,7 +1,7 @@
 import Link from "next/link";
 import { redirect } from "next/navigation";
 import { prisma } from "@/lib/prisma";
-import { getCurrentUserPermissions } from "@/lib/permissions";
+import { getCurrentUserAndPermissions } from "@/lib/permissions";
 import { canSeePage } from "@/lib/rbac";
 import { TopBar } from "@/components/TopBar";
 import { AGREEMENTS_PAGE } from "@/lib/esign/requests";
@@ -11,8 +11,8 @@ import { AgreementsList, type AgreementRow } from "./list-client";
 export const dynamic = "force-dynamic";
 
 export default async function AgreementsPage() {
-  const perms = await getCurrentUserPermissions();
-  if (!perms) redirect("/login");
+  const { userId, perms } = await getCurrentUserAndPermissions();
+  if (!userId || !perms) redirect("/login");
   if (!canSeePage(perms, AGREEMENTS_PAGE)) {
     return (
       <>
@@ -24,7 +24,7 @@ export default async function AgreementsPage() {
     );
   }
 
-  const [requests, sendingEnabled] = await Promise.all([
+  const [requests, sendingEnabled, mine] = await Promise.all([
     prisma.esignRequest.findMany({
       orderBy: { createdAt: "desc" },
       take: 300,
@@ -41,6 +41,15 @@ export default async function AgreementsPage() {
       },
     }),
     isSendingEnabled(),
+    // Agreements waiting for THIS user's signature (DESMA staff sign in DesGro).
+    prisma.esignRequest.findMany({
+      where: {
+        status: { in: ["sent", "viewed", "partially_signed"] },
+        signers: { some: { userId, status: { in: ["sent", "viewed"] } } },
+      },
+      orderBy: { sentAt: "asc" },
+      select: { id: true, reference: true, expiresAt: true },
+    }),
   ]);
 
   const rows: AgreementRow[] = requests.map((r) => ({
@@ -69,7 +78,12 @@ export default async function AgreementsPage() {
         }
       />
       <div className="p-margin">
-        <AgreementsList rows={rows} sendingEnabled={sendingEnabled} isAdmin={perms.isAdmin} />
+        <AgreementsList
+          rows={rows}
+          sendingEnabled={sendingEnabled}
+          isAdmin={perms.isAdmin}
+          waitingForMe={mine.map((m) => ({ id: m.id, reference: m.reference, expiresAt: m.expiresAt?.toISOString() ?? null }))}
+        />
       </div>
     </>
   );

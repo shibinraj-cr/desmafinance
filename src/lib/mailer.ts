@@ -143,7 +143,13 @@ export type SendResult = { messageId: string };
 /** Send one email. Throws on failure (caller decides how to handle/record). */
 export async function sendEmail(
   cfg: EmailConfig,
-  msg: { to: string; subject: string; text: string },
+  msg: {
+    to: string;
+    subject: string;
+    text: string;
+    /** Optional files, e.g. a signed agreement PDF. */
+    attachments?: Array<{ filename: string; content: Buffer; contentType?: string }>;
+  },
 ): Promise<SendResult> {
   const transport = await getTransport(cfg);
   const info = await transport.sendMail({
@@ -153,6 +159,7 @@ export async function sendEmail(
     text: msg.text,
     html: textToHtml(msg.text),
     ...(cfg.replyTo ? { replyTo: cfg.replyTo } : {}),
+    ...(msg.attachments?.length ? { attachments: msg.attachments } : {}),
   });
   return { messageId: info.messageId };
 }

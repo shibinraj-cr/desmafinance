@@ -5,7 +5,7 @@ import { useState } from "react";
 import { useRouter } from "next/navigation";
 import { StatusBadge } from "@/components/esign/StatusBadge";
 import { MERGE_KEYS } from "@/lib/esign/merge-keys";
-import { activeSigners, isOpenStatus } from "@/lib/esign/requests";
+import { EVENT_LABELS, activeSigners, isOpenStatus } from "@/lib/esign/requests";
 import { Field, Icon, Modal, api, formatDate, formatDateTime, inputCls, primaryBtn, secondaryBtn, taCls } from "../_ui";
 
 type SignerDTO = {
@@ -19,6 +19,8 @@ type SignerDTO = {
   hasLink: boolean;
   viewedAt: string | null;
   signedAt: string | null;
+  declineReason: string | null;
+  inApp: boolean;
 };
 type EventDTO = { id: number; seq: number; action: string; actor: string | null; signerId: string | null; meta: Record<string, unknown>; createdAt: string };
 
@@ -30,6 +32,10 @@ export type AgreementDetailDTO = {
   lead: { id: string; name: string } | null;
   template: { id: string; name: string; version: number } | null;
   hasPdf: boolean;
+  hasCurrent: boolean;
+  hasSigned: boolean;
+  signedSha256: string | null;
+  canSignNow: boolean;
   originalSha256: string | null;
   createdBy: string | null;
   createdAt: string;
@@ -45,21 +51,12 @@ export type AgreementDetailDTO = {
   sendingEnabled: boolean;
 };
 
-const ACTION_LABELS: Record<string, string> = {
-  created: "Created",
-  sent: "Sent for signature",
-  notified: "Link delivered",
-  resent: "New link sent",
-  contact_changed: "Contact details changed",
-  expiry_extended: "Expiry extended",
-  cancelled: "Cancelled",
-};
 
 type ChannelResult = { channel: string; ok: boolean; to: string | null; detail?: string };
 
 const SIGNER_STATUS: Record<string, string> = {
   waiting: "Waiting for their turn",
-  sent: "Link sent",
+  sent: "Their turn — notified",
   viewed: "Opened",
   signed: "Signed",
   declined: "Declined",
@@ -112,6 +109,21 @@ export function AgreementDetail({ a }: { a: AgreementDetailDTO }) {
             <Icon name="edit" /> Continue
           </Link>
         )}
+        {a.canSignNow && (
+          <Link href={`/operations/agreements/${a.id}/sign`} className={primaryBtn}>
+            <Icon name="draw" /> Sign now
+          </Link>
+        )}
+        {a.hasSigned && (
+          <a href={`/api/esign/requests/${a.id}/file?kind=signed`} target="_blank" rel="noreferrer" className={primaryBtn}>
+            <Icon name="verified" /> Signed PDF
+          </a>
+        )}
+        {a.hasCurrent && (
+          <a href={`/api/esign/requests/${a.id}/file?kind=current`} target="_blank" rel="noreferrer" className={secondaryBtn}>
+            <Icon name="picture_as_pdf" /> Current copy
+          </a>
+        )}
         {a.hasPdf && (
           <a href={`/api/esign/requests/${a.id}/file`} target="_blank" rel="noreferrer" className={secondaryBtn}>
             <Icon name="picture_as_pdf" /> PDF as sent
@@ -158,6 +170,13 @@ export function AgreementDetail({ a }: { a: AgreementDetailDTO }) {
           <Row label="Link works until">{a.expiresAt && a.status !== "draft" ? formatDateTime(a.expiresAt) : "—"}</Row>
           <Row label="Reminders">{a.reminderDays ? `Every ${a.reminderDays} days` : "Off"}</Row>
           {a.cc.length > 0 && <Row label="Signed copy also to">{a.cc.map((c) => c.email).join(", ")}</Row>}
+          {a.signedSha256 && (
+            <Row label="Signed fingerprint">
+              <span className="font-mono text-caption break-all" title="SHA-256 of the signed PDF; checkable on the public verify page">
+                {a.signedSha256}
+              </span>
+            </Row>
+          )}
           {a.originalSha256 && (
             <Row label="PDF fingerprint">
               <span className="font-mono text-caption break-all" title="SHA-256 of the PDF as sent">
@@ -205,6 +224,8 @@ export function AgreementDetail({ a }: { a: AgreementDetailDTO }) {
                   <td className="px-md py-sm">
                     {SIGNER_STATUS[s.status] ?? s.status}
                     {s.signedAt && <div className="text-caption text-on-surface-variant">{formatDateTime(s.signedAt)}</div>}
+                    {s.declineReason && <div className="text-caption text-error">“{s.declineReason}”</div>}
+                    {s.inApp && s.status !== "signed" && <div className="text-caption text-on-surface-variant">Signs in DesGro</div>}
                   </td>
                   <td className="px-md py-sm">
                     <div className="flex justify-end gap-xs">
@@ -274,7 +295,7 @@ export function AgreementDetail({ a }: { a: AgreementDetailDTO }) {
           {a.events.map((e) => (
             <li key={e.id} className="px-md py-sm text-body-md flex flex-wrap gap-x-md gap-y-xs">
               <span className="text-on-surface-variant whitespace-nowrap tabular-nums">{formatDateTime(e.createdAt)}</span>
-              <span className="font-semibold">{ACTION_LABELS[e.action] ?? e.action}</span>
+              <span className="font-semibold">{EVENT_LABELS[e.action] ?? e.action}</span>
               <span className="text-on-surface-variant">{eventDetail(e, a.signers)}</span>
               {e.actor && <span className="text-caption text-on-surface-variant ml-auto">{e.actor}</span>}
             </li>
@@ -317,6 +338,20 @@ function eventDetail(e: EventDTO, signers: SignerDTO[]): string {
       return typeof e.meta.to === "string" ? `to ${formatDate(e.meta.to)}` : "";
     case "cancelled":
       return typeof e.meta.reason === "string" ? e.meta.reason : "";
+    case "opened":
+      return who ?? "";
+    case "otp_sent":
+      return `${who ?? ""}: by ${String(e.meta.channel ?? "")} to ${String(e.meta.to ?? "")}`;
+    case "otp_verified":
+      return who ?? "";
+    case "otp_failed":
+      return `${who ?? ""}${typeof e.meta.attemptsLeft === "number" ? ` — ${e.meta.attemptsLeft} tries left` : ""}`;
+    case "field_saved":
+      return `${who ?? ""}: ${((e.meta.fields as string[] | undefined) ?? []).length} boxes`;
+    case "signed":
+      return `${who ?? ""}${typeof e.meta.verifiedBy === "string" ? ` — ${e.meta.verifiedBy}` : ""}`;
+    case "declined":
+      return `${who ?? ""}${typeof e.meta.reason === "string" ? `: ${e.meta.reason}` : ""}`;
     default:
       return "";
   }

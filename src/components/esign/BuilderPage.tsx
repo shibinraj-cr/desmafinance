@@ -44,6 +44,8 @@ type PageProps = {
   onPointerDownField: (e: React.PointerEvent, uid: string, mode: "move" | "resize") => void;
   onSelect: (uid: string | null, page: number) => void;
   onDropField: (type: string, page: number, at: { x: number; y: number }) => void;
+  /** Extra elements laid over the page (the signing view's input boxes). */
+  overlay?: React.ReactNode;
 };
 
 /** One PDF page: the rendered canvas with the field boxes laid over it. */
@@ -130,6 +132,7 @@ export const BuilderPage = memo(function BuilderPage(props: PageProps) {
             {failed ? "This page could not be drawn." : "Loading page…"}
           </div>
         )}
+        {props.overlay}
         {fields.map((f) => (
           <FieldBox
             key={f.uid}

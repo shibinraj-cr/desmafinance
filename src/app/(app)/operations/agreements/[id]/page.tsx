@@ -1,18 +1,18 @@
 import Link from "next/link";
 import { notFound, redirect } from "next/navigation";
 import { prisma } from "@/lib/prisma";
-import { getCurrentUserPermissions } from "@/lib/permissions";
+import { getCurrentUserAndPermissions } from "@/lib/permissions";
 import { canSeePage } from "@/lib/rbac";
 import { TopBar } from "@/components/TopBar";
-import { AGREEMENTS_PAGE } from "@/lib/esign/requests";
+import { AGREEMENTS_PAGE, activeSigners } from "@/lib/esign/requests";
 import { isSendingEnabled } from "@/lib/esign/settings";
 import { AgreementDetail, type AgreementDetailDTO } from "./client";
 
 export const dynamic = "force-dynamic";
 
 export default async function AgreementPage({ params }: { params: { id: string } }) {
-  const perms = await getCurrentUserPermissions();
-  if (!perms) redirect("/login");
+  const { userId, perms } = await getCurrentUserAndPermissions();
+  if (!userId || !perms) redirect("/login");
   if (!canSeePage(perms, AGREEMENTS_PAGE)) redirect(AGREEMENTS_PAGE);
 
   const r = await prisma.esignRequest.findUnique({
@@ -39,6 +39,12 @@ export default async function AgreementPage({ params }: { params: { id: string }
     lead: r.lead ? { id: r.lead.id, name: r.lead.candidateName } : null,
     template: r.templateVersion ? { id: r.templateVersion.template.id, name: r.templateVersion.template.name, version: r.templateVersion.version } : null,
     hasPdf: !!r.originalPathname,
+    hasCurrent: !!r.currentPathname && !r.signedPathname,
+    hasSigned: !!r.signedPathname,
+    signedSha256: r.signedSha256,
+    canSignNow:
+      ["sent", "viewed", "partially_signed"].includes(r.status) &&
+      activeSigners(r.signers).some((s) => s.userId === userId && ["sent", "viewed"].includes(s.status)),
     originalSha256: r.originalSha256,
     createdBy: r.createdBy?.username ?? null,
     createdAt: r.createdAt.toISOString(),
@@ -59,6 +65,8 @@ export default async function AgreementPage({ params }: { params: { id: string }
       hasLink: !!s.tokenHash,
       viewedAt: s.viewedAt?.toISOString() ?? null,
       signedAt: s.signedAt?.toISOString() ?? null,
+      declineReason: s.declineReason,
+      inApp: !!s.userId,
     })),
     events: r.events.map((e) => ({
       id: e.id,

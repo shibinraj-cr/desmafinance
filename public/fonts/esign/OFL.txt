@@ -91,3 +91,8 @@ INCLUDING ANY GENERAL, SPECIAL, INDIRECT, INCIDENTAL, OR CONSEQUENTIAL
 DAMAGES, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
 FROM, OUT OF THE USE OR INABILITY TO USE THE FONT SOFTWARE OR FROM
 OTHER DEALINGS IN THE FONT SOFTWARE.
+
+Noto Sans, Dancing Script and Great Vibes are all licensed under the SIL Open Font License 1.1 (text above).
+Copyright notices:
+Copyright 2016 The Dancing Script Project Authors (https://github.com/googlefonts/DancingScript), with Reserved Font Name 'Dancing Script'.
+Copyright 2015 The Great Vibes Pro Project Authors (https://github.com/googlefonts/great-vibes)

@@ -4,7 +4,7 @@ import { getCurrentUserAndPermissions } from "@/lib/permissions";
 import { canSeePage } from "@/lib/rbac";
 import { TopBar } from "@/components/TopBar";
 import { AGREEMENTS_PAGE } from "@/lib/esign/requests";
-import { isSendingEnabled } from "@/lib/esign/settings";
+import { getOtpWhatsAppTemplate, isSendingEnabled } from "@/lib/esign/settings";
 import { fieldFromRow } from "@/lib/esign/store";
 import { readPageGeometry } from "@/lib/esign/templates";
 import { NewAgreementWizard, type DraftInfo, type LeadInfo, type StaffOption, type TemplateOption } from "./client";
@@ -59,7 +59,7 @@ export default async function NewAgreementPage({ searchParams }: { searchParams:
 
   const leadId = draftRow?.leadId ?? searchParams.leadId ?? null;
   const userSelect = { id: true, username: true, email: true, employeeProfile: { select: { name: true } }, leadPulseRole: { select: { displayName: true } } } as const;
-  const [templates, lead, me, staffUsers, sendingEnabled] = await Promise.all([
+  const [templates, lead, me, staffUsers, sendingEnabled, otpTemplate] = await Promise.all([
     prisma.esignTemplate.findMany({
       where: { active: true, currentVersionId: { not: null } },
       orderBy: { name: "asc" },
@@ -69,6 +69,7 @@ export default async function NewAgreementPage({ searchParams }: { searchParams:
     prisma.user.findUnique({ where: { id: userId }, select: userSelect }),
     prisma.user.findMany({ where: { isActive: true, email: { not: null } }, orderBy: { username: "asc" }, select: userSelect }),
     isSendingEnabled(),
+    getOtpWhatsAppTemplate(),
   ]);
 
   const templateOptions: TemplateOption[] = templates.map((t) => {
@@ -95,7 +96,14 @@ export default async function NewAgreementPage({ searchParams }: { searchParams:
         id: draftRow.id,
         templateId: draftRow.templateVersion?.templateId ?? null,
         mergeData: (draftRow.mergeData ?? {}) as Record<string, string>,
-        signers: draftRow.signers.map((s) => ({ role: s.role as "Client" | "DESMA", name: s.name, email: s.email, phone: s.phone, signOrder: s.signOrder })),
+        signers: draftRow.signers.map((s) => ({
+          role: s.role as "Client" | "DESMA",
+          userId: s.userId,
+          name: s.name,
+          email: s.email,
+          phone: s.phone,
+          signOrder: s.signOrder,
+        })),
         cc: (Array.isArray(draftRow.cc) ? draftRow.cc : []) as Array<{ name: string; email: string }>,
         reminderDays: draftRow.reminderDays ?? 3,
         message: draftRow.message,
@@ -114,6 +122,7 @@ export default async function NewAgreementPage({ searchParams }: { searchParams:
         staff={staff}
         staffName={me ? personName(me) : ""}
         sendingEnabled={sendingEnabled}
+        otpByWhatsApp={!!otpTemplate}
         nowIso={new Date().toISOString()}
       />
     </>
