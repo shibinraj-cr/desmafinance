@@ -65,6 +65,7 @@ const version = {
   fields: [
     { key: "client_full_name_1", label: null, type: "text", role: "Client", page: 1, x: 0.1, y: 0.1, w: 0.3, h: 0.03, required: false, options: null, mergeKey: "client.full_name", fontSize: 11, alignment: "left" },
     { key: "signature_1", label: null, type: "signature", role: "Client", page: 1, x: 0.1, y: 0.8, w: 0.3, h: 0.06, required: true, options: null, mergeKey: null, fontSize: 11, alignment: "left" },
+    { key: "signature_2", label: null, type: "signature", role: "DESMA", page: 1, x: 0.6, y: 0.8, w: 0.3, h: 0.06, required: true, options: null, mergeKey: null, fontSize: 11, alignment: "left" },
   ],
 };
 
@@ -72,7 +73,10 @@ const body = (action: "draft" | "send") => ({
   leadId: "l1",
   templateVersionId: "v1",
   mergeData: { "client.full_name": "Test Client" },
-  signers: [{ role: "Client", name: "Test Client", email: "client@example.com", phone: null, signOrder: 1 }],
+  signers: [
+    { role: "Client", name: "Test Client", email: "client@example.com", phone: null, signOrder: 1 },
+    { role: "DESMA", name: "Staff", email: "staff@example.com", phone: null, signOrder: 2 },
+  ],
   cc: [],
   expiresInDays: 14,
   reminderDays: 3,
@@ -124,7 +128,11 @@ describe("the sending switch", () => {
       mergeData: { "client.full_name": "Test Client" },
       createdById: "u1",
     });
-    expect(tx.esignSigner.createMany.mock.calls[0][0].data[0]).toMatchObject({ role: "Client", email: "client@example.com" });
+    // Asked for Client first; stored with DESMA first.
+    expect(tx.esignSigner.createMany.mock.calls[0][0].data).toEqual([
+      expect.objectContaining({ role: "Client", email: "client@example.com", signOrder: 2 }),
+      expect.objectContaining({ role: "DESMA", email: "staff@example.com", signOrder: 1 }),
+    ]);
     expect(tx.esignEvent.create.mock.calls[0][0].data).toMatchObject({ requestId: "r1", action: "created", actor: "staff@example.com" });
   });
 

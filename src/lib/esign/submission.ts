@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { fieldName, type TemplateField } from "@/lib/esign/template-fields";
+import { fieldName, mustFill, type TemplateField } from "@/lib/esign/template-fields";
 import type { StampItem } from "@/lib/esign/stamp";
 
 /**
@@ -58,11 +58,12 @@ export function checkSubmission(fields: TemplateField[], role: string, sub: Subm
 
   for (const f of signerFields(fields, role)) {
     const name = fieldName(f);
+    const required = mustFill(f);
     const geo = { page: f.page, x: f.x, y: f.y, w: f.w, h: f.h };
     if (f.type === "signature" || f.type === "initial") {
       const raw = sub.images[f.key];
       if (!raw) {
-        if (f.required) errors.push(`${f.type === "initial" ? "Add your initials" : "Sign"} in ${name}.`);
+        if (required) errors.push(`${f.type === "initial" ? "Add your initials" : "Sign"} in ${name}.`);
         continue;
       }
       const png = decodePng(raw);
@@ -78,13 +79,13 @@ export function checkSubmission(fields: TemplateField[], role: string, sub: Subm
     const value = (sub.values[f.key] ?? "").trim();
     if (f.type === "checkbox") {
       const ticked = value === "true";
-      if (f.required && !ticked) errors.push(`Tick ${name}.`);
+      if (required && !ticked) errors.push(`Tick ${name}.`);
       if (ticked) items.push({ kind: "check", ...geo });
       values.push({ field: f, value: ticked ? "true" : "false", png: null });
       continue;
     }
     if (!value) {
-      if (f.required) errors.push(`Fill in ${name}.`);
+      if (required) errors.push(`Fill in ${name}.`);
       continue;
     }
     if (f.type === "radio" || f.type === "selection") {

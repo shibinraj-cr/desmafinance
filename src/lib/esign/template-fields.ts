@@ -132,6 +132,15 @@ export const FieldListSchema = z.array(FieldSchema).max(MAX_FIELDS);
 const round6 = (n: number) => Math.round(n * 1e6) / 1e6;
 const EPS = 1e-6;
 
+/**
+ * Whether a signer must fill a box before they can finish. Every DESMA box is
+ * mandatory whatever the template says: the client must never receive an
+ * agreement with DESMA's part left blank. Client boxes follow the template.
+ */
+export function mustFill(f: Pick<TemplateField, "required" | "role" | "mergeKey">): boolean {
+  return !f.mergeKey && (f.required || f.role === "DESMA");
+}
+
 /** How a field is named in an error message: its label, else its key. */
 export function fieldName(f: Pick<TemplateField, "label" | "key">): string {
   return f.label ? `"${f.label}"` : f.key;
@@ -222,7 +231,7 @@ export function normalizeField(f: TemplateField): TemplateField {
     h: round6(f.h),
     options: OPTION_TYPES.includes(f.type) ? f.options ?? [] : null,
     mergeKey,
-    required: mergeKey ? false : f.required,
+    required: mergeKey ? false : f.role === "DESMA" ? true : f.required,
   };
 }
 
@@ -317,9 +326,8 @@ export function fieldWarnings(fields: TemplateField[]): string[] {
   if (!fields.some((f) => f.role === "Client" && f.type === "signature")) {
     warnings.push("There is no signature box for the Client yet.");
   }
-  const desma = fields.filter((f) => f.role === "DESMA");
-  if (desma.length > 0 && !desma.some((f) => f.type === "signature")) {
-    warnings.push("DESMA has fields to fill but no signature box.");
+  if (!fields.some((f) => f.role === "DESMA" && f.type === "signature")) {
+    warnings.push("There is no signature box for DESMA yet. DESMA signs every agreement first, so it cannot be sent without one.");
   }
   return warnings;
 }

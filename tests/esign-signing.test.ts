@@ -103,9 +103,9 @@ const F = (p: Partial<TemplateField> & { key: string; type: TemplateField["type"
   ...p,
 });
 
-// A real, minimal PNG (1×1 transparent pixel, padded past the size floor by a text chunk).
-const PNG_1PX =
-  "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAAJnRFWHRDb21tZW50AHNpZ25hdHVyZSBwYWRkaW5nIGZvciB0aGUgdGVzdHMhIQ7XzyMAAAANSURBVHjaY/j//z8ABf4C/qc1gYQAAAAASUVORK5CYII=";
+// A real drawn signature (120×40 PNG) that pdf-lib can embed.
+const PNG_SIG =
+  "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAHgAAAAoCAYAAAA16j4lAAAABHNCSVQICAgIfAhkiAAAAAFzUkdCAK7OHOkAAAQISURBVHic7dpPaBxVHAfw7/fNbDDZ3TdvJrZq2qrR9KKICgVFiigobTWgBxE9ecilR8GDB5GC1n+Ign8uVmrQgwTEa8G2/kMvHvXUYlKSJkZJsu5sd/OHZOf9PLipst38253NJvo+MCyZ92bmu3z3TWZhAcdxHMdxHMdxnP8lrXXUaL/a/ihOihiG4bPGmIue5w03nLD9mZw0GGOeJPkKgLtW91lrHymVSl//e57fkXRO08IwHCR5QkQO1Q1NkszWz3creJeIouh+EXkbwOG6od8BvFYsFk8BWKk/zhW8wxlj7iX5BoAjdUMFAG9ls9kPp6amFtc63hW8A/X19fUsLCw8TXKowYq9IiLvZDKZd2dnZysbncsVvIP09vbeZ60dAvAMgHzd8AKAD0TkzTiO482e0xXcYVrryPf950RkCMCdDaZcIHnKWju8lWJXuYI7wBhzN8ljAI4BeKDBt5llAF+KyEdxHH/fyrW2peDap7RHKdVTrVazJHsA0Fq75HneYpIkS5lMZnFlZWUxn88vrffQsBtFUaQBPApgUESOArhxjamjAD6uVquflMvluTSunXrBuVxur+/7R5RSD1trHyN5Q5OnmgIwWdvGSf4BYFpEpq2106VSaSzl6KmqW6UPbjB9RCl1ulAonE87RyoFa60PKqWOkzwK4I40zrlJBQATJCcAXAaw+vpbkiQzXV1dM5t50myW1nrA9/1+ERkA0E9yQERuB3AbgNw6h04COEPyvFLqq7m5uXK7MrZUcBAEh0i+SPKpDabOi0iF5DyAeQAVAAmALIDrAHSLSDfJbgC6lUwNLAKYqa3+ilKqIiKVWoaKiJSVUhUAZQDl2t/LIhKJiAEQAggAXC8iEckIwK0A+reY4yzJsyJyrlgs/pLye1xTUwWHYTgI4AUADzUYvgLgR5LfkvyhUCj81Mw1tNYHSR4geTOA/ST3A9gHoE9E9rVw698uF0TkjFLqnNb6u/Hx8aVOhNhSwVrryPO8zwA83mD4c6XU+80W2owgCPpJHgBwS+2DsLrdBGAPgL42R5gG8CvJSyIySnIsSZKxTCZzsZ233a3YdMFhGB4GMFJbRf+cgBxOkuRkqVS61JaELTLGGN/39yZJsgdAQDJrrc0ByJFcfaIPAOSttXmSOZIZa20M4OpGsgjgT5IFEZkOgmC0U6tyKzZTsDLGvETyBACvtm8ZwKcAThaLxcttzui0YKOCPWPMSN1D1ISIPBHH8c9tzuakYL1fdFxTLslvROQeV+7u5xljvgjDUGqbDcPwdfcTn/+G+nIlDMPjnQ7lpOOaco0xL3c6lNO8+luurX0dAP7+n/teHMevbn8sp62MMc8bY053OofjOI7jOI7jOI7jOI7jXPUXgBpoKrDN9NgAAAAASUVORK5CYII=";
 
 describe("submissions", () => {
   const fields = [
@@ -124,10 +124,10 @@ describe("submissions", () => {
   });
 
   it("turn a complete submission into stamp items and rows", () => {
-    expect(decodePng(PNG_1PX)).not.toBeNull();
+    expect(decodePng(PNG_SIG)).not.toBeNull();
     const r = checkSubmission(fields, "Client", {
       values: { agree_1: "true", plan_1: "Premium", email_1: "c@example.com", notes_1: "" },
-      images: { signature_1: PNG_1PX },
+      images: { signature_1: PNG_SIG },
       consent: true,
     });
     expect(r.errors).toEqual([]);
@@ -150,8 +150,14 @@ describe("submissions", () => {
     expect(checkSubmission(fields, "Client", { values: {}, images: {}, consent: true }).errors.join(" ")).toMatch(/Sign in signature_1/);
   });
 
+  it("refuses a DESMA submission with any DESMA box left blank, even one the template marks optional", () => {
+    const desmaFields = [F({ key: "desma_fee", type: "text", role: "DESMA", required: false }), F({ key: "desma_sig", type: "signature", role: "DESMA", required: false })];
+    const r = checkSubmission(desmaFields, "DESMA", { values: { desma_fee: " " }, images: {}, consent: true });
+    expect([...r.errors].sort()).toEqual(["Fill in desma_fee.", "Sign in desma_sig."]);
+  });
+
   it("never lets a signer fill someone else's box", () => {
-    const r = checkSubmission(fields, "Client", { values: {}, images: { signature_1: PNG_1PX, desma_sig: PNG_1PX }, consent: true, location: null });
+    const r = checkSubmission(fields, "Client", { values: {}, images: { signature_1: PNG_SIG, desma_sig: PNG_SIG }, consent: true, location: null });
     expect(r.values.some((v) => v.field.key === "desma_sig")).toBe(false);
   });
 });
@@ -165,7 +171,8 @@ describe("sending needs a way to deliver the code", () => {
     ];
     const p = sendProblems({ input: { signers, mergeData: {}, action: "send" }, fields });
     expect(p).toEqual(["Client needs an email address: it is where their one-time signing code is sent.", "Staff needs an email address or a WhatsApp number to receive the link."]);
-    expect(sendProblems({ input: { signers: [signers[0]], mergeData: {}, action: "send" }, fields: [fields[0]], otpByWhatsApp: true })).toEqual([]);
+    const desmaReady = { ...signers[1], email: "staff@desma.in" };
+    expect(sendProblems({ input: { signers: [signers[0], desmaReady], mergeData: {}, action: "send" }, fields, otpByWhatsApp: true })).toEqual([]);
   });
 });
 
@@ -214,5 +221,25 @@ describe("certificate", () => {
     ]) {
       expect(text).toContain(s);
     }
+  });
+});
+
+describe("agreement links and signed-copy recipients", () => {
+  it("use desgro.in in production, the request's own host elsewhere", async () => {
+    const { esignBaseUrl } = await import("@/lib/esign/base-url");
+    const req = new Request("https://desgro.vercel.app/api/x", { headers: { host: "desgro.vercel.app" } });
+    const saved = { v: process.env.VERCEL_ENV, a: process.env.APP_BASE_URL, o: process.env.ESIGN_PUBLIC_BASE_URL };
+    process.env.APP_BASE_URL = "https://desgro.vercel.app";
+    delete process.env.ESIGN_PUBLIC_BASE_URL;
+    process.env.VERCEL_ENV = "production";
+    expect(esignBaseUrl(req)).toBe("https://desgro.in");
+    process.env.VERCEL_ENV = "preview";
+    expect(esignBaseUrl(req)).toBe("https://desgro.vercel.app");
+    process.env.ESIGN_PUBLIC_BASE_URL = "https://sign.desma.in/";
+    expect(esignBaseUrl(req)).toBe("https://sign.desma.in");
+    process.env.VERCEL_ENV = saved.v;
+    process.env.APP_BASE_URL = saved.a;
+    if (saved.o === undefined) delete process.env.ESIGN_PUBLIC_BASE_URL;
+    else process.env.ESIGN_PUBLIC_BASE_URL = saved.o;
   });
 });

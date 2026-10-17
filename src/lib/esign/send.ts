@@ -8,7 +8,7 @@ import { badRequest, conflict, forbidden, notFound, unauthorized, unprocessable 
 import { mintToken } from "@/lib/hiring/envelope";
 import { activateSigners, deliverActivated, type SignerDelivery } from "@/lib/esign/handoff";
 import { recordEsignEvent, requestOrigin } from "@/lib/esign/events";
-import { siteBaseUrl } from "@/lib/site-url";
+import { esignBaseUrl } from "@/lib/esign/base-url";
 import { loadStampFont } from "@/lib/esign/font";
 import { sha256Hex } from "@/lib/esign/pdf";
 import { stampPdf, type StampItem } from "@/lib/esign/stamp";
@@ -27,6 +27,7 @@ import {
   mergeKeysOf,
   requestReference,
   sendProblems,
+  withSigningOrder,
   type SendInput,
 } from "@/lib/esign/requests";
 
@@ -60,7 +61,7 @@ export async function requireAgreementsUser(): Promise<{ userId: string; actor: 
 /** Who is acting, from where — for routes that change an agreement. */
 export async function agreementContext(req: Request): Promise<AgreementCtx & { isAdmin: boolean }> {
   const user = await requireAgreementsUser();
-  return { ...user, ...requestOrigin(req), baseUrl: siteBaseUrl(req) };
+  return { ...user, ...requestOrigin(req), baseUrl: esignBaseUrl(req) };
 }
 
 const signerSummary = (s: { role: string; name: string; email: string | null; phone: string | null; signOrder: number }) => ({
@@ -124,7 +125,7 @@ export async function saveAgreement(input: SendInput, ctx: AgreementCtx): Promis
     expiresAt,
   } satisfies Partial<Prisma.EsignRequestUncheckedCreateInput>;
   const signerRows = (requestId: string) =>
-    input.signers.map((s) => ({
+    withSigningOrder(input.signers).map((s) => ({
       requestId,
       role: s.role,
       userId: s.userId ?? null,

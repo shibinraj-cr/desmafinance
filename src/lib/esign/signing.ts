@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import path from "node:path";
 import { put } from "@vercel/blob";
+import { PDFDocument } from "pdf-lib";
 import type { EsignSigner, Prisma } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
 import { normalizePhone } from "@/lib/crm";
@@ -18,7 +19,7 @@ import { sendOtpEmail, sendSignedCopies, type ChannelResult } from "@/lib/esign/
 import { OTP_TTL_MS, checkOtp, hashOtp, mintSession, newOtpCode } from "@/lib/esign/otp";
 import { sha256Hex } from "@/lib/esign/pdf";
 import { activeSigners, maskEmail, maskPhone } from "@/lib/esign/requests";
-import { getOtpWhatsAppTemplate } from "@/lib/esign/settings";
+import { getOtpWhatsAppTemplate, signedCopyRecipients } from "@/lib/esign/settings";
 import { openForStamping, stampInto } from "@/lib/esign/stamp";
 import { deleteBlobQuietly, fieldFromRow, readBlobBytes } from "@/lib/esign/store";
 import { checkSubmission, type Submission } from "@/lib/esign/submission";
@@ -217,6 +218,17 @@ export async function completeSigning(opts: {
   const checked = checkSubmission(fields, signerRow.role, opts.submission);
   if (checked.errors.length) throw unprocessable(checked.errors.join(" "), "incomplete");
 
+  // A PNG that passes the signature check can still be undecodable; refuse it
+  // here, before anything is stored, rather than failing mid-stamp.
+  for (const v of checked.values) {
+    if (!v.png) continue;
+    try {
+      await (await PDFDocument.create()).embedPng(v.png);
+    } catch {
+      throw unprocessable(`The ${v.field.type === "initial" ? "initials" : "signature"} in ${v.field.label ?? v.field.key} could not be read. Please sign it again.`, "bad_image");
+    }
+  }
+
   const folder = folderOf(request.originalPathname!);
   const uploaded: string[] = [];
   const store = async (name: string, bytes: Uint8Array, contentType: string) => {
@@ -359,6 +371,8 @@ export async function completeSigning(opts: {
       ...done.signers.filter((s) => s.email).map((s) => ({ name: s.name, email: s.email! })),
       ...cc,
       ...(request.createdBy?.email ? [{ name: request.createdBy.username, email: request.createdBy.email }] : []),
+      // DESMA's own inbox gets every signed agreement (hello@desma.in by default).
+      ...(await signedCopyRecipients()).map((email) => ({ name: "DESMA International", email })),
     ],
     pdf: outcome.signedPdf!,
     verifyUrl: `${opts.baseUrl.replace(/\/$/, "")}/verify/${done.id}`,

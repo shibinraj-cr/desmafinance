@@ -10,6 +10,7 @@ import {
   requestReference,
   rolesOf,
   sendProblems,
+  withSigningOrder,
 } from "@/lib/esign/requests";
 import { DEFAULT_EMAIL_BODY, inviteEmail } from "@/lib/esign/notify";
 
@@ -18,15 +19,18 @@ const fields: F[] = [
   { key: "client_full_name_1", label: "Client full name", role: "Client", mergeKey: "client.full_name" },
   { key: "deal_fee_amount_1", label: "Fee", role: "Client", mergeKey: "deal.fee_amount" },
   { key: "signature_1", label: null, role: "Client", mergeKey: null },
+  { key: "desma_signature_1", label: null, role: "DESMA", mergeKey: null },
 ];
-const client = { role: "Client" as const, name: "Test Client", email: "client@example.com", phone: null, signOrder: 1 };
+const client = { role: "Client" as const, name: "Test Client", email: "client@example.com", phone: null, signOrder: 2 };
+const desma = { role: "DESMA" as const, userId: "u1", name: "Staff", email: "staff@example.com", phone: null, signOrder: 1 };
 
 describe("what a template needs", () => {
   it("lists merge keys once, in field order, and the roles that sign", () => {
     expect(mergeKeysOf([...fields, { mergeKey: "client.full_name" }])).toEqual(["client.full_name", "deal.fee_amount"]);
-    expect([...rolesOf(fields)]).toEqual(["Client"]);
+    expect([...rolesOf(fields)]).toEqual(["Client", "DESMA"]);
     // A DESMA box that is only CRM-filled does not make DESMA a signer.
-    expect([...rolesOf([...fields, { key: "d", label: null, role: "DESMA", mergeKey: "staff.name" }])]).toEqual(["Client"]);
+    const clientOnly = fields.filter((f) => f.role === "Client");
+    expect([...rolesOf([...clientOnly, { key: "d", label: null, role: "DESMA", mergeKey: "staff.name" }])]).toEqual(["Client"]);
   });
 });
 
@@ -34,7 +38,7 @@ describe("sendProblems", () => {
   const values = { "client.full_name": "Test Client", "deal.fee_amount": "₹1,00,000" };
 
   it("passes a complete send and never blocks a draft", () => {
-    expect(sendProblems({ input: { signers: [client], mergeData: values, action: "send" }, fields })).toEqual([]);
+    expect(sendProblems({ input: { signers: [desma, client], mergeData: values, action: "send" }, fields })).toEqual([]);
     expect(sendProblems({ input: { signers: [], mergeData: {}, action: "draft" }, fields })).toEqual([]);
   });
 
@@ -49,18 +53,27 @@ describe("sendProblems", () => {
 
   it("names a nameless signer by role", () => {
     const p = sendProblems({
-      input: { signers: [{ ...client, name: " ", email: null }], mergeData: values, action: "send" },
+      input: { signers: [desma, { ...client, name: " ", email: null }], mergeData: values, action: "send" },
       fields,
     });
     expect(p).toEqual(["The Client signer needs a name.", "The Client signer needs an email address or a WhatsApp number to receive the link."]);
   });
 
-  it("requires a DESMA signer exactly when the template has DESMA boxes", () => {
-    const withDesma: F[] = [...fields, { key: "desma_sig", label: null, role: "DESMA", mergeKey: null }];
-    expect(sendProblems({ input: { signers: [client], mergeData: values, action: "send" }, fields: withDesma }).join(" ")).toMatch(/add a DESMA signer/);
-    const desma = { role: "DESMA" as const, name: "Staff", email: "staff@example.com", phone: null, signOrder: 2 };
-    expect(sendProblems({ input: { signers: [client, desma], mergeData: values, action: "send" }, fields }).join(" ")).toMatch(/nothing for DESMA/);
-    expect(sendProblems({ input: { signers: [client, client], mergeData: values, action: "send" }, fields }).join(" ")).toMatch(/one signer/);
+  it("needs DESMA on every agreement: a DESMA box in the template and a DESMA signer", () => {
+    expect(sendProblems({ input: { signers: [client], mergeData: values, action: "send" }, fields }).join(" ")).toMatch(/add a DESMA signer/);
+    const clientOnly = fields.filter((f) => f.role === "Client");
+    expect(sendProblems({ input: { signers: [client], mergeData: values, action: "send" }, fields: clientOnly }).join(" ")).toMatch(
+      /This template has no boxes for DESMA\. DESMA signs every agreement first/,
+    );
+    expect(sendProblems({ input: { signers: [desma, client, client], mergeData: values, action: "send" }, fields }).join(" ")).toMatch(/one signer/);
+  });
+
+  it("always puts DESMA first, whatever order was asked for", () => {
+    const asked = [{ ...client, signOrder: 1 }, { ...desma, signOrder: 5 }];
+    expect(withSigningOrder(asked).map((s) => [s.role, s.signOrder])).toEqual([
+      ["Client", 2],
+      ["DESMA", 1],
+    ]);
   });
 });
 
