@@ -177,6 +177,8 @@ model User {
   esignRequestsCreated         EsignRequest[]         @relation("EsignRequestCreatedBy")
   esignImportsReviewed         EsignImportRecord[]    @relation("EsignImportReviewedBy")
   esignSignerSeats             EsignSigner[]          @relation("EsignSignerUser")
+  agreementFoldersCreated      AgreementFolder[]      @relation("AgreementFolderCreatedBy")
+  agreementDocumentsUploaded   AgreementDocument[]    @relation("AgreementDocumentUploadedBy")
 
   @@index([roleId])
 }
@@ -6071,6 +6073,39 @@ model EsignEvent {
   createdAt DateTime     @default(now())
 
   @@unique([requestId, seq])
+}
+
+/// A folder of agreements kept as plain files: ones signed outside Desgro
+/// (the Odoo Sign archive, paper scans), filed under Agreements → Folders.
+/// Folders do not nest. Files are never served from a storage URL; they go out
+/// through /api/esign/documents/[id]/file, which checks the Agreements grant.
+model AgreementFolder {
+  id          String              @id @default(cuid())
+  /// Unique ignoring case, enforced by the API (as Finance Documents does).
+  name        String
+  documents   AgreementDocument[]
+  createdById String?
+  createdBy   User?               @relation("AgreementFolderCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
+  createdAt   DateTime            @default(now())
+  updatedAt   DateTime            @updatedAt
+}
+
+model AgreementDocument {
+  id           String          @id @default(cuid())
+  /// Display name, including its extension. Renaming changes only this; the
+  /// blob keeps its upload-time pathname.
+  name         String
+  folderId     String
+  folder       AgreementFolder @relation(fields: [folderId], references: [id], onDelete: Restrict)
+  blobPathname String          @unique
+  contentType  String
+  size         Int
+  uploadedById String?
+  uploadedBy   User?           @relation("AgreementDocumentUploadedBy", fields: [uploadedById], references: [id], onDelete: SetNull)
+  createdAt    DateTime        @default(now())
+  updatedAt    DateTime        @updatedAt
+
+  @@index([folderId])
 }
 
 /// One zip from the Odoo Sign export (integrations/odoo-sign/).
