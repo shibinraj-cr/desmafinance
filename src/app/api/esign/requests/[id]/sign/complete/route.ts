@@ -3,7 +3,7 @@ import { withApiHandler } from "@/lib/api";
 import { internalSigner } from "@/lib/esign/internal-signer";
 import { completeSigning } from "@/lib/esign/signing";
 import { SubmissionSchema } from "@/lib/esign/submission";
-import { siteBaseUrl } from "@/lib/site-url";
+import { esignBaseUrl } from "@/lib/esign/base-url";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -20,7 +20,7 @@ export const POST = withApiHandler(async (req: Request, { params }: { params: { 
     origin,
     actor: user?.email ?? user?.username ?? signer.name,
     verifiedBy: `Signed in to DesGro as ${user?.username ?? "staff"}`,
-    baseUrl: siteBaseUrl(req),
+    baseUrl: esignBaseUrl(req),
     actorUserId: userId,
   });
   return NextResponse.json(result);

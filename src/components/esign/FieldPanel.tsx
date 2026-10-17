@@ -161,13 +161,19 @@ export function FieldProperties({
         </span>
       </label>
 
-      {!f.mergeKey && f.type !== "checkbox" && (
+      {!f.mergeKey && f.role === "DESMA" && (
+        <label className="flex items-center gap-sm text-body-md text-on-surface-variant">
+          <input type="checkbox" checked disabled />
+          Always required — DESMA must fill every box before the client gets the agreement
+        </label>
+      )}
+      {!f.mergeKey && f.role !== "DESMA" && f.type !== "checkbox" && (
         <label className="flex items-center gap-sm text-body-md">
           <input type="checkbox" checked={f.required} onChange={(e) => onChange({ required: e.target.checked })} />
           Required to finish signing
         </label>
       )}
-      {f.type === "checkbox" && (
+      {f.role !== "DESMA" && f.type === "checkbox" && (
         <label className="flex items-center gap-sm text-body-md">
           <input type="checkbox" checked={f.required} onChange={(e) => onChange({ required: e.target.checked })} />
           Must be ticked to finish signing

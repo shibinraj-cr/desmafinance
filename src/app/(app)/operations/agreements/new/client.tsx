@@ -110,12 +110,6 @@ export function NewAgreementWizard(props: {
     const d = props.draft?.signers.find((s) => s.role === "DESMA");
     return { role: "DESMA", userId: d?.userId ?? null, name: d?.name ?? "", email: d?.email ?? "", phone: d?.phone ?? "", signOrder: d?.signOrder ?? 2 };
   });
-  const [desmaFirst, setDesmaFirst] = useState(() => {
-    const d = props.draft?.signers;
-    const c = d?.find((s) => s.role === "Client");
-    const m = d?.find((s) => s.role === "DESMA");
-    return !!(c && m && m.signOrder < c.signOrder);
-  });
   const [cc, setCc] = useState<Array<{ name: string; email: string }>>(props.draft?.cc ?? []);
   const [expiresInDays, setExpiresInDays] = useState(String(template?.defaultExpiryDays ?? 14));
   const [reminderDays, setReminderDays] = useState(String(props.draft?.reminderDays ?? template?.defaultReminderDays ?? 3));
@@ -191,13 +185,14 @@ export function NewAgreementWizard(props: {
   }
 
   const needsDesma = roles.has("DESMA");
+  // DESMA always signs first, then the client (the server enforces the same order).
   const signers: SendInput["signers"] = [
-    ...(roles.has("Client") || !template
-      ? [{ ...clientSigner, email: clientSigner.email || null, phone: clientSigner.phone || null, signOrder: needsDesma && desmaFirst ? 2 : 1 }]
-      : []),
     // A DESMA signer counts once someone is picked; until then the checks say "add a DESMA signer".
     ...(needsDesma && (desmaSigner.name.trim() || desmaSigner.email.trim())
-      ? [{ ...desmaSigner, email: desmaSigner.email || null, phone: desmaSigner.phone || null, signOrder: desmaFirst ? 1 : 2 }]
+      ? [{ ...desmaSigner, email: desmaSigner.email || null, phone: desmaSigner.phone || null, signOrder: 1 }]
+      : []),
+    ...(roles.has("Client") || !template
+      ? [{ ...clientSigner, email: clientSigner.email || null, phone: clientSigner.phone || null, signOrder: 2 }]
       : []),
   ];
 
@@ -226,7 +221,7 @@ export function NewAgreementWizard(props: {
     return p;
     // signers is rebuilt each render from these inputs
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [lead, template, values, clientSigner, desmaSigner, desmaFirst, expiresInDays]);
+  }, [lead, template, values, clientSigner, desmaSigner, expiresInDays]);
 
   async function submit(action: "draft" | "send") {
     const body = payload(action);
@@ -379,15 +374,9 @@ export function NewAgreementWizard(props: {
                       : "Not linked to a DesGro login: they will get a signing link by email and confirm a one-time code."}
                   </p>
                 </div>
-                <fieldset className="space-y-xs">
-                  <legend className="text-label-sm text-on-surface-variant mb-xs">Order</legend>
-                  <label className="flex items-center gap-sm text-body-md">
-                    <input type="radio" checked={!desmaFirst} onChange={() => setDesmaFirst(false)} /> Client signs first, then DESMA
-                  </label>
-                  <label className="flex items-center gap-sm text-body-md">
-                    <input type="radio" checked={desmaFirst} onChange={() => setDesmaFirst(true)} /> DESMA signs first, then the client
-                  </label>
-                </fieldset>
+                <p className="text-body-md text-on-surface-variant flex items-center gap-xs">
+                  <Icon name="looks_one" /> DESMA signs first. The client gets their link only after DESMA has filled in every DESMA box and signed.
+                </p>
               </>
             )}
             <div className="border-t border-outline-variant pt-md space-y-sm">
