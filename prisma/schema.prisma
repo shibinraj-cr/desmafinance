@@ -176,6 +176,7 @@ model User {
   esignTemplateVersionsCreated EsignTemplateVersion[] @relation("EsignTemplateVersionCreatedBy")
   esignRequestsCreated         EsignRequest[]         @relation("EsignRequestCreatedBy")
   esignImportsReviewed         EsignImportRecord[]    @relation("EsignImportReviewedBy")
+  esignSignerSeats             EsignSigner[]          @relation("EsignSignerUser")
 
   @@index([roleId])
 }
@@ -5936,6 +5937,10 @@ model EsignRequest {
   mergeData           Json                  @default("{}")
   originalPathname    String?
   originalSha256      String?
+  /// The PDF as it stands after the signers so far: the original plus every
+  /// completed signer's values. The next signer sees and signs this file.
+  currentPathname     String?
+  currentSha256       String?
   signedPathname      String?
   signedSha256        String?
   certificatePathname String?
@@ -5977,6 +5982,10 @@ model EsignSigner {
   request        EsignRequest      @relation(fields: [requestId], references: [id], onDelete: Cascade)
   /// "Client" | "DESMA" | …
   role           String            @default("Client")
+  /// Set for DESMA staff: they sign inside DesGro, logged in as this user,
+  /// instead of through an emailed link and one-time code.
+  userId         String?
+  user           User?             @relation("EsignSignerUser", fields: [userId], references: [id], onDelete: SetNull)
   name           String
   email          String?
   phone          String?
@@ -6005,6 +6014,7 @@ model EsignSigner {
   createdAt      DateTime          @default(now())
 
   @@index([requestId])
+  @@index([userId])
 }
 
 /// What a signer filled in. Geometry is copied from the template field so the

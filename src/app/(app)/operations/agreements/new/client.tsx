@@ -42,13 +42,13 @@ export type LeadInfo = {
 
 export type StaffOption = { id: string; name: string; email: string };
 
-type SignerForm = { role: "Client" | "DESMA"; name: string; email: string; phone: string; signOrder: number };
+type SignerForm = { role: "Client" | "DESMA"; userId: string | null; name: string; email: string; phone: string; signOrder: number };
 
 export type DraftInfo = {
   id: string;
   templateId: string | null;
   mergeData: Record<string, string>;
-  signers: Array<{ role: "Client" | "DESMA"; name: string; email: string | null; phone: string | null; signOrder: number }>;
+  signers: Array<{ role: "Client" | "DESMA"; userId: string | null; name: string; email: string | null; phone: string | null; signOrder: number }>;
   cc: Array<{ name: string; email: string }>;
   reminderDays: number;
   message: string | null;
@@ -76,6 +76,8 @@ export function NewAgreementWizard(props: {
   staff: StaffOption[];
   staffName: string;
   sendingEnabled: boolean;
+  /** A WhatsApp code template is set up, so a client without email can still sign. */
+  otpByWhatsApp: boolean;
   nowIso: string;
 }) {
   const router = useRouter();
@@ -97,6 +99,7 @@ export function NewAgreementWizard(props: {
     const d = props.draft?.signers.find((s) => s.role === "Client");
     return {
       role: "Client",
+      userId: null,
       name: d?.name ?? props.lead?.name ?? "",
       email: d?.email ?? props.lead?.email ?? "",
       phone: d?.phone ?? props.lead?.phone ?? "",
@@ -105,7 +108,7 @@ export function NewAgreementWizard(props: {
   });
   const [desmaSigner, setDesmaSigner] = useState<SignerForm>(() => {
     const d = props.draft?.signers.find((s) => s.role === "DESMA");
-    return { role: "DESMA", name: d?.name ?? "", email: d?.email ?? "", phone: d?.phone ?? "", signOrder: d?.signOrder ?? 2 };
+    return { role: "DESMA", userId: d?.userId ?? null, name: d?.name ?? "", email: d?.email ?? "", phone: d?.phone ?? "", signOrder: d?.signOrder ?? 2 };
   });
   const [desmaFirst, setDesmaFirst] = useState(() => {
     const d = props.draft?.signers;
@@ -217,7 +220,7 @@ export function NewAgreementWizard(props: {
   const problems = useMemo(() => {
     if (!lead) return ["Choose the client."];
     if (!template) return ["Choose a template."];
-    const p = sendProblems({ input: { signers, mergeData: values, action: "send" }, fields: template.fields });
+    const p = sendProblems({ input: { signers, mergeData: values, action: "send" }, fields: template.fields, otpByWhatsApp: props.otpByWhatsApp });
     const exp = Number(expiresInDays);
     if (!Number.isInteger(exp) || exp < 1 || exp > MAX_EXPIRY_DAYS) p.push(`The link must last 1–${MAX_EXPIRY_DAYS} days.`);
     return p;
@@ -349,7 +352,7 @@ export function NewAgreementWizard(props: {
                       value={props.staff.find((s) => s.email === desmaSigner.email)?.id ?? ""}
                       onChange={(e) => {
                         const s = props.staff.find((x) => x.id === e.target.value);
-                        if (s) setDesmaSigner((d) => ({ ...d, name: s.name, email: s.email }));
+                        if (s) setDesmaSigner((d) => ({ ...d, userId: s.id, name: s.name, email: s.email }));
                       }}
                     >
                       <option value="">Choose a staff member…</option>
@@ -360,7 +363,21 @@ export function NewAgreementWizard(props: {
                       ))}
                     </select>
                   </label>
-                  <SignerFields title="DESMA" signer={desmaSigner} onChange={setDesmaSigner} hidePhone />
+                  <SignerFields
+                    title="DESMA"
+                    signer={desmaSigner}
+                    // Changing the address to someone else's makes this an emailed signer, not a DesGro login.
+                    onChange={(next) => {
+                      const staff = props.staff.find((x) => x.id === next.userId);
+                      setDesmaSigner(staff && staff.email !== next.email ? { ...next, userId: null } : next);
+                    }}
+                    hidePhone
+                  />
+                  <p className="text-caption text-on-surface-variant">
+                    {desmaSigner.userId
+                      ? "Signs inside DesGro while logged in — no code needed. They get an email when it is their turn."
+                      : "Not linked to a DesGro login: they will get a signing link by email and confirm a one-time code."}
+                  </p>
                 </div>
                 <fieldset className="space-y-xs">
                   <legend className="text-label-sm text-on-surface-variant mb-xs">Order</legend>
@@ -422,7 +439,7 @@ export function NewAgreementWizard(props: {
               Sending to clients is switched off until the signing page is live. You can save this as a draft now and send it later.
             </div>
           )}
-          {template && lead && problems.length > 0 && (
+          {problems.length > 0 && (
             <ul className="text-body-md text-on-surface-variant space-y-xs">
               {problems.map((p, i) => (
                 <li key={i} className="flex gap-xs">

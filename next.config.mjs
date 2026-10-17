@@ -55,11 +55,12 @@ const BANK_BROWSER_ROUTES = [
   "/api/finance/bank-statements/upload",
 ];
 
-// Routes that stamp merge values into an agreement PDF read the font from
-// public/ on disk (src/lib/esign/font.ts). public/ is served by the CDN, not
-// deployed with functions, so the file is traced into these bundles.
-const ESIGN_STAMP_ROUTES = ["/api/esign/requests"];
-const ESIGN_FONT = ["./public/fonts/esign/**"];
+// Routes that stamp an agreement PDF read the font (and, when sealing, the
+// DESMA logo for the certificate) from public/ on disk. public/ is served by
+// the CDN, not deployed with functions, so the files are traced into these
+// bundles (src/lib/esign/font.ts, src/lib/esign/signing.ts).
+const ESIGN_STAMP_ROUTES = ["/api/esign/requests", "/api/sign/[token]/complete", "/api/esign/requests/[id]/sign/complete"];
+const ESIGN_FONT = ["./public/fonts/esign/NotoSans-Regular.ttf", "./public/desma-logo.png"];
 
 const nextConfig = {
   reactStrictMode: true,

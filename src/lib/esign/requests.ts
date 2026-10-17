@@ -34,6 +34,25 @@ export const STATUS_LABELS: Record<string, string> = {
   cancelled: "Cancelled",
 };
 
+/** Audit-trail actions in words, for the history list and the certificate. */
+export const EVENT_LABELS: Record<string, string> = {
+  created: "Created",
+  sent: "Sent for signature",
+  notified: "Delivered",
+  resent: "New link sent",
+  opened: "Opened",
+  otp_sent: "One-time code sent",
+  otp_verified: "One-time code verified",
+  otp_failed: "Wrong one-time code",
+  field_saved: "Fields filled in",
+  signed: "Signed",
+  declined: "Declined",
+  completed: "Completed",
+  contact_changed: "Contact details changed",
+  expiry_extended: "Expiry extended",
+  cancelled: "Cancelled",
+};
+
 /** Statuses an agreement can still be changed, resent or cancelled in. */
 export const OPEN_STATUSES = ["draft", "sent", "viewed", "partially_signed"] as const;
 export const isOpenStatus = (s: string) => (OPEN_STATUSES as readonly string[]).includes(s);
@@ -58,6 +77,8 @@ const optionalPhone = z
 
 export const SignerInputSchema = z.object({
   role: z.enum(["Client", "DESMA"]),
+  /** DESMA staff picked from the staff list sign inside DesGro as this user. */
+  userId: z.string().nullable().optional(),
   name: trimmed(200).min(1, "Every signer needs a name."),
   email: optionalEmail,
   phone: optionalPhone,
@@ -103,6 +124,8 @@ export function rolesOf(fields: Pick<TemplateField, "role" | "mergeKey">[]): Set
 export function sendProblems(opts: {
   input: Pick<SendInput, "signers" | "mergeData" | "action">;
   fields: Pick<TemplateField, "role" | "mergeKey" | "label" | "key">[];
+  /** A WhatsApp code template is set up, so external signers may sign without an email. */
+  otpByWhatsApp?: boolean;
 }): string[] {
   if (opts.input.action === "draft") return [];
   const problems: string[] = [];
@@ -122,6 +145,9 @@ export function sendProblems(opts: {
     if (!s.name.trim()) problems.push(`${who} needs a name.`);
     if (!roles.has(s.role)) problems.push(`The template has nothing for ${s.role} to fill or sign; remove that signer.`);
     if (!s.email && !s.phone) problems.push(`${who} needs an email address or a WhatsApp number to receive the link.`);
+    else if (!s.userId && !s.email && !opts.otpByWhatsApp) {
+      problems.push(`${who} needs an email address: it is where their one-time signing code is sent.`);
+    }
   }
   return problems;
 }

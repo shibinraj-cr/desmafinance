@@ -19,7 +19,17 @@ export type AgreementRow = {
   createdBy: string | null;
 };
 
-export function AgreementsList({ rows, sendingEnabled, isAdmin }: { rows: AgreementRow[]; sendingEnabled: boolean; isAdmin: boolean }) {
+export function AgreementsList({
+  rows,
+  sendingEnabled,
+  isAdmin,
+  waitingForMe,
+}: {
+  rows: AgreementRow[];
+  sendingEnabled: boolean;
+  isAdmin: boolean;
+  waitingForMe: Array<{ id: string; reference: string; expiresAt: string | null }>;
+}) {
   const [q, setQ] = useState("");
   const [status, setStatus] = useState("");
   const visible = useMemo(() => {
@@ -33,6 +43,23 @@ export function AgreementsList({ rows, sendingEnabled, isAdmin }: { rows: Agreem
 
   return (
     <div className="space-y-md">
+      {waitingForMe.length > 0 && (
+        <div className="rounded-lg border border-sky-300 bg-sky-50 p-md space-y-xs">
+          <div className="font-semibold flex items-center gap-xs">
+            <Icon name="draw" /> Waiting for your signature ({waitingForMe.length})
+          </div>
+          <ul className="text-body-md space-y-xs">
+            {waitingForMe.map((w) => (
+              <li key={w.id} className="flex flex-wrap items-center gap-sm">
+                <Link href={`/operations/agreements/${w.id}/sign`} className="font-semibold hover:underline">
+                  {w.reference}
+                </Link>
+                {w.expiresAt && <span className="text-caption text-on-surface-variant">by {formatDate(w.expiresAt)}</span>}
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
       <SendingSwitch enabled={sendingEnabled} isAdmin={isAdmin} />
 
       <div className="flex flex-wrap items-center gap-sm">

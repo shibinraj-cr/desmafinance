@@ -17,3 +17,13 @@ export async function isSendingEnabled(): Promise<boolean> {
 export async function setSendingEnabled(on: boolean, userId: string | null): Promise<void> {
   await setSetting(ESIGN_SENDING_KEY, on ? "true" : "false", userId);
 }
+
+/**
+ * Optional approved WhatsApp AUTHENTICATION template ("name:language") for
+ * one-time codes. Without it codes go by email only, so clients need an email.
+ */
+export const ESIGN_OTP_WA_TEMPLATE_KEY = "esign_otp_wa_template";
+
+export async function getOtpWhatsAppTemplate(): Promise<string | null> {
+  return (await getSetting(ESIGN_OTP_WA_TEMPLATE_KEY).catch(() => null))?.trim() || null;
+}

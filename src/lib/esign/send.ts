@@ -6,14 +6,14 @@ import { getCurrentUserAndPermissions } from "@/lib/permissions";
 import { canSeePage } from "@/lib/rbac";
 import { badRequest, conflict, forbidden, notFound, unauthorized, unprocessable } from "@/lib/http-error";
 import { mintToken } from "@/lib/hiring/envelope";
+import { activateSigners, deliverActivated, type SignerDelivery } from "@/lib/esign/handoff";
 import { recordEsignEvent, requestOrigin } from "@/lib/esign/events";
 import { siteBaseUrl } from "@/lib/site-url";
 import { loadStampFont } from "@/lib/esign/font";
-import { notifySigner, type ChannelResult } from "@/lib/esign/notify";
 import { sha256Hex } from "@/lib/esign/pdf";
 import { stampPdf, type StampItem } from "@/lib/esign/stamp";
 import { deleteBlobQuietly, fieldFromRow, readBlobBytes } from "@/lib/esign/store";
-import { isSendingEnabled } from "@/lib/esign/settings";
+import { getOtpWhatsAppTemplate, isSendingEnabled } from "@/lib/esign/settings";
 import {
   AGREEMENTS_PAGE,
   ESIGN_REQUEST_BLOB_PREFIX,
@@ -46,7 +46,7 @@ export type AgreementCtx = {
   baseUrl: string;
 };
 
-export type SignerDelivery = { signerId: string; name: string; role: string; results: ChannelResult[] };
+export type { SignerDelivery } from "@/lib/esign/handoff";
 
 /** Creating, sending and tracking agreements needs the Agreements page grant. */
 export async function requireAgreementsUser(): Promise<{ userId: string; actor: string; isAdmin: boolean }> {
@@ -61,10 +61,6 @@ export async function requireAgreementsUser(): Promise<{ userId: string; actor: 
 export async function agreementContext(req: Request): Promise<AgreementCtx & { isAdmin: boolean }> {
   const user = await requireAgreementsUser();
   return { ...user, ...requestOrigin(req), baseUrl: siteBaseUrl(req) };
-}
-
-export function signingLink(baseUrl: string, rawToken: string): string {
-  return `${baseUrl.replace(/\/$/, "")}/sign/${rawToken}`;
 }
 
 const signerSummary = (s: { role: string; name: string; email: string | null; phone: string | null; signOrder: number }) => ({
@@ -102,8 +98,14 @@ export async function saveAgreement(input: SendInput, ctx: AgreementCtx): Promis
   if (draft && draft.leadId !== input.leadId) throw badRequest("That draft belongs to a different client.");
 
   const fields = version.fields.map(fieldFromRow);
-  const problems = sendProblems({ input, fields });
+  const problems = sendProblems({ input, fields, otpByWhatsApp: !!(await getOtpWhatsAppTemplate()) });
   if (problems.length) throw unprocessable(problems.join(" "), "cannot_send");
+  // A signer tied to a DesGro login signs in-app as that user, so it must be a real, active one.
+  const userIds = input.signers.map((s) => s.userId).filter((v): v is string => !!v);
+  if (userIds.length) {
+    const found = await prisma.user.count({ where: { id: { in: userIds }, isActive: true } });
+    if (found !== new Set(userIds).size) throw badRequest("A DESMA signer is not an active DesGro user any more. Pick them again.");
+  }
 
   // Only the keys this template uses are kept: the snapshot is what was printed.
   const mergeData = Object.fromEntries(mergeKeysOf(fields).map((k) => [k, (input.mergeData[k] ?? "").trim()]));
@@ -122,7 +124,15 @@ export async function saveAgreement(input: SendInput, ctx: AgreementCtx): Promis
     expiresAt,
   } satisfies Partial<Prisma.EsignRequestUncheckedCreateInput>;
   const signerRows = (requestId: string) =>
-    input.signers.map((s) => ({ requestId, role: s.role, name: s.name, email: s.email, phone: s.phone, signOrder: s.signOrder }));
+    input.signers.map((s) => ({
+      requestId,
+      role: s.role,
+      userId: s.userId ?? null,
+      name: s.name,
+      email: s.email,
+      phone: s.phone,
+      signOrder: s.signOrder,
+    }));
 
   if (input.action === "draft") {
     const requestId = await prisma.$transaction(async (tx) => {
@@ -173,7 +183,7 @@ export async function saveAgreement(input: SendInput, ctx: AgreementCtx): Promis
   const pathname = `${ESIGN_REQUEST_BLOB_PREFIX}${randomUUID()}/original.pdf`;
   await put(pathname, Buffer.from(pdf), { access: "private", contentType: "application/pdf", addRandomSuffix: false });
 
-  let sent: { requestId: string; links: Array<{ signerId: string; raw: string }> };
+  let sent: { requestId: string; activated: Awaited<ReturnType<typeof activateSigners>> };
   try {
     sent = await prisma.$transaction(async (tx) => {
       const data = { ...common, status: "sent" as const, sentAt: now, originalPathname: pathname, originalSha256 };
@@ -182,12 +192,7 @@ export async function saveAgreement(input: SendInput, ctx: AgreementCtx): Promis
         : await tx.esignRequest.create({ data: { ...data, createdById: ctx.userId } });
       await tx.esignSigner.deleteMany({ where: { requestId: req.id } });
       const signers = await Promise.all(signerRows(req.id).map((row) => tx.esignSigner.create({ data: { ...row, status: "waiting" } })));
-      const links: Array<{ signerId: string; raw: string }> = [];
-      for (const s of activeSigners(signers)) {
-        const { raw, hash } = mintToken();
-        await tx.esignSigner.update({ where: { id: s.id }, data: { status: "sent", tokenHash: hash, tokenExpiresAt: expiresAt } });
-        links.push({ signerId: s.id, raw });
-      }
+      const activated = await activateSigners(tx, signers, expiresAt);
       const origin = { actor: ctx.actor, ip: ctx.ip, userAgent: ctx.userAgent };
       if (!draft) {
         await recordEsignEvent(tx, { requestId: req.id, action: "created", ...origin, meta: { templateVersionId: version.id, version: version.version } });
@@ -202,48 +207,18 @@ export async function saveAgreement(input: SendInput, ctx: AgreementCtx): Promis
           originalSha256,
           expiresAt: expiresAt.toISOString(),
           signers: signers.map(signerSummary),
-          linksIssuedTo: links.map((l) => signers.find((s) => s.id === l.signerId)!.role),
+          linksIssuedTo: activated.map((a) => signers.find((s) => s.id === a.signerId)!.role),
         },
       });
-      return { requestId: req.id, links };
+      return { requestId: req.id, activated };
     });
   } catch (e) {
     await deleteBlobQuietly(pathname);
     throw e;
   }
 
-  const delivery = await deliverLinks(sent.requestId, sent.links, ctx);
+  const delivery = await deliverActivated(sent.requestId, sent.activated, ctx);
   return { requestId: sent.requestId, status: "sent", delivery };
-}
-
-/** Notify each signer of their new link and log what reached them. */
-async function deliverLinks(requestId: string, links: Array<{ signerId: string; raw: string }>, ctx: AgreementCtx): Promise<SignerDelivery[]> {
-  const req = await prisma.esignRequest.findUniqueOrThrow({
-    where: { id: requestId },
-    include: { signers: true, templateVersion: { include: { template: true } } },
-  });
-  const template = req.templateVersion!.template;
-  const out: SignerDelivery[] = [];
-  for (const { signerId, raw } of links) {
-    const signer = req.signers.find((s) => s.id === signerId)!;
-    const results = await notifySigner({
-      request: { id: req.id, reference: req.reference, expiresAt: req.expiresAt!, message: req.message, leadId: req.leadId },
-      template,
-      signer,
-      link: signingLink(ctx.baseUrl, raw),
-      token: raw,
-      actorId: ctx.userId,
-    });
-    await recordEsignEvent(prisma, {
-      requestId: req.id,
-      signerId,
-      action: "notified",
-      actor: "system",
-      meta: { results: results as unknown as Prisma.InputJsonValue },
-    });
-    out.push({ signerId, name: signer.name, role: signer.role, results });
-  }
-  return out;
 }
 
 async function loadOpen(requestId: string) {
@@ -269,11 +244,16 @@ export async function resendLink(requestId: string, signerId: string, ctx: Agree
     throw conflict(`It is not ${signer.name}'s turn to sign yet.`, "not_their_turn");
   }
 
-  const { raw, hash } = mintToken();
+  // DESMA staff sign in-app: a reminder email, no token. Others get a fresh link.
+  const minted = signer.userId ? null : mintToken();
   await prisma.$transaction(async (tx) => {
     await tx.esignSigner.update({
       where: { id: signer.id },
-      data: { tokenHash: hash, tokenExpiresAt: req.expiresAt, status: signer.status === "waiting" ? "sent" : signer.status },
+      data: {
+        ...(minted ? { tokenHash: minted.hash } : {}),
+        tokenExpiresAt: req.expiresAt,
+        status: signer.status === "waiting" ? "sent" : signer.status,
+      },
     });
     await recordEsignEvent(tx, {
       requestId,
@@ -282,10 +262,10 @@ export async function resendLink(requestId: string, signerId: string, ctx: Agree
       actor: ctx.actor,
       ip: ctx.ip,
       userAgent: ctx.userAgent,
-      meta: { previousLinkRevoked: !!signer.tokenHash },
+      meta: { previousLinkRevoked: !!(minted && signer.tokenHash), inApp: !minted },
     });
   });
-  const [delivery] = await deliverLinks(requestId, [{ signerId, raw }], ctx);
+  const [delivery] = await deliverActivated(requestId, [{ signerId, raw: minted?.raw ?? null }], ctx);
   return delivery;
 }
 

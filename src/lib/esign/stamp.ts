@@ -30,7 +30,21 @@ export type StampText = {
   multiline: boolean;
 };
 
-export type StampItem = StampText;
+/** A signature or initials image (PNG), fitted inside the box keeping its shape. */
+export type StampImage = {
+  kind: "image";
+  page: number;
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+  png: Uint8Array;
+};
+
+/** A ticked checkbox, drawn as lines (the font has no ✓ glyph). */
+export type StampCheck = { kind: "check"; page: number; x: number; y: number; w: number; h: number };
+
+export type StampItem = StampText | StampImage | StampCheck;
 
 /** No text is drawn smaller than this, however long the value. */
 export const MIN_FONT_SIZE = 6;
@@ -138,24 +152,67 @@ function drawText(page: PDFPage, frame: Frame, font: PDFFont, capHeight: number,
   }
 }
 
+function drawCheck(page: PDFPage, frame: Frame, item: StampCheck) {
+  const dx = item.x * frame.W;
+  const dy = item.y * frame.H;
+  const dw = item.w * frame.W;
+  const dh = item.h * frame.H;
+  const pts = [
+    [dx + 0.2 * dw, dy + 0.55 * dh],
+    [dx + 0.42 * dw, dy + 0.78 * dh],
+    [dx + 0.82 * dw, dy + 0.22 * dh],
+  ].map(([u, v]) => displayToPdf(frame, u, v));
+  const thickness = Math.max(1, Math.min(dw, dh) * 0.12);
+  page.drawLine({ start: pts[0], end: pts[1], thickness, color: INK });
+  page.drawLine({ start: pts[1], end: pts[2], thickness, color: INK });
+}
+
+async function drawImage(doc: PDFDocument, page: PDFPage, frame: Frame, item: StampImage) {
+  const img = await doc.embedPng(item.png);
+  const dx = item.x * frame.W;
+  const dy = item.y * frame.H;
+  const dw = item.w * frame.W;
+  const dh = item.h * frame.H;
+  const scale = Math.min(dw / img.width, dh / img.height);
+  const width = img.width * scale;
+  const height = img.height * scale;
+  // Centred in the box; anchored at the image's bottom-left corner as displayed.
+  const at = displayToPdf(frame, dx + (dw - width) / 2, dy + (dh + height) / 2);
+  page.drawImage(img, { x: at.x, y: at.y, width, height, rotate: degrees(frame.rotate) });
+}
+
+/** An open document with the stamping font embedded, for callers that add more (the certificate). */
+export type StampSession = { doc: PDFDocument; font: PDFFont; capHeight: number };
+
+export async function openForStamping(pdfBytes: Uint8Array, fontBytes: Uint8Array): Promise<StampSession> {
+  const doc = await PDFDocument.load(pdfBytes, { ignoreEncryption: false, updateMetadata: false });
+  doc.registerFontkit(fontkit);
+  // The whole font, not a subset: pdf-lib's subsetter scrambles glyphs with
+  // Noto Sans ("Test Candidate" rendered as "C dd"), while the text layer still
+  // read correctly — so only drawing the page shows it. See esign-stamp-render.test.ts.
+  const font = await doc.embedFont(fontBytes, { subset: false });
+  const metrics = fontkit.create(fontBytes);
+  return { doc, font, capHeight: metrics.capHeight / metrics.unitsPerEm };
+}
+
+export async function stampInto(session: StampSession, items: StampItem[]): Promise<void> {
+  const pages = session.doc.getPages();
+  for (const item of items) {
+    const page = pages[item.page - 1];
+    if (!page) continue;
+    const frame = frameOf(page);
+    if (item.kind === "text") drawText(page, frame, session.font, session.capHeight, item);
+    else if (item.kind === "check") drawCheck(page, frame, item);
+    else await drawImage(session.doc, page, frame, item);
+  }
+}
+
 /**
  * Stamp `items` onto a copy of `pdfBytes`. The font must cover every character
  * used (the app ships Noto Sans: Latin incl. accents, and ₹).
  */
 export async function stampPdf(pdfBytes: Uint8Array, fontBytes: Uint8Array, items: StampItem[]): Promise<Uint8Array> {
-  const doc = await PDFDocument.load(pdfBytes, { ignoreEncryption: false, updateMetadata: false });
-  doc.registerFontkit(fontkit);
-  // The whole font, not a subset: pdf-lib's subsetter scrambles glyphs with
-  // Noto Sans ("Test Candidate" rendered as "C dd"), while the text layer still
-  // read correctly — so only drawing the page shows it. See esign-stamp.test.ts.
-  const font = await doc.embedFont(fontBytes, { subset: false });
-  const metrics = fontkit.create(fontBytes);
-  const capHeight = metrics.capHeight / metrics.unitsPerEm;
-  const pages = doc.getPages();
-  for (const item of items) {
-    const page = pages[item.page - 1];
-    if (!page) continue;
-    drawText(page, frameOf(page), font, capHeight, item);
-  }
-  return doc.save();
+  const session = await openForStamping(pdfBytes, fontBytes);
+  await stampInto(session, items);
+  return session.doc.save();
 }
