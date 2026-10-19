@@ -327,6 +327,17 @@ export const MODULES: AppModule[] = [
         group: "WHATSAPP",
       },
       {
+        // Right after Broadcasts: who replied to a campaign, whether each reply
+        // was answered, and what happened to the lead. Not behind the campaigns
+        // page's canBulkEmail — every CRM user sees it (see canSeePage), scoped
+        // the way the inbox is, so for a BDE it is their own list of campaign
+        // replies still waiting.
+        href: "/crm/broadcasts/report",
+        label: "Broadcast Report",
+        icon: "insights",
+        group: "WHATSAPP",
+      },
+      {
         // Not adminOnly: gated by an explicit page grant so a marketing
         // supervisor can be given template access without full CRM admin.
         href: "/crm/templates",

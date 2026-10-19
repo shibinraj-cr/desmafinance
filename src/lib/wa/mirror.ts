@@ -27,6 +27,7 @@ import { prisma } from "../prisma";
 import { computeDedupeKey } from "../crm";
 import { waIdToE164 } from "./phone";
 import { recordLeadActivity } from "../crm-activity";
+import { notifyUnownedBroadcastReply } from "../crm-notify";
 import { resolveDefaultStatus } from "../crm-leads";
 import { logger } from "../logger";
 import {
@@ -255,6 +256,8 @@ async function mirrorBroadcastContext(
   conversationId: string,
   phoneE164: string,
   provider: WaProviderKey,
+  /** False for an opt-out — "STOP" is not a reply anyone needs to pick up. */
+  alertIfUnowned: boolean,
 ): Promise<void> {
   const since = new Date(Date.now() - BROADCAST_CONTEXT_WINDOW_MS);
   const recipient = await prisma.waBroadcastRecipient.findFirst({
@@ -290,7 +293,7 @@ async function mirrorBroadcastContext(
   // providerMessageId (skipDuplicates) instead of stacking a duplicate. The id
   // can never equal a Meta `wamid.…`, so a delivery-status callback never matches
   // it — delivered/read/failed keeps landing on the recipient row, not here.
-  await prisma.waMessage.createMany({
+  const inserted = await prisma.waMessage.createMany({
     data: [
       {
         conversationId,
@@ -319,6 +322,13 @@ async function mirrorBroadcastContext(
       data: { sourceCampaign: recipient.broadcast.name, sourceCampaignAt: recipient.sentAt },
     })
     .catch(() => undefined);
+
+  // The first reply to this send (the bubble was new) on a number nobody owns:
+  // nobody else would hear about it, so the Marketing Admin does. Once per send,
+  // keyed by the same idempotent insert, so a chatty reply is one notification.
+  if (alertIfUnowned && inserted.count > 0) {
+    await notifyUnownedBroadcastReply({ conversationId, phoneE164, campaignName: recipient.broadcast.name });
+  }
 }
 
 /**
@@ -517,7 +527,9 @@ export async function ingestInboundMessage(
     // it and no campaign attribution. Best-effort, like the hook above — a missing
     // context bubble must never cost us the message. Only on `stored`, so a
     // redelivery cannot stack a second copy.
-    await mirrorBroadcastContext(conversation.id, phoneE164, config.provider).catch(() => undefined);
+    await mirrorBroadcastContext(conversation.id, phoneE164, config.provider, !isOptOutMessage(msg.body)).catch(
+      () => undefined,
+    );
 
     return {
       ok: true,
