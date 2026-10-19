@@ -5,6 +5,7 @@ import { getCurrentUserAndPermissions } from "@/lib/permissions";
 import { canSeePage } from "@/lib/rbac";
 import { TopBar } from "@/components/TopBar";
 import { AGREEMENTS_PAGE } from "@/lib/esign/requests";
+import { AGREEMENT_FOLDERS_PAGE } from "@/lib/esign/folders";
 import { isSendingEnabled } from "@/lib/esign/settings";
 import { AgreementsList, type AgreementRow } from "./list-client";
 
@@ -70,11 +71,16 @@ export default async function AgreementsPage() {
         title="Agreements"
         subtitle="Agreements sent for e-signature"
         action={
-          canSeePage(perms, "/operations/agreements/templates") ? (
-            <Link href="/operations/agreements/templates" className="text-body-md text-on-surface-variant hover:underline">
-              Templates
+          <>
+            <Link href={AGREEMENT_FOLDERS_PAGE} className="text-body-md text-on-surface-variant hover:underline">
+              Folders
             </Link>
-          ) : undefined
+            {canSeePage(perms, "/operations/agreements/templates") && (
+              <Link href="/operations/agreements/templates" className="text-body-md text-on-surface-variant hover:underline">
+                Templates
+              </Link>
+            )}
+          </>
         }
       />
       <div className="p-margin">
