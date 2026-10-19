@@ -27,6 +27,9 @@ export const OPS_ACTIVITY_TYPES = [
   "DOCUMENT_ANALYZED",
   "DOCUMENT_REMOVED",
   "NOTE_ADDED",
+  // Candidate name / contact / profile corrected from the project — written
+  // through to the Party and the CRM lead(s); metadata.changes holds from → to.
+  "CANDIDATE_UPDATED",
   "PROJECT_COMPLETED",
   "PROJECT_REOPENED",
   "IMPORTED",

@@ -2,6 +2,7 @@ import { Prisma } from "@prisma/client";
 import { fromPrismaDate, istDateString } from "./lead-pulse-dates";
 import { opsActionItemInclude, serializeActionItem, type OpsActionItemDTO } from "./ops-action-items";
 import type { ProofFact } from "./ops-doc-ai";
+import type { CandidateChange } from "./ops-candidate";
 
 /**
  * Read-side helpers for the Operations workspace: Prisma includes, filter
@@ -25,7 +26,19 @@ export const opsProjectDetailInclude = Prisma.validator<Prisma.OpsProjectInclude
   service: { select: { id: true, name: true } },
   assignedTo: { select: { id: true, username: true } },
   template: { select: { id: true, name: true, version: true } },
-  lead: { select: { id: true, candidateName: true } },
+  lead: {
+    select: {
+      id: true,
+      candidateName: true,
+      email: true,
+      phone: true,
+      altPhone: true,
+      dob: true,
+      country: true,
+      qualificationOther: true,
+      qualification: { select: { id: true, label: true } },
+    },
+  },
   tasks: {
     orderBy: { seq: "asc" },
     include: {
@@ -147,6 +160,27 @@ export type OpsActivityDTO = {
   summary: string | null;
   actorName: string | null;
   occurredAt: string;
+  /** From → to of each field, for CANDIDATE_UPDATED entries. */
+  changes: CandidateChange[] | null;
+};
+
+/**
+ * The candidate's editable details as the project page shows them: name /
+ * email / phone from the Finance Party (what the workspace already reads), the
+ * profile fields from the project's CRM lead. The lead's own name / email /
+ * phone ride along so the page can point out when the CRM disagrees.
+ */
+export type OpsCandidateDTO = {
+  name: string;
+  email: string | null;
+  phone: string | null;
+  altPhone: string | null;
+  dob: string | null;
+  country: string | null;
+  qualificationId: string | null;
+  qualificationLabel: string | null;
+  qualificationOther: string | null;
+  lead: { name: string; email: string | null; phone: string | null } | null;
 };
 
 export type OpsProjectDetailDTO = OpsProjectRow & {
@@ -155,6 +189,7 @@ export type OpsProjectDetailDTO = OpsProjectRow & {
   leadId: string | null;
   candidateEmail: string | null;
   candidatePhone: string | null;
+  candidate: OpsCandidateDTO;
   tasks: OpsTaskDTO[];
   /** Ad-hoc tasks on the candidate as a whole, attached to no single step. */
   actionItems: OpsActionItemDTO[];
@@ -169,6 +204,18 @@ export function serializeProjectDetail(p: DetailPayload, today: string = istDate
     leadId: p.lead?.id ?? null,
     candidateEmail: p.party.email,
     candidatePhone: p.party.phone,
+    candidate: {
+      name: p.party.name,
+      email: p.party.email,
+      phone: p.party.phone,
+      altPhone: p.lead?.altPhone ?? null,
+      dob: p.lead?.dob ? p.lead.dob.toISOString().slice(0, 10) : null,
+      country: p.lead?.country ?? null,
+      qualificationId: p.lead?.qualification?.id ?? null,
+      qualificationLabel: p.lead?.qualification?.label ?? null,
+      qualificationOther: p.lead?.qualificationOther ?? null,
+      lead: p.lead ? { name: p.lead.candidateName, email: p.lead.email, phone: p.lead.phone } : null,
+    },
     tasks: p.tasks.map((t) => ({
       id: t.id,
       seq: t.seq,
@@ -195,8 +242,16 @@ export function serializeProjectDetail(p: DetailPayload, today: string = istDate
       summary: a.summary,
       actorName: a.actor?.username ?? null,
       occurredAt: a.occurredAt.toISOString(),
+      changes: activityChanges(a.metadata),
     })),
   };
+}
+
+/** The from → to list a CANDIDATE_UPDATED entry carries, if well-formed. */
+function activityChanges(metadata: Prisma.JsonValue | null): CandidateChange[] | null {
+  if (!metadata || typeof metadata !== "object" || Array.isArray(metadata)) return null;
+  const list = (metadata as Record<string, unknown>).changes;
+  return Array.isArray(list) ? (list as CandidateChange[]) : null;
 }
 
 type DocumentPayload = Prisma.OpsDocumentGetPayload<{ include: { uploadedBy: { select: { username: true } } } }>;
