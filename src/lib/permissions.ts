@@ -5,6 +5,37 @@ import { authOptions } from "./auth";
 import { prisma } from "./prisma";
 import { env } from "./env";
 import { fromLegacyString, type Permissions } from "./rbac";
+import { PC_ENROLL_PAGE } from "./partner-commissions/constants";
+
+/**
+ * What the loader reads beyond the role, for per-PERSON page grants that a
+ * shared Role can't express.
+ */
+const USER_INCLUDE = {
+  roleRef: true,
+  leadPulseRole: { select: { role: true, active: true } },
+  pcEnrollGrant: { select: { programs: true } },
+} as const;
+
+/**
+ * Partner Enrollments (/crm/partner-enrollments) is granted per person, not per
+ * role: every active BDE (Lead Pulse L1/L2 — they enroll GCAN) and anyone with a
+ * personal enrollment grant from the Partner Commissions settings (e.g. the
+ * OSCE/NCLEX coordinator). Adding it here makes the nav and canSeePage agree
+ * without touching any Role row. The page re-checks exactly which programs.
+ */
+function withPersonalPages(
+  pages: string[],
+  user: {
+    leadPulseRole: { role: string; active: boolean } | null;
+    pcEnrollGrant: { programs: string[] } | null;
+  },
+): string[] {
+  const bde = !!user.leadPulseRole?.active && (user.leadPulseRole.role === "l1" || user.leadPulseRole.role === "l2");
+  const granted = (user.pcEnrollGrant?.programs.length ?? 0) > 0;
+  if ((bde || granted) && !pages.includes(PC_ENROLL_PAGE)) return [...pages, PC_ENROLL_PAGE];
+  return pages;
+}
 
 /**
  * Mobile bearer fallback: when there's no web session cookie, accept an
@@ -42,7 +73,7 @@ export async function getCurrentUserPermissions(): Promise<Permissions | null> {
   if (!userId) return null;
   const user = await prisma.user.findUnique({
     where: { id: userId },
-    include: { roleRef: true },
+    include: USER_INCLUDE,
   });
   if (!user) return null;
   // A deactivated account loses access immediately, even mid-session.
@@ -53,12 +84,12 @@ export async function getCurrentUserPermissions(): Promise<Permissions | null> {
       canApprove: user.roleRef.canApprove,
       needsApproval: user.roleRef.needsApproval,
       draftFirst: user.draftFirst,
-      pages: user.roleRef.pages,
+      pages: withPersonalPages(user.roleRef.pages, user),
       roleName: user.roleRef.name,
     };
   }
   const legacy = fromLegacyString(user.role);
-  return { ...legacy, draftFirst: user.draftFirst };
+  return { ...legacy, pages: withPersonalPages(legacy.pages, user), draftFirst: user.draftFirst };
 }
 
 export async function getCurrentUserAndPermissions() {
@@ -68,20 +99,21 @@ export async function getCurrentUserAndPermissions() {
   if (!userId) return { session: null, perms: null, userId: null };
   const user = await prisma.user.findUnique({
     where: { id: userId },
-    include: { roleRef: true },
+    include: USER_INCLUDE,
   });
   if (!user) return { session, perms: null, userId };
   // A deactivated account loses access immediately, even mid-session.
   if (!user.isActive) return { session, perms: null, userId: user.id };
+  const legacy = user.roleRef ? null : fromLegacyString(user.role);
   const perms: Permissions = user.roleRef
     ? {
         isAdmin: user.roleRef.isAdmin,
         canApprove: user.roleRef.canApprove,
         needsApproval: user.roleRef.needsApproval,
         draftFirst: user.draftFirst,
-        pages: user.roleRef.pages,
+        pages: withPersonalPages(user.roleRef.pages, user),
         roleName: user.roleRef.name,
       }
-    : { ...fromLegacyString(user.role), draftFirst: user.draftFirst };
+    : { ...legacy!, pages: withPersonalPages(legacy!.pages, user), draftFirst: user.draftFirst };
   return { session, perms, userId: user.id };
 }

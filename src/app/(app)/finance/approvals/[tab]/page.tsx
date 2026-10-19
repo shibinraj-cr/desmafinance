@@ -5,6 +5,7 @@ import { Section } from "@/components/Cards";
 import { prisma } from "@/lib/prisma";
 import { inrFull } from "@/lib/format";
 import { canApprove, canSeePage } from "@/lib/rbac";
+import { PC_FINANCE_PAGE } from "@/lib/partner-commissions/constants";
 import { getCurrentUserAndPermissions } from "@/lib/permissions";
 import { ApprovalActions } from "../actions";
 import { ResubmitEditor } from "../resubmit-editor";
@@ -87,6 +88,14 @@ export default async function ApprovalsPage({
   // Visibility: reviewers (manager/admin) see everyone's items, executives
   // see only their own submissions. The status filter narrows to the tab.
   const ownershipWhere = reviewer ? {} : { submittedById: userId ?? "__none__" };
+
+  // Commission payments (Partner Commissions) are approved on their own tab —
+  // they need the AED/INR figures beside the invoice — but they're flagged here
+  // so a reviewer working this queue sees them too.
+  const commissionAwaiting =
+    reviewer && canSeePage(perms, PC_FINANCE_PAGE)
+      ? await prisma.commissionReceipt.count({ where: { status: "awaiting" } }).catch(() => 0)
+      : 0;
 
   const [items, counts, masters, draftsCount] = await Promise.all([
     prisma.pendingApproval.findMany({
@@ -331,6 +340,18 @@ export default async function ApprovalsPage({
         subtitle={reviewer ? tabSubtitle : `Your submissions · ${tabSubtitle}`}
       />
       <div className="p-margin space-y-lg">
+        {commissionAwaiting > 0 ? (
+          <Link
+            href={`${PC_FINANCE_PAGE}?tab=payments`}
+            className="flex items-center gap-sm px-md py-sm rounded-xl border border-primary-container bg-primary-fixed/40 text-body-md hover:opacity-90"
+          >
+            <span className="material-symbols-outlined text-[18px]">handshake</span>
+            <span className="flex-1">
+              <b>{commissionAwaiting} commission payment{commissionAwaiting === 1 ? "" : "s"}</b> waiting for approval in Partner Commissions.
+            </span>
+            <span className="font-semibold text-accent">Review</span>
+          </Link>
+        ) : null}
         <Tabs
           active={tab}
           counts={{ pending: pendingCount, approved: approvedCount, rejected: rejectedCount }}
