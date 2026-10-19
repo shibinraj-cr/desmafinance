@@ -140,8 +140,8 @@ export function canSeePage(p: Permissions, href: string): boolean {
   if (ADMIN_RESTRICTED_PAGES.some((pg) => href === pg || href.startsWith(pg + "/"))) return false;
   // Self-service essentials everyone can see.
   if (ALWAYS_VISIBLE_PAGES.some((pg) => href === pg || href.startsWith(pg + "/"))) return true;
-  // CRM notifications, the personal Daily Report, the Campaign Delivery report
-  // and the WhatsApp Inbox are visible to every CRM user — anyone who can reach
+  // CRM notifications, the personal Daily Report, the Campaign Delivery report,
+  // the WhatsApp Inbox and the Broadcast Report are visible to every CRM user — anyone who can reach
   // the CRM Leads page — so they need no separate Role.pages grant (and never
   // leak the CRM module to non-CRM users, who can't see /crm/leads). Each page
   // itself authorises via getCrmAccess.
@@ -153,7 +153,12 @@ export function canSeePage(p: Permissions, href: string): boolean {
     href === "/crm/deliveries" ||
     href.startsWith("/crm/deliveries/") ||
     href === "/crm/inbox" ||
-    href.startsWith("/crm/inbox/")
+    href.startsWith("/crm/inbox/") ||
+    // The Broadcast Report, by itself: a consultant sees replies on their own
+    // leads. The prefix rule below would otherwise tie it to a /crm/broadcasts
+    // grant, which is the bulk-send tool and stays narrow.
+    href === "/crm/broadcasts/report" ||
+    href.startsWith("/crm/broadcasts/report/")
   ) {
     return p.pages.some((pg) => pg === "/crm/leads" || pg.startsWith("/crm/leads/"));
   }

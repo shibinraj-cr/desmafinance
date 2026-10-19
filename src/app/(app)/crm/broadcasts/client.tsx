@@ -1,8 +1,10 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useState } from "react";
+import Link from "next/link";
 import { MultiSelect } from "@/components/MultiSelect";
 import { listParam } from "@/lib/filter-params";
+import { istDay } from "@/lib/wa/broadcast-report";
 
 type TemplateOpt = {
   name: string;
@@ -34,6 +36,7 @@ type BroadcastRow = {
   templateName: string;
   status: string;
   scheduledAt: string | null;
+  startedAt: string | null;
   completedAt: string | null;
   totalRecipients: number;
   sentCount: number;
@@ -386,6 +389,16 @@ function BroadcastRowView({
           <ActionBtn busy={busy} onClick={onViewFailures}>
             Report
           </ActionBtn>
+        )}
+        {row.startedAt && (
+          // Who replied and whether they were answered — the Broadcast Report,
+          // opened on this campaign from the day it started sending.
+          <Link
+            href={`/crm/broadcasts/report?range=custom&from=${istDay(new Date(row.startedAt))}&to=${istDay(new Date())}&campaign=${row.id}`}
+            className="h-8 px-md ml-xs rounded-lg border border-outline-variant text-label-sm font-semibold text-on-surface-variant hover:bg-surface-container-low inline-flex items-center"
+          >
+            Replies
+          </Link>
         )}
         {(row.status === "sent" || row.status === "cancelled") && (
           <ActionBtn busy={busy} onClick={onResend}>
