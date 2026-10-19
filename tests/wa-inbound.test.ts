@@ -61,6 +61,7 @@ describe("normalizeMessageType", () => {
   });
   it("files anything unrecognised as unsupported rather than inventing a type", () => {
     expect(normalizeMessageType("order")).toBe("unsupported");
+    expect(normalizeMessageType("request_welcome")).toBe("unsupported");
   });
 });
 
@@ -180,6 +181,98 @@ describe("extractInboundMessages", () => {
     expect(extractInboundMessages(null)).toEqual([]);
     expect(extractInboundMessages("nope")).toEqual([]);
     expect(extractInboundMessages([])).toEqual([]);
+  });
+});
+
+describe("messages WhatsApp will not carry", () => {
+  // Meta's documented shape for an unsupported message, verbatim but for the ids.
+  const unsupported = (kind: string | null, code = 131051) => ({
+    from: "919947000001",
+    id: `wamid.UNSUP_${kind ?? "none"}_${code}`,
+    timestamp: "1760600700",
+    errors: [
+      {
+        code,
+        title: "Message type unknown",
+        message: "Message type unknown",
+        error_data: { details: "Message type is currently not supported." },
+      },
+    ],
+    type: "unsupported",
+    ...(kind ? { unsupported: { type: kind } } : {}),
+  });
+
+  it("keeps WHAT the candidate did, from Meta's unsupported.type — not just 'unsupported'", () => {
+    const [m] = extractInboundMessages(metaEnvelope([unsupported("edit")]));
+    expect(m.type).toBe("unsupported");
+    expect(m.unsupportedType).toBe("edit");
+    expect(m.body).toBeNull();
+  });
+
+  it("reads a reaction Meta could not carry as a reaction kind", () => {
+    expect(extractInboundMessages(metaEnvelope([unsupported("reaction")]))[0].unsupportedType).toBe("reaction");
+  });
+
+  it("names a 131060 'not available yet' message as such when Meta gives no kind", () => {
+    expect(extractInboundMessages(metaEnvelope([unsupported(null, 131060)]))[0].unsupportedType).toBe("unavailable");
+  });
+
+  it("is null rather than guessed when Meta names nothing", () => {
+    expect(extractInboundMessages(metaEnvelope([unsupported(null)]))[0].unsupportedType).toBeNull();
+  });
+
+  it("keeps the raw name of a Meta type we do not model", () => {
+    const [m] = extractInboundMessages(
+      metaEnvelope([{ from: "919947000001", id: "wamid.ORDER", type: "order", order: { catalog_id: "1" } }]),
+    );
+    expect(m.type).toBe("unsupported");
+    expect(m.unsupportedType).toBe("order");
+  });
+
+  it("is null on every ordinary message", () => {
+    const [m] = extractInboundMessages(
+      metaEnvelope([{ from: "919947000001", id: "wamid.T", type: "text", text: { body: "hi" } }]),
+    );
+    expect(m.unsupportedType).toBeNull();
+  });
+});
+
+describe("reactions", () => {
+  const reaction = (emoji?: string) => ({
+    from: "919947000001",
+    id: `wamid.REACT_${emoji ?? "removed"}`,
+    timestamp: "1760600700",
+    type: "reaction",
+    reaction: { message_id: "wamid.OUR_TEMPLATE", ...(emoji !== undefined ? { emoji } : {}) },
+  });
+
+  it("stores a reaction as a reaction, with its emoji as the body", () => {
+    const [m] = extractInboundMessages(metaEnvelope([reaction("👍")]));
+    expect(m.type).toBe("reaction");
+    expect(m.body).toBe("👍");
+    expect(m.unsupportedType).toBeNull();
+  });
+
+  it("drops a reaction being taken back — it says nothing and needs no reply", () => {
+    expect(extractInboundMessages(metaEnvelope([reaction()]))).toEqual([]);
+    expect(extractInboundMessages(metaEnvelope([reaction("")]))).toEqual([]);
+  });
+});
+
+describe("system messages", () => {
+  it("keeps the notice text, e.g. a candidate changing number", () => {
+    const [m] = extractInboundMessages(
+      metaEnvelope([
+        {
+          from: "919947000001",
+          id: "wamid.SYS",
+          type: "system",
+          system: { body: "User A changed from 919947000001 to 919947000002", type: "user_changed_number" },
+        },
+      ]),
+    );
+    expect(m.type).toBe("system");
+    expect(m.body).toContain("changed from");
   });
 });
 

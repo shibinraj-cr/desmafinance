@@ -10,6 +10,7 @@
 import { Prisma } from "@prisma/client";
 import { prisma } from "../prisma";
 import { isOptOutMessage } from "./inbound";
+import { waMessageText } from "./message-label";
 import {
   MAX_REPLY_WINDOW_DAYS,
   attributeReply,
@@ -157,7 +158,15 @@ export async function loadBroadcastReport(opts: {
       },
       orderBy: { occurredAt: "asc" },
       take: MAX_MESSAGES,
-      select: { conversationId: true, direction: true, type: true, body: true, occurredAt: true, sentById: true },
+      select: {
+        conversationId: true,
+        direction: true,
+        type: true,
+        body: true,
+        unsupportedType: true,
+        occurredAt: true,
+        sentById: true,
+      },
     }),
     prisma.lead.findMany({
       where: { id: { in: leadIds } },
@@ -183,7 +192,7 @@ export async function loadBroadcastReport(opts: {
   for (const m of messages) {
     const list = threadEvents.get(m.conversationId) ?? [];
     const at = m.occurredAt.getTime();
-    if (m.direction === "in") list.push({ kind: "in", at, text: m.body ?? (m.type !== "text" ? `[${m.type}]` : null) });
+    if (m.direction === "in") list.push({ kind: "in", at, text: waMessageText(m) });
     else if (m.sentById) list.push({ kind: "out", at, by: m.sentById });
     threadEvents.set(m.conversationId, list);
   }

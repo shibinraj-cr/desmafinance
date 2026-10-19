@@ -89,6 +89,7 @@ export const GET = withApiHandler(async (_req: Request, { params }: { params: { 
           direction: true,
           type: true,
           body: true,
+          unsupportedType: true,
           mediaMime: true,
           fileName: true,
           // Whether an attachment exists — never the provider's id. The bytes
@@ -226,6 +227,7 @@ export const GET = withApiHandler(async (_req: Request, { params }: { params: { 
         direction: m.direction,
         type: m.type,
         body: m.body,
+        unsupportedType: m.unsupportedType,
         mediaMime: m.mediaMime,
         fileName: m.fileName,
         hasMedia: !!(m.mediaId || m.mediaUrl),

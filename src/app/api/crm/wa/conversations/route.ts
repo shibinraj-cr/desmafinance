@@ -76,7 +76,7 @@ export const GET = withApiHandler(async (req: Request) => {
       messages: {
         orderBy: { occurredAt: "desc" },
         take: 1,
-        select: { body: true, type: true, direction: true },
+        select: { body: true, type: true, unsupportedType: true, direction: true },
       },
     },
   });
