@@ -30,6 +30,17 @@ export default async function OperationsProjectDetailPage({ params }: { params: 
         orderBy: { username: "asc" },
       })
     : [];
+  // For the candidate-details editor. The candidate's current qualification
+  // stays selectable even if it has since been retired from the master.
+  const qualifications = canEdit
+    ? await prisma.crmQualification.findMany({
+        where: {
+          OR: [{ active: true }, ...(detail.candidate.qualificationId ? [{ id: detail.candidate.qualificationId }] : [])],
+        },
+        orderBy: [{ displayOrder: "asc" }, { label: "asc" }],
+        select: { id: true, label: true },
+      })
+    : [];
 
   return (
     <>
@@ -40,6 +51,7 @@ export default async function OperationsProjectDetailPage({ params }: { params: 
           canEdit={canEdit}
           canAssign={access.canAssign}
           opsUsers={opsUsers}
+          qualifications={qualifications}
         />
       </div>
     </>

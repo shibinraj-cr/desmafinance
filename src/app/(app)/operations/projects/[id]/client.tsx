@@ -1,7 +1,10 @@
 "use client";
 
-import { useState } from "react";
+import { useState, type ReactNode } from "react";
 import { useRouter } from "next/navigation";
+import { ageFromDob } from "@/lib/age";
+import { COUNTRIES } from "@/lib/countries";
+import { isOtherQualification, qualificationText, QUALIFICATION_OTHER_MAX } from "@/lib/crm";
 
 type ActionItemDTO = {
   id: string;
@@ -51,7 +54,27 @@ type TaskDTO = {
   actionItems: ActionItemDTO[];
   documents: DocumentDTO[];
 };
-type ActivityDTO = { id: string; type: string; summary: string | null; actorName: string | null; occurredAt: string };
+type ChangeDTO = { field: string; label: string; from: string | null; to: string | null };
+type ActivityDTO = {
+  id: string;
+  type: string;
+  summary: string | null;
+  actorName: string | null;
+  occurredAt: string;
+  changes: ChangeDTO[] | null;
+};
+type CandidateDTO = {
+  name: string;
+  email: string | null;
+  phone: string | null;
+  altPhone: string | null;
+  dob: string | null;
+  country: string | null;
+  qualificationId: string | null;
+  qualificationLabel: string | null;
+  qualificationOther: string | null;
+  lead: { name: string; email: string | null; phone: string | null } | null;
+};
 type ProjectDetail = {
   id: string;
   candidateName: string;
@@ -67,12 +90,14 @@ type ProjectDetail = {
   leadId: string | null;
   candidateEmail: string | null;
   candidatePhone: string | null;
+  candidate: CandidateDTO;
   tasks: TaskDTO[];
   /** Ad-hoc tasks on the candidate as a whole, attached to no single step. */
   actionItems: ActionItemDTO[];
   activities: ActivityDTO[];
 };
 type UserLite = { id: string; username: string };
+type Option = { id: string; label: string };
 
 const TASK_TONE: Record<string, string> = {
   pending: "bg-surface-container-high text-on-surface-variant",
@@ -122,11 +147,13 @@ export function ProjectDetailClient({
   canEdit,
   canAssign,
   opsUsers,
+  qualifications,
 }: {
   project: ProjectDetail;
   canEdit: boolean;
   canAssign: boolean;
   opsUsers: UserLite[];
+  qualifications: Option[];
 }) {
   const router = useRouter();
   const [tab, setTab] = useState<"checklist" | "history">("checklist");
@@ -284,15 +311,6 @@ export function ProjectDetailClient({
                 </span>
               )}
             </div>
-            <div className="mt-xs text-body-sm text-on-surface-variant">
-              {project.candidateEmail || "—"} · {project.candidatePhone || "—"}
-              {project.leadId && (
-                <>
-                  {" · "}
-                  <a className="text-primary hover:underline" href={`/crm/leads/${project.leadId}`}>CRM lead</a>
-                </>
-              )}
-            </div>
           </div>
           <div className="flex items-center gap-sm">
             {canAssign && (
@@ -334,6 +352,14 @@ export function ProjectDetailClient({
         </div>
         {error && <div className="mt-sm text-label-sm text-error">{error}</div>}
       </section>
+
+      <CandidateCard
+        projectId={project.id}
+        candidate={project.candidate}
+        leadId={project.leadId}
+        canEdit={canEdit}
+        qualifications={qualifications}
+      />
 
       {/* Phase progress — the main stages of the process */}
       {phaseStatsList.length >= 2 && <PhaseProgress stats={phaseStatsList} />}
@@ -442,11 +468,314 @@ export function ProjectDetailClient({
                 <div className="flex-1">
                   <span className="text-body-sm text-on-surface">{a.summary ?? a.type}</span>
                   {a.actorName && <span className="text-label-sm text-on-surface-variant"> · {a.actorName}</span>}
+                  {a.changes && a.changes.length > 0 && (
+                    <ul className="mt-[2px] space-y-[2px]">
+                      {a.changes.map((c) => (
+                        <li key={c.field} className="text-label-sm text-on-surface-variant">
+                          {c.label}: <span className="line-through">{c.from || "—"}</span> → <span className="text-on-surface">{c.to || "—"}</span>
+                        </li>
+                      ))}
+                    </ul>
+                  )}
                 </div>
               </div>
             ))
           )}
         </div>
+      )}
+    </div>
+  );
+}
+
+const inputCls =
+  "w-full h-9 px-sm rounded-lg border border-outline-variant bg-surface-container-lowest text-body-sm outline-none focus:border-primary";
+
+type CandidateDraft = {
+  name: string;
+  email: string;
+  phone: string;
+  altPhone: string;
+  dob: string;
+  country: string;
+  qualificationId: string;
+  qualificationOther: string;
+};
+
+function draftFrom(c: CandidateDTO): CandidateDraft {
+  return {
+    name: c.name,
+    email: c.email ?? "",
+    phone: c.phone ?? "",
+    altPhone: c.altPhone ?? "",
+    dob: c.dob ?? "",
+    country: c.country ?? "",
+    qualificationId: c.qualificationId ?? "",
+    qualificationOther: c.qualificationOther ?? "",
+  };
+}
+
+const orNull = (v: string) => (v.trim() === "" ? null : v.trim());
+
+/**
+ * Name / email / phone where the CRM lead disagrees with the candidate record
+ * this page reads (e.g. a consultant corrected the lead after enrollment).
+ */
+function crmMismatches(c: CandidateDTO): { field: "name" | "email" | "phone"; label: string; crm: string | null }[] {
+  if (!c.lead) return [];
+  const out: { field: "name" | "email" | "phone"; label: string; crm: string | null }[] = [];
+  if (c.lead.name !== c.name) out.push({ field: "name", label: "Name", crm: c.lead.name });
+  if (c.lead.email !== c.email) out.push({ field: "email", label: "Email", crm: c.lead.email });
+  if (c.lead.phone !== c.phone) out.push({ field: "phone", label: "Phone", crm: c.lead.phone });
+  return out;
+}
+
+/**
+ * The candidate's details, editable by whoever can work the project. Saving
+ * writes through to the Finance candidate record and every CRM lead of the
+ * candidate, and is logged on this project's History and each lead's History.
+ */
+function CandidateCard({
+  projectId,
+  candidate,
+  leadId,
+  canEdit,
+  qualifications,
+}: {
+  projectId: string;
+  candidate: CandidateDTO;
+  leadId: string | null;
+  canEdit: boolean;
+  qualifications: Option[];
+}) {
+  const router = useRouter();
+  const [editing, setEditing] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [notice, setNotice] = useState<string | null>(null);
+  const [draft, setDraft] = useState<CandidateDraft>(() => draftFrom(candidate));
+
+  const mismatches = crmMismatches(candidate);
+  const isOtherQual = isOtherQualification(qualifications.find((q) => q.id === draft.qualificationId)?.label);
+  const age = ageFromDob(candidate.dob, new Date());
+  const draftAge = ageFromDob(draft.dob || null, new Date());
+
+  function startEdit() {
+    setDraft(draftFrom(candidate));
+    setError(null);
+    setNotice(null);
+    setEditing(true);
+  }
+
+  /** Only what changed. Name / email / phone also count as changed when the CRM
+   *  lead holds something else, so saving makes the two agree. */
+  function changedFields(): Record<string, string | null> {
+    const body: Record<string, string | null> = {};
+    const name = draft.name.trim();
+    if (name !== candidate.name || (candidate.lead && name !== candidate.lead.name)) body.candidateName = name;
+    for (const f of ["email", "phone"] as const) {
+      const v = orNull(draft[f]);
+      if (v !== candidate[f] || (candidate.lead && v !== candidate.lead[f])) body[f] = v;
+    }
+    if (orNull(draft.altPhone) !== candidate.altPhone) body.altPhone = orNull(draft.altPhone);
+    if (orNull(draft.dob) !== candidate.dob) body.dob = orNull(draft.dob);
+    if (orNull(draft.country) !== candidate.country) body.country = orNull(draft.country);
+    const qualId = orNull(draft.qualificationId);
+    const qualOther = isOtherQual ? orNull(draft.qualificationOther) : null;
+    if (qualId !== candidate.qualificationId || qualOther !== candidate.qualificationOther) {
+      body.qualificationId = qualId;
+      body.qualificationOther = qualOther;
+    }
+    return body;
+  }
+
+  async function save() {
+    setError(null);
+    if (draft.name.trim().length < 2) {
+      setError("Name must be at least 2 characters.");
+      return;
+    }
+    const body = changedFields();
+    if (Object.keys(body).length === 0) {
+      setEditing(false);
+      return;
+    }
+    setBusy(true);
+    const res = await fetch(`/api/operations/projects/${projectId}/candidate`, {
+      method: "PATCH",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(body),
+    });
+    setBusy(false);
+    const d = (await res.json().catch(() => ({}))) as {
+      message?: string;
+      error?: string;
+      issues?: { message?: string }[];
+      leadsUpdated?: number;
+    };
+    if (!res.ok) {
+      setError(d.issues?.[0]?.message || d.message || d.error || "Couldn't save the changes.");
+      return;
+    }
+    const n = d.leadsUpdated ?? 0;
+    setNotice(n > 0 ? `Saved. Updated in CRM too (${n} lead${n === 1 ? "" : "s"}).` : "Saved.");
+    setEditing(false);
+    router.refresh();
+  }
+
+  const rows: [string, string][] = [
+    ["Name", candidate.name],
+    ["Email", candidate.email || "—"],
+    ["Phone", candidate.phone || "—"],
+    ["Alternative phone", candidate.altPhone || "—"],
+    ["Date of birth", candidate.dob ? `${fmtDate(candidate.dob)}${age !== null ? ` · age ${age}` : ""}` : "—"],
+    ["Country", candidate.country || "—"],
+    ["Qualification", qualificationText(candidate.qualificationLabel, candidate.qualificationOther) || "—"],
+  ];
+
+  return (
+    <section className="rounded-xl border border-outline-variant bg-surface-container-lowest p-md space-y-sm">
+      <div className="flex items-center justify-between gap-sm">
+        <h3 className="text-label-sm uppercase tracking-wider text-on-surface-variant">Candidate details</h3>
+        <div className="flex items-center gap-sm">
+          {leadId && (
+            <a className="text-label-sm text-primary hover:underline" href={`/crm/leads/${leadId}`}>
+              Open CRM lead
+            </a>
+          )}
+          {canEdit && !editing && (
+            <button className={actionBtn} onClick={startEdit}>
+              Edit
+            </button>
+          )}
+        </div>
+      </div>
+
+      {notice && !editing && <div className="text-label-sm text-accent">{notice}</div>}
+
+      {!editing ? (
+        <>
+          <dl className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-x-lg gap-y-sm">
+            {rows.map(([label, value]) => (
+              <div key={label} className="min-w-0">
+                <dt className="text-label-sm text-on-surface-variant">{label}</dt>
+                <dd className="text-body-sm text-on-surface break-words">{value}</dd>
+              </div>
+            ))}
+          </dl>
+          {mismatches.length > 0 && (
+            <div className="text-label-sm text-on-surface-variant">
+              The CRM lead shows a different {mismatches.map((m) => m.label.toLowerCase()).join(", ")}
+              {canEdit && " — use Edit to choose the right value; saving updates both."}
+            </div>
+          )}
+        </>
+      ) : (
+        <div className="space-y-sm">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-sm">
+            <CandidateField label="Name" crm={mismatches.find((m) => m.field === "name")} onUseCrm={(v) => setDraft({ ...draft, name: v })}>
+              <input className={inputCls} value={draft.name} maxLength={160} onChange={(e) => setDraft({ ...draft, name: e.target.value })} />
+            </CandidateField>
+            <CandidateField label="Email" crm={mismatches.find((m) => m.field === "email")} onUseCrm={(v) => setDraft({ ...draft, email: v })}>
+              <input className={inputCls} type="email" value={draft.email} onChange={(e) => setDraft({ ...draft, email: e.target.value })} />
+            </CandidateField>
+            <CandidateField label="Phone" crm={mismatches.find((m) => m.field === "phone")} onUseCrm={(v) => setDraft({ ...draft, phone: v })}>
+              <input className={inputCls} value={draft.phone} onChange={(e) => setDraft({ ...draft, phone: e.target.value })} />
+            </CandidateField>
+            <CandidateField label="Alternative phone">
+              <input className={inputCls} value={draft.altPhone} onChange={(e) => setDraft({ ...draft, altPhone: e.target.value })} />
+            </CandidateField>
+            <CandidateField label={`Date of birth${draftAge !== null ? ` · age ${draftAge}` : ""}`}>
+              <input
+                className={inputCls}
+                type="date"
+                value={draft.dob}
+                max={todayKey()}
+                onChange={(e) => setDraft({ ...draft, dob: e.target.value })}
+              />
+            </CandidateField>
+            <CandidateField label="Country">
+              <select className={inputCls} value={draft.country} onChange={(e) => setDraft({ ...draft, country: e.target.value })}>
+                <option value="">—</option>
+                {COUNTRIES.map((c) => (
+                  <option key={c} value={c}>{c}</option>
+                ))}
+              </select>
+            </CandidateField>
+            <CandidateField label="Qualification">
+              <select
+                className={inputCls}
+                value={draft.qualificationId}
+                onChange={(e) => setDraft({ ...draft, qualificationId: e.target.value })}
+              >
+                <option value="">—</option>
+                {qualifications.map((q) => (
+                  <option key={q.id} value={q.id}>{q.label}</option>
+                ))}
+              </select>
+            </CandidateField>
+            {isOtherQual && (
+              <CandidateField label={`Which qualification? (max ${QUALIFICATION_OTHER_MAX} chars)`}>
+                <input
+                  className={inputCls}
+                  value={draft.qualificationOther}
+                  maxLength={QUALIFICATION_OTHER_MAX}
+                  placeholder="e.g. MBA"
+                  onChange={(e) => setDraft({ ...draft, qualificationOther: e.target.value })}
+                />
+              </CandidateField>
+            )}
+          </div>
+          <div className="text-label-sm text-on-surface-variant">
+            Saving updates the candidate record and the CRM lead, and is recorded in both histories.
+          </div>
+          {error && <div className="text-label-sm text-error">{error}</div>}
+          <div className="flex gap-sm">
+            <button
+              className="px-md h-9 rounded-lg bg-primary text-on-primary text-label-sm disabled:opacity-50"
+              disabled={busy}
+              onClick={save}
+            >
+              {busy ? "Saving…" : "Save"}
+            </button>
+            <button className="px-md h-9 rounded-lg border border-outline-variant text-label-sm" disabled={busy} onClick={() => setEditing(false)}>
+              Cancel
+            </button>
+          </div>
+        </div>
+      )}
+    </section>
+  );
+}
+
+function CandidateField({
+  label,
+  crm,
+  onUseCrm,
+  children,
+}: {
+  label: string;
+  crm?: { crm: string | null };
+  onUseCrm?: (value: string) => void;
+  children: ReactNode;
+}) {
+  return (
+    <div className="space-y-[2px]">
+      <label className="block space-y-[2px]">
+        <span className="text-label-sm text-on-surface-variant">{label}</span>
+        {children}
+      </label>
+      {crm && (
+        <span className="block text-label-sm text-on-surface-variant">
+          CRM lead has: {crm.crm || "—"}
+          {onUseCrm && (
+            <>
+              {" · "}
+              <button type="button" className="text-primary hover:underline" onClick={() => onUseCrm(crm.crm ?? "")}>
+                use this
+              </button>
+            </>
+          )}
+        </span>
       )}
     </div>
   );
