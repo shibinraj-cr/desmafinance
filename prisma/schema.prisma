@@ -376,25 +376,30 @@ model PartyService {
 // ──────────────────────────────────────────────────────────────────────
 
 model LeadPulseRole {
-  id             String   @id @default(cuid())
-  userId         String   @unique
-  user           User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  id              String   @id @default(cuid())
+  userId          String   @unique
+  user            User     @relation(fields: [userId], references: [id], onDelete: Cascade)
   // 'l1' | 'l2' | 'supervisor'
-  role           String
+  role            String
   // Region codes from LeadPulseRegion.code; empty array = all regions.
-  regionFocus    String[] @default([])
-  displayName    String
+  regionFocus     String[] @default([])
+  displayName     String
   // Consultant contact number, surfaced as the {consultant_phone} merge field in
   // CRM email/WhatsApp templates. Optional — blank renders as an empty string.
-  phone          String?
-  active         Boolean  @default(true)
+  phone           String?
+  active          Boolean  @default(true)
   // Per-user CRM notification preference: when true (default), the user gets an
   // in-app notification each time a lead is assigned/reassigned to them. This is
   // the "notification setting" surfaced on the personal Notifications page. Lives
   // here because only users with a LeadPulseRole can be assigned leads.
-  notifyOnAssign Boolean  @default(true)
-  createdAt      DateTime @default(now())
-  updatedAt      DateTime @updatedAt
+  notifyOnAssign  Boolean  @default(true)
+  // When false, assigning a lead to this person never sends the candidate the
+  // automated WhatsApp intro (recorded as a skipped delivery instead) — for
+  // someone who holds leads without being the consultant the intro announces,
+  // e.g. a supervisor rostered as L2. Toggled on the Team Roster page.
+  sendAssignIntro Boolean  @default(true)
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
 
   @@index([role])
   @@index([active])

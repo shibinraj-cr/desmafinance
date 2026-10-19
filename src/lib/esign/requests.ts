@@ -102,6 +102,11 @@ export const SendInputSchema = z.object({
 });
 export type SendInput = z.infer<typeof SendInputSchema>;
 
+/** DESMA always signs first, then the client — whatever order was asked for. */
+export function withSigningOrder<T extends { role: string; signOrder: number }>(signers: T[]): T[] {
+  return signers.map((s) => ({ ...s, signOrder: s.role === "DESMA" ? 1 : 2 }));
+}
+
 /** "AHPRA Agreement – Client Name" */
 export function requestReference(templateName: string, clientName: string): string {
   return `${templateName} – ${clientName}`.slice(0, 300);
@@ -133,6 +138,9 @@ export function sendProblems(opts: {
   if (missing.length) problems.push(`Fill in: ${missing.join(", ")}.`);
 
   const roles = rolesOf(opts.fields);
+  if (!roles.has("DESMA")) {
+    problems.push("This template has no boxes for DESMA. DESMA signs every agreement first, so add DESMA's signature box to the template.");
+  }
   const byRole = new Map(opts.input.signers.map((s) => [s.role, s]));
   if (opts.input.signers.length !== byRole.size) problems.push("Each role can only have one signer.");
   for (const role of roles) {

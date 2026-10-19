@@ -19,6 +19,7 @@ import {
   fieldWarnings,
   isAutoKey,
   keyForMergeKey,
+  mustFill,
   newField,
   normalizeField,
   parsePageList,
@@ -283,11 +284,18 @@ describe("normalising and validating", () => {
     expect(errors.join("\n")).toMatch(/signature cannot be filled from the CRM/);
   });
 
-  it("warns, without blocking, when nobody signs", () => {
-    expect(fieldWarnings([field()])).toEqual(["There is no signature box for the Client yet."]);
-    expect(fieldWarnings([field({ type: "signature" }), field({ key: "d", role: "DESMA" })])).toEqual([
-      "DESMA has fields to fill but no signature box.",
-    ]);
+  it("warns, without blocking, when the Client or DESMA has no signature box", () => {
+    const noDesma = "There is no signature box for DESMA yet. DESMA signs every agreement first, so it cannot be sent without one.";
+    expect(fieldWarnings([field()])).toEqual(["There is no signature box for the Client yet.", noDesma]);
+    expect(fieldWarnings([field({ type: "signature" }), field({ key: "d", role: "DESMA" })])).toEqual([noDesma]);
+    expect(fieldWarnings([field({ type: "signature" }), field({ key: "d", role: "DESMA", type: "signature" })])).toEqual([]);
+  });
+
+  it("makes every DESMA box mandatory, whatever the template says", () => {
+    expect(mustFill(field({ role: "DESMA", required: false }))).toBe(true);
+    expect(mustFill(field({ role: "Client", required: false }))).toBe(false);
+    expect(mustFill(field({ role: "DESMA", mergeKey: "staff.name" }))).toBe(false);
+    expect(normalizeField(field({ role: "DESMA", required: false })).required).toBe(true);
   });
 });
 

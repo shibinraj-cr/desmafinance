@@ -5,7 +5,7 @@ import type { PDFDocumentProxy } from "pdfjs-dist";
 import { BuilderPage } from "@/components/esign/BuilderPage";
 import { fetchPdfBytes, openPdf } from "@/components/esign/pdf-client";
 import { SignatureModal } from "@/components/esign/SignatureModal";
-import { FIELD_TYPE_LABELS, type TemplateField } from "@/lib/esign/template-fields";
+import { FIELD_TYPE_LABELS, mustFill, type TemplateField } from "@/lib/esign/template-fields";
 import type { PageGeometry } from "@/lib/esign/templates";
 
 /**
@@ -89,12 +89,12 @@ export function SigningView(p: SigningProps) {
 
   const isFilled = (f: TemplateField) =>
     f.type === "signature" || f.type === "initial" ? !!images[f.key] : f.type === "checkbox" ? values[f.key] === "true" : !!(values[f.key] ?? "").trim();
-  const required = sorted.filter((f) => f.required);
+  const required = sorted.filter(mustFill);
   const filledRequired = required.filter(isFilled).length;
   const ready = filledRequired === required.length && consent;
 
   function goNext() {
-    const next = sorted.find((f) => f.required && !isFilled(f)) ?? sorted.find((f) => !isFilled(f));
+    const next = sorted.find((f) => mustFill(f) && !isFilled(f)) ?? sorted.find((f) => !isFilled(f));
     if (!next) return;
     const el = document.querySelector<HTMLElement>(`[data-field="${next.key}"]`);
     el?.scrollIntoView({ block: "center", behavior: "smooth" });
@@ -282,7 +282,8 @@ function FieldInput({
   onSign: () => void;
 }) {
   const style: React.CSSProperties = { left: `${f.x * 100}%`, top: `${f.y * 100}%`, width: `${f.w * 100}%`, height: `${f.h * 100}%` };
-  const ring = filled ? "border-emerald-600 bg-emerald-50/40" : f.required ? "border-amber-500 bg-amber-100/60" : "border-sky-500 bg-sky-50/60";
+  const req = mustFill(f);
+  const ring = filled ? "border-emerald-600 bg-emerald-50/40" : req ? "border-amber-500 bg-amber-100/60" : "border-sky-500 bg-sky-50/60";
   const font = Math.max(10, Math.min(16, heightPx * 0.6));
   const label = f.label || FIELD_TYPE_LABELS[f.type];
   const common = `absolute border-2 rounded-sm ${ring}`;
@@ -298,7 +299,7 @@ function FieldInput({
         ) : (
           <span className="font-bold text-amber-900 whitespace-nowrap leading-none overflow-hidden" style={{ fontSize: Math.max(8, Math.min(16, heightPx * 0.55)) }}>
             {f.type === "initial" ? "Initial" : "Sign here"}
-            {f.required ? " *" : ""}
+            {req ? " *" : ""}
           </span>
         )}
       </button>
@@ -325,7 +326,7 @@ function FieldInput({
     return (
       <div data-field={f.key} className={common} style={style}>
         <select aria-label={label} value={value} onChange={(e) => onChange(e.target.value)} className="h-full w-full bg-transparent px-1 outline-none" style={{ fontSize: font }}>
-          <option value="">{f.required ? "Choose… *" : "Choose…"}</option>
+          <option value="">{req ? "Choose… *" : "Choose…"}</option>
           {(f.options ?? []).map((o) => (
             <option key={o} value={o}>
               {o}
@@ -338,7 +339,7 @@ function FieldInput({
   if (f.type === "textarea") {
     return (
       <div data-field={f.key} className={common} style={style}>
-        <textarea aria-label={label} placeholder={`${label}${f.required ? " *" : ""}`} value={value} onChange={(e) => onChange(e.target.value)} className="h-full w-full resize-none bg-transparent px-1 outline-none" style={{ fontSize: font }} />
+        <textarea aria-label={label} placeholder={`${label}${req ? " *" : ""}`} value={value} onChange={(e) => onChange(e.target.value)} className="h-full w-full resize-none bg-transparent px-1 outline-none" style={{ fontSize: font }} />
       </div>
     );
   }
@@ -346,7 +347,7 @@ function FieldInput({
     <div data-field={f.key} className={common} style={style}>
       <input
         aria-label={label}
-        placeholder={`${label}${f.required ? " *" : ""}`}
+        placeholder={`${label}${req ? " *" : ""}`}
         value={value}
         onChange={(e) => onChange(e.target.value)}
         inputMode={f.type === "phone" ? "tel" : f.type === "email" ? "email" : undefined}
