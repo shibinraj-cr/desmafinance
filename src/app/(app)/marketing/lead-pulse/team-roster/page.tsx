@@ -76,6 +76,7 @@ export default async function TeamRosterPage() {
           phone: r.phone,
           regionFocus: r.regionFocus,
           active: r.active,
+          sendAssignIntro: r.sendAssignIntro,
         }))}
         regions={regions}
       />

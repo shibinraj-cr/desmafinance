@@ -10,6 +10,7 @@ const PatchSchema = z.object({
   phone: z.string().max(40).nullable().optional(),
   regionFocus: z.array(z.string()).optional(),
   active: z.boolean().optional(),
+  sendAssignIntro: z.boolean().optional(),
 });
 
 export async function PATCH(req: NextRequest, { params }: { params: { id: string } }) {
@@ -44,6 +45,7 @@ export async function PATCH(req: NextRequest, { params }: { params: { id: string
   if (data.phone !== undefined) update.phone = data.phone?.trim() || null;
   if (data.regionFocus !== undefined) update.regionFocus = data.regionFocus;
   if (data.active !== undefined) update.active = data.active;
+  if (data.sendAssignIntro !== undefined) update.sendAssignIntro = data.sendAssignIntro;
 
   const updated = await prisma.leadPulseRole.update({
     where: { id: params.id },

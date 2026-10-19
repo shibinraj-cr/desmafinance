@@ -31,16 +31,19 @@ export async function assignLeadTo(
   // Kept alongside the name because the automated WhatsApp intro is L2-only —
   // read here rather than re-queried later, since this lookup already has it.
   let targetRole: string | null = null;
+  // Same reason: the assignee's own Team Roster switch for that intro.
+  let targetIntroEnabled = true;
   if (targetUserId) {
     const role = await prisma.leadPulseRole.findUnique({
       where: { userId: targetUserId },
-      select: { role: true, active: true, displayName: true },
+      select: { role: true, active: true, displayName: true, sendAssignIntro: true },
     });
     if (!role || !role.active || (role.role !== "l1" && role.role !== "l2")) {
       throw badRequest("Assignee must be an active L1/L2 BDE", "invalid_assignee");
     }
     targetName = role.displayName;
     targetRole = role.role;
+    targetIntroEnabled = role.sendAssignIntro;
   }
 
   if (existing.assignedToId === targetUserId) {
@@ -126,6 +129,7 @@ export async function assignLeadTo(
       agentDisplayName: updated.assignedTo?.leadPulseRole?.displayName,
       agentPhone: updated.assignedTo?.leadPulseRole?.phone,
       assigneeRole: targetRole,
+      assigneeIntroEnabled: targetIntroEnabled,
     });
   }
 

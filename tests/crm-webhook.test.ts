@@ -6,6 +6,7 @@ import {
   resolveAgent,
   isExcludedAssignee,
   isIntroExcludedRole,
+  leadAssignedSkipReason,
   isWabisWebhookUrl,
   pickEndpoint,
   STUDY_ABROAD_EVENT,
@@ -135,6 +136,35 @@ describe("isIntroExcludedRole", () => {
     expect(isIntroExcludedRole(null)).toBe(false);
     expect(isIntroExcludedRole(undefined)).toBe(false);
     expect(isIntroExcludedRole("")).toBe(false);
+  });
+});
+
+describe("leadAssignedSkipReason", () => {
+  const send = {
+    isStudyAbroad: false,
+    assigneeRole: "l2",
+    assigneeIntroEnabled: true,
+    agentDisplayName: "Priya",
+  };
+
+  it("sends for an L2 consultant with the intro switched on", () => {
+    expect(leadAssignedSkipReason(send)).toBeNull();
+  });
+  it("skips when the assignee's Team Roster switch is off", () => {
+    expect(leadAssignedSkipReason({ ...send, assigneeIntroEnabled: false })).toMatch(/switched off .* Team Roster/);
+  });
+  it("only an explicit false skips — a missing switch keeps the send as the default", () => {
+    expect(leadAssignedSkipReason({ ...send, assigneeIntroEnabled: null })).toBeNull();
+    expect(leadAssignedSkipReason({ ...send, assigneeIntroEnabled: undefined })).toBeNull();
+  });
+  it("names the more fundamental reason first when several apply", () => {
+    const all = { isStudyAbroad: true, assigneeRole: "l1", assigneeIntroEnabled: false, agentDisplayName: "Dilna" };
+    expect(leadAssignedSkipReason(all)).toMatch(/Study Abroad/);
+    expect(leadAssignedSkipReason({ ...all, isStudyAbroad: false })).toMatch(/L1 BDE/);
+    expect(leadAssignedSkipReason({ ...all, isStudyAbroad: false, assigneeRole: "l2" })).toMatch(/Team Roster/);
+  });
+  it("keeps the existing name exclusion", () => {
+    expect(leadAssignedSkipReason({ ...send, agentDisplayName: "Dilna" })).toMatch(/excluded/);
   });
 });
 
