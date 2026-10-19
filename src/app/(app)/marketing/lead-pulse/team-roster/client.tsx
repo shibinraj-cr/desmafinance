@@ -20,6 +20,7 @@ type RosterRow = {
   phone: string | null;
   regionFocus: string[];
   active: boolean;
+  sendAssignIntro: boolean;
 };
 
 type RegionOption = { code: string; label: string };
@@ -177,6 +178,7 @@ function RosterRow({ row, regions }: { row: RosterRow; regions: RegionOption[] }
         phone: draft.phone,
         regionFocus: draft.regionFocus,
         active: draft.active,
+        sendAssignIntro: draft.sendAssignIntro,
       }),
     });
     setBusy(false);
@@ -359,6 +361,31 @@ function RosterRow({ row, regions }: { row: RosterRow; regions: RegionOption[] }
           >
             {row.active ? "Active" : "Inactive"}
           </span>
+          {editing ? (
+            <label
+              className="mt-[6px] flex items-center gap-[6px] text-[12px] cursor-pointer"
+              style={{ color: "var(--lp-on-surface-variant)" }}
+              title="Send the candidate the automated WhatsApp intro when a lead is assigned to this person"
+            >
+              <input
+                type="checkbox"
+                checked={draft.sendAssignIntro}
+                onChange={(e) => setDraft({ ...draft, sendAssignIntro: e.target.checked })}
+              />
+              WhatsApp intro on assign
+            </label>
+          ) : (
+            !row.sendAssignIntro && (
+              <div
+                className="mt-[6px] flex items-center gap-[4px] text-[11px]"
+                style={{ color: "var(--lp-on-surface-variant)" }}
+                title="Assigning a lead to this person does not send the candidate the automated WhatsApp intro"
+              >
+                <span className="material-symbols-outlined" style={{ fontSize: 12 }}>speaker_notes_off</span>
+                No WhatsApp intro
+              </div>
+            )
+          )}
         </td>
         <td className="px-[16px] py-[10px] text-right whitespace-nowrap">
           {editing ? (

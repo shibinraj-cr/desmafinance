@@ -241,6 +241,38 @@ export function isIntroExcludedRole(role: string | null | undefined): boolean {
 }
 
 /**
+ * Why the automated intro must NOT go out for this assignment, or null when it
+ * may. Checked in this order so the delivery log names the most fundamental
+ * reason: the lead's service, then the assignee's tier, then the assignee's own
+ * Team Roster switch (`LeadPulseRole.sendAssignIntro`), then the name list.
+ *
+ * The roster switch is the per-person exception that `isExcludedAssignee`'s
+ * comment says to prefer over adding a name: it is set from the UI, survives a
+ * rename, and keeps employee names out of the code.
+ */
+export function leadAssignedSkipReason(opts: {
+  isStudyAbroad: boolean | null | undefined;
+  assigneeRole: string | null | undefined;
+  /** `LeadPulseRole.sendAssignIntro`; only an explicit false skips. */
+  assigneeIntroEnabled: boolean | null | undefined;
+  agentDisplayName: string | null | undefined;
+}): string | null {
+  if (opts.isStudyAbroad) {
+    return "this lead's service is Study Abroad, which has its own separate intro (not this template)";
+  }
+  if (isIntroExcludedRole(opts.assigneeRole)) {
+    return "the lead is assigned to an L1 BDE, and the automated intro only goes out for L2 consultants";
+  }
+  if (opts.assigneeIntroEnabled === false) {
+    return "the automated WhatsApp intro is switched off for this consultant on the Team Roster";
+  }
+  if (isExcludedAssignee(opts.agentDisplayName)) {
+    return "this consultant is excluded from the automated intro";
+  }
+  return null;
+}
+
+/**
  * The consultant's Wabis identity. `LeadPulseRole.displayName` / `.phone` are
  * the source of truth — they already drive the CRM's `{consultant_phone}` merge
  * field. The endpoint's `agentName` / `agentPhone` override them only for the
@@ -832,15 +864,14 @@ export async function enqueueLeadAssignedWebhook(opts: {
    * — see `isIntroExcludedRole`.
    */
   assigneeRole: string | null | undefined;
+  /**
+   * The assignee's `LeadPulseRole.sendAssignIntro` — false means their Team
+   * Roster row has the intro switched off. See `leadAssignedSkipReason`.
+   */
+  assigneeIntroEnabled: boolean | null | undefined;
 }): Promise<void> {
   try {
-    const skipReason = opts.isStudyAbroad
-      ? "this lead's service is Study Abroad, which has its own separate intro (not this template)"
-      : isIntroExcludedRole(opts.assigneeRole)
-        ? "the lead is assigned to an L1 BDE, and the automated intro only goes out for L2 consultants"
-        : isExcludedAssignee(opts.agentDisplayName)
-          ? "this consultant is excluded from the automated intro"
-          : null;
+    const skipReason = leadAssignedSkipReason(opts);
     if (skipReason) {
       await prisma.crmWebhookDelivery
         .create({
