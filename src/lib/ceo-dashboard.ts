@@ -1,5 +1,5 @@
 // CEO Dashboard — cross-module rollup combining Finance (Transactions,
-// Collection Plans), Marketing (Lead Pulse pipeline + closes) and HR
+// Collection Plans), Marketing (CRM enrollments) and HR
 // (User roster + Salary expense category) into one screen.
 //
 // All numbers are sourced from the same tables the per-module pages use,
@@ -41,25 +41,6 @@ export type CeoHeadline = {
   expectedCollections: number;
   expectedCollectionsCount: number;
 
-  /** Sum of LeadPulsePipeline.expectedFirstInstallment where status='open'
-   *  AND expectedCloseDate falls within the running calendar month. This
-   *  matches what the Lead Pulse "Pipeline Forecast — <month>" card
-   *  reports, so the two views agree. */
-  pipelineValue: number;
-  pipelineCount: number;
-
-  /** Open pipeline rows whose expectedCloseDate falls outside the
-   *  running calendar month — future-month forecasts plus overdue-but-
-   *  still-open rows. Together with pipelineValue this is a clean
-   *  partition of every open pipeline row. */
-  pipelineValueBeyond: number;
-  pipelineCountBeyond: number;
-
-  /** Total pending = Pending-Submission collections (this month) +
-   *  this month's open pipeline (pipelineValue). Beyond-month pipeline is
-   *  shown separately and is NOT included here. */
-  totalPending: number;
-
   /** Finance approval queue — distinct from collection plans. Surfaced so the
    *  CEO can see if any reviews are stuck. */
   pendingApprovalsCount: number;
@@ -97,7 +78,7 @@ export async function ceoHeadline(): Promise<CeoHeadline> {
   const nextMonthStart = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() + 1, 1));
   const prevMonthStart = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() - 1, 1));
 
-  const [cur, prev, plans, pipelineCurrent, pipelineBeyond, approvals, drafts, pendingApprovalRows] =
+  const [cur, prev, plans, approvals, drafts, pendingApprovalRows] =
     await Promise.all([
     safe(
       "transaction.aggregate(currentMonthRevenue)",
@@ -139,49 +120,6 @@ export async function ceoHeadline(): Promise<CeoHeadline> {
         }),
       {
         _sum: { amount: null as null | { toString(): string } },
-        _count: { _all: 0 },
-      },
-    ),
-    // Pipeline split into "current month" vs "beyond" so the headline
-    // matches the Lead Pulse month-bound Pipeline Forecast tile.
-    // Rows with NO expectedCloseDate are grouped under "beyond" so
-    // every open row is represented somewhere in the dashboard.
-    safe(
-      "leadPulsePipeline.aggregate(pipelineCurrent)",
-      () =>
-        prisma.leadPulsePipeline.aggregate({
-          where: {
-            status: "open",
-            expectedCloseDate: { gte: currentMonthStart, lt: nextMonthStart },
-          },
-          _sum: { expectedFirstInstallment: true },
-          _count: { _all: true },
-        }),
-      {
-        _sum: { expectedFirstInstallment: null as null | { toString(): string } },
-        _count: { _all: 0 },
-      },
-    ),
-    safe(
-      "leadPulsePipeline.aggregate(pipelineBeyond)",
-      () =>
-        prisma.leadPulsePipeline.aggregate({
-          where: {
-            status: "open",
-            // Every open row that isn't expected to land *this* month —
-            // covers both future-month forecasts and overdue rows that
-            // haven't been moved to closed_won / lost yet. Together with
-            // pipelineCurrent this is a clean partition of all open rows.
-            OR: [
-              { expectedCloseDate: { lt: currentMonthStart } },
-              { expectedCloseDate: { gte: nextMonthStart } },
-            ],
-          },
-          _sum: { expectedFirstInstallment: true },
-          _count: { _all: true },
-        }),
-      {
-        _sum: { expectedFirstInstallment: null as null | { toString(): string } },
         _count: { _all: 0 },
       },
     ),
@@ -229,8 +167,6 @@ export async function ceoHeadline(): Promise<CeoHeadline> {
       ? ((currentMonthRevenue - previousMonthRevenue) / previousMonthRevenue) * 100
       : null;
   const expectedCollections = num(plans._sum.amount);
-  const pipelineValue = num(pipelineCurrent._sum.expectedFirstInstallment);
-  const pipelineValueBeyond = num(pipelineBeyond._sum.expectedFirstInstallment);
   const myDraftsRevenue = num(drafts._sum.amount);
 
   // Sum the proposed Revenue amounts sitting in the pending-approval
@@ -255,11 +191,6 @@ export async function ceoHeadline(): Promise<CeoHeadline> {
     currentMonthRevenueTrendPct,
     expectedCollections,
     expectedCollectionsCount: plans._count._all,
-    pipelineValue,
-    pipelineCount: pipelineCurrent._count._all,
-    pipelineValueBeyond,
-    pipelineCountBeyond: pipelineBeyond._count._all,
-    totalPending: expectedCollections + pipelineValue,
     pendingApprovalsCount: approvals,
     myDraftsRevenue,
     myDraftsRevenueCount: drafts._count._all,
@@ -609,8 +540,8 @@ export async function orgHealth(series: MonthlyRow[]): Promise<OrgHealth> {
   const ytdExpense = series.reduce((s, b) => s + b.expense, 0);
   const netMarginPct = ytdRevenue > 0 ? ((ytdRevenue - ytdExpense) / ytdRevenue) * 100 : null;
 
-  // Health score: blend net margin, conversion %, and pipeline coverage into
-  // a 0-100 number. Each band contributes ~33 points; everything clamped.
+  // Health score: blend net margin, conversion % and payroll load into a
+  // 0-100 number. Each band contributes ~33 points; everything clamped.
   const marginPts = netMarginPct === null ? 16 : clamp((netMarginPct / 40) * 33, 0, 33);
   const conversionPts =
     funnelConversionPct === null ? 16 : clamp((funnelConversionPct / 25) * 33, 0, 33);
