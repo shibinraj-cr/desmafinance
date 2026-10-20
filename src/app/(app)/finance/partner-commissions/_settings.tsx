@@ -360,12 +360,15 @@ function IssuerCard({ ctx, ro }: { ctx: PcCtx; ro: boolean }) {
 
 function RunCard({ ctx, ro }: { ctx: PcCtx; ro: boolean }) {
   const s = ctx.data.settings;
+  const existing = ctx.data.invoices.map((i) => i.number);
+  // What DesGro will suggest next: one above the last DesGro invoice, but never below the saved floor.
+  const suggested = suggestInvoiceNumber(s.numberPrefix, ctx.data.today, existing, s.nextNumber);
   const [prefix, setPrefix] = useState(s.numberPrefix);
+  const [next, setNext] = useState(suggested);
   const [day, setDay] = useState(String(s.runDay));
   const [email, setEmail] = useState(s.emailAlerts);
   const { busy, err, save } = useSaver(ctx);
-  const dirty = prefix !== s.numberPrefix || day !== String(s.runDay) || email !== s.emailAlerts;
-  const next = suggestInvoiceNumber(prefix || s.numberPrefix, ctx.data.today, ctx.data.invoices.map((i) => i.number));
+  const dirty = prefix !== s.numberPrefix || next.trim() !== suggested || day !== String(s.runDay) || email !== s.emailAlerts;
   return (
     <div className={`${cardCls} p-md flex flex-col gap-sm`}>
       <h4 className="font-semibold text-body-lg">Numbering and monthly run</h4>
@@ -373,7 +376,12 @@ function RunCard({ ctx, ro }: { ctx: PcCtx; ro: boolean }) {
         <Field label="Number prefix"><input className={inputCls} value={prefix} disabled={ro} onChange={(e) => setPrefix(e.target.value)} /></Field>
         <Field label="Financial year"><input className={inputCls} value="April to March (automatic)" disabled /></Field>
       </div>
-      <p className="text-caption text-on-surface-variant">Next suggested number: <b className="tabular-nums text-on-surface">{next}</b>. The series is shared with invoices raised outside DesGro, so Finance can change any number before payment.</p>
+      <Field
+        label="Next invoice number"
+        hint="Invoices raised outside DesGro share this series, so set the next free number here. DesGro won't suggest anything lower this financial year and moves on by itself as invoices are made; from April the new year starts at 001. Any number can still be changed on the invoice before payment."
+      >
+        <input className={`${inputCls} tabular-nums`} value={next} disabled={ro} onChange={(e) => setNext(e.target.value)} />
+      </Field>
       <div className="grid grid-cols-2 gap-sm">
         <Field label="Run on day (1–28)"><input className={inputCls} type="number" min={1} max={28} value={day} disabled={ro} onChange={(e) => setDay(e.target.value)} /></Field>
         <Field label="Time"><input className={inputCls} value="08:30 IST" disabled /></Field>
@@ -381,7 +389,7 @@ function RunCard({ ctx, ro }: { ctx: PcCtx; ro: boolean }) {
       <label className="flex items-center gap-2 text-body-md"><input type="checkbox" checked={email} disabled={ro} onChange={(e) => setEmail(e.target.checked)} />Email the run&apos;s invoices to Finance Managers, Finance Executives and Admins</label>
       <p className="text-caption text-on-surface-variant">A notification goes to the same people either way, and payments waiting for approval also count on the Approvals badge.</p>
       {err ? <p className="text-body-md text-error font-medium">{err}</p> : null}
-      {!ro ? <div className="flex justify-end"><button className={primaryBtnCls} disabled={busy || !dirty} onClick={() => save({ action: "settings", numberPrefix: prefix, runDay: parseInt(day, 10), emailAlerts: email }, "Saved.")}>Save</button></div> : null}
+      {!ro ? <div className="flex justify-end"><button className={primaryBtnCls} disabled={busy || !dirty} onClick={() => save({ action: "settings", numberPrefix: prefix, ...(next.trim() !== suggested ? { nextNumber: next.trim() } : {}), runDay: parseInt(day, 10), emailAlerts: email }, "Saved.")}>Save</button></div> : null}
     </div>
   );
 }

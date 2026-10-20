@@ -3448,14 +3448,14 @@ model WaMessage {
   conversation   WaConversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
 
   /// 'in' (from the candidate) | 'out' (from us).
-  direction String
+  direction       String
   /// 'text' | 'image' | 'document' | 'audio' | 'video' | 'sticker' |
   /// 'location' | 'template' | 'interactive' | 'reaction' | 'system' |
   /// 'unsupported'.
-  type      String  @default("text")
+  type            String  @default("text")
   /// Message text, a caption, or a rendered template body — or a reaction's
   /// emoji. Null for a bare media message with no caption.
-  body      String?
+  body            String?
   /// On an 'unsupported' message: what the candidate actually did, from Meta's
   /// `unsupported.type` ('edit' | 'poll_creation' | 'reaction' | 'pin' | …), or
   /// 'unavailable' for error 131060. Meta never sends the content itself, so
@@ -6403,6 +6403,10 @@ model CommissionSettings {
   signaturePng    Bytes?
   signatureMime   String?
   numberPrefix    String   @default("D/DLLC/")
+  /// "Next invoice number", e.g. "D/DLLC/26-27/025": DesGro never suggests a
+  /// lower number in that financial year's series, because invoices raised
+  /// outside DesGro share it. Ignored once the series moves to a new year.
+  nextNumber      String?
   /// Day of the month the monthly run drafts invoices (1–28).
   runDay          Int      @default(20)
   emailAlerts     Boolean  @default(true)
