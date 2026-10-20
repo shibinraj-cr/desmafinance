@@ -89,6 +89,9 @@ export const MODULES: AppModule[] = [
       { href: "/finance/overview", label: "Overview", icon: "dashboard", group: "OVERVIEW" },
       { href: "/finance/revenue", label: "Revenue", icon: "payments", group: "MONEY IN" },
       { href: "/finance/collection-plan", label: "Collection Plan", icon: "schedule_send", group: "MONEY IN" },
+      // NCLEX / OSCE / GCAN enrollments, the monthly commission invoice and the
+      // commission's arrival in Wio (src/lib/partner-commissions/).
+      { href: "/finance/partner-commissions", label: "Partner Commissions", icon: "handshake", group: "MONEY IN" },
       { href: "/finance/expenses", label: "Expenses", icon: "receipt_long", group: "MONEY OUT" },
       {
         // A child route of /finance/expenses on purpose: anyone whose role
@@ -298,6 +301,16 @@ export const MODULES: AppModule[] = [
         href: "/crm/tasks",
         label: "Tasks",
         icon: "task_alt",
+        group: "PIPELINE",
+      },
+      {
+        // Add NCLEX / OSCE / GCAN partner enrollments. Granted per PERSON, not
+        // per role: the permissions loader adds it for active BDEs and anyone
+        // with a Partner Commissions enrollment grant (see withPersonalPages in
+        // src/lib/permissions.ts), so it needs no Role.pages entry.
+        href: "/crm/partner-enrollments",
+        label: "Partner Enrollments",
+        icon: "school",
         group: "PIPELINE",
       },
       {

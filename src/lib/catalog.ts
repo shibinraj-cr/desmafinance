@@ -104,7 +104,7 @@ const REVENUE_SUB_ITEMS: Record<string, string[]> = {
   "Collection - Study Abroad": [
     "Study Abroad - Registration Fee (Collection)",
   ],
-  Commissions: ["OSCE Commission", "NCLEX Commission", "Verification Services", "Attestation"],
+  Commissions: ["OSCE Commission", "NCLEX Commission", "GCAN Commission", "Verification Services", "Attestation"],
 };
 
 const EXPENSE_SUB_ITEMS: Record<string, string[]> = {

@@ -61,7 +61,12 @@ export default async function AppLayout({ children }: { children: React.ReactNod
     dueMeetingActions,
     leadPulseRole,
   ] = await Promise.all([
-    prisma.pendingApproval.count({ where: { status: "pending" } }).catch(() => 0),
+    // Finance approvals plus commission payments waiting on a Finance Manager
+    // (Partner Commissions), so both show on the one Approvals badge.
+    Promise.all([
+      prisma.pendingApproval.count({ where: { status: "pending" } }).catch(() => 0),
+      prisma.commissionReceipt.count({ where: { status: "awaiting" } }).catch(() => 0),
+    ]).then(([a, b]) => a + b),
     prisma.pendingApproval
       .count({ where: { status: "rejected", submittedById: userId } })
       .catch(() => 0),

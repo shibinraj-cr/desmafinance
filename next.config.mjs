@@ -62,6 +62,10 @@ const BANK_BROWSER_ROUTES = [
 const ESIGN_STAMP_ROUTES = ["/api/esign/requests", "/api/sign/[token]/complete", "/api/esign/requests/[id]/sign/complete"];
 const ESIGN_FONT = ["./public/fonts/esign/NotoSans-Regular.ttf", "./public/desma-logo.png"];
 
+// The Partner Commissions invoice PDF prints the DESMA logo and falls back to
+// the same Noto Sans for names Helvetica can't encode (src/lib/partner-commissions/invoice-data.ts).
+const COMMISSION_PDF_ROUTES = ["/api/finance/partner-commissions/invoices/[id]/pdf"];
+
 const nextConfig = {
   reactStrictMode: true,
   poweredByHeader: false,
@@ -72,6 +76,7 @@ const nextConfig = {
     outputFileTracingIncludes: Object.fromEntries([
       ...BANK_BROWSER_ROUTES.map((r) => [r, CHROMIUM_BIN]),
       ...ESIGN_STAMP_ROUTES.map((r) => [r, ESIGN_FONT]),
+      ...COMMISSION_PDF_ROUTES.map((r) => [r, ESIGN_FONT]),
     ]),
   },
   async headers() {

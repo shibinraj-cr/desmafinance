@@ -180,6 +180,14 @@ model User {
   agreementFoldersCreated      AgreementFolder[]      @relation("AgreementFolderCreatedBy")
   agreementDocumentsUploaded   AgreementDocument[]    @relation("AgreementDocumentUploadedBy")
 
+  // Partner Commissions (NCLEX / OSCE / GCAN)
+  pcEnrollmentsCreated  CommissionEnrollment[] @relation("CommissionEnrollmentCreatedBy")
+  pcFeePaymentsRecorded CommissionFeePayment[] @relation("CommissionFeePaymentRecordedBy")
+  pcInvoicesCreated     CommissionInvoice[]    @relation("CommissionInvoiceCreatedBy")
+  pcReceiptsRecorded    CommissionReceipt[]    @relation("CommissionReceiptRecordedBy")
+  pcReceiptsReviewed    CommissionReceipt[]    @relation("CommissionReceiptReviewedBy")
+  pcEnrollGrant         CommissionEnrollGrant? @relation("CommissionEnrollGrantUser")
+
   @@index([roleId])
 }
 
@@ -1177,17 +1185,19 @@ model Party {
   createdAt       DateTime         @default(now())
   updatedAt       DateTime         @updatedAt
 
-  transactions      Transaction[]
-  transactionDrafts TransactionDraft[]
+  transactions       Transaction[]
+  transactionDrafts  TransactionDraft[]
   // Legacy implicit M:M kept for backwards compatibility — new UI uses
   // partyServices (with totalAmount). Will be removed once
   // migrate-party-services has been run everywhere.
-  services          Service[]
-  partyServices     PartyService[]
-  pipelineRows      LeadPulsePipeline[] @relation("PartyPipeline")
-  collectionPlans   CollectionPlan[]
-  leads             Lead[]              @relation("LeadParty")
-  opsProjects       OpsProject[]
+  services           Service[]
+  partyServices      PartyService[]
+  pipelineRows       LeadPulsePipeline[] @relation("PartyPipeline")
+  collectionPlans    CollectionPlan[]
+  leads              Lead[]              @relation("LeadParty")
+  opsProjects        OpsProject[]
+  // Partner Commissions: the institution this party stands for, when it is one.
+  commissionPartners CommissionPartner[]
 
   @@unique([name, group])
   @@index([group])
@@ -2931,6 +2941,9 @@ model Lead {
   /// honoured by every broadcast. Distinct from `whatsappUndeliverableAt`, which
   /// means the number does not work — this one means they asked us not to.
   whatsappOptedOutAt DateTime?
+
+  // Partner Commissions enrollments (NCLEX / OSCE / GCAN) linked to this lead.
+  commissionEnrollments CommissionEnrollment[]
 
   @@index([assignedToId])
   @@index([assignedAt])
@@ -6165,4 +6178,258 @@ model EsignImportRecord {
 
   @@index([reviewStatus, matchStatus])
   @@index([batchId])
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Partner Commissions — NCLEX / OSCE / GCAN enrollments with partner
+// institutions. The candidate pays the course fee to the institution (tracked
+// here, never DESMA revenue); once fully paid, DESMA invoices the institution
+// for its commission. Only the commission reaches the ledger, as Revenue, when a
+// payment received into Wio is approved. See src/lib/partner-commissions/.
+//
+// Partner names, rates, the issuer block and bank details live in these tables
+// (entered on the Settings tab), never in code: the repository is public.
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// An institution DESMA earns commission from (e.g. the NCLEX/OSCE provider).
+model CommissionPartner {
+  id        String   @id @default(cuid())
+  name      String   @unique
+  /// Multi-line postal address, printed under BILL TO.
+  address   String   @default("")
+  email     String?
+  /// Optional "FOR:" line under the bill-to block.
+  forLine   String?
+  /// "compact" = program in the description ("Name | OSCE | Full Fee Paid");
+  /// "detailed" = separate Student ID and Course columns.
+  layout    String   @default("compact")
+  isActive  Boolean  @default(true)
+  /// Party used as the counterparty on the Revenue rows. Filled on first
+  /// posting when unset.
+  partyId   String?
+  party     Party?   @relation(fields: [partyId], references: [id], onDelete: SetNull)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  programs    CommissionProgram[]
+  enrollments CommissionEnrollment[]
+  invoices    CommissionInvoice[]
+}
+
+/// One row per program code (NCLEX / OSCE / GCAN): which partner runs it and
+/// the defaults a new enrollment starts from.
+model CommissionProgram {
+  id         String            @id @default(cuid())
+  /// "NCLEX" | "OSCE" | "GCAN" — the fixed set in partner-commissions/constants.ts.
+  code       String            @unique
+  partnerId  String
+  partner    CommissionPartner @relation(fields: [partnerId], references: [id], onDelete: Restrict)
+  /// Course name printed on the invoice (e.g. "GCAN Online").
+  courseName String
+  defaultFee Decimal?          @db.Decimal(12, 2)
+  defaultPct Decimal?          @db.Decimal(5, 2)
+  isActive   Boolean           @default(true)
+  createdAt  DateTime          @default(now())
+  updatedAt  DateTime          @updatedAt
+}
+
+/// A candidate enrolled with a partner. The course fee is fixed at creation;
+/// each fee payment comes off the balance. `invoiceId` points at the invoice
+/// that currently claims its commission (cleared when a line is removed or the
+/// invoice is cancelled, so it queues again).
+model CommissionEnrollment {
+  id            String             @id @default(cuid())
+  program       String
+  partnerId     String
+  partner       CommissionPartner  @relation(fields: [partnerId], references: [id], onDelete: Restrict)
+  candidateName String
+  leadId        String?
+  lead          Lead?              @relation(fields: [leadId], references: [id], onDelete: SetNull)
+  studentId     String?
+  courseName    String
+  /// "MMM-YY", e.g. "Jan-27".
+  intakeMonth   String
+  /// AUD.
+  courseFee     Decimal            @db.Decimal(12, 2)
+  commissionPct Decimal            @db.Decimal(5, 2)
+  /// "active" | "withdrawn".
+  status        String             @default("active")
+  /// Date of the payment that cleared the balance; null while anything is due.
+  fullyPaidOn   DateTime?          @db.Date
+  invoiceId     String?
+  invoice       CommissionInvoice? @relation(fields: [invoiceId], references: [id], onDelete: SetNull)
+  notes         String?
+  createdById   String?
+  createdBy     User?              @relation("CommissionEnrollmentCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
+  createdAt     DateTime           @default(now())
+  updatedAt     DateTime           @updatedAt
+
+  payments     CommissionFeePayment[]
+  invoiceLines CommissionInvoiceLine[]
+
+  @@index([program])
+  @@index([partnerId])
+  @@index([invoiceId])
+  @@index([status, fullyPaidOn])
+  @@index([createdById])
+  @@index([leadId])
+}
+
+/// A course-fee installment the candidate paid the institution (1st–3rd).
+/// Tracking only — never a ledger row.
+model CommissionFeePayment {
+  id           String               @id @default(cuid())
+  enrollmentId String
+  enrollment   CommissionEnrollment @relation(fields: [enrollmentId], references: [id], onDelete: Cascade)
+  seq          Int
+  /// AUD.
+  amount       Decimal              @db.Decimal(12, 2)
+  paidOn       DateTime             @db.Date
+  reference    String?
+  createdById  String?
+  createdBy    User?                @relation("CommissionFeePaymentRecordedBy", fields: [createdById], references: [id], onDelete: SetNull)
+  createdAt    DateTime             @default(now())
+
+  @@unique([enrollmentId, seq])
+}
+
+/// A commission invoice to one partner. Lines are a frozen copy of what was
+/// billed; the bill-to block is copied from the partner so later address
+/// changes never rewrite a sent invoice.
+model CommissionInvoice {
+  id            String            @id @default(cuid())
+  /// Editable by Finance until a payment is approved. Unique, cancelled ones included.
+  number        String            @unique
+  partnerId     String
+  partner       CommissionPartner @relation(fields: [partnerId], references: [id], onDelete: Restrict)
+  invoiceDate   DateTime          @db.Date
+  paymentTerm   String            @default("Immediate")
+  currency      String            @default("AUD")
+  billToName    String
+  billToAddress String            @default("")
+  billToEmail   String?
+  billToFor     String?
+  /// Null = generated from the total.
+  amountWords   String?
+  /// "draft" | "sent" | "awaiting" | "partpaid" | "paid" | "cancelled".
+  status        String            @default("draft")
+  /// "monthly_run" | "manual".
+  source        String            @default("manual")
+  sentAt        DateTime?
+  cancelledAt   DateTime?
+  createdById   String?
+  createdBy     User?             @relation("CommissionInvoiceCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
+  createdAt     DateTime          @default(now())
+  updatedAt     DateTime          @updatedAt
+
+  lines       CommissionInvoiceLine[]
+  receipts    CommissionReceipt[]
+  enrollments CommissionEnrollment[]
+
+  @@index([partnerId])
+  @@index([status])
+  @@index([invoiceDate])
+}
+
+model CommissionInvoiceLine {
+  id            String                @id @default(cuid())
+  invoiceId     String
+  invoice       CommissionInvoice     @relation(fields: [invoiceId], references: [id], onDelete: Cascade)
+  enrollmentId  String?
+  enrollment    CommissionEnrollment? @relation(fields: [enrollmentId], references: [id], onDelete: SetNull)
+  position      Int
+  program       String
+  description   String
+  studentId     String?
+  courseName    String
+  intakeMonth   String
+  courseFee     Decimal               @db.Decimal(12, 2)
+  commissionPct Decimal               @db.Decimal(5, 2)
+  /// AUD, courseFee × commissionPct / 100.
+  amount        Decimal               @db.Decimal(12, 2)
+
+  @@index([invoiceId])
+  @@index([enrollmentId])
+}
+
+/// Money received from the partner into Wio (AED), with its INR value. On
+/// approval the INR value posts to Revenue › Commissions, split by program.
+model CommissionReceipt {
+  id           String            @id @default(cuid())
+  invoiceId    String
+  invoice      CommissionInvoice @relation(fields: [invoiceId], references: [id], onDelete: Restrict)
+  receivedOn   DateTime          @db.Date
+  /// How much of the invoice (AUD) this payment settles.
+  audSettled   Decimal           @db.Decimal(12, 2)
+  aedAmount    Decimal           @db.Decimal(14, 2)
+  inrAmount    Decimal           @db.Decimal(14, 2)
+  /// inrAmount / aedAmount, stored for the record.
+  aedInrRate   Decimal           @db.Decimal(12, 6)
+  reference    String?
+  /// Close the invoice even when the AUD settled is short (bank charges, rate).
+  settleInFull Boolean           @default(true)
+  /// Cutover: the money is already in the ledger, so approving posts nothing.
+  skipLedger   Boolean           @default(false)
+  /// "awaiting" | "approved" | "returned".
+  status       String            @default("awaiting")
+  recordedById String?
+  recordedBy   User?             @relation("CommissionReceiptRecordedBy", fields: [recordedById], references: [id], onDelete: SetNull)
+  reviewedById String?
+  reviewedBy   User?             @relation("CommissionReceiptReviewedBy", fields: [reviewedById], references: [id], onDelete: SetNull)
+  reviewedAt   DateTime?
+  reviewNote   String?
+  /// Revenue Transaction ids created on approval.
+  postedTxIds  String[]          @default([])
+  createdAt    DateTime          @default(now())
+  updatedAt    DateTime          @updatedAt
+
+  @@index([invoiceId])
+  @@index([status])
+}
+
+/// Singleton (id = "default"): invoice issuer, bank block, numbering and the
+/// monthly run.
+model CommissionSettings {
+  id              String   @id @default("default")
+  issuerName      String   @default("")
+  issuerAddress   String   @default("")
+  issuerRegLine   String   @default("")
+  bankAccountName String   @default("")
+  bankCurrency    String   @default("AED")
+  bankIban        String   @default("")
+  bankBic         String   @default("")
+  bankAccountNo   String   @default("")
+  signatoryName   String   @default("")
+  signaturePng    Bytes?
+  signatureMime   String?
+  numberPrefix    String   @default("D/DLLC/")
+  /// Day of the month the monthly run drafts invoices (1–28).
+  runDay          Int      @default(20)
+  emailAlerts     Boolean  @default(true)
+  /// Programs every active BDE (Lead Pulse L1/L2) may enroll.
+  bdePrograms     String[] @default(["GCAN"])
+  updatedById     String?
+  updatedAt       DateTime @updatedAt
+}
+
+/// Per-person enrollment access for people outside Finance (e.g. an OSCE/NCLEX
+/// coordinator): which programs they may add enrollments for.
+model CommissionEnrollGrant {
+  id          String   @id @default(cuid())
+  userId      String   @unique
+  user        User     @relation("CommissionEnrollGrantUser", fields: [userId], references: [id], onDelete: Cascade)
+  programs    String[] @default([])
+  grantedById String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+}
+
+/// One row per month the monthly run has executed — makes the run idempotent
+/// (a second cron fire in the same month does nothing).
+model CommissionRun {
+  id         String   @id @default(cuid())
+  /// "YYYY-MM" (IST).
+  month      String   @unique
+  ranAt      DateTime @default(now())
+  invoiceIds String[] @default([])
 }
