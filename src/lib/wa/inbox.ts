@@ -13,6 +13,7 @@
  */
 import type { Prisma } from "@prisma/client";
 import { listParam, oneOf } from "../filter-params";
+import { waMessageText } from "./message-label";
 import { isSessionOpen } from "./mirror";
 
 /** Which slice of the inbox to show. */
@@ -201,7 +202,7 @@ type ConversationWithPreview = {
     status: { label: string; color: string | null } | null;
   } | null;
   assignedTo: { id: string; username: string; leadPulseRole: { displayName: string } | null } | null;
-  messages: { body: string | null; type: string; direction: string }[];
+  messages: { body: string | null; type: string; unsupportedType: string | null; direction: string }[];
   sourceCampaign: string | null;
 };
 
@@ -217,7 +218,7 @@ export function serializeInboxRow(c: ConversationWithPreview): InboxRow {
     sessionOpen: isSessionOpen(c.sessionExpiresAt),
     awaitingReply: c.awaitingReply,
     // A media message with no caption still needs a line in the list.
-    preview: newest ? (newest.body?.trim() || (newest.type !== "text" ? `[${newest.type}]` : null)) : null,
+    preview: newest ? waMessageText(newest) : null,
     previewDirection: newest?.direction ?? null,
     lead: c.lead
       ? {

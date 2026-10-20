@@ -5,6 +5,7 @@ import { MultiSelect } from "@/components/MultiSelect";
 import Link from "next/link";
 import { WaComposer, type WaTemplateOpt } from "@/components/crm/WaComposer";
 import { WaAttachment } from "@/components/crm/WaAttachment";
+import { WaMessageText } from "@/components/crm/WaMessageText";
 import { statusTooltip } from "@/lib/wa/status-label";
 import { isOtherQualification, qualificationText, QUALIFICATION_OTHER_MAX, daysInStatus } from "@/lib/crm";
 
@@ -37,6 +38,7 @@ type ThreadMessage = {
   direction: string;
   type: string;
   body: string | null;
+  unsupportedType: string | null;
   mediaMime: string | null;
   fileName: string | null;
   hasMedia: boolean;
@@ -651,11 +653,6 @@ function SessionPill({ sessionOpen, sessionExpiresAt }: { sessionOpen: boolean; 
 function Bubble({ message }: { message: ThreadMessage }) {
   const outbound = message.direction === "out";
   const status = message.waStatus ? WA_STATUS_GLYPH[message.waStatus] : null;
-  // With a player on screen, "[audio]" is worse than nothing — it reads as the
-  // message having failed to load. The placeholder is only for a non-text
-  // message we have no attachment for.
-  const text = message.body?.trim() || (message.type !== "text" && !message.hasMedia ? `[${message.type}]` : "");
-
   return (
     <div className={"flex " + (outbound ? "justify-end" : "justify-start")}>
       <div
@@ -675,7 +672,7 @@ function Bubble({ message }: { message: ThreadMessage }) {
             type={message.type}
           />
         )}
-        {text && <p className="text-body-md text-on-surface whitespace-pre-wrap break-words">{text}</p>}
+        <WaMessageText message={message} />
         {message.fileName && message.mediaMime && !message.mediaMime.startsWith("audio/") && (
           <span className="block text-label-sm text-on-surface-variant">{message.fileName}</span>
         )}

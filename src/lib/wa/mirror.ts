@@ -443,6 +443,7 @@ export async function ingestInboundMessage(
           direction: "in",
           type: msg.type,
           body: msg.body,
+          unsupportedType: msg.unsupportedType,
           mediaId: msg.mediaId,
           mediaMime: msg.mediaMime,
           fileName: msg.fileName,
@@ -460,6 +461,15 @@ export async function ingestInboundMessage(
 
     if (created.count === 0) {
       return { ok: true, action: "duplicate", conversationId: conversation.id, leadId: conversation.leadId };
+    }
+
+    // Counted so we can see which kinds candidates actually send that Meta will
+    // not carry — the decision on whether any deserve more than a placeholder.
+    if (msg.type === "unsupported") {
+      logger.info("wa_inbound_unsupported", {
+        unsupportedType: msg.unsupportedType,
+        providerMessageId: msg.providerMessageId,
+      });
     }
 
     // Counters are updated only for a message we actually stored, so a redelivery

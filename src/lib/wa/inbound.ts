@@ -29,7 +29,7 @@ export type WaInboundMessage = {
   /** Provider message id (`wamid.…`). The idempotency key; null means we cannot dedupe. */
   providerMessageId: string | null;
   type: WaMessageType;
-  /** Text body or media caption. */
+  /** Text body or media caption — or, on a reaction, the emoji. */
   body: string | null;
   mediaId: string | null;
   mediaMime: string | null;
@@ -38,6 +38,11 @@ export type WaInboundMessage = {
   occurredAt: Date | null;
   /** Echoed from our own outbound payload, when the flow passes it back. */
   leadId: string | null;
+  /**
+   * On an `unsupported` message, WHAT the candidate actually did — see
+   * readUnsupportedType. Null on every other type.
+   */
+  unsupportedType: string | null;
 };
 
 export const WA_MESSAGE_TYPES = [
@@ -52,6 +57,8 @@ export const WA_MESSAGE_TYPES = [
   "interactive",
   "button",
   "template",
+  "reaction",
+  "system",
   "unsupported",
 ] as const;
 
@@ -153,7 +160,8 @@ export function normalizeMessageType(raw: unknown): WaMessageType {
 export function extractBody(msg: Record<string, unknown>, type: WaMessageType): string | null {
   const nested = asObject(msg[type]);
   if (nested) {
-    const v = pick(nested, "body", "caption", "text");
+    // `emoji` is a reaction's whole content (`reaction: {message_id, emoji}`).
+    const v = pick(nested, "body", "caption", "text", "emoji");
     if (v) return v;
   }
 
@@ -175,8 +183,32 @@ export function extractBody(msg: Record<string, unknown>, type: WaMessageType): 
   return pick(msg, "body", "text", "message", "caption", "reply", "keyword");
 }
 
+/**
+ * What an `unsupported` message actually was.
+ *
+ * Meta files everything the Cloud API cannot carry — an edit, a poll, a pin, a
+ * view-once photo, some reactions — as `type: "unsupported"`, and names the real
+ * kind in `unsupported.type`. Without it the thread can only say "[unsupported]",
+ * which reads as our bug and leaves the consultant guessing whether the candidate
+ * said yes. Error 131060 is the other flavour: the content exists but has not
+ * reached the API yet.
+ *
+ * A type WE do not model (Meta's `order`, `request_welcome`, …) is also filed as
+ * unsupported, so its raw name is kept for the same reason.
+ */
+function readUnsupportedType(raw: Record<string, unknown>, rawType: string): string | null {
+  const declared = pick(asObject(raw.unsupported) ?? {}, "type");
+  if (declared) return declared.toLowerCase();
+
+  const errors = Array.isArray(raw.errors) ? raw.errors : [];
+  if (errors.some((e) => String(asObject(e)?.code ?? "") === "131060")) return "unavailable";
+
+  return rawType && rawType !== "unsupported" && rawType !== "unknown" ? rawType : null;
+}
+
 function readMessage(raw: Record<string, unknown>): WaInboundMessage {
-  const type = normalizeMessageType(raw.type ?? raw.message_type ?? raw.messageType);
+  const rawType = String(raw.type ?? raw.message_type ?? raw.messageType ?? "").trim().toLowerCase();
+  const type = normalizeMessageType(rawType);
   const media = asObject(raw[type]);
 
   return {
@@ -189,7 +221,17 @@ function readMessage(raw: Record<string, unknown>): WaInboundMessage {
     fileName: (media && pick(media, "filename", "file_name")) ?? pick(raw, "filename", "file_name"),
     occurredAt: parseWaTimestamp(raw.timestamp ?? raw.occurredAt ?? raw.created_at ?? raw.time),
     leadId: pick(raw, "lead_id", "leadId"),
+    unsupportedType: type === "unsupported" ? readUnsupportedType(raw, rawType) : null,
   };
+}
+
+/**
+ * A reaction with no emoji is the candidate taking a reaction BACK. It says
+ * nothing, and storing it would put an empty bubble in the thread and flag it
+ * as needing a reply.
+ */
+function isReactionRemoved(m: WaInboundMessage): boolean {
+  return m.type === "reaction" && !m.body;
 }
 
 /**
@@ -244,7 +286,10 @@ export function extractInboundMessages(body: unknown): WaInboundMessage[] {
   // wearing a different hat, which the statuses key gives away.
   if (raw.length === 0 && !("statuses" in b)) raw.push(b);
 
-  return raw.filter((r) => !isStatusCallback(r)).map(readMessage).filter((m) => !!m.from);
+  return raw
+    .filter((r) => !isStatusCallback(r))
+    .map(readMessage)
+    .filter((m) => !!m.from && !isReactionRemoved(m));
 }
 
 /**

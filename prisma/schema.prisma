@@ -3437,11 +3437,17 @@ model WaMessage {
   /// 'in' (from the candidate) | 'out' (from us).
   direction String
   /// 'text' | 'image' | 'document' | 'audio' | 'video' | 'sticker' |
-  /// 'location' | 'template' | 'interactive' | 'unsupported'.
+  /// 'location' | 'template' | 'interactive' | 'reaction' | 'system' |
+  /// 'unsupported'.
   type      String  @default("text")
-  /// Message text, a caption, or a rendered template body. Null for a bare
-  /// media message with no caption.
+  /// Message text, a caption, or a rendered template body — or a reaction's
+  /// emoji. Null for a bare media message with no caption.
   body      String?
+  /// On an 'unsupported' message: what the candidate actually did, from Meta's
+  /// `unsupported.type` ('edit' | 'poll_creation' | 'reaction' | 'pin' | …), or
+  /// 'unavailable' for error 131060. Meta never sends the content itself, so
+  /// this is all the thread can say. Null on rows stored before it existed.
+  unsupportedType String?
 
   /// Provider-side media handle and a resolved URL, when the message carries an
   /// attachment. Cloud API media URLs are short-lived, so `mediaUrl` is a cache

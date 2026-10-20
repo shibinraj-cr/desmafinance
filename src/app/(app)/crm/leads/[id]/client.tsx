@@ -17,6 +17,7 @@ import { TaskReminderFields, type TaskReminderPreviewDTO } from "@/components/cr
 import { reminderStatusLabel, type TaskReminderChannel } from "@/lib/crm-task-reminders";
 import { WaComposer, type WaTemplateOpt } from "@/components/crm/WaComposer";
 import { WaAttachment } from "@/components/crm/WaAttachment";
+import { WaMessageText } from "@/components/crm/WaMessageText";
 import { statusTooltip } from "@/lib/wa/status-label";
 import { WaStartComposer } from "@/components/crm/WaStartComposer";
 import { TaskEditDialog, type TaskEditPayload } from "@/components/crm/TaskEditDialog";
@@ -2367,6 +2368,7 @@ type WaMessageRow = {
   direction: string;
   type: string;
   body: string | null;
+  unsupportedType: string | null;
   mediaMime: string | null;
   fileName: string | null;
   hasMedia: boolean;
@@ -2549,12 +2551,6 @@ function WhatsAppThreadPanel({
 function WaBubble({ message }: { message: WaMessageRow }) {
   const outbound = message.direction === "out";
   const status = message.waStatus ? WA_STATUS_GLYPH[message.waStatus] : null;
-  // A media message with no caption still has to render as something — the type
-  // plus filename is more use than an empty bubble.
-  // With a player on screen, "[audio]" reads as a failure to load rather than as
-  // a description. Only used when there is no attachment to show.
-  const text = message.body?.trim() || (message.type !== "text" && !message.hasMedia ? `[${message.type}]` : "");
-
   return (
     <div className={"flex " + (outbound ? "justify-end" : "justify-start")}>
       <div
@@ -2576,7 +2572,7 @@ function WaBubble({ message }: { message: WaMessageRow }) {
             type={message.type}
           />
         )}
-        {text && <p className="text-body-md text-on-surface whitespace-pre-wrap break-words">{text}</p>}
+        <WaMessageText message={message} />
         {message.fileName && message.mediaMime && !message.mediaMime.startsWith("audio/") && (
           <span className="block text-label-sm text-on-surface-variant">{message.fileName}</span>
         )}
