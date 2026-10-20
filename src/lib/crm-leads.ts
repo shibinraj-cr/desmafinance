@@ -385,6 +385,44 @@ function idleClauses(raw: MultiFilterValue, now: Date): Prisma.LeadWhereInput[] 
   return out;
 }
 
+/**
+ * The free-text lead search — name, email or phone in one box — as OR clauses.
+ * Shared by the Leads list and anywhere else a lead is picked by search (e.g.
+ * linking a Partner Commissions enrollment), so both find the same leads.
+ */
+export function leadSearchClauses(q: string): Prisma.LeadWhereInput[] {
+  // An "@" makes this unambiguously an email search — match the email only.
+  // Otherwise the query's stray digits leak into the phone match below: e.g.
+  // "srisubha1703@gmail.com" reduces to "1703", which is a substring of every
+  // number stored as "91703…" (9[1703]…), so the email search would pull in
+  // every candidate whose number starts with 703.
+  if (q.includes("@")) return [{ email: { contains: q, mode: "insensitive" } }];
+  const or: Prisma.LeadWhereInput[] = [
+    { candidateName: { contains: q, mode: "insensitive" } },
+    { email: { contains: q, mode: "insensitive" } },
+    { phone: { contains: q } },
+    { phoneE164: { contains: q } },
+    { altPhone: { contains: q } },
+    { altPhoneE164: { contains: q } },
+  ];
+  // Format-agnostic phone search: match the bare digits against the
+  // normalized phoneE164 (and raw phone), so "+91 78142 95082" also finds a
+  // lead stored as "917814295082" / "7814295082" and vice-versa. Only run it
+  // when the query is *predominantly* digits (an actual phone), so a name or
+  // partial email that merely contains a few digits doesn't match unrelated
+  // numbers by substring.
+  const digits = q.replace(/\D/g, "");
+  const compact = q.replace(/\s/g, "");
+  const isPhoneish = digits.length >= 4 && digits.length / compact.length >= 0.6;
+  if (isPhoneish) {
+    or.push({ phoneE164: { contains: digits } });
+    or.push({ phone: { contains: digits } });
+    or.push({ altPhoneE164: { contains: digits } });
+    or.push({ altPhone: { contains: digits } });
+  }
+  return or;
+}
+
 /** Build the Prisma `where` for the leads list. Shared by the list page and the GET API so they never drift. */
 export function buildLeadWhere(p: LeadFilterParams): Prisma.LeadWhereInput {
   const where: Prisma.LeadWhereInput = {};
@@ -430,41 +468,7 @@ export function buildLeadWhere(p: LeadFilterParams): Prisma.LeadWhereInput {
   const idle = idleClauses(p.idle, now);
   if (idle.length > 0) and.push({ OR: idle });
   const q = p.q?.trim();
-  if (q) {
-    // An "@" makes this unambiguously an email search — match the email only.
-    // Otherwise the query's stray digits leak into the phone match below: e.g.
-    // "srisubha1703@gmail.com" reduces to "1703", which is a substring of every
-    // number stored as "91703…" (9[1703]…), so the email search would pull in
-    // every candidate whose number starts with 703.
-    if (q.includes("@")) {
-      where.OR = [{ email: { contains: q, mode: "insensitive" } }];
-    } else {
-      const or: Prisma.LeadWhereInput[] = [
-        { candidateName: { contains: q, mode: "insensitive" } },
-        { email: { contains: q, mode: "insensitive" } },
-        { phone: { contains: q } },
-        { phoneE164: { contains: q } },
-        { altPhone: { contains: q } },
-        { altPhoneE164: { contains: q } },
-      ];
-      // Format-agnostic phone search: match the bare digits against the
-      // normalized phoneE164 (and raw phone), so "+91 78142 95082" also finds a
-      // lead stored as "917814295082" / "7814295082" and vice-versa. Only run it
-      // when the query is *predominantly* digits (an actual phone), so a name or
-      // partial email that merely contains a few digits doesn't match unrelated
-      // numbers by substring.
-      const digits = q.replace(/\D/g, "");
-      const compact = q.replace(/\s/g, "");
-      const isPhoneish = digits.length >= 4 && digits.length / compact.length >= 0.6;
-      if (isPhoneish) {
-        or.push({ phoneE164: { contains: digits } });
-        or.push({ phone: { contains: digits } });
-        or.push({ altPhoneE164: { contains: digits } });
-        or.push({ altPhone: { contains: digits } });
-      }
-      where.OR = or;
-    }
-  }
+  if (q) where.OR = leadSearchClauses(q);
   if (p.from || p.to) {
     const createdAt: Prisma.DateTimeFilter = {};
     if (p.from) createdAt.gte = p.from;

@@ -201,7 +201,7 @@ function LeadPicker({ value, onChange }: { value: LeadHit | null; onChange: (l: 
   }
   return (
     <div className="relative">
-      <input className={inputCls} value={q} placeholder="Search CRM leads by name (optional)" onChange={(e) => { setQ(e.target.value); setOpen(true); }} onFocus={() => setOpen(true)} onBlur={() => setTimeout(() => setOpen(false), 150)} />
+      <input className={inputCls} value={q} placeholder="Search CRM leads by name, phone or email (optional)" onChange={(e) => { setQ(e.target.value); setOpen(true); }} onFocus={() => setOpen(true)} onBlur={() => setTimeout(() => setOpen(false), 150)} />
       {open && hits.length > 0 ? (
         <ul className="absolute z-10 left-0 right-0 mt-1 max-h-60 overflow-auto bg-surface-container-lowest border border-outline-variant rounded-lg shadow-lg">
           {hits.map((h) => (
