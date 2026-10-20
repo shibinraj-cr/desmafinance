@@ -71,6 +71,8 @@ export type SettingsDTO = {
   signatoryName: string;
   hasSignature: boolean;
   numberPrefix: string;
+  /** Lowest number DesGro may suggest in its financial year (invoices raised outside DesGro share the series). */
+  nextNumber: string | null;
   runDay: number;
   emailAlerts: boolean;
   bdePrograms: string[];

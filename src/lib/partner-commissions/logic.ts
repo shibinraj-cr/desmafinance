@@ -152,20 +152,33 @@ export function isIntakeMonth(v: string): boolean {
   return /^(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)-\d{2}$/.test(v);
 }
 
+/** The running number of `number` within `series` ("D/DLLC/26-27/"), or null when it isn't in it. */
+function seqIn(series: string, number: string): number | null {
+  if (!number.startsWith(series)) return null;
+  const tail = number.slice(series.length);
+  return /^\d+$/.test(tail) ? Number(tail) : null;
+}
+
 /**
  * Suggested next invoice number in `prefix + FY + "/" + NNN`, one above the
- * highest number already used in that series. The series is shared with
- * invoices raised outside DesGro, so Finance can always change it.
+ * highest number already used in that series.
+ *
+ * The series is shared with invoices raised outside DesGro, which DesGro can't
+ * see — so `floor` (the "Next invoice number" setting) sets the lowest number
+ * it may suggest. It only applies within its own financial year: once the
+ * invoice date reaches the next April, numbering starts again at 001. Finance
+ * can still change any number before payment.
  */
-export function suggestInvoiceNumber(prefix: string, isoDate: string, existing: string[]): string {
+export function suggestInvoiceNumber(prefix: string, isoDate: string, existing: string[], floor?: string | null): string {
   const series = `${prefix}${fyLabel(isoDate)}/`;
-  let max = 0;
+  let next = 1;
   for (const n of existing) {
-    if (!n.startsWith(series)) continue;
-    const tail = n.slice(series.length);
-    if (/^\d+$/.test(tail)) max = Math.max(max, Number(tail));
+    const seq = seqIn(series, n);
+    if (seq != null) next = Math.max(next, seq + 1);
   }
-  return `${series}${String(max + 1).padStart(3, "0")}`;
+  const min = floor ? seqIn(series, floor.trim()) : null;
+  if (min != null) next = Math.max(next, min);
+  return `${series}${String(next).padStart(3, "0")}`;
 }
 
 /** True when the number follows the series shape, e.g. D/DLLC/26-27/012. */

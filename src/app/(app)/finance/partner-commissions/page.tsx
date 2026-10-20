@@ -64,6 +64,7 @@ export default async function PartnerCommissionsPage({ searchParams }: { searchP
       signatoryName: settings.signatoryName,
       hasSignature: !!settings.signaturePng,
       numberPrefix: settings.numberPrefix,
+      nextNumber: settings.nextNumber,
       runDay: settings.runDay,
       emailAlerts: settings.emailAlerts,
       bdePrograms: settings.bdePrograms,

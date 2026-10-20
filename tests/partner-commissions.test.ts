@@ -88,6 +88,19 @@ describe("invoice numbering", () => {
     expect(suggestInvoiceNumber("D/DLLC/", "2026-10-20", existing)).toBe("D/DLLC/26-27/020");
     expect(suggestInvoiceNumber("D/DLLC/", "2027-04-02", existing)).toBe("D/DLLC/27-28/001");
   });
+  it("never suggests below the Next invoice number setting in its financial year", () => {
+    const floor = "D/DLLC/26-27/025";
+    // Nothing in DesGro yet: 001–024 were raised outside it.
+    expect(suggestInvoiceNumber("D/DLLC/", "2026-10-20", [], floor)).toBe("D/DLLC/26-27/025");
+    // DesGro invoices below the floor don't pull the suggestion down…
+    expect(suggestInvoiceNumber("D/DLLC/", "2026-10-20", ["D/DLLC/26-27/012"], floor)).toBe("D/DLLC/26-27/025");
+    // …and once DesGro has made 025 and 026 it moves on by itself.
+    expect(suggestInvoiceNumber("D/DLLC/", "2026-11-20", ["D/DLLC/26-27/025", "D/DLLC/26-27/026"], floor)).toBe("D/DLLC/26-27/027");
+    // A new financial year starts again at 001.
+    expect(suggestInvoiceNumber("D/DLLC/", "2027-04-20", ["D/DLLC/26-27/031"], floor)).toBe("D/DLLC/27-28/001");
+    // A floor from another series is ignored.
+    expect(suggestInvoiceNumber("D/DLLC/", "2026-10-20", [], "INV/26-27/900")).toBe("D/DLLC/26-27/001");
+  });
   it("recognises the series shape", () => {
     expect(looksLikeSeries("D/DLLC/", "D/DLLC/26-27/012")).toBe(true);
     expect(looksLikeSeries("D/DLLC/", "INV-12")).toBe(false);

@@ -18,6 +18,7 @@ const Body = z.discriminatedUnion("action", [
     bankAccountNo: z.string().max(60).optional(),
     signatoryName: z.string().max(120).optional(),
     numberPrefix: z.string().max(30).optional(),
+    nextNumber: z.string().max(60).nullable().optional(),
     runDay: z.number().int().optional(),
     emailAlerts: z.boolean().optional(),
     bdePrograms: z.array(z.string().max(10)).max(10).optional(),

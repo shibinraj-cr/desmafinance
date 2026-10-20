@@ -130,7 +130,7 @@ function GenerateModal({ ctx, onClose }: { ctx: PcCtx; onClose: () => void }) {
     const taken = [...existing];
     const out: Record<string, string> = {};
     for (const pid of partnerIds) {
-      const n = suggestInvoiceNumber(data.settings.numberPrefix, data.today, taken);
+      const n = suggestInvoiceNumber(data.settings.numberPrefix, data.today, taken, data.settings.nextNumber);
       out[pid] = n;
       taken.push(n);
     }

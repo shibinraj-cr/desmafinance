@@ -26,6 +26,7 @@ import {
   invoiceTotal,
   isEditableInvoice,
   isIntakeMonth,
+  looksLikeSeries,
   openAud,
   round2,
   runDue,
@@ -333,7 +334,7 @@ async function allInvoiceNumbers(): Promise<string[]> {
 
 export async function suggestNumber(dateIso: string): Promise<string> {
   const settings = await getSettings();
-  return suggestInvoiceNumber(settings.numberPrefix, dateIso, await allInvoiceNumbers());
+  return suggestInvoiceNumber(settings.numberPrefix, dateIso, await allInvoiceNumbers(), settings.nextNumber);
 }
 
 /**
@@ -866,6 +867,7 @@ export type SettingsPatch = Partial<
     | "bankAccountNo"
     | "signatoryName"
     | "numberPrefix"
+    | "nextNumber"
     | "runDay"
     | "emailAlerts"
     | "bdePrograms"
@@ -883,6 +885,12 @@ export async function saveSettings(a: PcAccess, patch: SettingsPatch) {
     const p = patch.numberPrefix.trim();
     if (!p || p.length > 30) throw badRequest("Enter the invoice number prefix, e.g. D/DLLC/.");
     data.numberPrefix = p;
+  }
+  if (patch.nextNumber !== undefined) {
+    const n = (patch.nextNumber ?? "").trim();
+    const prefix = (data.numberPrefix as string | undefined) ?? (await getSettings()).numberPrefix;
+    if (n && !looksLikeSeries(prefix, n)) throw badRequest(`Enter the next number in the series, e.g. ${prefix}26-27/025.`);
+    data.nextNumber = n || null;
   }
   if (patch.runDay !== undefined) {
     if (!Number.isInteger(patch.runDay) || patch.runDay < 1 || patch.runDay > 28) throw badRequest("The run day must be between 1 and 28.");
