@@ -5,7 +5,7 @@ import { withApiHandler } from "@/lib/api";
 import { unauthorized, forbidden } from "@/lib/http-error";
 import { getCurrentUserAndPermissions } from "@/lib/permissions";
 import { getCrmAccess } from "@/lib/crm-rbac";
-import { buildInboxWhere, inboxOwnerWhere, normalizeInboxFilter, serializeInboxRow } from "@/lib/wa/inbox";
+import { buildInboxWhere, inboxOwnerWhere, inboxStageWhere, normalizeInboxFilter, serializeInboxRow } from "@/lib/wa/inbox";
 import { conversationVisibilityWhere } from "@/lib/wa/access";
 
 export const dynamic = "force-dynamic";
@@ -43,6 +43,9 @@ export const GET = withApiHandler(async (req: Request) => {
   const owner = sp.getAll("owner");
   // Broadcast-reply narrowing: "__any__" = any campaign, else one campaign name.
   const campaign = sp.get("campaign");
+  // Lead-stage narrowing (CrmLeadStatus ids and/or "no_lead"). Open to every
+  // CRM user — it only narrows within what `visibility` already allows.
+  const stage = sp.getAll("stage");
   // Floored and floored-at-1: Prisma requires an Int, and a negative `take`
   // means "page backwards", which the hasMore/slice arithmetic below cannot
   // express — an unvalidated `?limit=-5` would silently return the wrong page.
@@ -51,7 +54,7 @@ export const GET = withApiHandler(async (req: Request) => {
   const cursor = sp.get("cursor");
 
   const visibility = conversationVisibilityWhere(access, userId);
-  const where = buildInboxWhere(filter, { userId, isBde: access.isBde, visibility, owner, campaign }, search);
+  const where = buildInboxWhere(filter, { userId, isBde: access.isBde, visibility, owner, campaign, stage }, search);
 
   const rows = await prisma.waConversation.findMany({
     where,
@@ -92,6 +95,7 @@ export const GET = withApiHandler(async (req: Request) => {
   // that clicking through cannot show is worse than no badge. They also obey
   // the owner filter, so picking a consultant re-scopes the badges to their
   // threads rather than leaving them showing the whole desk's numbers.
+  // Same for the stage filter.
   const ownerScope = inboxOwnerWhere(owner);
   // The campaign lens, as a where-clause — folded into BOTH the list (via
   // buildInboxWhere) and the badge counts below, so a badge never promises work
@@ -99,11 +103,13 @@ export const GET = withApiHandler(async (req: Request) => {
   // in).
   const campaignScope: Prisma.WaConversationWhereInput | null =
     campaign === "__any__" ? { sourceCampaign: { not: null } } : campaign ? { sourceCampaign: campaign } : null;
+  const stageScope = inboxStageWhere(stage);
+  // AND, not object spread: visibility, owner and stage can each be an `OR`, and
+  // spreading two of them would silently drop one.
   const open: Prisma.WaConversationWhereInput = {
-    status: { not: "closed" },
-    ...visibility,
-    ...(ownerScope ?? {}),
-    ...(campaignScope ?? {}),
+    AND: [{ status: { not: "closed" } }, visibility, ownerScope, campaignScope, stageScope].filter(
+      (w): w is Prisma.WaConversationWhereInput => !!w && Object.keys(w).length > 0,
+    ),
   };
   const [needsReply, unread, unassigned] = await Promise.all([
     prisma.waConversation.count({ where: { ...open, awaitingReply: true } }),
