@@ -147,6 +147,37 @@ describe("buildInboxWhere", () => {
       AND: [OPEN, { OR: [{ assignedToId: null }, { assignedToId: "u2" }] }],
     });
   });
+
+  // The lead-stage filter ANDs on top like the owner and campaign filters.
+  it("narrows to one lead stage", () => {
+    expect(buildInboxWhere("all", { ...scope, stage: "s1" })).toEqual({
+      AND: [OPEN, { lead: { statusId: "s1" } }],
+    });
+  });
+  it("turns several picked stages into an IN", () => {
+    expect(buildInboxWhere("all", { ...scope, stage: ["s1", "s2"] })).toEqual({
+      AND: [OPEN, { lead: { statusId: { in: ["s1", "s2"] } } }],
+    });
+  });
+  it("resolves the 'no_lead' stage sentinel to threads with no linked lead", () => {
+    expect(buildInboxWhere("all", { ...scope, stage: ["no_lead"] })).toEqual({
+      AND: [OPEN, { leadId: null }],
+    });
+  });
+  it("ORs unlinked threads together with picked stages", () => {
+    expect(buildInboxWhere("all", { ...scope, stage: ["no_lead", "s1"] })).toEqual({
+      AND: [OPEN, { OR: [{ leadId: null }, { lead: { statusId: "s1" } }] }],
+    });
+  });
+  it("adds no stage clause when nothing is picked", () => {
+    expect(buildInboxWhere("all", { ...scope, stage: [] })).toEqual({ AND: [OPEN] });
+    expect(buildInboxWhere("all", { ...scope, stage: null })).toEqual({ AND: [OPEN] });
+  });
+  it("combines a stage with an owner and a status chip", () => {
+    expect(buildInboxWhere("needs_reply", { ...scope, owner: "u2", stage: "s1" })).toEqual({
+      AND: [OPEN, { assignedToId: "u2" }, { lead: { statusId: "s1" } }, { awaitingReply: true }],
+    });
+  });
 });
 
 describe("isAwaitingReply", () => {

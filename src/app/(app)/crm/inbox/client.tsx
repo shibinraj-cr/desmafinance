@@ -211,6 +211,8 @@ export function InboxClient({
   const [search, setSearch] = useState("");
   // Empty = no consultant narrowing; userIds and/or the "unassigned" sentinel.
   const [owner, setOwner] = useState<string[]>([]);
+  // Empty = every stage; CrmLeadStatus ids and/or the "no_lead" sentinel.
+  const [stage, setStage] = useState<string[]>([]);
   // "" = all threads; "__any__" = any broadcast reply; else one campaign name.
   const [campaign, setCampaign] = useState<string>("");
   const [campaigns, setCampaigns] = useState<string[]>([]);
@@ -224,6 +226,7 @@ export function InboxClient({
     const qs = new URLSearchParams({ filter });
     if (search.trim()) qs.set("q", search.trim());
     for (const o of owner) qs.append("owner", o);
+    for (const s of stage) qs.append("stage", s);
     if (campaign) qs.set("campaign", campaign);
     const res = await fetch(`/api/crm/wa/conversations?${qs}`).catch(() => null);
     setListLoading(false);
@@ -239,7 +242,7 @@ export function InboxClient({
     // the user on an empty, uncontrollable filter.
     if (campaign && campaign !== "__any__" && !nextCampaigns.includes(campaign)) setCampaign("");
     else if (campaign === "__any__" && nextCampaigns.length === 0) setCampaign("");
-  }, [filter, search, owner, campaign]);
+  }, [filter, search, owner, stage, campaign]);
 
   // Debounced so typing in the search box does not fire a request per keystroke.
   useEffect(() => {
@@ -271,6 +274,9 @@ export function InboxClient({
           bdes={bdes}
           owner={owner}
           onOwner={setOwner}
+          stages={masters.statuses}
+          stage={stage}
+          onStage={setStage}
           campaign={campaign}
           onCampaign={setCampaign}
           campaigns={campaigns}
@@ -305,6 +311,9 @@ function ConversationList({
   bdes,
   owner,
   onOwner,
+  stages,
+  stage,
+  onStage,
   campaign,
   onCampaign,
   campaigns,
@@ -322,6 +331,9 @@ function ConversationList({
   bdes: BdeOpt[];
   owner: string[];
   onOwner: (o: string[]) => void;
+  stages: InboxMasters["statuses"];
+  stage: string[];
+  onStage: (s: string[]) => void;
   campaign: string;
   onCampaign: (c: string) => void;
   campaigns: string[];
@@ -352,6 +364,18 @@ function ConversationList({
             onChange={onOwner}
           />
         )}
+        {/* Lead stage — open to everyone, since it only narrows within the
+            threads this user can already see. ANDs on top of the chips. */}
+        <MultiSelect
+          className="w-full"
+          placeholder="All stages"
+          options={[
+            ...stages.map((s) => ({ value: s.id, label: s.label })),
+            { value: "no_lead", label: "No lead linked" },
+          ]}
+          selected={stage}
+          onChange={onStage}
+        />
         {/* Broadcast-reply filter — a broadcast send never lands in the inbox, so
             without this a campaign reply is indistinguishable from any other
             inbound. Shown only once some thread has actually replied to one. */}
