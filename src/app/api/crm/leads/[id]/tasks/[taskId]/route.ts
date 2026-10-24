@@ -15,6 +15,7 @@ import {
   getTaskReminderConfig,
   TASK_REMINDER_CHANNELS,
 } from "@/lib/crm-task-reminders-engine";
+import { QUALITY_GATE_MESSAGE, QUALITY_REQUIRED_CODE, qualityGate } from "@/lib/crm-lead-quality";
 
 export const dynamic = "force-dynamic";
 
@@ -62,7 +63,15 @@ export const PATCH = withApiHandler(async (req: Request, { params }: Ctx) => {
     where: { id: params.taskId },
     include: {
       ...taskInclude,
-      lead: { select: { id: true, assignedToId: true, status: { select: { kind: true, code: true, parked: true } } } },
+      lead: {
+        select: {
+          id: true,
+          assignedToId: true,
+          qualityRating: true,
+          qualityDueAt: true,
+          status: { select: { kind: true, code: true, parked: true } },
+        },
+      },
     },
   });
   if (!task || task.leadId !== params.id) throw notFound();
@@ -123,6 +132,21 @@ export const PATCH = withApiHandler(async (req: Request, { params }: Ctx) => {
       update.completedBy = { disconnect: true };
       statusActivity = { type: "TASK_REOPENED", summary: `Task reopened: “${task.subject}”` };
     }
+  }
+
+  // An overdue quality rating comes first: the lead's own BDE can't tick off
+  // work on a lead they still haven't rated (see crm-lead-quality.ts).
+  if (completing) {
+    const gate = qualityGate(
+      {
+        qualityRating: task.lead.qualityRating,
+        qualityDueAt: task.lead.qualityDueAt,
+        assignedToId: task.lead.assignedToId,
+        statusCode: task.lead.status?.code ?? "",
+      },
+      { actorId: userId, now: new Date() },
+    );
+    if (gate) throw unprocessable(QUALITY_GATE_MESSAGE[gate], QUALITY_REQUIRED_CODE);
   }
 
   // Mandatory next step: an ACTIVE lead must always have an open task. If this

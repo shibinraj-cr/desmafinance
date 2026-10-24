@@ -10,6 +10,8 @@ import { DEFAULT_STATUS_COLOR } from "@/lib/crm";
 import { NextStepDialog, type NextStepPayload } from "@/components/crm/NextStepDialog";
 import { TaskEditDialog, type TaskEditPayload } from "@/components/crm/TaskEditDialog";
 import { reminderStatusLabel, type TaskReminderChannel } from "@/lib/crm-task-reminders";
+import { LeadQualityDialog, qualityDraftFrom } from "@/components/crm/LeadQualityPicker";
+import { QUALITY_GATE_MESSAGE, QUALITY_REQUIRED_CODE, type QualityReasonOpt } from "@/lib/crm-lead-quality";
 
 export type BdeOpt = { userId: string; displayName: string; username: string; role: string };
 export type TasksAccess = { isAdmin: boolean; isBde: boolean; userId: string };
@@ -107,6 +109,7 @@ export function TasksBoard({
   counts,
   access,
   reminders,
+  qualityReasons,
 }: {
   tasks: CrmTaskListRow[];
   total: number;
@@ -116,6 +119,8 @@ export function TasksBoard({
   counts: TaskCounts;
   access: TasksAccess;
   reminders: { enabled: boolean; defaultChannels: TaskReminderChannel[]; consultantIds: string[] };
+  /** Active Poor / Junk reasons, for rating a lead whose rating blocks a completion. */
+  qualityReasons: QualityReasonOpt[];
 }) {
   const router = useRouter();
   const pathname = usePathname();
@@ -202,6 +207,9 @@ export function TasksBoard({
   const [pendingComplete, setPendingComplete] = useState<CrmTaskListRow | null>(null);
   const [nextBusy, setNextBusy] = useState(false);
   const [nextError, setNextError] = useState<string | null>(null);
+  // The lead's quality rating is overdue, so the API refused the completion:
+  // rate it here, then the completion is retried.
+  const [rateFirst, setRateFirst] = useState<CrmTaskListRow | null>(null);
 
   async function setStatus(task: CrmTaskListRow, status: "done" | "open") {
     const res = await fetch(`/api/crm/leads/${task.leadId}/tasks/${task.id}`, {
@@ -214,6 +222,10 @@ export function TasksBoard({
       if (j?.error === "next_task_required") {
         setNextError(null);
         setPendingComplete(task);
+        return;
+      }
+      if (j?.error === QUALITY_REQUIRED_CODE) {
+        setRateFirst(task);
         return;
       }
     }
@@ -264,6 +276,22 @@ export function TasksBoard({
 
   return (
     <div className="space-y-md">
+      {rateFirst && (
+        <LeadQualityDialog
+          leadId={rateFirst.leadId}
+          leadName={rateFirst.lead.candidateName}
+          initial={qualityDraftFrom(null)}
+          reasons={qualityReasons}
+          required
+          requiredMessage={QUALITY_GATE_MESSAGE.overdue}
+          onClose={() => setRateFirst(null)}
+          onSaved={() => {
+            const task = rateFirst;
+            setRateFirst(null);
+            void setStatus(task, "done");
+          }}
+        />
+      )}
       {pendingComplete && (
         <NextStepDialog
           reminders={{

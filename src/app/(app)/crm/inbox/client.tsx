@@ -8,6 +8,8 @@ import { WaAttachment } from "@/components/crm/WaAttachment";
 import { WaMessageText } from "@/components/crm/WaMessageText";
 import { statusTooltip } from "@/lib/wa/status-label";
 import { isOtherQualification, qualificationText, QUALIFICATION_OTHER_MAX, daysInStatus } from "@/lib/crm";
+import { leadQualityMeta, type LeadQualityRating, type QualityReasonOpt } from "@/lib/crm-lead-quality";
+import { LeadQualityDialog, QualityPill, qualityDraftFrom } from "@/components/crm/LeadQualityPicker";
 
 /**
  * The three-pane inbox: conversation list | thread | lead context.
@@ -75,6 +77,13 @@ type Thread = {
     country: string | null;
     studyDestination: string | null;
     temperature: string | null;
+    quality: {
+      rating: LeadQualityRating | null;
+      reason: { id: string; label: string } | null;
+      note: string | null;
+      /** ISO — when the rating becomes mandatory; null = never. */
+      dueAt: string | null;
+    };
     statusLabel: string | null;
     statusColor: string | null;
     serviceName: string | null;
@@ -128,6 +137,7 @@ export type InboxMasters = {
   sources: { id: string; label: string }[];
   qualifications: { id: string; label: string }[];
   subStatuses: { id: string; label: string; group: string }[];
+  qualityReasons: QualityReasonOpt[];
   countries: string[];
 };
 
@@ -955,6 +965,7 @@ function LeadFields({
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [saved, setSaved] = useState<string | null>(null);
+  const [rating, setRating] = useState(false);
 
   // Re-seed when the conversation changes; the component is reused across threads.
   useEffect(() => {
@@ -992,6 +1003,7 @@ function LeadFields({
         <Row label="Source" value={lead.sourceLabel} />
         <Row label="Qualification" value={qualificationText(lead.qualificationLabel, lead.qualificationOther)} />
         <Row label="Status" value={statusSummary(lead.subStatusLabel, lead.subStatusSince)} />
+        <Row label="Quality" value={leadQualityMeta(lead.quality.rating)?.label ?? null} />
         <Row label="Country" value={lead.country} />
         <Row label="Email" value={lead.email} />
       </dl>
@@ -1143,6 +1155,42 @@ function LeadFields({
           <option value="cold">Cold</option>
         </select>
       </label>
+
+      {/* Rated in a dialog rather than a select: Poor and Junk need a reason. */}
+      <div>
+        <span className="block text-label-sm text-on-surface-variant mb-xs">Lead quality</span>
+        <div className="flex flex-wrap items-center gap-sm">
+          <QualityPill rating={lead.quality.rating} />
+          {lead.quality.reason && <span className="text-label-sm text-on-surface-variant">{lead.quality.reason.label}</span>}
+          {!lead.quality.rating &&
+            lead.quality.dueAt &&
+            new Date(lead.quality.dueAt).getTime() <= Date.now() && (
+              <span className="text-label-sm font-semibold text-error">Overdue</span>
+            )}
+          <button
+            type="button"
+            disabled={busy}
+            onClick={() => setRating(true)}
+            className="ml-auto text-label-sm font-semibold text-accent hover:underline"
+          >
+            {lead.quality.rating ? "Change" : "Rate"}
+          </button>
+        </div>
+      </div>
+      {rating && (
+        <LeadQualityDialog
+          leadId={lead.id}
+          leadName={lead.candidateName}
+          initial={qualityDraftFrom(lead.quality)}
+          reasons={masters.qualityReasons}
+          onClose={() => setRating(false)}
+          onSaved={() => {
+            setRating(false);
+            setSaved("Quality saved");
+            onSaved();
+          }}
+        />
+      )}
     </div>
   );
 }

@@ -20,6 +20,7 @@ import {
 import { buildL2Scorecard, type L2Score, type ScoreComponent } from "@/lib/crm-score";
 import { getPipelineForecast } from "@/lib/lead-pulse-metrics";
 import { inr } from "@/lib/format";
+import { QUALITY_DUE_AFTER_DAYS } from "@/lib/crm-lead-quality";
 import { getCrmUsageByUser } from "@/lib/usage-metrics";
 import { formatActiveTime, activeHours } from "@/lib/usage-tracking";
 import { MODULES } from "@/lib/modules";
@@ -478,7 +479,7 @@ export default async function TeamActivityPage({ searchParams }: { searchParams:
         </Section>
 
         {/* Attention strip */}
-        <section className="grid grid-cols-2 gap-gutter md:grid-cols-3 lg:grid-cols-6">
+        <section className="grid grid-cols-2 gap-gutter md:grid-cols-4 lg:grid-cols-7">
           <KpiCard
             label="SLA breaches"
             value={num(t.slaBreaches)}
@@ -514,6 +515,12 @@ export default async function TeamActivityPage({ searchParams }: { searchParams:
             value={num(t.openReinquiry)}
             hint="Open re-inquiry tasks"
             tone={t.openReinquiry > 0 ? "primary" : "default"}
+          />
+          <KpiCard
+            label="Quality overdue"
+            value={num(t.qualityOverdue)}
+            hint={`Unrated ${QUALITY_DUE_AFTER_DAYS}+ days in the system`}
+            tone={t.qualityOverdue > 0 ? "danger" : "default"}
           />
         </section>
 
@@ -640,13 +647,16 @@ export default async function TeamActivityPage({ searchParams }: { searchParams:
                   <th className="px-sm py-sm text-right font-semibold">Abandon</th>
                   <th className="px-sm py-sm text-right font-semibold">No task</th>
                   <th className="px-sm py-sm text-right font-semibold">Stuck</th>
-                  <th className="pl-sm py-sm text-right font-semibold">Re-inq.</th>
+                  <th className="px-sm py-sm text-right font-semibold">Re-inq.</th>
+                  <th className="pl-sm py-sm text-right font-semibold" title="Leads past their quality-rating due date, still unrated">
+                    Quality due
+                  </th>
                 </tr>
               </thead>
               <tbody>
                 {rows.length === 0 ? (
                   <tr>
-                    <td colSpan={12} className="py-lg text-center text-on-surface-variant">
+                    <td colSpan={13} className="py-lg text-center text-on-surface-variant">
                       No active consultants.
                     </td>
                   </tr>
@@ -684,7 +694,16 @@ export default async function TeamActivityPage({ searchParams }: { searchParams:
                       </td>
                       <td className="px-sm py-sm text-right tabular-nums">{r.noTask}</td>
                       <td className="px-sm py-sm text-right tabular-nums">{r.stuck}</td>
-                      <td className="pl-sm py-sm text-right tabular-nums">{r.openReinquiry}</td>
+                      <td className="px-sm py-sm text-right tabular-nums">{r.openReinquiry}</td>
+                      <td className={`pl-sm py-sm text-right tabular-nums ${r.qualityOverdue > 0 ? "font-semibold text-error" : ""}`}>
+                        {r.qualityOverdue > 0 ? (
+                          <Link href={`/crm/leads?assignee=${r.userId}&quality=overdue`} className="hover:underline">
+                            {r.qualityOverdue}
+                          </Link>
+                        ) : (
+                          0
+                        )}
+                      </td>
                     </tr>
                   ))
                 )}

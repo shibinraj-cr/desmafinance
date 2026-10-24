@@ -25,17 +25,20 @@ export default async function CrmSettingsPage() {
     );
   }
 
-  const [statuses, statusCounts, subStatuses, subStatusCounts, quals, qualCounts] = await Promise.all([
+  const [statuses, statusCounts, subStatuses, subStatusCounts, quals, qualCounts, reasons, reasonCounts] = await Promise.all([
     prisma.crmLeadStatus.findMany({ orderBy: [{ displayOrder: "asc" }, { label: "asc" }] }),
     prisma.lead.groupBy({ by: ["statusId"], _count: true }),
     prisma.crmLeadSubStatus.findMany({ orderBy: [{ displayOrder: "asc" }, { label: "asc" }] }),
     prisma.lead.groupBy({ by: ["subStatusId"], _count: true, where: { subStatusId: { not: null } } }),
     prisma.crmQualification.findMany({ orderBy: [{ displayOrder: "asc" }, { label: "asc" }] }),
     prisma.lead.groupBy({ by: ["qualificationId"], _count: true, where: { qualificationId: { not: null } } }),
+    prisma.crmLeadQualityReason.findMany({ orderBy: [{ displayOrder: "asc" }, { label: "asc" }] }),
+    prisma.lead.groupBy({ by: ["qualityReasonId"], _count: true, where: { qualityReasonId: { not: null } } }),
   ]);
   const statusCountMap = new Map(statusCounts.map((c) => [c.statusId, c._count]));
   const subStatusCountMap = new Map(subStatusCounts.map((c) => [c.subStatusId, c._count]));
   const qualCountMap = new Map(qualCounts.map((c) => [c.qualificationId, c._count]));
+  const reasonCountMap = new Map(reasonCounts.map((c) => [c.qualityReasonId, c._count]));
 
   return (
     <>
@@ -71,6 +74,13 @@ export default async function CrmSettingsPage() {
             displayOrder: q.displayOrder,
             active: q.active,
             leadCount: qualCountMap.get(q.id) ?? 0,
+          }))}
+          qualityReasons={reasons.map((r) => ({
+            id: r.id,
+            label: r.label,
+            displayOrder: r.displayOrder,
+            active: r.active,
+            leadCount: reasonCountMap.get(r.id) ?? 0,
           }))}
         />
       </div>

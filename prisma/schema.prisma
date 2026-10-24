@@ -90,6 +90,7 @@ model User {
   // CRM relations
   assignedLeads           Lead[]                 @relation("LeadAssignee")
   createdLeads            Lead[]                 @relation("LeadCreatedBy")
+  qualityRatedLeads       Lead[]                 @relation("LeadQualityRatedBy")
   leadNotes               LeadNote[]             @relation("LeadNoteAuthor")
   leadActivities          LeadActivity[]         @relation("LeadActivityActor")
   leadImports             LeadImportBatch[]      @relation("LeadImportUploader")
@@ -2907,6 +2908,31 @@ model Lead {
   // leads-list Temperature column + filter and is set from the lead detail.
   temperature String?
 
+  // ── Lead quality (the consultant's verdict on the enquiry itself) ─────────
+  // Was this a real, relevant enquiry at all? Distinct from `temperature` (how
+  // likely they are to enrol soon, which moves) and from the stage/status (where
+  // the lead and the conversation stand): quality is judged once, by the BDE
+  // who worked the lead, and is read back by source and campaign so marketing
+  // can see which channels send genuine candidates and which send junk.
+  //
+  // 'good' | 'average' | 'poor' | 'junk' (null = not rated). A fixed scale on
+  // purpose, not an admin master, so a month's mix stays comparable with the
+  // next. Poor and Junk carry a reason from CrmLeadQualityReason.
+  qualityRating    String?
+  qualityReasonId  String?
+  qualityReason    CrmLeadQualityReason? @relation(fields: [qualityReasonId], references: [id], onDelete: SetNull)
+  qualityNote      String?
+  qualityRatedAt   DateTime?
+  qualityRatedById String?
+  qualityRatedBy   User?                 @relation("LeadQualityRatedBy", fields: [qualityRatedById], references: [id], onDelete: SetNull)
+  /// When rating this lead becomes mandatory: five days after the row was
+  /// INSERTED, stamped by the database default. Deliberately not derived from
+  /// `createdAt`, which a sheet import back-dates to the original enquiry — a
+  /// lead that arrived today is never already overdue. Null = never mandatory:
+  /// every lead that existed before the rule shipped, and re-enrollment leads
+  /// (an existing candidate says nothing about a marketing channel).
+  qualityDueAt     DateTime?             @default(dbgenerated("(CURRENT_TIMESTAMP + '5 days'::interval)"))
+
   // Re-inquiry tracking. When a candidate who already exists submits again
   // (a duplicate by email/phone), we DON'T create a new row — we fold the
   // signal onto this canonical lead: bump `inquiryCount`, stamp `lastInquiryAt`,
@@ -2963,6 +2989,10 @@ model Lead {
   @@index([emailKey])
   @@index([campaign])
   @@index([temperature])
+  @@index([qualityRating])
+  @@index([qualityReasonId])
+  // Backs the "rating overdue" queue: unrated leads whose due date has passed.
+  @@index([qualityDueAt, qualityRating])
   @@index([dob])
   @@index([country])
   @@index([studyDestination])
@@ -3023,6 +3053,23 @@ model CrmLeadSubStatus {
   color        String?
   // The status new leads start in. Exactly one row should have this true.
   isDefault    Boolean  @default(false)
+  active       Boolean  @default(true)
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+  leads        Lead[]
+
+  @@index([active])
+  @@index([displayOrder])
+}
+
+/// Why a lead was rated Poor or Junk ("Wrong / invalid number", "Never
+/// reachable", …). Admin-editable at CRM Settings → Lead Quality. Required for
+/// those two ratings, so the quality report can say WHY a channel's leads are
+/// bad, not only that they are.
+model CrmLeadQualityReason {
+  id           String   @id @default(cuid())
+  label        String   @unique
+  displayOrder Int      @default(0)
   active       Boolean  @default(true)
   createdAt    DateTime @default(now())
   updatedAt    DateTime @updatedAt

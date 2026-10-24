@@ -3,7 +3,7 @@ import { Prisma } from "@prisma/client";
 import { z } from "zod";
 import { prisma } from "@/lib/prisma";
 import { withApiHandler } from "@/lib/api";
-import { unauthorized, forbidden, notFound, badRequest } from "@/lib/http-error";
+import { unauthorized, forbidden, notFound, badRequest, unprocessable } from "@/lib/http-error";
 import { getCurrentUserAndPermissions } from "@/lib/permissions";
 import { getCrmAccess, canEditLead } from "@/lib/crm-rbac";
 import { recordLeadActivity } from "@/lib/crm-activity";
@@ -21,6 +21,8 @@ import { openRemarketingCampaign, stopRemarketingCampaigns } from "@/lib/crm-rem
 import { syncPipelineToLeadStatus } from "@/lib/crm-enroll";
 import { REMARKETING_STATUS_CODE } from "@/lib/crm-reinquiry";
 import { assignLeadTo } from "@/lib/crm-assign";
+import { QualityInputSchema, resolveQualityChange, type QualityChange } from "@/lib/crm-lead-quality-data";
+import { QUALITY_GATE_MESSAGE, QUALITY_REQUIRED_CODE, qualityGate } from "@/lib/crm-lead-quality";
 
 export const dynamic = "force-dynamic";
 
@@ -70,6 +72,12 @@ const PatchSchema = z.object({
     z.enum(LEAD_TEMPERATURE_VALUES as [string, ...string[]]).nullable().optional(),
   ),
   extra: z.record(z.string()).nullable().optional(),
+  /**
+   * Lead quality (see crm-lead-quality.ts). Sent alone by the rating band, or
+   * together with `statusId` by the close dialog, so closing a lead and rating
+   * it is one request that passes the quality gate below.
+   */
+  quality: QualityInputSchema.optional(),
 });
 
 const FIELD_LABELS: Record<string, string> = {
@@ -242,6 +250,7 @@ export const PATCH = withApiHandler(async (req: Request, { params }: Ctx) => {
   // Status change.
   let statusChange: { from: string; to: string } | null = null;
   let statusCodeChange: { fromCode: string; toCode: string } | null = null;
+  let nextStageKind: string | null = null;
   if (d.statusId !== undefined && d.statusId !== existing.statusId) {
     // Enrolled leads have a Party record / LeadPulsePipeline row / Finance TransactionDraft /
     // Operations project already created off the back of enrollment. Leaving "enrolled" via the
@@ -266,8 +275,33 @@ export const PATCH = withApiHandler(async (req: Request, { params }: Ctx) => {
       );
     }
     update.statusId = d.statusId;
+    nextStageKind = newStatus.kind;
     statusChange = { from: existing.status.label, to: newStatus.label };
     statusCodeChange = { fromCode: existing.status.code, toCode: newStatus.code };
+  }
+
+  // Lead quality. Resolved BEFORE the gate so a request that rates the lead and
+  // moves its stage together passes it.
+  let qualityChange: QualityChange | null = null;
+  if (d.quality) {
+    qualityChange = await resolveQualityChange(existing, d.quality, userId);
+    if (qualityChange) Object.assign(update, qualityChange.data);
+  }
+
+  // The rating comes first: the lead's own BDE can't move an overdue lead's
+  // stage, or close any tracked lead, while it is unrated. Thrown before the
+  // write, so a refused request changes nothing at all.
+  if (statusCodeChange) {
+    const gate = qualityGate(
+      {
+        qualityRating: qualityChange?.data.qualityRating ?? existing.qualityRating,
+        qualityDueAt: existing.qualityDueAt,
+        assignedToId: existing.assignedToId,
+        statusCode: existing.status.code,
+      },
+      { actorId: userId, now: new Date(), nextStage: { code: statusCodeChange.toCode, kind: nextStageKind ?? "active" } },
+    );
+    if (gate) throw unprocessable(QUALITY_GATE_MESSAGE[gate], QUALITY_REQUIRED_CODE);
   }
 
   if (Object.keys(update).length === 0) {
@@ -310,6 +344,15 @@ export const PATCH = withApiHandler(async (req: Request, { params }: Ctx) => {
       type: "SUB_STATUS_CHANGED",
       summary: `Status: ${subStatusChange.fromLabel} → ${subStatusChange.toLabel}`,
       metadata: subStatusChange,
+    });
+  }
+  if (qualityChange) {
+    await recordLeadActivity({
+      leadId: updated.id,
+      actorId: userId,
+      type: "QUALITY_RATED",
+      summary: qualityChange.summary,
+      metadata: qualityChange.metadata,
     });
   }
   if (partyLinked) {

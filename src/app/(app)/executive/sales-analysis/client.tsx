@@ -10,6 +10,7 @@ import {
   COLLECTION_ONLY_DIMS,
   DIM_LABELS,
   ENROLLMENT_ONLY_DIMS,
+  LEAD_ONLY_DIMS,
   MEASURES,
   MEASURE_META,
   NOT_APPLICABLE,
@@ -33,7 +34,7 @@ import {
 } from "@/lib/sales-analysis";
 import type { SalesAnalysisPayload } from "@/lib/sales-analysis-data";
 
-type Range = { period: string; from: string; to: string; prevFrom: string; prevTo: string };
+export type Range = { period: string; from: string; to: string; prevFrom: string; prevTo: string };
 
 const ALL_DIMS: DimKey[] = [...STORED_DIMS, ...TIME_DIMS];
 
@@ -53,6 +54,7 @@ const PRESETS: Array<{ label: string; measure: MeasureKey; by: DimKey; split?: D
   { label: "Collections by BDE", measure: "collected", by: "bde", split: "revenueCategory" },
   { label: "Payment modes", measure: "collected", by: "paymentMode" },
   { label: "Lead → close speed", measure: "enrollments", by: "closeSpeed" },
+  { label: "Lead quality by source", measure: "leads", by: "source", split: "quality" },
 ];
 
 /** Where a drill-down goes next after filtering on a row. */
@@ -72,6 +74,9 @@ const DRILL_NEXT: Partial<Record<DimKey, DimKey>> = {
   paymentMode: "bde",
   market: "service",
   closeSpeed: "bde",
+  quality: "source",
+  qualityReason: "source",
+  leadOutcome: "source",
   month: "source",
   quarter: "month",
   week: "source",
@@ -184,7 +189,9 @@ export function SalesAnalysisView({ payload, range }: { payload: SalesAnalysisPa
     ? "Payment mode, revenue category and export/domestic exist only on collections — enrollments and leads show as “Not applicable”."
     : ENROLLMENT_ONLY_DIMS.includes(by) || (split && ENROLLMENT_ONLY_DIMS.includes(split))
       ? "Lead → close time exists only on enrollments (days from lead created to deal closed)."
-      : null;
+      : LEAD_ONLY_DIMS.includes(by) || (split && LEAD_ONLY_DIMS.includes(split))
+        ? "Lead outcome exists only on leads: where each lead created in the period has ended up."
+        : null;
 
   return (
     <div className="p-margin space-y-lg">
@@ -404,7 +411,7 @@ function AddFilter({ exclude, onAdd }: { exclude: DimKey[]; onAdd: (d: DimKey) =
   );
 }
 
-function PeriodBar({ range, onChange }: { range: Range; onChange: (period: string, from?: string, to?: string) => void }) {
+export function PeriodBar({ range, onChange }: { range: Range; onChange: (period: string, from?: string, to?: string) => void }) {
   const [from, setFrom] = useState(range.from);
   const [to, setTo] = useState(range.to);
   const [custom, setCustom] = useState(range.period === "custom");

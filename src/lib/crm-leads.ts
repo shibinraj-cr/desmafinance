@@ -2,6 +2,7 @@ import { Prisma } from "@prisma/client";
 import { prisma } from "./prisma";
 import { ageFromDob, dobRangeForAge } from "./age";
 import { isOtherQualification, normalizeTemperature, type LeadTemperature } from "./crm";
+import { normalizeQuality, QUALITY_UNRATED_BUCKETS, LEAD_QUALITY_RATINGS, type LeadQualityRating } from "./crm-lead-quality";
 import { listParam, oneOf, oneParam } from "./filter-params";
 import { parseAgeParam } from "./age";
 import { parsePeriod, rangeFor } from "./period";
@@ -27,6 +28,8 @@ export const leadRowInclude = Prisma.validator<Prisma.LeadInclude>()({
   },
   party: { select: { id: true, name: true } },
   pipeline: { select: { status: true } },
+  qualityReason: { select: { id: true, label: true } },
+  qualityRatedBy: { select: { username: true, leadPulseRole: { select: { displayName: true } } } },
 });
 
 export type LeadWithRels = Prisma.LeadGetPayload<{ include: typeof leadRowInclude }>;
@@ -61,6 +64,17 @@ export type LeadRow = {
   campaign: string | null;
   /** Hot / Warm / Cold rating (`'hot' | 'warm' | 'cold'`), or null if unrated. */
   temperature: LeadTemperature | null;
+  /** The consultant's verdict on the enquiry — see crm-lead-quality.ts. */
+  quality: {
+    rating: LeadQualityRating | null;
+    /** Why it was Poor / Junk. */
+    reason: { id: string; label: string } | null;
+    note: string | null;
+    ratedAt: string | null;
+    ratedBy: string | null;
+    /** When rating becomes mandatory; null = never (pre-rule and re-enrollment leads). */
+    dueAt: string | null;
+  };
   /** Official date of birth as `YYYY-MM-DD` (date-only), or null. */
   dob: string | null;
   /** Age in whole years, derived from `dob` at serialize time (always current). */
@@ -118,6 +132,14 @@ export function serializeLead(l: LeadWithRels): LeadRow {
     party: l.party ? { id: l.party.id, name: l.party.name } : null,
     campaign: l.campaign,
     temperature: normalizeTemperature(l.temperature),
+    quality: {
+      rating: normalizeQuality(l.qualityRating),
+      reason: l.qualityReason ? { id: l.qualityReason.id, label: l.qualityReason.label } : null,
+      note: l.qualityNote,
+      ratedAt: l.qualityRatedAt ? l.qualityRatedAt.toISOString() : null,
+      ratedBy: l.qualityRatedBy ? (l.qualityRatedBy.leadPulseRole?.displayName ?? l.qualityRatedBy.username) : null,
+      dueAt: l.qualityDueAt ? l.qualityDueAt.toISOString() : null,
+    },
     // Date-only ISO (drop the time) + age derived relative to now.
     dob: l.dob ? l.dob.toISOString().slice(0, 10) : null,
     age: ageFromDob(l.dob, new Date()),
@@ -182,6 +204,12 @@ export type LeadFilterParams = {
    * stage at once, which is the entire point of the field.
    */
   substatus?: MultiFilterValue;
+  /**
+   * Lead quality — any of the four ratings plus the unrated piles
+   * (`overdue` | `pending` | `exempt`, see QUALITY_UNRATED_BUCKETS). Several
+   * picks union, so "Junk + overdue" is one list of both.
+   */
+  quality?: MultiFilterValue;
   country?: MultiFilterValue;
   studyDestination?: MultiFilterValue;
   /**
@@ -363,6 +391,39 @@ function openTaskFilter(raw: MultiFilterValue): Prisma.LeadWhereInput | null {
 }
 
 /**
+ * One clause per picked quality bucket, to be OR-ed. The unrated piles mirror
+ * `qualityBucket()` in crm-lead-quality.ts exactly: a lead with no rating is
+ * "exempt" when it was never due (no due date, no owner, or a duplicate),
+ * otherwise overdue or pending by its due date.
+ */
+function qualityClauses(raw: MultiFilterValue, now: Date): Prisma.LeadWhereInput[] {
+  const out: Prisma.LeadWhereInput[] = [];
+  const tracked: Prisma.LeadWhereInput = {
+    qualityRating: null,
+    assignedToId: { not: null },
+    status: { code: { not: "duplicate" } },
+  };
+  for (const value of listParam(raw)) {
+    const rating = normalizeQuality(value);
+    if (rating) out.push({ qualityRating: rating });
+    else if (value === "overdue") out.push({ ...tracked, qualityDueAt: { lte: now } });
+    else if (value === "pending") out.push({ ...tracked, qualityDueAt: { gt: now } });
+    else if (value === "exempt")
+      out.push({
+        qualityRating: null,
+        OR: [{ qualityDueAt: null }, { assignedToId: null }, { status: { code: "duplicate" } }],
+      });
+  }
+  return out;
+}
+
+/** Every value the quality filter understands, in picker order. */
+export const LEAD_QUALITY_FILTER_VALUES: readonly string[] = [
+  ...LEAD_QUALITY_RATINGS,
+  ...QUALITY_UNRATED_BUCKETS.map((b) => b.value),
+];
+
+/**
  * Turn the picked {@link LEAD_IDLE_BUCKETS} into one `lastActivityAt` clause per
  * bucket, to be OR-ed together. A bucket of [min, max] days of age is the
  * half-open window `(now - (max+1)d, now - min d]` — upper bound inclusive so a
@@ -467,6 +528,8 @@ export function buildLeadWhere(p: LeadFilterParams): Prisma.LeadWhereInput {
   // Staleness buckets union as an OR: picking two age bands means "either".
   const idle = idleClauses(p.idle, now);
   if (idle.length > 0) and.push({ OR: idle });
+  const quality = qualityClauses(p.quality, now);
+  if (quality.length > 0) and.push({ OR: quality });
   const q = p.q?.trim();
   if (q) where.OR = leadSearchClauses(q);
   if (p.from || p.to) {
@@ -530,6 +593,7 @@ export function leadFilterParamsFromQuery(
     campaign: readAll(sp, "campaign"),
     temperature: readAll(sp, "temperature"),
     substatus: readAll(sp, "substatus"),
+    quality: readAll(sp, "quality"),
     country: readAll(sp, "country"),
     studyDestination: readAll(sp, "studyDestination"),
     task: readAll(sp, "task"),

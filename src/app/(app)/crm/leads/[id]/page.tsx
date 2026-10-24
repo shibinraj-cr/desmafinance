@@ -24,6 +24,7 @@ import { listMessageTemplates } from "@/lib/crm-message-templates";
 import { STUDY_ABROAD_EVENT } from "@/lib/crm-webhook";
 import { previewTaskReminders } from "@/lib/crm-task-reminders-engine";
 import { TASK_TYPES } from "@/lib/crm";
+import { activeQualityReasons } from "@/lib/crm-lead-quality-data";
 import { LeadDetail } from "./client";
 
 export const dynamic = "force-dynamic";
@@ -54,7 +55,7 @@ export default async function LeadDetailPage({ params }: { params: { id: string 
   const lead = await prisma.lead.findUnique({ where: { id: params.id }, include: leadRowInclude });
   if (!lead) notFound();
 
-  const [notes, activities, tasks, statuses, sources, services, qualifications, subStatuses, bdes, parties, emailConfigured, templates] = await Promise.all([
+  const [notes, activities, tasks, statuses, sources, services, qualifications, subStatuses, bdes, parties, emailConfigured, templates, qualityReasons] = await Promise.all([
     prisma.leadNote.findMany({ where: { leadId: params.id }, orderBy: { createdAt: "desc" }, include: noteInclude }),
     prisma.leadActivity.findMany({
       where: { leadId: params.id, type: { notIn: TIMELINE_EXCLUDE } },
@@ -92,6 +93,7 @@ export default async function LeadDetailPage({ params }: { params: { id: string 
     }),
     isEmailConfigured(),
     listMessageTemplates({ activeOnly: true }),
+    activeQualityReasons(),
   ]);
 
   // Best-effort: record that this user opened the lead (once per day).
@@ -142,6 +144,7 @@ export default async function LeadDetailPage({ params }: { params: { id: string 
     services: services.map((s) => ({ id: s.id, label: s.name })),
     qualifications,
     subStatuses,
+    qualityReasons,
     bdes,
     parties: parties.map((p) => ({ id: p.id, label: p.name, phone: p.phone })),
   };
