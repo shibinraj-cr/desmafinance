@@ -6,6 +6,7 @@ import { getCrmAccess } from "@/lib/crm-rbac";
 import { WA_UI_ADMIN_ONLY } from "@/lib/rbac";
 import { filterTemplatesFor, leadPulseRoleOf, loadTemplateGrants, templateKey } from "@/lib/wa/template-access";
 import { COUNTRIES } from "@/lib/countries";
+import { activeQualityReasons } from "@/lib/crm-lead-quality-data";
 import { getWaMirrorConfig } from "@/lib/wa/mirror";
 import { getWaProvider } from "@/lib/wa/registry";
 import { canViewAllConversations } from "@/lib/wa/access";
@@ -55,7 +56,7 @@ export default async function CrmInboxPage({
     );
   }
 
-  const [config, provider, bdes, statuses, services, sources, subStatuses, qualifications] = await Promise.all([
+  const [config, provider, bdes, statuses, services, sources, subStatuses, qualifications, qualityReasons] = await Promise.all([
     getWaMirrorConfig(),
     getWaProvider(),
     prisma.leadPulseRole.findMany({
@@ -87,6 +88,7 @@ export default async function CrmInboxPage({
       orderBy: { displayOrder: "asc" },
       select: { id: true, label: true },
     }),
+    activeQualityReasons(),
   ]);
 
   // Templates come from the WABA, NOT from CrmMessageTemplate. A CRM template's
@@ -145,6 +147,7 @@ export default async function CrmInboxPage({
             sources,
             qualifications,
             subStatuses,
+            qualityReasons,
             countries: [...COUNTRIES],
           }}
         />

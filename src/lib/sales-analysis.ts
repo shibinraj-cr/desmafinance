@@ -15,6 +15,7 @@
  * reads as "Not applicable". The engine is pure — no Prisma — so the client can
  * re-pivot instantly and the tests can drive it with plain rows.
  */
+import { QUALITY_BUCKET_ORDER, qualityBucketLabel } from "./crm-lead-quality";
 
 // ── Dimensions ───────────────────────────────────────────────────────────────
 
@@ -35,6 +36,13 @@ export const STORED_DIMS = [
   "paymentMode",
   "market",
   "closeSpeed",
+  // Lead quality (crm-lead-quality.ts): the rating, or which unrated pile.
+  "quality",
+  // Why a Poor / Junk lead was rated so; "Not applicable" for the rest.
+  "qualityReason",
+  // Where the lead CREATED in the period ended up: Open / Enrolled / Lost.
+  // Leads only — the cohort view behind "do Good leads actually enrol?".
+  "leadOutcome",
 ] as const;
 export type StoredDim = (typeof STORED_DIMS)[number];
 
@@ -60,6 +68,9 @@ export const DIM_LABELS: Record<DimKey, string> = {
   paymentMode: "Payment mode",
   market: "Export / Domestic",
   closeSpeed: "Lead → close time",
+  quality: "Lead quality",
+  qualityReason: "Quality reason",
+  leadOutcome: "Lead outcome",
   month: "Month",
   quarter: "FY quarter",
   week: "Week (Sat–Fri)",
@@ -70,6 +81,14 @@ export const DIM_LABELS: Record<DimKey, string> = {
 export const COLLECTION_ONLY_DIMS: readonly DimKey[] = ["revenueCategory", "paymentMode", "market"];
 /** Dimensions that only exist on enrollments. */
 export const ENROLLMENT_ONLY_DIMS: readonly DimKey[] = ["closeSpeed"];
+/** Dimensions that only exist on leads. */
+export const LEAD_ONLY_DIMS: readonly DimKey[] = ["leadOutcome"];
+
+/** Fixed order of the lead-outcome buckets. */
+export const LEAD_OUTCOMES = ["Open", "Enrolled", "Lost"] as const;
+
+/** Display order of the quality buckets, as the labels the dictionary holds. */
+export const QUALITY_LABEL_ORDER: string[] = QUALITY_BUCKET_ORDER.map(qualityBucketLabel);
 
 export const NOT_APPLICABLE = "Not applicable";
 export const UNKNOWN = "Not set";
@@ -229,6 +248,15 @@ function naturalOrder(dim: DimKey, dicts: Dicts): ((a: string, b: string) => num
   }
   if (dim === "closeSpeed") {
     const pos = (k: string) => (k === NOT_APPLICABLE ? 99 : CLOSE_SPEED_BUCKETS.indexOf(dicts.closeSpeed[Number(k)]));
+    return (a, b) => pos(a) - pos(b);
+  }
+  if (dim === "quality" || dim === "leadOutcome") {
+    const order: readonly string[] = dim === "quality" ? QUALITY_LABEL_ORDER : LEAD_OUTCOMES;
+    const pos = (k: string) => {
+      if (k === NOT_APPLICABLE) return 999;
+      const i = order.indexOf(dicts[dim][Number(k)]);
+      return i < 0 ? 998 : i;
+    };
     return (a, b) => pos(a) - pos(b);
   }
   return null;

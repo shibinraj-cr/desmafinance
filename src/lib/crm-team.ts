@@ -37,6 +37,7 @@ import { prisma } from "./prisma";
 import { getAssignableBdes, REINQUIRY_TASK_SUBJECT_NEEDLE } from "./crm-leads";
 import { getCrmFunnelByBde } from "./lead-pulse-crm-metrics";
 import { CRM_TEAM_LEAD_PAGE } from "./crm-rbac";
+import { qualityOverdueWhere } from "./crm-lead-quality-data";
 
 // ── Policy constants ─────────────────────────────────────────────────────────
 
@@ -469,6 +470,8 @@ export type TeamBdeRow = {
   noTask: number;
   stuck: number;
   openReinquiry: number;
+  /** Owned leads past their quality-rating due date and still unrated (see crm-lead-quality.ts). */
+  qualityOverdue: number;
 };
 
 export type TeamLeadRef = {
@@ -495,6 +498,7 @@ export type TeamActivity = {
     noTask: number;
     stuck: number;
     openReinquiry: number;
+    qualityOverdue: number;
     firstResponsePending: number;
     firstResponseBreached: number;
     unassignedActive: number;
@@ -546,6 +550,7 @@ export async function getTeamActivity(opts: {
     trendLeads,
     newLeadsRange,
     unassignedActive,
+    qualityOverdueByBde,
   ] = await Promise.all([
     // Conversion (current month, carryover-safe). Narrowed to self below.
     getCrmFunnelByBde(now.getFullYear(), now.getMonth() + 1),
@@ -606,6 +611,12 @@ export async function getTeamActivity(opts: {
     prisma.lead.count({ where: { ...(occurredAt ? { createdAt: occurredAt } : {}), ...scopeLeadWhere } }),
     // Unassigned active leads (managers only; 0 for a self-view).
     self ? Promise.resolve(0) : prisma.lead.count({ where: { status: { kind: "active" }, assignedToId: null } }),
+    // Overdue quality ratings, per owner (now).
+    prisma.lead.groupBy({
+      by: ["assignedToId"],
+      where: { ...qualityOverdueWhere(now), ...(self ? { assignedToId: self } : {}) },
+      _count: { _all: true },
+    }),
   ]);
 
   // Carryover-exclude: keep only genuinely-owned leads (drops bulk-import dumps),
@@ -689,6 +700,7 @@ export async function getTeamActivity(opts: {
     noTask: 0,
     stuck: 0,
     openReinquiry: 0,
+    qualityOverdue: 0,
   });
   const acc = new Map(roster.map((b) => [b.userId, blank()]));
 
@@ -750,6 +762,10 @@ export async function getTeamActivity(opts: {
   for (const g of reinquiryByBde) {
     const a = g.assignedToId ? acc.get(g.assignedToId) : undefined;
     if (a) a.openReinquiry += g._count._all;
+  }
+  for (const g of qualityOverdueByBde) {
+    const a = g.assignedToId ? acc.get(g.assignedToId) : undefined;
+    if (a) a.qualityOverdue += g._count._all;
   }
 
   // ── Attention buckets (point-in-time) ──
@@ -836,6 +852,7 @@ export async function getTeamActivity(opts: {
       noTask: noTaskList.length,
       stuck: stuckList.length,
       openReinquiry: sum((r) => r.openReinquiry),
+      qualityOverdue: sum((r) => r.qualityOverdue),
       firstResponsePending: sum((r) => r.firstResponsePending),
       firstResponseBreached: sum((r) => r.firstResponseBreached),
       unassignedActive,

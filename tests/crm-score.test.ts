@@ -30,6 +30,7 @@ function row(p: Partial<TeamBdeRow> = {}): TeamBdeRow {
     firstResponsePending: 0,
     firstResponseBreached: 0,
     activeOwned: 10,
+    qualityOverdue: 0,
     slaBreaches: 0,
     abandoned: 0,
     noTask: 0,

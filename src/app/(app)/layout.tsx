@@ -16,6 +16,7 @@ import { AnnouncementBand } from "@/components/AnnouncementBand";
 import { CelebrationGreeting } from "@/components/CelebrationGreeting";
 import { MeetingActionReminder } from "@/components/MeetingActionReminder";
 import { UncontactedLeadAlarm } from "@/components/UncontactedLeadAlarm";
+import { LeadQualityReminder } from "@/components/LeadQualityReminder";
 import { uncontactedAlarmScope } from "@/lib/crm-uncontacted-alarm";
 import { dueRemindersFor } from "@/lib/meeting-notes";
 import { todayIst } from "@/lib/lead-pulse-dates";
@@ -93,6 +94,8 @@ export default async function AppLayout({ children }: { children: React.ReactNod
       .catch(() => null),
   ]);
   const alarmScope = uncontactedAlarmScope(perms, leadPulseRole);
+  // Active BDEs rate their own leads' quality; nobody else is ever reminded.
+  const qualityReminder = !!leadPulseRole?.active && (leadPulseRole.role === "l1" || leadPulseRole.role === "l2");
 
   // Only costs a further query when the viewer is actually one of today's
   // celebrants — on an ordinary day `today` is empty and this is free.
@@ -169,6 +172,9 @@ export default async function AppLayout({ children }: { children: React.ReactNod
           they move to Follow Up. Polls on its own, so it keeps nagging on a page
           the user never leaves. */}
       {alarmScope ? <UncontactedLeadAlarm userId={userId} scope={alarmScope} /> : null}
+      {/* Leads past their quality-rating due date (5 days in the system): every
+          30 minutes until rated, with the rating controls in the pop-up. */}
+      {qualityReminder ? <LeadQualityReminder userId={userId} /> : null}
     </div>
   );
 }

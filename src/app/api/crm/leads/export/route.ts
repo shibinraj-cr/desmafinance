@@ -6,6 +6,7 @@ import { unauthorized, forbidden } from "@/lib/http-error";
 import { getCurrentUserAndPermissions } from "@/lib/permissions";
 import { getCrmAccess } from "@/lib/crm-rbac";
 import { leadTemperatureMeta, qualificationText, daysInStatus } from "@/lib/crm";
+import { qualityBucket, qualityBucketLabel } from "@/lib/crm-lead-quality";
 import { countryCodeFor } from "@/lib/countries";
 import {
   buildLeadWhere,
@@ -40,6 +41,7 @@ export const GET = withApiHandler(async (req: Request) => {
     include: leadRowInclude,
   });
 
+  const now = new Date();
   const data = rows.map((r) => {
     const l = serializeLead(r);
     return {
@@ -53,6 +55,15 @@ export const GET = withApiHandler(async (req: Request) => {
       Status: l.subStatus?.label ?? "",
       "Days In Status": daysInStatus(l.subStatusSince) ?? "",
       Temperature: leadTemperatureMeta(l.temperature)?.label ?? "",
+      // The rating, or which unrated pile the lead is in ("Not rated (overdue)").
+      Quality: qualityBucketLabel(
+        qualityBucket(
+          { qualityRating: l.quality.rating, qualityDueAt: l.quality.dueAt, assignedToId: l.assignedTo?.id ?? null, statusCode: l.status.code },
+          now,
+        ),
+      ),
+      "Quality Reason": l.quality.reason?.label ?? "",
+      "Quality Note": l.quality.note ?? "",
       Candidate: l.candidateName,
       Email: l.email ?? "",
       Phone: l.phone ?? "",
@@ -71,11 +82,11 @@ export const GET = withApiHandler(async (req: Request) => {
   });
 
   const ws = XLSX.utils.json_to_sheet(data, {
-    header: ["Created", "Source", "Campaign", "Stage", "Status", "Days In Status", "Temperature", "Candidate", "Email", "Phone", "Alt Phone", "DOB", "Age", "Country", "Country Code", "Study Destination", "Service", "Qualification", "Consultant", "Assigned"],
+    header: ["Created", "Source", "Campaign", "Stage", "Status", "Days In Status", "Temperature", "Quality", "Quality Reason", "Quality Note", "Candidate", "Email", "Phone", "Alt Phone", "DOB", "Age", "Country", "Country Code", "Study Destination", "Service", "Qualification", "Consultant", "Assigned"],
   });
   // Reasonable column widths.
   ws["!cols"] = [
-    { wch: 20 }, { wch: 14 }, { wch: 22 }, { wch: 14 }, { wch: 38 }, { wch: 13 }, { wch: 12 }, { wch: 22 },
+    { wch: 20 }, { wch: 14 }, { wch: 22 }, { wch: 14 }, { wch: 38 }, { wch: 13 }, { wch: 12 }, { wch: 22 }, { wch: 28 }, { wch: 30 }, { wch: 22 },
     { wch: 26 }, { wch: 16 }, { wch: 16 }, { wch: 12 }, { wch: 6 }, { wch: 16 }, { wch: 6 }, { wch: 18 }, { wch: 22 }, { wch: 16 }, { wch: 18 }, { wch: 20 },
   ];
   const wb = XLSX.utils.book_new();

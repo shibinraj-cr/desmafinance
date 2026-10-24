@@ -174,6 +174,9 @@ export async function reopenForAnotherService(p: ReopenServiceParams): Promise<R
       studyDestination: src.studyDestination,
       partyId: src.partyId ?? null,
       createdById: p.actorId,
+      // Never due for a quality rating: an existing candidate coming back says
+      // nothing about any marketing channel (see crm-lead-quality.ts).
+      qualityDueAt: null,
       extra: { reEnrollment: "true", reEnrolledFromLeadId: src.id },
     },
     select: { id: true },
