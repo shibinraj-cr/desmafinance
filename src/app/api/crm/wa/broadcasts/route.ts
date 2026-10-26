@@ -5,7 +5,7 @@ import { withApiHandler } from "@/lib/api";
 import { unauthorized, forbidden, badRequest } from "@/lib/http-error";
 import { getCurrentUserAndPermissions } from "@/lib/permissions";
 import { getCrmAccess } from "@/lib/crm-rbac";
-import { countSegment, materialiseAudience, headerMediaConsistent, finalOutcomeCounts } from "@/lib/wa/broadcast";
+import { MAX_HOLDOUT_PCT, countSegment, materialiseAudience, headerMediaConsistent, finalOutcomeCounts } from "@/lib/wa/broadcast";
 import { getWaProvider } from "@/lib/wa/registry";
 import type { LeadFilterParams } from "@/lib/crm-leads";
 
@@ -83,6 +83,8 @@ const CreateSchema = z.object({
     .nullable()
     .optional(),
   scheduledAt: z.string().datetime().nullable().optional(),
+  /** Share of the audience held back as a control group (0 = none). */
+  holdoutPct: z.number().int().min(0).max(MAX_HOLDOUT_PCT).default(0),
   /** Materialise + queue immediately. False leaves it as a draft to review. */
   queue: z.boolean().default(false),
 }).superRefine(headerMediaConsistent);
@@ -129,6 +131,7 @@ export const POST = withApiHandler(async (req: Request) => {
       headerMediaType: data.headerMediaType ?? null,
       headerMediaUrl: data.headerMediaUrl ?? null,
       scheduledAt: data.scheduledAt ? new Date(data.scheduledAt) : null,
+      holdoutPct: data.holdoutPct,
       // Always born a draft — see below.
       status: "draft",
       totalRecipients: estimate,

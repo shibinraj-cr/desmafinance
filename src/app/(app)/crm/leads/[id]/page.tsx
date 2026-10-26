@@ -1,3 +1,4 @@
+import type { Prisma } from "@prisma/client";
 import Link from "next/link";
 import { notFound, redirect } from "next/navigation";
 import { TopBar } from "@/components/TopBar";
@@ -103,11 +104,16 @@ export default async function LeadDetailPage({ params }: { params: { id: string 
   // Best-effort: record that this user opened the lead (once per day).
   await recordLeadOpenedOncePerDay(params.id, userId);
 
-  // Other leads sharing this lead's email or phone — so a flagged duplicate
-  // shows exactly which record(s) it matches (and any lead shows its twins).
-  const dupOr: Array<{ emailKey: string } | { phoneE164: string }> = [];
+  // The same candidate's other records — sharing this lead's email, either of
+  // its phone numbers (each side's primary or alternate), or its candidate
+  // record. A flagged duplicate shows exactly which record(s) it matches, and a
+  // re-enrollment or a reassigned lead shows who worked her before and what
+  // they wrote, so she never has to tell the story twice.
+  const phones = [lead.phoneE164, lead.altPhoneE164].filter((p): p is string => !!p);
+  const dupOr: Prisma.LeadWhereInput[] = [];
   if (lead.emailKey) dupOr.push({ emailKey: lead.emailKey });
-  if (lead.phoneE164) dupOr.push({ phoneE164: lead.phoneE164 });
+  if (phones.length) dupOr.push({ phoneE164: { in: phones } }, { altPhoneE164: { in: phones } });
+  if (lead.partyId) dupOr.push({ partyId: lead.partyId });
   const dupRows = dupOr.length
     ? await prisma.lead.findMany({
         where: { id: { not: lead.id }, OR: dupOr },
@@ -120,16 +126,23 @@ export default async function LeadDetailPage({ params }: { params: { id: string 
           phone: true,
           emailKey: true,
           phoneE164: true,
+          altPhoneE164: true,
+          partyId: true,
           createdAt: true,
           source: { select: { label: true } },
+          service: { select: { name: true } },
           status: { select: { label: true, color: true } },
+          assignedTo: { select: { username: true, leadPulseRole: { select: { displayName: true } } } },
         },
       })
     : [];
   const duplicates = dupRows.map((d) => {
     const on: string[] = [];
     if (lead.emailKey && d.emailKey === lead.emailKey) on.push("email");
-    if (lead.phoneE164 && d.phoneE164 === lead.phoneE164) on.push("phone");
+    if ((d.phoneE164 && phones.includes(d.phoneE164)) || (d.altPhoneE164 && phones.includes(d.altPhoneE164))) {
+      on.push("phone");
+    }
+    if (lead.partyId && d.partyId === lead.partyId) on.push("candidate record");
     return {
       id: d.id,
       candidateName: d.candidateName,
@@ -137,10 +150,36 @@ export default async function LeadDetailPage({ params }: { params: { id: string 
       phone: d.phone,
       createdAt: d.createdAt.toISOString(),
       source: d.source?.label ?? null,
+      service: d.service?.name ?? null,
+      owner: d.assignedTo?.leadPulseRole?.displayName ?? d.assignedTo?.username ?? null,
       status: { label: d.status.label, color: d.status.color },
       matchedOn: on.join(" + "),
     };
   });
+  // What was written about her on those records — newest first, a handful.
+  const storyNotes = dupRows.length
+    ? (
+        await prisma.leadNote.findMany({
+          where: { leadId: { in: dupRows.map((d) => d.id) } },
+          orderBy: { createdAt: "desc" },
+          take: 6,
+          select: {
+            id: true,
+            leadId: true,
+            body: true,
+            createdAt: true,
+            author: { select: { username: true, leadPulseRole: { select: { displayName: true } } } },
+          },
+        })
+      ).map((n) => ({
+        id: n.id,
+        leadId: n.leadId,
+        body: n.body,
+        createdAt: n.createdAt.toISOString(),
+        author: n.author?.leadPulseRole?.displayName ?? n.author?.username ?? null,
+        service: dupRows.find((d) => d.id === n.leadId)?.service?.name ?? null,
+      }))
+    : [];
 
   // Someone who only sees their own tasks mustn't read everyone else's off the
   // Timeline either: drop the task entries (created / completed / edited …) for
@@ -211,6 +250,7 @@ export default async function LeadDetailPage({ params }: { params: { id: string 
           timeline={timeline.map((a) => serializeActivity(a, { includeMetadata: false }))}
           tasks={tasks.map(serializeTask)}
           duplicates={duplicates}
+      storyNotes={storyNotes}
           masters={masters}
           canEdit={canEditLead(access, lead, userId)}
           emailConfigured={emailConfigured}

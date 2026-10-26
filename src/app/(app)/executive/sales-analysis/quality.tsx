@@ -35,7 +35,7 @@ import {
 import { PeriodBar, type Range } from "./client";
 
 /** The cuts the mix chart offers; each is a dimension the lead facts carry. */
-const GROUP_DIMS: DimKey[] = ["source", "campaign", "service", "bde", "originalSource", "country", "month", "week"];
+const GROUP_DIMS: DimKey[] = ["source", "campaign", "adSet", "service", "bde", "originalSource", "country", "month", "week"];
 /** Dimensions the page can be filtered by. */
 const FILTER_DIMS: DimKey[] = ["source", "campaign", "service", "bde"];
 /** Dimensions a row can open in the CRM leads list, and the list's query key for each. */

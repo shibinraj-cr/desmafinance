@@ -261,6 +261,15 @@ export const MODULES: AppModule[] = [
     status: "active",
     pages: [
       {
+        // A consultant's ordered to-do: WhatsApp replies owed, uncontacted new
+        // leads, tasks due, ratings due. Personal to every CRM user, so (like
+        // the Daily Report) visibility is handled in canSeePage.
+        href: "/crm/my-day",
+        label: "My Day",
+        icon: "today",
+        group: "ACTIVITY",
+      },
+      {
         href: "/crm/team",
         label: "Dashboard",
         icon: "insights",

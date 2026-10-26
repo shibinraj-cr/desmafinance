@@ -5,6 +5,7 @@ import Link from "next/link";
 import { MultiSelect } from "@/components/MultiSelect";
 import { listParam } from "@/lib/filter-params";
 import { istDay } from "@/lib/wa/broadcast-report";
+import type { HoldoutComparison } from "@/lib/wa/broadcast-holdout";
 
 type TemplateOpt = {
   name: string;
@@ -501,6 +502,8 @@ function BroadcastForm({
   // instead of POSTing another one (the create form now stays open).
   const startedInEdit = !!broadcastId;
   const [createdId, setCreatedId] = useState<string | null>(null);
+  // Control group: chosen when the campaign is first saved, fixed after.
+  const [holdout, setHoldout] = useState(false);
   const effectiveId = broadcastId ?? createdId;
   const [name, setName] = useState(initial?.name ?? "");
   const [templateName, setTemplateName] = useState(initial?.templateName ?? "");
@@ -598,6 +601,7 @@ function BroadcastForm({
             variableMap,
             headerMediaType,
             headerMediaUrl: headerMediaUrlValue,
+            holdoutPct: holdout ? 10 : 0,
             queue,
           }),
         }).catch(() => null);
@@ -825,6 +829,25 @@ function BroadcastForm({
               This audience currently matches <span className="font-semibold tabular-nums">{estimate}</span> leads (before
               opted-out / undeliverable / no-phone are skipped at queue time).
             </p>
+          )}
+
+          {!startedInEdit && (
+            <label className="flex items-start gap-sm text-body-md text-on-surface">
+              <input
+                type="checkbox"
+                className="mt-1"
+                checked={holdout}
+                disabled={!!effectiveId}
+                onChange={(e) => setHoldout(e.target.checked)}
+              />
+              <span>
+                Hold back 10% as a control group
+                <span className="block text-label-sm text-on-surface-variant">
+                  They are not messaged. The delivery report then compares enrolments within 30 days — sent vs held back —
+                  so you can see whether the campaign itself made a difference.
+                </span>
+              </span>
+            </label>
           )}
 
           <div className="flex items-center gap-base">
@@ -1156,11 +1179,46 @@ function ResendPanel({
   );
 }
 
+const pct = (n: number, d: number) => (d > 0 ? `${((n / d) * 100).toFixed(1)}%` : "—");
+
+/** Sent vs held back: enrolments within the window, and the difference. */
+function HoldoutPanel({ h }: { h: HoldoutComparison }) {
+  return (
+    <div className="rounded-lg border border-outline-variant p-md">
+      <div className="text-label-sm font-semibold text-on-surface">
+        Did it change enrolments? — {h.windowDays} days from {h.from.slice(0, 10)}
+      </div>
+      <div className="mt-xs grid grid-cols-1 gap-sm text-body-md md:grid-cols-3">
+        <div>
+          Sent: <span className="font-semibold tabular-nums">{h.sent.enrolled}</span> of{" "}
+          <span className="tabular-nums">{h.sent.leads}</span> enrolled ({pct(h.sent.enrolled, h.sent.leads)})
+        </div>
+        <div>
+          Held back: <span className="font-semibold tabular-nums">{h.holdout.enrolled}</span> of{" "}
+          <span className="tabular-nums">{h.holdout.leads}</span> enrolled ({pct(h.holdout.enrolled, h.holdout.leads)})
+        </div>
+        <div>
+          Difference:{" "}
+          <span className="font-semibold tabular-nums">
+            {h.liftPts === null ? "—" : `${h.liftPts > 0 ? "+" : ""}${h.liftPts} pts`}
+          </span>
+        </div>
+      </div>
+      {!h.readable && (
+        <p className="mt-xs text-label-sm text-on-surface-variant">
+          Too few leads in one of the groups to read this yet — treat the difference as noise.
+        </p>
+      )}
+    </div>
+  );
+}
+
 function FailurePanel({ broadcastId, name, onClose }: { broadcastId: string; name: string; onClose: () => void }) {
   const [loading, setLoading] = useState(true);
   const [recipients, setRecipients] = useState<RecipientRow[]>([]);
   const [delivery, setDelivery] = useState<DeliveryCounts | null>(null);
   const [skipped, setSkipped] = useState(0);
+  const [holdout, setHoldout] = useState<HoldoutComparison | null>(null);
 
   useEffect(() => {
     let alive = true;
@@ -1174,8 +1232,10 @@ function FailurePanel({ broadcastId, name, onClose }: { broadcastId: string; nam
         broadcast: { skippedCount: number };
         delivery: DeliveryCounts;
         recipients: RecipientRow[];
+        holdout?: HoldoutComparison | null;
       };
       setDelivery(d.delivery);
+      setHoldout(d.holdout ?? null);
       setSkipped(d.broadcast.skippedCount);
       setRecipients(d.recipients);
     })();
@@ -1238,6 +1298,7 @@ function FailurePanel({ broadcastId, name, onClose }: { broadcastId: string; nam
               </span>
             ))}
           </div>
+          {holdout && <HoldoutPanel h={holdout} />}
           <p className="text-label-sm text-on-surface-variant">
             <span className="font-medium">Accepted</span> = Meta took it; <span className="font-medium">Delivered</span>{" "}
             = reached the phone (includes read); <span className="font-medium">Read</span> only counts when the

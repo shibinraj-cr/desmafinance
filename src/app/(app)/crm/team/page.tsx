@@ -731,6 +731,12 @@ export default async function TeamActivityPage({ searchParams }: { searchParams:
                   <th className="px-sm py-sm text-right font-semibold">Assigned</th>
                   <th className="px-sm py-sm text-right font-semibold">Enrolled</th>
                   <th className="px-sm py-sm text-right font-semibold">Conv.</th>
+                  <th
+                    className="px-sm py-sm text-right font-semibold"
+                    title="Of the leads assigned in the last 90 days, the share enrolled now — the same leads on both sides of the ratio"
+                  >
+                    90-day cohort
+                  </th>
                   <th className="px-sm py-sm text-right font-semibold">Contacts</th>
                   <th className="px-sm py-sm text-right font-semibold">Tasks ✓</th>
                   <th className="px-sm py-sm text-right font-semibold">1st resp.</th>
@@ -747,7 +753,7 @@ export default async function TeamActivityPage({ searchParams }: { searchParams:
               <tbody>
                 {rows.length === 0 ? (
                   <tr>
-                    <td colSpan={13} className="py-lg text-center text-on-surface-variant">
+                    <td colSpan={14} className="py-lg text-center text-on-surface-variant">
                       No active consultants.
                     </td>
                   </tr>
@@ -764,6 +770,12 @@ export default async function TeamActivityPage({ searchParams }: { searchParams:
                       <td className="px-sm py-sm text-right tabular-nums">{r.enrolledPeriod}</td>
                       <td className="px-sm py-sm text-right tabular-nums">
                         {r.conversionPct === null ? "—" : `${r.conversionPct}%`}
+                      </td>
+                      <td
+                        className="px-sm py-sm text-right tabular-nums"
+                        title={`${r.cohortEnrolled} enrolled of ${r.cohortAssigned} assigned in the last 90 days`}
+                      >
+                        {r.cohortConversionPct === null ? "—" : `${r.cohortConversionPct}%`}
                       </td>
                       <td className="px-sm py-sm text-right tabular-nums" title={`${r.calls} calls · ${r.emails} emails · ${r.whatsapp} WhatsApp`}>
                         {r.contacts}

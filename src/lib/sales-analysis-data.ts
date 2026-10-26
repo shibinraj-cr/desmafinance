@@ -32,6 +32,7 @@ import {
   type StoredDim,
   type WireFact,
 } from "./sales-analysis";
+import { metaAdField } from "./meta-ad-fields";
 
 export type SalesAnalysisPayload = {
   dicts: Dicts;
@@ -105,6 +106,7 @@ export async function loadSalesAnalysis(opts: { from: string; to: string }): Pro
     country: true,
     studyDestination: true,
     campaign: true,
+    extra: true,
     temperature: true,
     expectedValue: true,
     qualification: { select: { label: true } },
@@ -196,6 +198,8 @@ export async function loadSalesAnalysis(opts: { from: string; to: string }): Pro
     dims[slot("country")] = dict.id("country", tidy(lead?.country));
     dims[slot("destination")] = dict.id("destination", tidy(lead?.studyDestination));
     dims[slot("campaign")] = dict.id("campaign", lead?.campaign);
+    dims[slot("adSet")] = dict.id("adSet", metaAdField(lead?.extra, "adset"));
+    dims[slot("ad")] = dict.id("ad", metaAdField(lead?.extra, "ad"));
     dims[slot("temperature")] = dict.id("temperature", tidy(lead?.temperature));
     if (lead) {
       const bucket = qualityBucket(

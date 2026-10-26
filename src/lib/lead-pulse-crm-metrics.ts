@@ -110,6 +110,49 @@ export async function getCrmFunnelByBdeInRange(range: { from?: Date; to?: Date }
   });
 }
 
+/** Days of assignments the cohort conversion looks back over. */
+export const COHORT_DAYS = 90;
+
+export type CrmCohortConversion = { assigned: number; enrolled: number; conversionPct: number | null };
+
+/**
+ * Cohort conversion per consultant: of the leads deliberately assigned to them
+ * in the last {@link COHORT_DAYS} days, how many are enrolled NOW.
+ *
+ * Unlike the month funnel above — enrolments closed this month over leads
+ * assigned this month, two different groups of leads — numerator and
+ * denominator here are the same leads, so a consultant handed a fresh batch of
+ * slow-to-close form leads is not marked down for enrolments that simply have
+ * not happened yet, and one closing old leads is not credited against a small
+ * new intake. Same carryover and duplicate rules as the funnel.
+ */
+export async function getCrmCohortConversionByBde(
+  now: Date = new Date(),
+  days: number = COHORT_DAYS,
+): Promise<Map<string, CrmCohortConversion>> {
+  const from = new Date(now.getTime() - days * 86_400_000);
+  const rows = await prisma.$queryRaw<Array<{ userId: string; assigned: bigint; enrolled: bigint }>>(Prisma.sql`
+    SELECT l."assignedToId" AS "userId",
+           COUNT(*) AS assigned,
+           COUNT(*) FILTER (WHERE st.code = 'enrolled') AS enrolled
+    FROM "Lead" l
+    LEFT JOIN "LeadImportBatch" b ON l."importBatchId" = b.id
+    JOIN "CrmLeadStatus" st ON l."statusId" = st.id
+    WHERE l."assignedToId" IS NOT NULL
+      AND l."assignedAt" >= ${from} AND l."assignedAt" <= ${now}
+      AND ${DELIBERATE}
+      AND st.code <> 'duplicate'
+    GROUP BY l."assignedToId"
+  `);
+  return new Map(
+    rows.map((r) => {
+      const assigned = Number(r.assigned);
+      const enrolled = Number(r.enrolled);
+      return [r.userId, { assigned, enrolled, conversionPct: pct(enrolled, assigned) }];
+    }),
+  );
+}
+
 /**
  * Each BDE's total enrollment target for a month: every LeadPulseTarget row
  * (service-group and legacy per-service) summed per user — the "of N target"
