@@ -7,6 +7,7 @@ import {
   dueTouchIndex,
   isCampaignExpired,
   matchesReengageKeyword,
+  isRefusalReply,
   normalizeDeliveryStatus,
   parseErrorCode,
   extractDeliveryEvents,
@@ -124,6 +125,19 @@ describe("isCampaignExpired", () => {
     const four = [5, 19, 33, 45];
     expect(isCampaignExpired({ startedAt: start, now: plusDays(51), offsets: four, sent: [true, true, true, true] })).toBe(false);
     expect(isCampaignExpired({ startedAt: start, now: plusDays(52), offsets: four, sent: [true, true, true, true] })).toBe(true);
+  });
+});
+
+describe("isRefusalReply", () => {
+  it("recognises the refusals that must end a drip", () => {
+    for (const t of ["Not interested", "wrong number", "please STOP", "No thanks", "do not contact me"]) {
+      expect(isRefusalReply(t)).toBe(true);
+    }
+  });
+  it("lets ordinary replies through", () => {
+    expect(isRefusalReply("Yes, please send the details")).toBe(false);
+    expect(isRefusalReply("")).toBe(false);
+    expect(isRefusalReply(null)).toBe(false);
   });
 });
 

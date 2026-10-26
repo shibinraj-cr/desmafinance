@@ -102,9 +102,15 @@ export const POST = withApiHandler(async (req: Request, { params }: { params: { 
     const text = data.body ?? "";
     const url = `https://wa.me/${lead.phoneE164.replace(/[^0-9]/g, "")}` + (text ? `?text=${encodeURIComponent(text)}` : "");
 
-    await logComm(params.id, userId, "WHATSAPP_SENT", `WhatsApp to ${lead.phoneE164}`, {
+    // A wa.me link opens the consultant's own WhatsApp — DesGro never sees
+    // whether a message actually went, so the timeline says what we KNOW (the
+    // chat was opened) and `via: "wa_me"` keeps it distinguishable from a send
+    // the Cloud API confirmed. It still counts as an outbound contact: the
+    // consultant's business WhatsApp is an accepted first-contact channel.
+    await logComm(params.id, userId, "WHATSAPP_SENT", `WhatsApp chat opened to ${lead.phoneE164} (wa.me)`, {
       to: lead.phoneE164,
       message: text,
+      via: "wa_me",
     });
     return NextResponse.json({ channel: "whatsapp", url });
   }

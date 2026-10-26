@@ -18,6 +18,13 @@ import {
 import { verifyMetaSignature } from "@/lib/wa/signature";
 import { createHmac } from "node:crypto";
 
+describe("isOptOutMessage — Meta's opt-out button", () => {
+  it("treats the 'Stop promotions' quick reply as an opt-out", () => {
+    expect(isOptOutMessage("Stop promotions")).toBe(true);
+    expect(isOptOutMessage("stop promotions.")).toBe(true);
+  });
+});
+
 describe("isOptOutMessage", () => {
   it("catches the one-tap replies WhatsApp actually sends", () => {
     for (const w of ["STOP", "stop", "Stop.", "unsubscribe", "opt out", "Remove me"]) {

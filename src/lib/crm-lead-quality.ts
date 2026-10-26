@@ -46,7 +46,11 @@ export const LEAD_QUALITIES: { value: LeadQualityRating; label: string; color: s
 /** The neutral for "no verdict" (every unrated pile) in charts. */
 export const QUALITY_UNRATED_COLOR = "#a8a7a2";
 
-/** Days after a lead enters the system that rating it becomes mandatory. Mirrors the `Lead.qualityDueAt` database default. */
+/**
+ * Days a consultant has to rate a lead. Mirrors the `Lead.qualityDueAt` database
+ * default (insert + 5 days) and is re-applied from the assignment moment by
+ * {@link qualityDueAtOnAssign}.
+ */
 export const QUALITY_DUE_AFTER_DAYS = 5;
 
 /** The reminder pop-up re-opens this often while any rating is overdue. */
@@ -101,6 +105,25 @@ export function qualityPending(lead: QualitySubject): boolean {
 /** Pending and past its due date. */
 export function isQualityOverdue(lead: QualitySubject, now: Date): boolean {
   return qualityPending(lead) && time(lead.qualityDueAt!) <= now.getTime();
+}
+
+/**
+ * The rating's due date after an (re)assignment, or undefined to leave it as is.
+ *
+ * The five days are the consultant's time to judge the lead, so they run from
+ * when THIS consultant got it — not from when the row was inserted. Without
+ * this, a lead assigned on day 6 (or revived to a different BDE months later)
+ * reached its new owner already overdue, with stage changes and task ticks
+ * blocked before they had made a single call. Never moves the date earlier,
+ * and leaves alone leads outside the rule (`qualityDueAt` null) or already rated.
+ */
+export function qualityDueAtOnAssign(
+  lead: { qualityDueAt: Date | null; qualityRating: string | null },
+  now: Date,
+): Date | undefined {
+  if (lead.qualityDueAt == null || normalizeQuality(lead.qualityRating)) return undefined;
+  const fresh = new Date(now.getTime() + QUALITY_DUE_AFTER_DAYS * 86_400_000);
+  return fresh.getTime() > lead.qualityDueAt.getTime() ? fresh : undefined;
 }
 
 export type QualityGate = "overdue" | "closing";

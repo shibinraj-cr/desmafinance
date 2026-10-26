@@ -4,10 +4,12 @@
  * New stage (`not_yet_started`).
  *
  * Derived, never stored: a lead is on the alarm exactly while it is assigned,
- * still in New, and its assignment is older than {@link UNCONTACTED_AFTER_MINUTES}.
- * Moving it to Follow Up (or any other stage) is what clears it — there is no
- * acknowledge or dismiss record to go stale, and a reassignment restarts the
- * clock for the new owner because `assignedAt` is re-stamped.
+ * still in New, its assignment is older than {@link UNCONTACTED_AFTER_MINUTES},
+ * and nobody has logged a contact (call / WhatsApp / email by a person) since it
+ * was assigned. Doing the work clears it: contacting the candidate, or moving the
+ * lead to Follow Up (or any other stage). There is no acknowledge or dismiss
+ * record to go stale, and a reassignment restarts the clock for the new owner
+ * because `assignedAt` is re-stamped.
  *
  * Who sees what:
  *   - an active BDE (Lead Pulse l1/l2) sees their own overdue leads;
@@ -91,3 +93,13 @@ export type UncontactedSnapshot = {
   /** The New stage's id, for the "see all" link into the filtered leads list. */
   newStatusId: string | null;
 };
+
+/**
+ * Has a person contacted the candidate since this assignment? `lastContactAt`
+ * is the latest human outbound contact on the lead (any time); only one at or
+ * after the assignment counts, so the previous owner's calls never clear the
+ * new owner's alarm.
+ */
+export function contactedSinceAssignment(assignedAt: Date, lastContactAt: Date | null): boolean {
+  return lastContactAt !== null && lastContactAt.getTime() >= assignedAt.getTime();
+}

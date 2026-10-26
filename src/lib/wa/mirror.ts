@@ -507,6 +507,19 @@ export async function ingestInboundMessage(
         .catch(() => undefined);
     }
 
+    // She just wrote to us from this number, so it IS on WhatsApp — whatever a
+    // past failed send concluded. Clear the dead-number flag on every lead whose
+    // primary phone this is, or reminders, agreement links and campaigns stay
+    // switched off for a candidate who is plainly reachable. Primary phone only:
+    // a lead she wrote to from her alternate number may still have a dead
+    // primary, and that is the number its sends go to.
+    await prisma.lead
+      .updateMany({
+        where: { phoneE164, whatsappUndeliverableAt: { not: null } },
+        data: { whatsappUndeliverableAt: null, whatsappUndeliverableReason: null },
+      })
+      .catch(() => undefined);
+
     // A reply ends a re-marketing campaign.
     //
     // Under Wabis this only ever happened because a keyword flow over there

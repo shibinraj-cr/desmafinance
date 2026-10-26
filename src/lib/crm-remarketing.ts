@@ -64,6 +64,8 @@ import {
 import { cloudProvider } from "./wa/cloud-provider";
 import { findOrCreateConversationForLead } from "./wa/mirror";
 import { RANK, type WaDeliveryUpdate } from "./wa/delivery-status";
+import { isPermanentUndeliverable } from "./wa/undeliverable";
+import { checkAutomatedSend, logAutomatedSend } from "./wa/send-policy";
 
 /** The Follow-Up stage a responding lead advances to. */
 export const FOLLOW_UP_STATUS_CODE = "follow_up";
@@ -90,13 +92,10 @@ const RUN_TIME_BUDGET_MS = 45_000;
  * sequentially drains only ~25 in the time budget; firing a batch concurrently
  * lifts that to the low hundreds. Kept modest so we don't stampede Wabis/Meta. */
 const SEND_CONCURRENCY = 20;
-/**
- * Meta error codes that mark a number PERMANENTLY undeliverable (bad number / not
- * on WhatsApp) — these flag the lead so a future campaign also skips it. Transient
- * codes (e.g. 131049, the marketing frequency cap) still STOP the current campaign
- * under the "any hard failure" policy, but do not permanently flag the lead.
- */
-const PERMANENT_UNDELIVERABLE_CODES: ReadonlySet<string> = new Set(["131026", "131000", "131047"]);
+// Meta error codes that mark a number PERMANENTLY undeliverable live in
+// wa/undeliverable.ts, shared with broadcasts. Transient codes (e.g. 131049, the
+// marketing frequency cap) still STOP the current campaign under the "any hard
+// failure" policy, but do not permanently flag the lead.
 
 // ── Config ──────────────────────────────────────────────────────────────────
 
@@ -210,6 +209,18 @@ const NEGATIVE_REPLY_TERMS = [
   "no thank you",
 ] as const;
 
+/**
+ * Is this reply a refusal ("not interested", "wrong number", "stop" …)? A refusal
+ * ends the running drip — it is the candidate telling us the nurturing is
+ * unwanted — but is NOT a global opt-out: only an explicit opt-out message
+ * (wa/inbound.ts) silences every channel. A false positive here costs one
+ * campaign, never the candidate's reachability.
+ */
+export function isRefusalReply(text: string | null | undefined): boolean {
+  const t = (text ?? "").toLowerCase();
+  return NEGATIVE_REPLY_TERMS.some((k) => t.includes(k));
+}
+
 /** Whole calendar days between two instants (≥ 0; 0 when `to` precedes `from`). */
 export function daysBetween(from: Date, to: Date): number {
   const ms = to.getTime() - from.getTime();
@@ -262,7 +273,7 @@ export function matchesReengageKeyword(text: string | null | undefined, keywords
   // real gate; once every inbound message reaches us directly it is not, and
   // "not interested" would move the lead to Follow-Up and tell a consultant to
   // ring somebody who had just asked to be left alone.
-  if (NEGATIVE_REPLY_TERMS.some((k) => t.includes(k))) return false;
+  if (isRefusalReply(t)) return false;
   // A reply with no text is still a reply — a photo of a passport page is
   // engagement, and the candidate chose to send it. Only the keyword-matching
   // branch below needs words to work with.
@@ -934,6 +945,8 @@ export async function runRemarketingScheduler(): Promise<{
   touchesSent: number;
   completed: number;
   stopped: number;
+  /** Touches due but held back by the send policy (quiet hours, contact limit) — sent on a later run. */
+  deferred?: number;
   skipped?: string;
 }> {
   const config = await getRemarketingConfig();
@@ -959,6 +972,7 @@ export async function runRemarketingScheduler(): Promise<{
           id: true,
           candidateName: true,
           phone: true,
+          phoneE164: true,
           email: true,
           assignedToId: true,
           whatsappUndeliverableAt: true,
@@ -981,6 +995,8 @@ export async function runRemarketingScheduler(): Promise<{
   // collect the touches that are due. No Wabis POST happens here, so it stays fast
   // even for a large backlog.
   const dueSends: { c: (typeof campaigns)[number]; due: number }[] = [];
+  const phonesThisRun = new Set<string>();
+  let deferred = 0;
   for (const c of campaigns) {
     try {
       // The lead left Re-marketing without closing the campaign (e.g. a path we
@@ -1026,6 +1042,31 @@ export async function runRemarketingScheduler(): Promise<{
       const due = dueTouchIndex({ startedAt: c.startedAt, now, offsets: config.offsets, sent });
 
       if (due) {
+        // The shared send policy, asked per PHONE: an opt-out on any of this
+        // person's leads ends the drip; quiet hours or the contact limit hold the
+        // touch back — it stays due and a later run sends it. Two campaigns on
+        // one number (re-enrollment) never both send in the same run.
+        const phone = c.lead.phoneE164;
+        if (phone) {
+          if (phonesThisRun.has(phone)) {
+            deferred++;
+            continue;
+          }
+          const verdict = await checkAutomatedSend({ phoneE164: phone, purpose: "marketing", now });
+          if (!verdict.ok && verdict.reason === "opted_out") {
+            await prisma.crmRemarketingCampaign.update({
+              where: { id: c.id },
+              data: { status: "stopped", endedReason: "opted_out", endedAt: now },
+            });
+            stopped++;
+            continue;
+          }
+          if (!verdict.ok) {
+            deferred++;
+            continue;
+          }
+          phonesThisRun.add(phone);
+        }
         dueSends.push({ c, due }); // at most one touch per campaign per run
         continue;
       }
@@ -1086,6 +1127,9 @@ export async function runRemarketingScheduler(): Promise<{
             summary: `Re-marketing touch ${due} sent`,
             metadata: { touch: due },
           });
+          if (c.lead.phoneE164) {
+            await logAutomatedSend({ phoneE164: c.lead.phoneE164, purpose: "marketing", source: "drip", leadId: c.leadId, at: now });
+          }
           return true;
         } catch (e) {
           console.error(`[crm-remarketing] send failed for campaign ${c.id}:`, e);
@@ -1096,7 +1140,7 @@ export async function runRemarketingScheduler(): Promise<{
     touchesSent += results.filter(Boolean).length;
   }
 
-  return { touchesSent, completed, stopped };
+  return { touchesSent, completed, stopped, deferred };
 }
 
 // ── Bulk enrolment (one-off: touch every un-touched Re-marketing lead) ───────
@@ -1287,12 +1331,32 @@ export async function handleRemarketingReply(input: {
     leadId: found.id,
     type: "REMARKETING_RESPONSE",
     summary: advance
-      ? "Candidate replied in Wabis — advancing to Follow-Up"
-      : "Candidate replied in Wabis (no matching intent keyword)",
+      ? "Candidate replied — advancing to Follow-Up"
+      : "Candidate replied (no matching intent keyword)",
     metadata: { text: (input.text ?? "").slice(0, 500), matched: advance, keywords: config.keywords },
   });
 
   if (!advance) {
+    // A refusal ends the drip. Without this, "not interested" / "wrong number"
+    // was recognised (it can never advance the lead) and then ignored, and the
+    // next touch went out anyway. The lead stays in Re-marketing and its
+    // `remarketingStartedAt` clock is left alone — only the messaging stops; the
+    // thread keeps awaitingReply, so a person still answers her.
+    if (campaign && isRefusalReply(input.text)) {
+      const closed = await prisma.crmRemarketingCampaign.updateMany({
+        where: { id: campaign.id, status: "running" },
+        data: { status: "stopped", endedReason: "declined", endedAt: new Date() },
+      });
+      if (closed.count > 0) {
+        await recordLeadActivity({
+          leadId: found.id,
+          type: "REMARKETING_ENDED",
+          summary: "Re-marketing messages stopped — the candidate declined",
+          metadata: { reason: "declined" },
+        });
+      }
+      return { ok: true, action: "ignored", reason: "declined", leadId: found.id };
+    }
     return { ok: true, action: "ignored", reason: "no_keyword_match", leadId: found.id };
   }
 
@@ -1608,7 +1672,7 @@ async function applyHardDeliveryFailure(input: {
   touch: number | null;
   now: Date;
 }): Promise<boolean> {
-  const permanent = input.errorCode ? PERMANENT_UNDELIVERABLE_CODES.has(input.errorCode) : false;
+  const permanent = input.errorCode ? isPermanentUndeliverable(input.errorCode) : false;
 
   await prisma.crmRemarketingCampaign
     .updateMany({
@@ -1847,7 +1911,7 @@ export async function importWabisDeliveryReport(opts: {
       summary.matched++;
       if (row.status === "failed") summary.failures++;
       if (row.status === "delivered" || row.status === "read") summary.delivered++;
-      if (row.errorCode && PERMANENT_UNDELIVERABLE_CODES.has(row.errorCode)) summary.flagged++;
+      if (isPermanentUndeliverable(row.errorCode)) summary.flagged++;
     } else {
       summary.unmatched++;
       if (summary.unmatchedPhones.length < 100) summary.unmatchedPhones.push(row.phone);

@@ -43,6 +43,7 @@ import {
 } from "./app-settings";
 import { cloudProvider, isCloudConfigured, renderTemplatePreview } from "./wa/cloud-provider";
 import { findOrCreateConversationForLead } from "./wa/mirror";
+import { isPhoneOptedOut, logAutomatedSend } from "./wa/send-policy";
 
 export const LEAD_ASSIGNED_EVENT = "lead_assigned";
 /**
@@ -250,13 +251,35 @@ export function isIntroExcludedRole(role: string | null | undefined): boolean {
  * comment says to prefer over adding a name: it is set from the UI, survives a
  * rename, and keeps employee names out of the code.
  */
+/**
+ * Has this candidate opted out — on this lead, or on any other lead with the
+ * same number? Consent is per person, and a person is a phone here.
+ */
+async function leadOptedOut(leadId: string): Promise<boolean> {
+  const lead = await prisma.lead
+    .findUnique({ where: { id: leadId }, select: { whatsappOptedOutAt: true, phoneE164: true } })
+    .catch(() => null);
+  if (!lead) return false;
+  if (lead.whatsappOptedOutAt) return true;
+  return lead.phoneE164 ? isPhoneOptedOut(lead.phoneE164).catch(() => false) : false;
+}
+
 export function leadAssignedSkipReason(opts: {
+  /**
+   * The candidate asked us to stop messaging (`Lead.whatsappOptedOutAt` set).
+   * Checked first: it is a promise to the candidate, not a routing detail, and
+   * no service, tier or roster setting may override it.
+   */
+  candidateOptedOut?: boolean | null;
   isStudyAbroad: boolean | null | undefined;
   assigneeRole: string | null | undefined;
   /** `LeadPulseRole.sendAssignIntro`; only an explicit false skips. */
   assigneeIntroEnabled: boolean | null | undefined;
   agentDisplayName: string | null | undefined;
 }): string | null {
+  if (opts.candidateOptedOut) {
+    return "the candidate has opted out of WhatsApp messages";
+  }
   if (opts.isStudyAbroad) {
     return "this lead's service is Study Abroad, which has its own separate intro (not this template)";
   }
@@ -608,6 +631,7 @@ async function attemptCloudLeadAssignedDelivery(row: {
   });
 
   if (result.ok) {
+    await logAutomatedSend({ phoneE164: toE164, purpose: "service", source: "intro", leadId: row.leadId });
     // Best-effort: the candidate already has the message (this mirrors it into
     // the CRM's own inbox, it doesn't send it), so a mirror problem must never
     // flip a genuinely-sent delivery back to anything but "sent" — it would
@@ -752,6 +776,23 @@ export async function attemptDelivery(deliveryId: string): Promise<boolean> {
   const row = await prisma.crmWebhookDelivery.findUnique({ where: { id: deliveryId } });
   if (!row) return false;
 
+  // Consent is re-checked at SEND time, not just when the intro was queued: a
+  // retry can fire minutes or hours later, and a candidate who replied STOP in
+  // between must not receive it.
+  if (row.event === LEAD_ASSIGNED_EVENT && row.leadId) {
+    if (await leadOptedOut(row.leadId)) {
+      await prisma.crmWebhookDelivery.update({
+        where: { id: row.id },
+        data: {
+          status: "failed",
+          nextAttemptAt: null,
+          responseBody: "Not sent — the candidate opted out of WhatsApp messages before this went out.",
+        },
+      });
+      return false;
+    }
+  }
+
   // Cut-over path: the assignment intro only, gated by its own switch (see
   // `isLeadAssignedCloudEnabled`) so this can go live without touching
   // study-abroad, the re-marketing drip, or the broader wa_provider cutover.
@@ -871,7 +912,7 @@ export async function enqueueLeadAssignedWebhook(opts: {
   assigneeIntroEnabled: boolean | null | undefined;
 }): Promise<void> {
   try {
-    const skipReason = leadAssignedSkipReason(opts);
+    const skipReason = leadAssignedSkipReason({ ...opts, candidateOptedOut: await leadOptedOut(opts.leadId) });
     if (skipReason) {
       await prisma.crmWebhookDelivery
         .create({

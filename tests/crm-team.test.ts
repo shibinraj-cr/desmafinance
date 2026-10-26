@@ -20,6 +20,7 @@ import {
   hasUpcomingTask,
   isTaskOnTime,
   isDeliberateAssignment,
+  carryoverBatchCreatedAt,
   IMPORT_CARRYOVER_GRACE_MS,
   resolveTeamScope,
   median,
@@ -31,8 +32,13 @@ import {
 const DAY = 86_400_000;
 
 describe("touchActivityWhere", () => {
-  it("excludes the passive LEAD_OPENED view", () => {
-    expect(touchActivityWhere().type).toEqual({ notIn: ["LEAD_OPENED"] });
+  it("counts only real work — contact, notes, stage/status moves, finished tasks", () => {
+    const types = (touchActivityWhere().type as { in: string[] }).in;
+    expect(types).toEqual(expect.arrayContaining(["CALL_LOGGED", "WHATSAPP_SENT", "NOTE_ADDED", "STATUS_CHANGED", "TASK_COMPLETED"]));
+    // Bookkeeping and things that happen TO the lead never reset its clock.
+    for (const t of ["LEAD_OPENED", "TASK_UPDATED", "ASSIGNED", "REASSIGNED", "RE_INQUIRY", "QUALITY_RATED", "FIELD_UPDATED"]) {
+      expect(types).not.toContain(t);
+    }
   });
 
   it("excludes bulk-email sends (EMAIL_SENT with metadata.bulk = true)", () => {
@@ -41,6 +47,10 @@ describe("touchActivityWhere", () => {
       metadata: { path: ["bulk"], equals: true },
     });
   });
+
+  it("excludes activity the system wrote on its own (no actor)", () => {
+    expect(touchActivityWhere().actorId).toEqual({ not: null });
+  });
 });
 
 describe("outboundContactWhere", () => {
@@ -48,6 +58,10 @@ describe("outboundContactWhere", () => {
     const where = outboundContactWhere();
     expect(where.type).toEqual({ in: ["CALL_LOGGED", "EMAIL_SENT", "WHATSAPP_SENT"] });
     expect(where.NOT).toEqual({ type: "EMAIL_SENT", metadata: { path: ["bulk"], equals: true } });
+  });
+
+  it("never counts an automated send (no actor) as a consultant's contact", () => {
+    expect(outboundContactWhere().actorId).toEqual({ not: null });
   });
 });
 
@@ -271,6 +285,31 @@ describe("local day helpers", () => {
   });
 });
 
+describe("hasUpcomingTask — far-future tasks", () => {
+  const now = new Date(2026, 5, 24, 12, 0);
+  it("a task within 30 days still counts as a planned next step", () => {
+    expect(hasUpcomingTask(new Date(2026, 6, 20, 9, 0), now)).toBe(true);
+  });
+  it("a task parked months out does not silence the SLA / stuck flags", () => {
+    expect(hasUpcomingTask(new Date(2026, 9, 1, 9, 0), now)).toBe(false);
+  });
+});
+
+describe("isTaskOnTime — judged against the original due date", () => {
+  it("a due date pushed back after it lapsed does not make a late completion on time", () => {
+    expect(
+      isTaskOnTime({
+        completedAt: new Date(2026, 5, 15, 10),
+        dueAt: new Date(2026, 5, 16),
+        originalDueAt: new Date(2026, 5, 10),
+      }),
+    ).toBe(false);
+  });
+  it("falls back to dueAt when no original was recorded", () => {
+    expect(isTaskOnTime({ completedAt: new Date(2026, 5, 9, 10), dueAt: new Date(2026, 5, 10), originalDueAt: null })).toBe(true);
+  });
+});
+
 describe("isTaskOnTime", () => {
   it("counts a task finished before its due day as on time", () => {
     expect(isTaskOnTime({ completedAt: new Date(2026, 5, 9, 10), dueAt: new Date(2026, 5, 10) })).toBe(true);
@@ -312,6 +351,31 @@ describe("isDeliberateAssignment", () => {
   it("accepts an imported lead reassigned meaningfully later", () => {
     const assignedAt = new Date(importedAt.getTime() + IMPORT_CARRYOVER_GRACE_MS + 60_000);
     expect(isDeliberateAssignment({ assignedToId: "u1", assignedAt, importBatchCreatedAt: importedAt })).toBe(true);
+  });});
+
+describe("carryoverBatchCreatedAt", () => {
+  const createdAt = new Date("2026-06-01T00:00:00Z");
+
+  it("judges an uploaded file against its import time", () => {
+    expect(carryoverBatchCreatedAt({ createdAt, uploadedById: "u9" })).toEqual(createdAt);
+  });
+
+  it("never treats a sheet-sync batch (no uploader) as carryover", () => {
+    expect(carryoverBatchCreatedAt({ createdAt, uploadedById: null })).toBeNull();
+    // A sheet lead assigned two minutes after the sync is a real assignment.
+    const assignedAt = new Date(createdAt.getTime() + 2 * 60_000);
+    expect(
+      isDeliberateAssignment({
+        assignedToId: "u1",
+        assignedAt,
+        importBatchCreatedAt: carryoverBatchCreatedAt({ createdAt, uploadedById: null }),
+      }),
+    ).toBe(true);
+  });
+
+  it("is null for a lead with no batch", () => {
+    expect(carryoverBatchCreatedAt(null)).toBeNull();
+    expect(carryoverBatchCreatedAt(undefined)).toBeNull();
   });
 });
 

@@ -56,6 +56,9 @@ export async function POST() {
     // of CRM admin.
     "/crm/meta-reconcile",
     "/crm/voxbay-reconcile",
+    // The Follow-Up / Re-marketing time limits — the Marketing Admin decides
+    // extensions and when each cap goes live.
+    "/crm/lifecycle",
   ];
 
   const role = await prisma.role.upsert({

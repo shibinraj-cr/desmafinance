@@ -18,6 +18,10 @@
       "schedule": "15 3 * * *"
     },
     {
+      "path": "/api/cron/crm-webhooks",
+      "schedule": "45 5 * * *"
+    },
+    {
       "path": "/api/cron/crm-broadcasts",
       "schedule": "*/5 * * * *"
     },
@@ -84,6 +88,10 @@
     {
       "path": "/api/cron/bank-statements",
       "schedule": "*/5 * * * *"
+    },
+    {
+      "path": "/api/cron/crm-lifecycle",
+      "schedule": "50 2 * * *"
     }
   ]
 }

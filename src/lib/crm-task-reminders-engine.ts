@@ -59,6 +59,7 @@ import {
   type TaskReminderConfig,
   type ReminderSkipReason,
 } from "./crm-task-reminders";
+import { isPhoneOptedOut, logAutomatedSend } from "./wa/send-policy";
 
 export * from "./crm-task-reminders";
 
@@ -776,6 +777,11 @@ async function evaluate(reminder: DueReminder, now: Date, config: TaskReminderCo
 
   const unreachable = skipReasonForChannel(reminder.channel as TaskReminderChannel, task.lead);
   if (unreachable) return { kind: "skip", reason: unreachable };
+  // Consent is per PHONE: an opt-out recorded on another of this person's leads
+  // (a re-enrollment, a duplicate) binds this one too.
+  if (reminder.channel === "whatsapp" && task.lead.phoneE164 && (await isPhoneOptedOut(task.lead.phoneE164))) {
+    return { kind: "skip", reason: "opted_out" };
+  }
 
   // Per LEAD and ACROSS TASKS: from the candidate's side, being messaged about
   // four different overdue things in one morning does not become acceptable
@@ -836,9 +842,15 @@ async function sendWhatsAppReminder(reminder: DueReminder, task: TaskWithLead): 
     template: reminder.templateName,
     templateParams: (reminder.templateParams ?? {}) as Record<string, string>,
     renderedBody: reminder.body,
+    // recordSend() writes the timeline entry (with the task it belongs to), so
+    // the generic one from the send path would log the same message twice.
+    recordActivity: false,
   });
 
-  if (result.ok) return { ok: true, providerMessageId: result.providerMessageId, detail: "", retryable: true };
+  if (result.ok) {
+    await logAutomatedSend({ phoneE164: task.lead.phoneE164!, purpose: "service", source: "reminder", leadId: task.lead.id });
+    return { ok: true, providerMessageId: result.providerMessageId, detail: "", retryable: true };
+  }
   return {
     ok: false,
     providerMessageId: null,
