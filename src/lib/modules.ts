@@ -295,13 +295,13 @@ export const MODULES: AppModule[] = [
         href: "/crm/leads",
         label: "Leads",
         icon: "groups",
-        group: "PIPELINE",
+        group: "LEADS",
       },
       {
         href: "/crm/tasks",
         label: "Tasks",
         icon: "task_alt",
-        group: "PIPELINE",
+        group: "LEADS",
       },
       {
         // Add NCLEX / OSCE / GCAN partner enrollments. Granted per PERSON, not
@@ -311,17 +311,17 @@ export const MODULES: AppModule[] = [
         href: "/crm/partner-enrollments",
         label: "Partner Enrollments",
         icon: "school",
-        group: "PIPELINE",
+        group: "LEADS",
       },
       {
         // Its own group, so WhatsApp is a destination in the left bar rather
-        // than a page buried inside Pipeline — the left bar lists GROUPS, so
+        // than a page buried inside Leads — the left bar lists GROUPS, so
         // anything sharing a group with Leads is invisible until you are already
-        // in Pipeline. Answering candidates is its own job, not a sub-task of
+        // in Leads. Answering candidates is its own job, not a sub-task of
         // working the pipeline.
         //
         // Group order follows first appearance in this list (see moduleGroups),
-        // so sitting here puts WhatsApp directly below Pipeline.
+        // so sitting here puts WhatsApp directly below Leads.
         //
         // Not adminOnly: any CRM user works their own threads. Page enforces
         // canViewLeads; each conversation re-checks who may act on it.
