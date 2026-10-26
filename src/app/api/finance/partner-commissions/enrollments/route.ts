@@ -15,6 +15,7 @@ const Body = z.object({
   courseFee: z.number(),
   commissionPct: z.number().nullish(),
   commissionFlat: z.number().nullable().optional(),
+  installmentPlan: z.number().int().nullish(),
   notes: z.string().max(1000).nullish(),
   firstPayment: z
     .object({ amount: z.number(), paidOn: z.string().max(10), reference: z.string().max(120).nullish() })

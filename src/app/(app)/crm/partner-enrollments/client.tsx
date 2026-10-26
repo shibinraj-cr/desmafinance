@@ -22,8 +22,8 @@ import {
   type ProgramOption,
 } from "@/components/partner-commissions/ui";
 import { FeeBar, InstallmentSlots } from "@/components/partner-commissions/installments";
-import { MAX_INSTALLMENTS, PC_FINANCE_PAGE, type EnrollmentState } from "@/lib/partner-commissions/constants";
-import { enrollmentState, fmtMoney, intakeMonthOptions } from "@/lib/partner-commissions/logic";
+import { PC_FINANCE_PAGE, type EnrollmentState } from "@/lib/partner-commissions/constants";
+import { enrollmentState, fmtMoney, installmentCap, intakeMonthOptions } from "@/lib/partner-commissions/logic";
 import type { EnrollmentDTO } from "@/lib/partner-commissions/server";
 
 type Row = EnrollmentDTO & { canRecord: boolean };
@@ -39,6 +39,7 @@ export function PartnerEnrollmentsClient({
   allowed,
   isFinance,
   runDay,
+  planOptions,
   programs,
   enrollments,
 }: {
@@ -47,6 +48,8 @@ export function PartnerEnrollmentsClient({
   allowed: string[];
   isFinance: boolean;
   runDay: number;
+  /** Each program's installment plans, for the plan switcher. */
+  planOptions: Record<string, number[]>;
   programs: ProgramOption[];
   enrollments: Row[];
 }) {
@@ -118,7 +121,7 @@ export function PartnerEnrollmentsClient({
                     <td className="px-sm py-2.5 text-right tabular-nums">{AUD(e.courseFee)}</td>
                     <td className="px-sm py-2.5 min-w-[160px]">
                       <FeeBar e={e} />
-                      <div className="text-caption text-on-surface-variant tabular-nums mt-1">{fmtMoney(e.courseFee - e.balance)} of {fmtMoney(e.courseFee)} · {e.payments.length} of {MAX_INSTALLMENTS}</div>
+                      <div className="text-caption text-on-surface-variant tabular-nums mt-1">{fmtMoney(e.courseFee - e.balance)} of {fmtMoney(e.courseFee)} · {e.payments.length} of {installmentCap(e.installmentPlan)} installments</div>
                     </td>
                     <td className={`px-sm py-2.5 text-right tabular-nums ${e.balance ? "font-semibold" : "text-on-surface-variant"}`}>{e.balance ? AUD(e.balance) : "—"}</td>
                     <td className="px-sm py-2.5"><EnrollmentPill state={stateOf(e)} /></td>
@@ -131,7 +134,7 @@ export function PartnerEnrollmentsClient({
         </>
       )}
 
-      {open ? <EnrollmentPanel key={open.id} e={open} today={today} userId={userId} runDay={runDay} onClose={() => setOpenId(null)} done={done} /> : null}
+      {open ? <EnrollmentPanel key={open.id} e={open} today={today} userId={userId} runDay={runDay} planOptions={planOptions[open.program] ?? []} onClose={() => setOpenId(null)} done={done} /> : null}
       {adding ? (
         <EnrollmentForm
           programs={programs}
@@ -150,7 +153,7 @@ export function PartnerEnrollmentsClient({
   );
 }
 
-function EnrollmentPanel({ e, today, userId, runDay, onClose, done }: { e: Row; today: string; userId: string; runDay: number; onClose: () => void; done: (msg: string) => void }) {
+function EnrollmentPanel({ e, today, userId, runDay, planOptions, onClose, done }: { e: Row; today: string; userId: string; runDay: number; planOptions: number[]; onClose: () => void; done: (msg: string) => void }) {
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   const [editing, setEditing] = useState(false);
@@ -200,7 +203,7 @@ function EnrollmentPanel({ e, today, userId, runDay, onClose, done }: { e: Row; 
         ) : null}
         {!e.canRecord && !locked ? <Callout icon="lock">You can see this enrollment but not record its installments. Finance or the candidate&apos;s consultant does that.</Callout> : null}
 
-        <InstallmentSlots e={e} today={today} locked={locked} canRecord={e.canRecord} busy={busy} act={act} />
+        <InstallmentSlots e={e} today={today} locked={locked} canRecord={e.canRecord} busy={busy} act={act} planOptions={planOptions} />
         {err ? <Callout tone="bad" icon="error">{err}</Callout> : null}
 
         <section className="flex flex-col gap-2">

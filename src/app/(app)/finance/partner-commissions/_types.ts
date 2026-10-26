@@ -81,7 +81,7 @@ export type SettingsDTO = {
 };
 
 export type PartnerDTO = { id: string; name: string; address: string; email: string | null; forLine: string | null; layout: string; isActive: boolean };
-export type ProgramDTO = { code: string; configured: boolean; partnerId: string | null; courseName: string; defaultFee: number | null; defaultPct: number | null; defaultFlat: number | null; isActive: boolean };
+export type ProgramDTO = { code: string; configured: boolean; partnerId: string | null; courseName: string; defaultFee: number | null; defaultPct: number | null; defaultFlat: number | null; installmentPlans: number[]; isActive: boolean };
 
 export type PcPageData = {
   today: string;

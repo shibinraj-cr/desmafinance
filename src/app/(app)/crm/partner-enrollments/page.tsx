@@ -22,11 +22,12 @@ export default async function PartnerEnrollmentsPage() {
   const access = await getAccess();
   if (!access) redirect("/login");
 
-  const [programs, rows, settings] = await Promise.all([
-    prisma.commissionProgram.findMany({ where: { code: { in: access.programs }, isActive: true }, include: { partner: true } }),
+  const [allPrograms, rows, settings] = await Promise.all([
+    prisma.commissionProgram.findMany({ include: { partner: true } }),
     prisma.commissionEnrollment.findMany({ where: trackableWhere(access), include: ENROLLMENT_INCLUDE, orderBy: { createdAt: "desc" }, take: 1000 }),
     getSettings(),
   ]);
+  const programs = allPrograms.filter((p) => access.programs.includes(p.code as (typeof access.programs)[number]) && p.isActive);
 
   return (
     <>
@@ -37,6 +38,7 @@ export default async function PartnerEnrollmentsPage() {
         allowed={access.programs}
         isFinance={access.isFinance}
         runDay={settings.runDay}
+        planOptions={Object.fromEntries(allPrograms.map((p) => [p.code, p.installmentPlans]))}
         programs={programs
           .filter((p) => p.partner.isActive)
           .map((p) => ({
@@ -46,6 +48,7 @@ export default async function PartnerEnrollmentsPage() {
             defaultFee: p.defaultFee == null ? null : Number(p.defaultFee),
             defaultPct: p.defaultPct == null ? null : Number(p.defaultPct),
             defaultFlat: p.defaultFlat == null ? null : Number(p.defaultFlat),
+            installmentPlans: p.installmentPlans,
             layout: p.partner.layout,
           }))}
         enrollments={rows.map((e) => ({
