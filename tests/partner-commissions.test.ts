@@ -5,8 +5,10 @@ import { PDFDocument } from "pdf-lib";
 import {
   amountInWords,
   balanceOf,
+  canTrackEnrollment,
   checkInstallment,
   commissionOf,
+  commissionTerms,
   defaultLineDescription,
   enrollablePrograms,
   enrollmentState,
@@ -50,6 +52,12 @@ describe("course fee and installments", () => {
   it("computes commission and balance", () => {
     expect(commissionOf(2300, 20)).toBe(460);
     expect(commissionOf(8000, 10)).toBe(800);
+    // A flat program (GCAN): the same amount whatever the course fee, the % is ignored.
+    expect(commissionOf(7500, 10, 800)).toBe(800);
+    expect(commissionOf(9200, 0, 800)).toBe(800);
+    expect(commissionOf(2400, 20, null)).toBe(480);
+    expect(commissionTerms(20, null)).toBe("20%");
+    expect(commissionTerms(10, 800)).toBe("Flat AUD 800");
     expect(balanceOf(fee, [{ amount: 1000 }, { amount: 500 }])).toBe(800);
     expect(balanceOf(fee, [{ amount: 2300 }])).toBe(0);
   });
@@ -197,9 +205,35 @@ describe("invoice PDF", () => {
     const doc = await PDFDocument.load(await buildInvoicePdf(base));
     expect(doc.getPageCount()).toBe(1);
   });
+  it("prints a flat commission line", async () => {
+    const flatLine = { ...base.lines[0], description: "GCAN candidate", courseName: "GCAN Online", courseFee: 7500, commissionPct: 0, commissionFlat: 800, amount: 800 };
+    const doc = await PDFDocument.load(await buildInvoicePdf({ ...base, layout: "detailed", lines: [flatLine], total: 800, words: "AUD Eight Hundred" }));
+    expect(doc.getPageCount()).toBe(1);
+  });
   it("runs onto more pages for a long invoice, with names Helvetica can't encode", async () => {
     const lines = Array.from({ length: 60 }, (_, i) => ({ ...base.lines[0], description: `Ŝṙeeja ${i} | OSCE | Full Fee Paid` }));
     const doc = await PDFDocument.load(await buildInvoicePdf({ ...base, layout: "detailed", lines, total: 30000 }));
     expect(doc.getPageCount()).toBeGreaterThan(1);
+  });
+});
+
+describe("who records fee installments", () => {
+  const coord = { isFinance: false, userId: "u_coord", grantPrograms: ["OSCE", "NCLEX"], bdePrograms: [] };
+  const bde = { isFinance: false, userId: "u_bde", grantPrograms: [], bdePrograms: ["GCAN"] };
+  const fin = { isFinance: true, userId: "u_fe", grantPrograms: [], bdePrograms: [] };
+  const e = (program: string, createdById: string | null, leadAssignedToId: string | null = null) => ({ program, createdById, leadAssignedToId });
+  it("lets Finance record anything", () => {
+    expect(canTrackEnrollment(fin, e("GCAN", "someone"))).toBe(true);
+  });
+  it("lets the coordinator record every enrollment in their programs, whoever added it", () => {
+    expect(canTrackEnrollment(coord, e("OSCE", "u_fe"))).toBe(true);
+    expect(canTrackEnrollment(coord, e("NCLEX", null))).toBe(true);
+    expect(canTrackEnrollment(coord, e("GCAN", "u_coord"))).toBe(false);
+  });
+  it("lets a BDE record the GCAN enrollments they added or whose lead is theirs", () => {
+    expect(canTrackEnrollment(bde, e("GCAN", "u_bde"))).toBe(true);
+    expect(canTrackEnrollment(bde, e("GCAN", "u_fe", "u_bde"))).toBe(true);
+    expect(canTrackEnrollment(bde, e("GCAN", "other_bde", "other_bde"))).toBe(false);
+    expect(canTrackEnrollment(bde, e("OSCE", "u_bde"))).toBe(false);
   });
 });

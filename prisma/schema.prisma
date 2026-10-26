@@ -6266,18 +6266,21 @@ model CommissionPartner {
 /// One row per program code (NCLEX / OSCE / GCAN): which partner runs it and
 /// the defaults a new enrollment starts from.
 model CommissionProgram {
-  id         String            @id @default(cuid())
+  id          String            @id @default(cuid())
   /// "NCLEX" | "OSCE" | "GCAN" — the fixed set in partner-commissions/constants.ts.
-  code       String            @unique
-  partnerId  String
-  partner    CommissionPartner @relation(fields: [partnerId], references: [id], onDelete: Restrict)
+  code        String            @unique
+  partnerId   String
+  partner     CommissionPartner @relation(fields: [partnerId], references: [id], onDelete: Restrict)
   /// Course name printed on the invoice (e.g. "GCAN Online").
-  courseName String
-  defaultFee Decimal?          @db.Decimal(12, 2)
-  defaultPct Decimal?          @db.Decimal(5, 2)
-  isActive   Boolean           @default(true)
-  createdAt  DateTime          @default(now())
-  updatedAt  DateTime          @updatedAt
+  courseName  String
+  defaultFee  Decimal?          @db.Decimal(12, 2)
+  defaultPct  Decimal?          @db.Decimal(5, 2)
+  /// Flat commission per enrollment (AUD). When set it replaces the percentage —
+  /// e.g. a program that pays a fixed amount whatever the course fee.
+  defaultFlat Decimal?          @db.Decimal(12, 2)
+  isActive    Boolean           @default(true)
+  createdAt   DateTime          @default(now())
+  updatedAt   DateTime          @updatedAt
 }
 
 /// A candidate enrolled with a partner. The course fee is fixed at creation;
@@ -6285,31 +6288,34 @@ model CommissionProgram {
 /// that currently claims its commission (cleared when a line is removed or the
 /// invoice is cancelled, so it queues again).
 model CommissionEnrollment {
-  id            String             @id @default(cuid())
-  program       String
-  partnerId     String
-  partner       CommissionPartner  @relation(fields: [partnerId], references: [id], onDelete: Restrict)
-  candidateName String
-  leadId        String?
-  lead          Lead?              @relation(fields: [leadId], references: [id], onDelete: SetNull)
-  studentId     String?
-  courseName    String
+  id             String             @id @default(cuid())
+  program        String
+  partnerId      String
+  partner        CommissionPartner  @relation(fields: [partnerId], references: [id], onDelete: Restrict)
+  candidateName  String
+  leadId         String?
+  lead           Lead?              @relation(fields: [leadId], references: [id], onDelete: SetNull)
+  studentId      String?
+  courseName     String
   /// "MMM-YY", e.g. "Jan-27".
-  intakeMonth   String
+  intakeMonth    String
   /// AUD.
-  courseFee     Decimal            @db.Decimal(12, 2)
-  commissionPct Decimal            @db.Decimal(5, 2)
+  courseFee      Decimal            @db.Decimal(12, 2)
+  commissionPct  Decimal            @db.Decimal(5, 2)
+  /// Flat commission (AUD), copied from the program when added. When set, the
+  /// commission is this amount rather than courseFee × commissionPct.
+  commissionFlat Decimal?           @db.Decimal(12, 2)
   /// "active" | "withdrawn".
-  status        String             @default("active")
+  status         String             @default("active")
   /// Date of the payment that cleared the balance; null while anything is due.
-  fullyPaidOn   DateTime?          @db.Date
-  invoiceId     String?
-  invoice       CommissionInvoice? @relation(fields: [invoiceId], references: [id], onDelete: SetNull)
-  notes         String?
-  createdById   String?
-  createdBy     User?              @relation("CommissionEnrollmentCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
-  createdAt     DateTime           @default(now())
-  updatedAt     DateTime           @updatedAt
+  fullyPaidOn    DateTime?          @db.Date
+  invoiceId      String?
+  invoice        CommissionInvoice? @relation(fields: [invoiceId], references: [id], onDelete: SetNull)
+  notes          String?
+  createdById    String?
+  createdBy      User?              @relation("CommissionEnrollmentCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
+  createdAt      DateTime           @default(now())
+  updatedAt      DateTime           @updatedAt
 
   payments     CommissionFeePayment[]
   invoiceLines CommissionInvoiceLine[]
@@ -6379,21 +6385,23 @@ model CommissionInvoice {
 }
 
 model CommissionInvoiceLine {
-  id            String                @id @default(cuid())
-  invoiceId     String
-  invoice       CommissionInvoice     @relation(fields: [invoiceId], references: [id], onDelete: Cascade)
-  enrollmentId  String?
-  enrollment    CommissionEnrollment? @relation(fields: [enrollmentId], references: [id], onDelete: SetNull)
-  position      Int
-  program       String
-  description   String
-  studentId     String?
-  courseName    String
-  intakeMonth   String
-  courseFee     Decimal               @db.Decimal(12, 2)
-  commissionPct Decimal               @db.Decimal(5, 2)
+  id             String                @id @default(cuid())
+  invoiceId      String
+  invoice        CommissionInvoice     @relation(fields: [invoiceId], references: [id], onDelete: Cascade)
+  enrollmentId   String?
+  enrollment     CommissionEnrollment? @relation(fields: [enrollmentId], references: [id], onDelete: SetNull)
+  position       Int
+  program        String
+  description    String
+  studentId      String?
+  courseName     String
+  intakeMonth    String
+  courseFee      Decimal               @db.Decimal(12, 2)
+  commissionPct  Decimal               @db.Decimal(5, 2)
+  /// Flat commission (AUD) when the program pays a fixed amount; printed as "Flat".
+  commissionFlat Decimal?              @db.Decimal(12, 2)
   /// AUD, courseFee × commissionPct / 100.
-  amount        Decimal               @db.Decimal(12, 2)
+  amount         Decimal               @db.Decimal(12, 2)
 
   @@index([invoiceId])
   @@index([enrollmentId])

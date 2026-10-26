@@ -8,9 +8,18 @@ import { MAX_INSTALLMENTS, type EnrollmentState, type InvoiceLayout, type Invoic
 
 export const round2 = (n: number): number => Math.round((n + Number.EPSILON) * 100) / 100;
 
-/** Commission on a course fee at a percentage, to the cent. */
-export function commissionOf(courseFee: number, pct: number): number {
+/**
+ * The commission on one enrollment, to the cent: a flat amount when the
+ * program pays one (e.g. GCAN), otherwise the course fee × the percentage.
+ */
+export function commissionOf(courseFee: number, pct: number, flat?: number | null): number {
+  if (flat != null) return round2(flat);
   return round2((courseFee * pct) / 100);
+}
+
+/** "20%" or "Flat AUD 800" — how an enrollment's commission terms read. */
+export function commissionTerms(pct: number, flat?: number | null): string {
+  return flat != null ? `Flat AUD ${fmtMoney(flat)}` : `${fmtMoney(pct)}%`;
 }
 
 export function paidOf(payments: Array<{ amount: number }>): number {
@@ -269,6 +278,26 @@ export function statusAfterReturn(approvedAud: number): InvoiceStatus {
 
 export function isEditableInvoice(status: string): boolean {
   return status === "draft" || status === "sent";
+}
+
+/**
+ * Whether someone may record (or undo) course-fee installments on an enrollment.
+ * Finance invoices; the people who enroll candidates keep their fees up to date.
+ *   - Finance: every enrollment.
+ *   - A personal grant for the program (e.g. the OSCE/NCLEX coordinator): every
+ *     enrollment in that program, whoever added it.
+ *   - A BDE, for programs opened to BDEs: the enrollments they added, and those
+ *     linked to a CRM lead assigned to them.
+ * `bdePrograms` is empty for someone who isn't an active BDE.
+ */
+export function canTrackEnrollment(
+  who: { isFinance: boolean; userId: string; grantPrograms: string[]; bdePrograms: string[] },
+  e: { program: string; createdById: string | null; leadAssignedToId: string | null },
+): boolean {
+  if (who.isFinance) return true;
+  if (who.grantPrograms.includes(e.program)) return true;
+  if (who.bdePrograms.includes(e.program)) return e.createdById === who.userId || e.leadAssignedToId === who.userId;
+  return false;
 }
 
 /**

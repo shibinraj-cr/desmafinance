@@ -20,6 +20,7 @@ const Body = z.discriminatedUnion("action", [
     intakeMonth: z.string().max(10).optional(),
     courseFee: z.number().optional(),
     commissionPct: z.number().optional(),
+    commissionFlat: z.number().nullable().optional(),
     courseName: z.string().max(120).optional(),
     leadId: z.string().max(60).nullable().optional(),
     notes: z.string().max(1000).nullable().optional(),

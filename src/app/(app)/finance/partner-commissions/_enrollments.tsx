@@ -21,6 +21,7 @@ import {
   primaryBtnCls,
   type ProgramOption,
 } from "@/components/partner-commissions/ui";
+import { FeeBar, InstallmentSlots } from "@/components/partner-commissions/installments";
 import { ENROLLMENT_STATE_LABEL, MAX_INSTALLMENTS, PROGRAM_CODES, type EnrollmentState } from "@/lib/partner-commissions/constants";
 import { commissionOf, fmtMoney, intakeMonthOptions } from "@/lib/partner-commissions/logic";
 import { stateOf, type EnrollmentDTO, type PcPageData } from "./_types";
@@ -34,20 +35,9 @@ export function programOptions(data: PcPageData, allowed?: string[]): ProgramOpt
     .filter((p) => p.configured && p.isActive && (!allowed || allowed.includes(p.code)))
     .map((p) => {
       const partner = data.partners.find((x) => x.id === p.partnerId);
-      return { code: p.code, partnerName: partner?.name ?? "", courseName: p.courseName, defaultFee: p.defaultFee, defaultPct: p.defaultPct, layout: partner?.layout ?? "compact" };
+      return { code: p.code, partnerName: partner?.name ?? "", courseName: p.courseName, defaultFee: p.defaultFee, defaultPct: p.defaultPct, defaultFlat: p.defaultFlat, layout: partner?.layout ?? "compact" };
     })
     .filter((p) => p.partnerName);
-}
-
-export function FeeBar({ e, tall }: { e: EnrollmentDTO; tall?: boolean }) {
-  return (
-    <div className={`flex gap-0.5 ${tall ? "h-2.5" : "h-[7px]"} rounded-full overflow-hidden bg-surface-container-high`}>
-      {e.payments.map((p) => (
-        <i key={p.seq} className="block bg-primary min-w-[3px]" style={{ flex: p.amount }} title={`${ORD[p.seq - 1] ?? "Extra"} installment · ${AUD(p.amount)} · ${fmtDate(p.paidOn)}`} />
-      ))}
-      {e.balance > 0 ? <i className="block" style={{ flex: e.balance }} /> : null}
-    </div>
-  );
 }
 
 export function EnrollmentsTab({ ctx }: { ctx: PcCtx }) {
@@ -112,7 +102,7 @@ export function EnrollmentsTab({ ctx }: { ctx: PcCtx }) {
                       <div className="text-caption text-on-surface-variant tabular-nums mt-1">{fmtMoney(e.courseFee - e.balance)} of {fmtMoney(e.courseFee)} · {e.payments.length} of {MAX_INSTALLMENTS} installments</div>
                     </td>
                     <td className={`px-sm py-2.5 text-right tabular-nums ${e.balance ? "font-semibold" : "text-on-surface-variant"}`}>{e.balance ? AUD(e.balance) : "—"}</td>
-                    <td className="px-sm py-2.5 text-right tabular-nums">{AUD(commissionOf(e.courseFee, e.commissionPct))} <span className="text-caption text-on-surface-variant">{fmtMoney(e.commissionPct)}%</span></td>
+                    <td className="px-sm py-2.5 text-right tabular-nums">{AUD(commissionOf(e.courseFee, e.commissionPct, e.commissionFlat))} <span className="text-caption text-on-surface-variant">{e.commissionFlat != null ? "flat" : `${fmtMoney(e.commissionPct)}%`}</span></td>
                     <td className="px-sm py-2.5">
                       <EnrollmentPill state={st} />
                       {e.invoice ? <div className="text-caption text-on-surface-variant mt-0.5">{e.invoice.number}</div> : null}
@@ -149,9 +139,6 @@ function EnrollmentDrawer({ ctx, e, onClose }: { ctx: PcCtx; e: EnrollmentDTO; o
   const st = stateOf(e);
   const locked = !!e.invoice || e.status === "withdrawn";
   const paid = e.courseFee - e.balance;
-  const [amt, setAmt] = useState(String(e.balance || ""));
-  const [paidOn, setPaidOn] = useState(data.today);
-  const [ref, setRef] = useState("");
   const [err, setErr] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [edit, setEdit] = useState(false);
@@ -173,9 +160,6 @@ function EnrollmentDrawer({ ctx, e, onClose }: { ctx: PcCtx; e: EnrollmentDTO; o
       setBusy(false);
     }
   }
-
-  const left = Math.round((e.balance - (parseFloat(amt) || 0)) * 100) / 100;
-  const nextSeq = e.payments.length;
 
   return (
     <Drawer onClose={onClose} label="Enrollment details">
@@ -207,66 +191,14 @@ function EnrollmentDrawer({ ctx, e, onClose }: { ctx: PcCtx; e: EnrollmentDTO; o
           <Callout tone="bad" icon="block">Withdrawn, so it is never invoiced.</Callout>
         ) : null}
 
-        <section className="flex flex-col gap-2">
-          <h4 className="text-label-sm uppercase tracking-wider text-on-surface-variant">Fee installments</h4>
-          <p className="text-caption text-on-surface-variant">What the candidate paid {e.partnerName}. Tracked here only: it&apos;s the institution&apos;s money, not DESMA revenue.</p>
-          {[0, 1, 2].map((i) => {
-            const p = e.payments[i];
-            if (p) {
-              return (
-                <div key={i} className="border border-outline-variant rounded-lg px-sm py-2 flex flex-wrap items-baseline gap-x-3 gap-y-1">
-                  <span className="font-semibold text-body-md w-28">{ORD[i]} installment</span>
-                  <b className="tabular-nums">{AUD(p.amount)}</b>
-                  <span className="text-caption text-on-surface-variant">{fmtDate(p.paidOn)}{p.reference ? ` · ${p.reference}` : ""}</span>
-                  <span className="flex-1" />
-                  {!locked && i === e.payments.length - 1 ? (
-                    <button className={`${linkBtnCls} text-caption`} disabled={busy} onClick={() => act({ action: "undo-pay" }, `Removed the ${AUD(p.amount)} installment.`)}>Undo</button>
-                  ) : null}
-                </div>
-              );
-            }
-            if (i === nextSeq && e.balance > 0 && !locked) {
-              return (
-                <div key={i} className="border border-primary-container bg-primary-fixed/30 rounded-lg p-sm flex flex-col gap-sm">
-                  <span className="font-semibold text-body-md">{ORD[i]} installment</span>
-                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-sm">
-                    <Field label="Amount (AUD)"><input className={inputCls} type="number" min={1} step="0.01" value={amt} onChange={(x) => setAmt(x.target.value)} /></Field>
-                    <Field label="Paid on"><input className={inputCls} type="date" max={data.today} value={paidOn} onChange={(x) => setPaidOn(x.target.value)} /></Field>
-                    <Field label="Reference"><input className={inputCls} value={ref} onChange={(x) => setRef(x.target.value)} placeholder="Receipt no. or note" /></Field>
-                  </div>
-                  <div className="flex flex-wrap justify-between items-center gap-sm">
-                    <span className="text-caption text-on-surface-variant tabular-nums">{left < 0 ? `That's ${AUD(-left)} more than the balance.` : `Balance after this payment: ${AUD(left)}`}</span>
-                    <button
-                      className={primaryBtnCls}
-                      disabled={busy}
-                      onClick={() =>
-                        act(
-                          { action: "pay", amount: parseFloat(amt), paidOn, reference: ref || null },
-                          left <= 0 ? `${e.candidateName} is fully paid and queued for the next invoice.` : `${ORD[i]} installment recorded. Balance ${AUD(left)}.`,
-                        )
-                      }
-                    >
-                      Record {ORD[i]} installment
-                    </button>
-                  </div>
-                </div>
-              );
-            }
-            return (
-              <div key={i} className="border border-dashed border-outline-variant bg-surface-container-low rounded-lg px-sm py-2 flex justify-between text-body-md">
-                <span className="font-semibold">{ORD[i]} installment</span>
-                <span className="text-caption text-on-surface-variant">{e.balance === 0 ? "Not needed, fee fully paid" : locked ? "—" : `Opens after the ${ORD[i - 1]} installment`}</span>
-              </div>
-            );
-          })}
-          {e.payments.length >= MAX_INSTALLMENTS && e.balance > 0 ? (
-            <Callout tone="bad" icon="error">All {MAX_INSTALLMENTS} installments are used and {AUD(e.balance)} is still due. Undo the last installment and re-enter it, or lower the course fee.</Callout>
-          ) : null}
-        </section>
+        <InstallmentSlots e={e} today={data.today} locked={locked} canRecord busy={busy} act={act} />
 
         <section className="flex flex-col gap-2">
           <h4 className="text-label-sm uppercase tracking-wider text-on-surface-variant">Commission</h4>
-          <p><b className="tabular-nums">{AUD(commissionOf(e.courseFee, e.commissionPct))}</b> <span className="text-on-surface-variant">= {fmtMoney(e.commissionPct)}% of {AUD(e.courseFee)}</span></p>
+          <p>
+            <b className="tabular-nums">{AUD(commissionOf(e.courseFee, e.commissionPct, e.commissionFlat))}</b>{" "}
+            <span className="text-on-surface-variant">{e.commissionFlat != null ? "flat per enrollment, whatever the course fee" : `= ${fmtMoney(e.commissionPct)}% of ${AUD(e.courseFee)}`}</span>
+          </p>
           {locked ? <p className="text-caption text-on-surface-variant">{e.invoice ? "Locked because it's on an invoice. Change the % on the invoice while it's a draft or sent." : ""}</p> : null}
         </section>
 
@@ -336,6 +268,8 @@ function EditDetails({ e, today, busy, onCancel, onSave }: { e: EnrollmentDTO; t
   const [intake, setIntake] = useState(e.intakeMonth);
   const [fee, setFee] = useState(String(e.courseFee));
   const [pct, setPct] = useState(String(e.commissionPct));
+  const [isFlat, setIsFlat] = useState(e.commissionFlat != null);
+  const [flat, setFlat] = useState(e.commissionFlat != null ? String(e.commissionFlat) : "");
   const [course, setCourse] = useState(e.courseName);
   const [notes, setNotes] = useState(e.notes ?? "");
   const months = intakeMonthOptions(today);
@@ -347,7 +281,20 @@ function EditDetails({ e, today, busy, onCancel, onSave }: { e: EnrollmentDTO; t
         <Field label="Student ID"><input className={inputCls} value={sid} onChange={(x) => setSid(x.target.value)} /></Field>
         <Field label="Intake month"><select className={inputCls} value={intake} onChange={(x) => setIntake(x.target.value)}>{months.map((m) => <option key={m}>{m}</option>)}</select></Field>
         <Field label="Course fee (AUD)"><input className={inputCls} type="number" min={1} value={fee} onChange={(x) => setFee(x.target.value)} /></Field>
-        <Field label="Commission %"><input className={inputCls} type="number" min={0} max={100} step="0.5" value={pct} onChange={(x) => setPct(x.target.value)} /></Field>
+        <div className="flex flex-col gap-1 min-w-0">
+          <span className="text-label-sm font-semibold text-on-surface-variant">Commission</span>
+          <div className="flex gap-2">
+            <select className={`${inputCls} !w-28 shrink-0`} aria-label="Commission type" value={isFlat ? "flat" : "pct"} onChange={(x) => setIsFlat(x.target.value === "flat")}>
+              <option value="pct">% of fee</option>
+              <option value="flat">Flat AUD</option>
+            </select>
+            {isFlat ? (
+              <input className={inputCls} type="number" min={1} step="1" value={flat} onChange={(x) => setFlat(x.target.value)} aria-label="Flat commission (AUD)" />
+            ) : (
+              <input className={inputCls} type="number" min={0} max={100} step="0.5" value={pct} onChange={(x) => setPct(x.target.value)} aria-label="Commission %" />
+            )}
+          </div>
+        </div>
       </div>
       <Field label="Course name on invoice"><input className={inputCls} value={course} onChange={(x) => setCourse(x.target.value)} /></Field>
       <Field label="Notes"><textarea className={`${inputCls} !h-auto py-2`} rows={2} value={notes} onChange={(x) => setNotes(x.target.value)} /></Field>
@@ -356,7 +303,7 @@ function EditDetails({ e, today, busy, onCancel, onSave }: { e: EnrollmentDTO; t
         <button
           className={primaryBtnCls}
           disabled={busy}
-          onClick={() => onSave({ candidateName: name, studentId: sid || null, intakeMonth: intake, courseFee: parseFloat(fee), commissionPct: parseFloat(pct), courseName: course, notes: notes || null })}
+          onClick={() => onSave({ candidateName: name, studentId: sid || null, intakeMonth: intake, courseFee: parseFloat(fee), commissionPct: parseFloat(pct), commissionFlat: isFlat ? parseFloat(flat) : null, courseName: course, notes: notes || null })}
         >
           Save
         </button>
