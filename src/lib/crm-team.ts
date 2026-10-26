@@ -17,8 +17,9 @@
  *     would otherwise make a mass-emailed lead look freshly worked. Bulk sends
  *     are tagged `metadata.bulk = true` on their `EMAIL_SENT` activity, so the
  *     carve-out is exact.
- *   - "Conversion" reuses `getCrmFunnelByBde` (current month, carryover-safe);
- *     activity/first-response metrics use the page's selected date range;
+ *   - "Conversion" (assigned → enrolled) reuses the CRM funnel
+ *     (`getCrmFunnelByBdeInRange`, carryover-safe) and, like the activity and
+ *     first-response metrics, follows the page's selected date range;
  *     attention buckets (SLA breach / abandoned / no-task / stuck) are
  *     point-in-time snapshots that ignore the range. Each is labelled in the UI.
  *   - A lead with an *upcoming* scheduled task (an open task due today or within the next 30 days)
@@ -35,7 +36,7 @@
 import { Prisma } from "@prisma/client";
 import { prisma } from "./prisma";
 import { getAssignableBdes, REINQUIRY_TASK_SUBJECT_NEEDLE } from "./crm-leads";
-import { getCrmFunnelByBde } from "./lead-pulse-crm-metrics";
+import { getCrmFunnelByBdeInRange } from "./lead-pulse-crm-metrics";
 import { CRM_TEAM_LEAD_PAGE } from "./crm-rbac";
 import { qualityOverdueWhere } from "./crm-lead-quality-data";
 
@@ -494,9 +495,12 @@ export type TeamBdeRow = {
   userId: string;
   displayName: string;
   role: string;
-  // Conversion (current calendar month, via getCrmFunnelByBde).
-  assignedMonth: number;
-  enrolledMonth: number;
+  // Conversion (selected range, via getCrmFunnelByBdeInRange). Enrollments are
+  // credited to the deal owner and dated by the enrollment date (closedDate).
+  // `assignedPeriod` excludes duplicate-status leads; `assignedRange` below
+  // doesn't, as it is the first-response population.
+  assignedPeriod: number;
+  enrolledPeriod: number;
   conversionPct: number | null;
   // Activity (selected range).
   assignedRange: number;
@@ -600,8 +604,8 @@ export async function getTeamActivity(opts: {
     unassignedActive,
     qualityOverdueByBde,
   ] = await Promise.all([
-    // Conversion (current month, carryover-safe). Narrowed to self below.
-    getCrmFunnelByBde(now.getFullYear(), now.getMonth() + 1),
+    // Conversion (range, carryover-safe). Narrowed to self below.
+    getCrmFunnelByBdeInRange(range),
     // Assigned active leads — the population for staleness / stuck / no-task. Only
     // OWNED leads (assignedToId set); the deliberate-assignment filter below drops
     // bulk-import carryover so the unassigned/imported backlog can't inflate counts.
@@ -729,8 +733,8 @@ export async function getTeamActivity(opts: {
 
   // ── Per-BDE accumulators ──
   const blank = (): Omit<TeamBdeRow, "userId" | "displayName" | "role"> => ({
-    assignedMonth: 0,
-    enrolledMonth: 0,
+    assignedPeriod: 0,
+    enrolledPeriod: 0,
     conversionPct: null,
     assignedRange: 0,
     calls: 0,
@@ -752,14 +756,14 @@ export async function getTeamActivity(opts: {
   });
   const acc = new Map(roster.map((b) => [b.userId, blank()]));
 
-  // Conversion (month).
+  // Conversion (range).
   const funnelById = new Map(funnel.map((f) => [f.userId, f]));
   for (const b of roster) {
     const f = funnelById.get(b.userId);
     const a = acc.get(b.userId)!;
     if (f) {
-      a.assignedMonth = f.leadsAssigned;
-      a.enrolledMonth = f.enrolled;
+      a.assignedPeriod = f.leadsAssigned;
+      a.enrolledPeriod = f.enrolled;
       a.conversionPct = f.conversionPct;
     }
   }

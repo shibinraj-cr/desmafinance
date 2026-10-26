@@ -175,10 +175,10 @@ export default async function ScorecardGuidePage() {
 
         {/* The four parameters */}
         <div className="space-y-gutter">
-          <Card kicker="The biggest lever" name="Conversion" weight={SCORE_WEIGHTS.conversion} window="Window: current month">
+          <Card kicker="The biggest lever" name="Conversion" weight={SCORE_WEIGHTS.conversion} window="Window: the period you're viewing">
             <Line tag="Measures">
-              Of the leads assigned to you <span className="font-semibold text-on-surface">this month</span>, how many you
-              enrolled — Enrolled ÷ Assigned.
+              Of the leads assigned to you <span className="font-semibold text-on-surface">in the period</span> (the
+              Activity page opens on the current month), how many you enrolled — Enrolled ÷ Assigned.
             </Line>
             <Line tag="Scored">
               <span className="font-semibold text-on-surface">{CONVERSION_TARGET_PCT}% or higher</span> earns the full{" "}

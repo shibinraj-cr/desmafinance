@@ -10,6 +10,7 @@ import { todayIst } from "@/lib/lead-pulse-dates";
 import { badRequest, conflict, forbidden, notFound, unauthorized, unprocessable } from "@/lib/http-error";
 import {
   LEDGER,
+  MAX_INSTALLMENTS,
   PC_FINANCE_PAGE,
   PC_NOTIFY_KIND,
   PROGRAM_CODES,
@@ -26,6 +27,7 @@ import {
   invoiceTotal,
   isEditableInvoice,
   isIntakeMonth,
+  planLabel,
   canTrackEnrollment,
   looksLikeSeries,
   openAud,
@@ -139,6 +141,8 @@ export type EnrollmentInput = {
   commissionFlat?: number | null;
   notes?: string | null;
   firstPayment?: { amount: number; paidOn: string; reference?: string | null } | null;
+  /** The installment plan picked when enrolling — required when the program offers plans (GCAN: 1, 2 or 6). */
+  installmentPlan?: number | null;
 };
 
 async function programConfig(code: string) {
@@ -183,9 +187,10 @@ export async function createEnrollment(a: PcAccess, input: EnrollmentInput) {
   }
   // Whoever adds the enrollment may record a 1st installment already paid — they track this candidate's fee.
   const first = input.firstPayment ?? null;
+  const plan = choosePlan(input.program, prog.installmentPlans, input.installmentPlan ?? null);
   const today = todayIst();
   if (first) {
-    const err = checkInstallment({ courseFee: input.courseFee, payments: [], amount: first.amount, paidOn: first.paidOn, today });
+    const err = checkInstallment({ courseFee: input.courseFee, payments: [], amount: first.amount, paidOn: first.paidOn, today, plan });
     if (err) throw badRequest(err);
   }
   const created = await prisma.commissionEnrollment.create({
@@ -200,6 +205,7 @@ export async function createEnrollment(a: PcAccess, input: EnrollmentInput) {
       courseFee: round2(input.courseFee),
       commissionPct: pct,
       commissionFlat: flat,
+      installmentPlan: plan,
       notes: clean(input.notes),
       createdById: a.userId,
       fullyPaidOn: first && round2(first.amount) === round2(input.courseFee) ? toDate(first.paidOn) : null,
@@ -321,7 +327,7 @@ export async function addFeePayment(a: PcAccess, id: string, p: { amount: number
   if (e.status === "withdrawn") throw conflict("This enrollment is withdrawn.");
   if (e.invoiceId) throw conflict("This enrollment is already invoiced.");
   const payments = e.payments.map((x) => ({ amount: num(x.amount) }));
-  const err = checkInstallment({ courseFee: num(e.courseFee), payments, amount: p.amount, paidOn: p.paidOn, today: todayIst() });
+  const err = checkInstallment({ courseFee: num(e.courseFee), payments, amount: p.amount, paidOn: p.paidOn, today: todayIst(), plan: e.installmentPlan });
   if (err) throw badRequest(err);
   const seq = e.payments.length + 1;
   try {
@@ -351,6 +357,38 @@ export async function undoLastFeePayment(a: PcAccess, id: string) {
     userId: a.userId,
     changes: { undoFeePayment: { seq: last.seq, amount: num(last.amount), paidOn: isoDate(last.paidOn) } },
   });
+}
+
+/**
+ * The plan for a new enrollment: required and one of the offered plans when the
+ * program has plans (GCAN: 1, 2 or 6); none otherwise.
+ */
+function choosePlan(program: string, offered: number[], picked: number | null): number | null {
+  if (offered.length === 0) return null;
+  if (picked == null || !offered.includes(picked)) {
+    throw badRequest(`Pick ${program}'s installment plan: ${offered.map(planLabel).join(", ")}.`);
+  }
+  return picked;
+}
+
+/**
+ * Change an enrollment's installment plan (e.g. 2 → 6 when the candidate needs
+ * longer). Anyone who records its installments may, until it is invoiced; the
+ * plan can't drop below the installments already recorded.
+ */
+export async function setInstallmentPlan(a: PcAccess, id: string, plan: number) {
+  const e = await loadEnrollment(id);
+  assertCanTrack(a, e);
+  if (e.invoiceId) throw conflict("This enrollment is already invoiced.");
+  if (e.status === "withdrawn") throw conflict("This enrollment is withdrawn.");
+  const prog = await prisma.commissionProgram.findUnique({ where: { code: e.program }, select: { installmentPlans: true } });
+  const offered = prog?.installmentPlans ?? [];
+  if (offered.length ? !offered.includes(plan) : !(Number.isInteger(plan) && plan >= 1 && plan <= MAX_INSTALLMENTS)) {
+    throw badRequest(offered.length ? `Pick one of ${e.program}'s plans: ${offered.map(planLabel).join(", ")}.` : "Pick a plan of 1 to 6 installments.");
+  }
+  if (plan < e.payments.length) throw badRequest(`${e.payments.length} installments are already recorded, so the plan can't be ${plan}.`);
+  await prisma.commissionEnrollment.update({ where: { id }, data: { installmentPlan: plan } });
+  await recordAudit({ entityType: "CommissionEnrollment", entityId: id, action: "UPDATE", userId: a.userId, changes: { installmentPlan: { from: e.installmentPlan, to: plan } } });
 }
 
 export async function setWithdrawn(a: PcAccess, id: string, withdrawn: boolean) {
@@ -1001,6 +1039,8 @@ export type ProgramInput = {
   isActive?: boolean;
   /** Also move enrollments not yet invoiced onto the new commission. */
   applyToOpen?: boolean;
+  /** Installment plans offered when enrolling (1–6), e.g. [1, 2, 6]. Omitted = unchanged. */
+  installmentPlans?: number[];
 };
 
 export async function saveProgram(a: PcAccess, p: ProgramInput) {
@@ -1014,7 +1054,18 @@ export async function saveProgram(a: PcAccess, p: ProgramInput) {
   if (p.defaultPct != null) checkPct(p.defaultPct);
   const defaultFlat = p.defaultFlat ?? null;
   if (defaultFlat != null) checkFlat(defaultFlat);
-  const data = { partnerId: p.partnerId, courseName, defaultFee: p.defaultFee, defaultPct: p.defaultPct, defaultFlat, isActive: p.isActive ?? true };
+  if (p.installmentPlans && p.installmentPlans.some((n) => !Number.isInteger(n) || n < 1 || n > MAX_INSTALLMENTS)) {
+    throw badRequest(`Installment plans must be whole numbers from 1 to ${MAX_INSTALLMENTS}.`);
+  }
+  const data = {
+    partnerId: p.partnerId,
+    courseName,
+    defaultFee: p.defaultFee,
+    defaultPct: p.defaultPct,
+    defaultFlat,
+    isActive: p.isActive ?? true,
+    ...(p.installmentPlans ? { installmentPlans: [...new Set(p.installmentPlans)].sort((x, y) => x - y) } : {}),
+  };
   const saved = await prisma.commissionProgram.upsert({ where: { code: p.code }, create: { code: p.code, ...data }, update: data });
   // Enrollments already on an invoice keep what was billed; the rest can follow the new terms.
   let applied = 0;
@@ -1076,6 +1127,7 @@ export function serializeEnrollment(e: EnrollmentRow) {
     courseFee: num(e.courseFee),
     commissionPct: num(e.commissionPct),
     commissionFlat: flatOf(e.commissionFlat),
+    installmentPlan: e.installmentPlan,
     status: e.status,
     fullyPaidOn: isoDate(e.fullyPaidOn),
     invoice: e.invoice ? { id: e.invoice.id, number: e.invoice.number, status: e.invoice.status, source: e.invoice.source } : null,

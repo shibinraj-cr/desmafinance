@@ -135,3 +135,28 @@ function labelForQuarter(q: 1 | 2 | 3 | 4): string {
 function labelForHalf(h: 1 | 2): string {
   return ["Apr-Sep", "Oct-Mar"][h - 1];
 }
+
+/**
+ * The month preset (e.g. "Oct-26") for the month containing `ymd` (YYYY-MM-DD),
+ * or null when that month is outside the FY the presets cover.
+ */
+export function monthLabelFor(ymd: string): string | null {
+  const y = Number(ymd.slice(0, 4));
+  const m = Number(ymd.slice(5, 7));
+  const label = `${["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"][m - 1]}-${String(y).slice(2)}`;
+  return MONTH_TO_INDEX[label] !== undefined ? label : null;
+}
+
+/**
+ * The calendar month a range covers exactly — [1st of a month, 1st of the next) —
+ * or null for anything else (all time, quarters, part-month custom ranges). A
+ * month preset always qualifies; so does a custom range spanning one whole month.
+ */
+export function singleMonthOf(range: Range): { year: number; month: number } | null {
+  const { from, to } = range;
+  if (!from || !to) return null;
+  const year = from.getUTCFullYear();
+  const month0 = from.getUTCMonth();
+  if (+from !== Date.UTC(year, month0, 1) || +to !== Date.UTC(year, month0 + 1, 1)) return null;
+  return { year, month: month0 + 1 };
+}
