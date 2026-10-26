@@ -5,7 +5,7 @@ import { prisma } from "@/lib/prisma";
 import { withApiHandler } from "@/lib/api";
 import { unauthorized, forbidden, notFound, badRequest, unprocessable } from "@/lib/http-error";
 import { getCurrentUserAndPermissions } from "@/lib/permissions";
-import { getCrmAccess, canEditLead } from "@/lib/crm-rbac";
+import { getCrmAccess, canEditTask } from "@/lib/crm-rbac";
 import { recordLeadActivity, type CrmActivityType } from "@/lib/crm-activity";
 import { taskInclude, serializeTask, isActiveBde, requiresNextStepOnComplete } from "@/lib/crm-leads";
 import {
@@ -75,11 +75,11 @@ export const PATCH = withApiHandler(async (req: Request, { params }: Ctx) => {
     },
   });
   if (!task || task.leadId !== params.id) throw notFound();
-  if (!canEditLead(access, task.lead, userId)) throw forbidden();
+  if (!canEditTask(access, task, task.lead, userId)) throw forbidden();
 
   const data = PatchSchema.parse(await req.json().catch(() => null));
 
-  if (data.assignedToId && !(await isActiveBde(data.assignedToId))) {
+  if (data.assignedToId && data.assignedToId !== userId && !(await isActiveBde(data.assignedToId))) {
     throw badRequest("The selected assignee is not an active BDE.", "assignee_not_bde");
   }
 
@@ -275,7 +275,8 @@ export const PATCH = withApiHandler(async (req: Request, { params }: Ctx) => {
   });
 });
 
-// DELETE /api/crm/leads/[id]/tasks/[taskId] — assigned BDE or admin
+// DELETE /api/crm/leads/[id]/tasks/[taskId] — assigned BDE or admin (or the
+// enrolled-lead task-taker whose task it is — see canEditTask)
 export const DELETE = withApiHandler(async (_req: Request, { params }: Ctx) => {
   const { userId, perms } = await getCurrentUserAndPermissions();
   if (!userId || !perms) throw unauthorized();
@@ -284,10 +285,16 @@ export const DELETE = withApiHandler(async (_req: Request, { params }: Ctx) => {
 
   const task = await prisma.crmTask.findUnique({
     where: { id: params.taskId },
-    select: { id: true, leadId: true, subject: true, lead: { select: { id: true, assignedToId: true } } },
+    select: {
+      id: true,
+      leadId: true,
+      subject: true,
+      assignedToId: true,
+      lead: { select: { id: true, assignedToId: true, status: { select: { code: true } } } },
+    },
   });
   if (!task || task.leadId !== params.id) throw notFound();
-  if (!canEditLead(access, task.lead, userId)) throw forbidden();
+  if (!canEditTask(access, task, task.lead, userId)) throw forbidden();
 
   await prisma.crmTask.delete({ where: { id: params.taskId } });
   await recordLeadActivity({

@@ -80,6 +80,7 @@ export default async function PartnerCommissionsPage({ searchParams }: { searchP
         defaultFee: n(p?.defaultFee),
         defaultPct: n(p?.defaultPct),
         defaultFlat: n(p?.defaultFlat),
+        installmentPlans: p?.installmentPlans ?? (code === "GCAN" ? [1, 2, 6] : []),
         isActive: p?.isActive ?? false,
       };
     }),

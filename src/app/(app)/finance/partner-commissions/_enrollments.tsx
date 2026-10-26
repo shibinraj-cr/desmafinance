@@ -22,12 +22,11 @@ import {
   type ProgramOption,
 } from "@/components/partner-commissions/ui";
 import { FeeBar, InstallmentSlots } from "@/components/partner-commissions/installments";
-import { ENROLLMENT_STATE_LABEL, MAX_INSTALLMENTS, PROGRAM_CODES, type EnrollmentState } from "@/lib/partner-commissions/constants";
-import { commissionOf, fmtMoney, intakeMonthOptions } from "@/lib/partner-commissions/logic";
+import { ENROLLMENT_STATE_LABEL, PROGRAM_CODES, type EnrollmentState } from "@/lib/partner-commissions/constants";
+import { commissionOf, fmtMoney, installmentCap, intakeMonthOptions } from "@/lib/partner-commissions/logic";
 import { stateOf, type EnrollmentDTO, type PcPageData } from "./_types";
 import type { PcCtx } from "./client";
 
-const ORD = ["1st", "2nd", "3rd"];
 const RANK: Record<EnrollmentState, number> = { fullypaid: 0, paying: 1, notstarted: 2, invoiced: 3, received: 4, withdrawn: 5 };
 
 export function programOptions(data: PcPageData, allowed?: string[]): ProgramOption[] {
@@ -35,7 +34,7 @@ export function programOptions(data: PcPageData, allowed?: string[]): ProgramOpt
     .filter((p) => p.configured && p.isActive && (!allowed || allowed.includes(p.code)))
     .map((p) => {
       const partner = data.partners.find((x) => x.id === p.partnerId);
-      return { code: p.code, partnerName: partner?.name ?? "", courseName: p.courseName, defaultFee: p.defaultFee, defaultPct: p.defaultPct, defaultFlat: p.defaultFlat, layout: partner?.layout ?? "compact" };
+      return { code: p.code, partnerName: partner?.name ?? "", courseName: p.courseName, defaultFee: p.defaultFee, defaultPct: p.defaultPct, defaultFlat: p.defaultFlat, installmentPlans: p.installmentPlans, layout: partner?.layout ?? "compact" };
     })
     .filter((p) => p.partnerName);
 }
@@ -99,7 +98,7 @@ export function EnrollmentsTab({ ctx }: { ctx: PcCtx }) {
                     <td className="px-sm py-2.5 text-right tabular-nums">{AUD(e.courseFee)}</td>
                     <td className="px-sm py-2.5 min-w-[170px]">
                       <FeeBar e={e} />
-                      <div className="text-caption text-on-surface-variant tabular-nums mt-1">{fmtMoney(e.courseFee - e.balance)} of {fmtMoney(e.courseFee)} · {e.payments.length} of {MAX_INSTALLMENTS} installments</div>
+                      <div className="text-caption text-on-surface-variant tabular-nums mt-1">{fmtMoney(e.courseFee - e.balance)} of {fmtMoney(e.courseFee)} · {e.payments.length} of {installmentCap(e.installmentPlan)} installments</div>
                     </td>
                     <td className={`px-sm py-2.5 text-right tabular-nums ${e.balance ? "font-semibold" : "text-on-surface-variant"}`}>{e.balance ? AUD(e.balance) : "—"}</td>
                     <td className="px-sm py-2.5 text-right tabular-nums">{AUD(commissionOf(e.courseFee, e.commissionPct, e.commissionFlat))} <span className="text-caption text-on-surface-variant">{e.commissionFlat != null ? "flat" : `${fmtMoney(e.commissionPct)}%`}</span></td>
@@ -191,7 +190,7 @@ function EnrollmentDrawer({ ctx, e, onClose }: { ctx: PcCtx; e: EnrollmentDTO; o
           <Callout tone="bad" icon="block">Withdrawn, so it is never invoiced.</Callout>
         ) : null}
 
-        <InstallmentSlots e={e} today={data.today} locked={locked} canRecord busy={busy} act={act} />
+        <InstallmentSlots e={e} today={data.today} locked={locked} canRecord busy={busy} act={act} planOptions={data.programs.find((p) => p.code === e.program)?.installmentPlans ?? []} />
 
         <section className="flex flex-col gap-2">
           <h4 className="text-label-sm uppercase tracking-wider text-on-surface-variant">Commission</h4>

@@ -23,6 +23,7 @@ vi.mock("@/lib/permissions", () => ({
 vi.mock("@/lib/crm-rbac", () => ({
   getCrmAccess: vi.fn(async () => ({ canViewLeads: true, ...access.current })),
   canEditLead: vi.fn(() => true),
+  canEditTask: vi.fn(() => true),
 }));
 vi.mock("@/lib/crm-activity", () => ({ recordLeadActivity: activity }));
 vi.mock("@/lib/crm-remarketing", () => ({ openRemarketingCampaign: vi.fn(), stopRemarketingCampaigns: vi.fn() }));

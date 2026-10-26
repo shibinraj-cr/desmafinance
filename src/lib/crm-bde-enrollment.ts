@@ -21,7 +21,7 @@
  */
 import { prisma } from "./prisma";
 import { getAssignableBdes } from "./crm-leads";
-import { getCrmFunnelByBde, getCrmFunnelBySource } from "./lead-pulse-crm-metrics";
+import { getCrmFunnelByBde, getCrmFunnelBySource, getMonthlyTargetByBde } from "./lead-pulse-crm-metrics";
 import { getTeamActivity, wholeTeamScope, ABANDONED_DAYS, STUCK_DAYS, FIRST_RESPONSE_SLA_HOURS, startOfLocalDay } from "./crm-team";
 import { monthBounds } from "./lead-pulse-metrics";
 import { toPrismaDate, todayIst, fromPrismaDate } from "./lead-pulse-dates";
@@ -247,7 +247,7 @@ export async function getBdeEnrollmentData(opts: {
     createdGroups,
     enrolledValueGroups,
     openDeals,
-    targetGroups,
+    targetById,
     overdueGroups,
     statuses,
     stageGroups,
@@ -281,9 +281,7 @@ export async function getBdeEnrollmentData(opts: {
           },
         })
       : Promise.resolve([]),
-    ids.length
-      ? prisma.leadPulseTarget.groupBy({ by: ["userId"], where: { year, month, userId: { in: ids } }, _sum: { target: true } })
-      : Promise.resolve([] as Array<{ userId: string; _sum: { target: number | null } }>),
+    getMonthlyTargetByBde(year, month, ids),
     ids.length
       ? prisma.crmTask.groupBy({
           by: ["assignedToId"],
@@ -305,7 +303,6 @@ export async function getBdeEnrollmentData(opts: {
   const activityById = new Map(activity.bdeRows.map((r) => [r.userId, r]));
   const createdById = new Map(createdGroups.map((g) => [g.createdById, g._count._all]));
   const enrolledValueById = new Map(enrolledValueGroups.map((g) => [g.userId, Number(g._sum.expectedFirstInstallment ?? 0)]));
-  const targetById = new Map(targetGroups.map((g) => [g.userId, g._sum.target ?? 0]));
   const overdueById = new Map(overdueGroups.map((g) => [g.assignedToId, g._count._all]));
   const nameById = new Map(roster.map((b) => [b.userId, b.displayName]));
   const statusById = new Map(statuses.map((s) => [s.id, s]));
