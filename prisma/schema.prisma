@@ -3627,6 +3627,12 @@ model WaBroadcast {
   resendOfId  String?
   resendScope String? // 'not_delivered' | 'failed_only'
 
+  /// Share of the audience (0–50, normally 0 or 10) held back as a control
+  /// group: chosen deterministically per lead when the audience is frozen,
+  /// recorded as skipped with reason 'holdout', never sent — and never picked up
+  /// by a re-send. The campaign's enrolments are then compared against theirs.
+  holdoutPct Int @default(0)
+
   /// 'draft' | 'scheduled' | 'sending' | 'sent' | 'cancelled' | 'failed'
   status      String    @default("draft")
   /// When the drain may begin. Null means "as soon as it is queued".

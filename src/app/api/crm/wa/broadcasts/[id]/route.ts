@@ -8,6 +8,7 @@ import { getCurrentUserAndPermissions } from "@/lib/permissions";
 import { getCrmAccess } from "@/lib/crm-rbac";
 import { drainBroadcasts, materialiseAudience, countSegment, headerMediaConsistent, resendScopeWhere } from "@/lib/wa/broadcast";
 import type { LeadFilterParams } from "@/lib/crm-leads";
+import { holdoutComparison } from "@/lib/wa/broadcast-holdout";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -38,6 +39,7 @@ export const GET = withApiHandler(async (_req: Request, { params }: { params: { 
       sentCount: true,
       failedCount: true,
       skippedCount: true,
+      holdoutPct: true,
     },
   });
   if (!broadcast) throw notFound();
@@ -111,7 +113,10 @@ export const GET = withApiHandler(async (_req: Request, { params }: { params: { 
   const failedIds = new Set(failedRecipients.map((r) => r.id));
   const recipients = [...failedRecipients, ...pageRecipients.filter((r) => !failedIds.has(r.id))];
 
-  return NextResponse.json({ broadcast, delivery, recipients });
+  // The control-group read-out (null when the campaign held no one back).
+  const holdout = await holdoutComparison(params.id);
+
+  return NextResponse.json({ broadcast, delivery, recipients, holdout });
 });
 
 const PatchSchema = z.discriminatedUnion("action", [

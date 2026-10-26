@@ -125,7 +125,7 @@ export async function getBroadcastConfig(): Promise<BroadcastConfig> {
 }
 
 /** Why a lead in the segment will not be messaged. */
-export type SkipReason = "no_phone" | "opted_out" | "undeliverable" | "duplicate_number" | "cancelled";
+export type SkipReason = "no_phone" | "opted_out" | "undeliverable" | "duplicate_number" | "cancelled" | "holdout";
 
 /**
  * Leads that must never receive a marketing broadcast, whatever the segment says.
@@ -264,7 +264,31 @@ export function resendScopeWhere(scope: string | null | undefined): Prisma.WaBro
   if (scope === "failed_only") {
     return { OR: [{ status: "failed" }, { waStatus: "failed" }] };
   }
-  return { OR: [{ waStatus: null }, { waStatus: { notIn: ["delivered", "read"] } }] };
+  // Never the control group: a re-send that messaged the held-back leads would
+  // erase the comparison the holdout exists for.
+  return {
+    OR: [{ waStatus: null }, { waStatus: { notIn: ["delivered", "read"] } }],
+    NOT: { skipReason: "holdout" },
+  };
+}
+
+/** Largest control group a campaign may hold back. */
+export const MAX_HOLDOUT_PCT = 50;
+
+/**
+ * Is this lead in the campaign's control group? Deterministic (FNV-1a over the
+ * campaign and lead ids) rather than random, so re-materialising an
+ * interrupted audience puts every lead back in the same group.
+ */
+export function inHoldout(broadcastId: string, leadId: string, pct: number): boolean {
+  if (!(pct > 0)) return false;
+  let h = 0x811c9dc5;
+  const key = `${broadcastId}:${leadId}`;
+  for (let i = 0; i < key.length; i++) {
+    h ^= key.charCodeAt(i);
+    h = Math.imul(h, 0x01000193) >>> 0;
+  }
+  return h % 100 < Math.min(pct, MAX_HOLDOUT_PCT);
 }
 
 /**
@@ -283,9 +307,12 @@ export function resendScopeWhere(scope: string | null | undefined): Prisma.WaBro
 export async function materialiseAudience(broadcastId: string): Promise<{ total: number; skipped: number }> {
   const broadcast = await prisma.waBroadcast.findUnique({
     where: { id: broadcastId },
-    select: { id: true, segment: true, variableMap: true, resendOfId: true, resendScope: true },
+    select: { id: true, segment: true, variableMap: true, resendOfId: true, resendScope: true, holdoutPct: true },
   });
   if (!broadcast) return { total: 0, skipped: 0 };
+  // A re-send is aimed at people the first campaign did not reach; holding some
+  // of THEM back would answer no question, so the control group is first-send only.
+  const holdoutPct = broadcast.resendOfId ? 0 : broadcast.holdoutPct;
 
   const segment = (broadcast.segment ?? {}) as LeadFilterParams;
   const variableMap = (broadcast.variableMap ?? null) as Record<string, string> | null;
@@ -335,7 +362,9 @@ export async function materialiseAudience(broadcastId: string): Promise<{ total:
     ...preClaimedPhones,
     ...(
       await prisma.waBroadcastRecipient.findMany({
-        where: { broadcastId, status: "pending" },
+        // Held-back numbers too: on a resumed run, a second lead on a control
+        // group phone must still not be messaged.
+        where: { broadcastId, OR: [{ status: "pending" }, { skipReason: "holdout" }] },
         select: { phoneE164: true },
       })
     ).map((r) => r.phoneE164),
@@ -363,6 +392,9 @@ export async function materialiseAudience(broadcastId: string): Promise<{ total:
       // lead the segment matched — but it is not sent to.
       if (!skip && lead.phoneE164 && claimedNumbers.has(lead.phoneE164)) skip = "duplicate_number";
       if (!skip && lead.phoneE164) claimedNumbers.add(lead.phoneE164);
+      // After the number is claimed, so a second lead on a held-back phone is a
+      // duplicate, not a second chance to be messaged.
+      if (!skip && inHoldout(broadcastId, lead.id, holdoutPct)) skip = "holdout";
       if (skip) skipped++;
       return {
         broadcastId,

@@ -232,13 +232,26 @@ export type DuplicateRow = {
   phone: string | null;
   createdAt: string;
   source: string | null;
+  service?: string | null;
+  /** The consultant who owns that record now. */
+  owner?: string | null;
   status: { label: string; color: string | null };
-  matchedOn: string; // "email", "phone", or "email + phone"
+  matchedOn: string; // "email", "phone", "candidate record", joined with " + "
+};
+
+/** A note written on one of the candidate's OTHER records. */
+export type StoryNoteRow = {
+  id: string;
+  leadId: string;
+  body: string;
+  createdAt: string;
+  author: string | null;
+  service: string | null;
 };
 
 // Banner shown on a lead that shares an email or phone with other lead(s) — so a
 // "Duplicate"-flagged lead reveals exactly which record(s) it matches.
-function DuplicatesBanner({ duplicates }: { duplicates: DuplicateRow[] }) {
+function DuplicatesBanner({ duplicates, notes = [] }: { duplicates: DuplicateRow[]; notes?: StoryNoteRow[] }) {
   const fields = Array.from(new Set(duplicates.flatMap((d) => d.matchedOn.split(" + ")).filter(Boolean)));
   return (
     <div className="rounded-xl border border-amber-300 bg-amber-50 p-md">
@@ -246,7 +259,7 @@ function DuplicatesBanner({ duplicates }: { duplicates: DuplicateRow[] }) {
         <span className="material-symbols-outlined" style={{ fontSize: 20 }}>
           content_copy
         </span>
-        {duplicates.length} possible duplicate{duplicates.length === 1 ? "" : "s"}
+        {duplicates.length} other record{duplicates.length === 1 ? "" : "s"} for this candidate
         {fields.length > 0 && <span className="font-normal text-amber-700">— same {fields.join(" / ")}</span>}
       </div>
       <ul className="mt-sm space-y-xs">
@@ -263,10 +276,32 @@ function DuplicatesBanner({ duplicates }: { duplicates: DuplicateRow[] }) {
             >
               {d.status.label}
             </span>
+            {d.service && <span className="text-on-surface-variant">· {d.service}</span>}
+            {d.owner && <span className="text-on-surface-variant">· with {d.owner}</span>}
             <span className="text-label-sm text-on-surface-variant">matched on {d.matchedOn}</span>
           </li>
         ))}
       </ul>
+      {notes.length > 0 && (
+        <div className="mt-md border-t border-amber-200 pt-sm">
+          <div className="text-label-sm font-semibold text-amber-800">Latest notes on those records</div>
+          <ul className="mt-xs space-y-xs">
+            {notes.map((n) => (
+              <li key={n.id} className="text-body-md text-on-surface">
+                <span className="whitespace-pre-line">{n.body}</span>
+                <span className="text-label-sm text-on-surface-variant">
+                  {" "}
+                  — {n.author ?? "someone"}, {n.createdAt.slice(0, 10)}
+                  {n.service ? ` · ${n.service}` : ""} ·{" "}
+                  <Link href={`/crm/leads/${n.leadId}`} className="hover:underline">
+                    open
+                  </Link>
+                </span>
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
     </div>
   );
 }
@@ -278,6 +313,7 @@ export function LeadDetail({
   timeline,
   tasks,
   duplicates,
+  storyNotes = [],
   masters,
   canEdit,
   emailConfigured,
@@ -291,6 +327,7 @@ export function LeadDetail({
   timeline: ActivityRow[];
   tasks: TaskRow[];
   duplicates: DuplicateRow[];
+  storyNotes?: StoryNoteRow[];
   masters: DetailMasters;
   canEdit: boolean;
   emailConfigured: boolean;
@@ -417,7 +454,7 @@ export function LeadDetail({
         )}
       </div>
 
-      {duplicates.length > 0 && <DuplicatesBanner duplicates={duplicates} />}
+      {duplicates.length > 0 && <DuplicatesBanner duplicates={duplicates} notes={storyNotes} />}
 
       {tab === "overview" && (
         <>
