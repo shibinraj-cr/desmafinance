@@ -24,6 +24,7 @@ function access(over: Partial<CrmAccess> = {}): CrmAccess {
     referralLeadsOnly: false,
     canReEnroll: false,
     canTaskEnrolledLeads: false,
+    ownTasksOnly: false,
     canBulkImport: false,
     canBulkEmail: false,
     canBulkStatus: false,

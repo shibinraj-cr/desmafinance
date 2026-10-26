@@ -14,7 +14,17 @@ import { LeadQualityDialog, qualityDraftFrom } from "@/components/crm/LeadQualit
 import { QUALITY_GATE_MESSAGE, QUALITY_REQUIRED_CODE, type QualityReasonOpt } from "@/lib/crm-lead-quality";
 
 export type BdeOpt = { userId: string; displayName: string; username: string; role: string };
-export type TasksAccess = { isAdmin: boolean; isBde: boolean; userId: string };
+export type TasksAccess = {
+  isAdmin: boolean;
+  isBde: boolean;
+  /**
+   * Sees only their own tasks (CrmAccess.ownTasksOnly) — the server scopes every
+   * row and count, so the board drops the consultant picker and the chips that
+   * would only ever describe their own list under another name.
+   */
+  ownTasksOnly: boolean;
+  userId: string;
+};
 export type TaskCounts = { open: number; overdue: number; dueToday: number; unassignedOpen: number; reinquiry: number };
 
 // ── Reusable class strings (verbatim from the leads board design system) ────
@@ -164,7 +174,8 @@ export function TasksBoard({
   // Effective assignee mirrors the server default: a BDE with no explicit
   // assignee lands on their own queue ("my tasks"); non-BDEs (and the explicit
   // "All tasks" / "all" choice) see everyone. Used for the select value + chips.
-  const assigneeVals = picked("assignee").length > 0 ? picked("assignee") : [access.isBde ? access.userId : "all"];
+  const ownQueueDefault = access.isBde || access.ownTasksOnly;
+  const assigneeVals = picked("assignee").length > 0 ? picked("assignee") : [ownQueueDefault ? access.userId : "all"];
   const kindVals = picked("kind");
   const anyFilter =
     picked("status").length > 0 ||
@@ -191,16 +202,21 @@ export function TasksBoard({
   // the All/My scope chips light up only when nothing else is filtering.
   const noNarrowing =
     statusVal === "open" && dueVals.length === 0 && !hasDueRange && kindVals.length === 0 && picked("priority").length === 0;
-  const chips: { key: string; label: string; count?: number; active: boolean; patch: Record<string, string | string[] | null> }[] = [
+  type Chip = { key: string; label: string; count?: number; active: boolean; patch: Record<string, string | string[] | null> };
+  const allChips: Chip[] = [
     { key: "open", label: "All open", count: counts.open, active: assigneeVal === "all" && noNarrowing, patch: { status: null, assignee: "all", priority: null, due: null, kind: null, q: null, dueFrom: null, dueTo: null } },
     { key: "overdue", label: "Overdue", count: counts.overdue, active: dueVal === "overdue", patch: { due: "overdue", status: null, assignee: null, priority: null, kind: null, dueFrom: null, dueTo: null } },
     { key: "today", label: "Due today", count: counts.dueToday, active: dueVal === "today", patch: { due: "today", status: null, assignee: null, priority: null, kind: null, dueFrom: null, dueTo: null } },
     { key: "reinquiry", label: "Re-inquiry", count: counts.reinquiry, active: kindVal === "reinquiry", patch: { kind: "reinquiry", status: null, assignee: null, priority: null, due: null, dueFrom: null, dueTo: null } },
     { key: "unassigned", label: "Unassigned", count: counts.unassignedOpen, active: assigneeVal === "unassigned", patch: { assignee: "unassigned", status: null, due: null, priority: null, kind: null, dueFrom: null, dueTo: null } },
   ];
-  if (access.isBde) {
-    chips.push({ key: "mine", label: "My tasks", active: assigneeVal === access.userId && noNarrowing, patch: { assignee: access.userId, status: null, due: null, kind: null, priority: null, dueFrom: null, dueTo: null } });
-  }
+  const mine: Chip = { key: "mine", label: "My tasks", active: assigneeVal === access.userId && noNarrowing, patch: { assignee: access.userId, status: null, due: null, kind: null, priority: null, dueFrom: null, dueTo: null } };
+  // Own-tasks-only: "My tasks" leads, and only the chips that narrow it remain.
+  const chips = access.ownTasksOnly
+    ? [mine, ...allChips.filter((c) => c.key === "overdue" || c.key === "today")]
+    : access.isBde
+      ? [...allChips, mine]
+      : allChips;
 
   // When completing the last open task on a still-active lead, the API rejects
   // with 422 next_task_required; we then collect the next follow-up and retry.
@@ -322,7 +338,13 @@ export function TasksBoard({
             assignedToId: editingTask.assignedToId,
             note: editingTask.note,
           }}
-          bdes={bdes}
+          bdes={
+            // Their own task isn't on the BDE roster; list it so the picker shows
+            // who has it rather than "Unassigned".
+            editingTask.assignedToId && !bdes.some((b) => b.userId === editingTask.assignedToId)
+              ? [...bdes, { userId: editingTask.assignedToId, displayName: editingTask.assignedToName ?? "Current assignee" }]
+              : bdes
+          }
           reminders={editingTask.reminders}
           busy={editBusy}
           error={editError}
@@ -396,16 +418,18 @@ export function TasksBoard({
           onChange={(next) => update({ status: next })}
         />
 
-        <MultiSelect
-          placeholder="All consultants"
-          options={[
-            { value: "all", label: "All consultants" },
-            { value: "unassigned", label: "Unassigned" },
-            ...bdes.map((b) => ({ value: b.userId, label: b.displayName })),
-          ]}
-          selected={assigneeVals}
-          onChange={(next) => update({ assignee: next.length ? next : "all" })}
-        />
+        {!access.ownTasksOnly && (
+          <MultiSelect
+            placeholder="All consultants"
+            options={[
+              { value: "all", label: "All consultants" },
+              { value: "unassigned", label: "Unassigned" },
+              ...bdes.map((b) => ({ value: b.userId, label: b.displayName })),
+            ]}
+            selected={assigneeVals}
+            onChange={(next) => update({ assignee: next.length ? next : "all" })}
+          />
+        )}
 
         <MultiSelect
           placeholder="All priorities"
@@ -525,7 +549,12 @@ export function TasksBoard({
                 </tr>
               ) : (
                 tasks.map((t) => {
-                  const canEdit = access.isAdmin || (access.isBde && t.lead.assignedToId === access.userId);
+                  // An own-tasks-only user works their tasks on enrolled leads only —
+                  // canEditTask's rule; every row here is already theirs.
+                  const canEdit =
+                    access.isAdmin ||
+                    (access.isBde && t.lead.assignedToId === access.userId) ||
+                    (access.ownTasksOnly && t.assignedToId === access.userId && t.lead.status.code === "enrolled");
                   const overdue = t.status === "open" && !!t.dueAt && new Date(t.dueAt).getTime() < today;
                   const done = t.status === "done";
                   const reinquiry = isReInquiryTask(t.subject);

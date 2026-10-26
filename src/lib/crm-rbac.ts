@@ -1,3 +1,4 @@
+import type { Prisma } from "@prisma/client";
 import type { Permissions } from "./rbac";
 import { isAdmin, canSeePage } from "./rbac";
 import { getLeadPulseAccess } from "./lead-pulse-rbac";
@@ -138,6 +139,13 @@ export type CrmAccess = {
   canReEnroll: boolean;
   /** Add tasks to any enrolled lead ({@link CRM_ENROLLED_TASKS_PAGE}). */
   canTaskEnrolledLeads: boolean;
+  /**
+   * Sees only the tasks assigned to them — the Tasks board is locked to "My
+   * tasks", and a lead's Tasks tab and Timeline drop everyone else's. True for
+   * an enrolled-lead task-taker who isn't otherwise a consultant or overseer
+   * (admin, BDE, supervisor, team lead, CRM admin). See {@link visibleTasksWhere}.
+   */
+  ownTasksOnly: boolean;
   canBulkImport: boolean;
   /** Send a bulk email to many leads at once (CRM-admin, like bulk import). */
   canBulkEmail: boolean;
@@ -223,6 +231,7 @@ export async function getCrmAccess(
     referralLeadsOnly: !canCreateAnyLead && canCreateReferrals,
     canReEnroll: canCreateAnyLead,
     canTaskEnrolledLeads,
+    ownTasksOnly: canTaskEnrolledLeads && !admin && !isBde && !isSupervisor && !isCrmTeamLead && !canManageCrm,
     canBulkImport: canManageCrm,
     canBulkEmail: canManageCrm,
     // Mirrors canEditLead's "may edit any lead" arm exactly (admin | supervisor).
@@ -266,6 +275,14 @@ export function canAddTask(
     canEditLead(access, lead, userId) ||
     (access.canTaskEnrolledLeads && lead.status?.code === ENROLLED_STATUS_CODE)
   );
+}
+
+/**
+ * The tasks this user may SEE, as a filter to AND onto any task query: their
+ * own when {@link CrmAccess.ownTasksOnly}, otherwise all of them.
+ */
+export function visibleTasksWhere(access: CrmAccess, userId: string): Prisma.CrmTaskWhereInput {
+  return access.ownTasksOnly ? { assignedToId: userId } : {};
 }
 
 /**

@@ -3,7 +3,7 @@ import { notFound, redirect } from "next/navigation";
 import { TopBar } from "@/components/TopBar";
 import { prisma } from "@/lib/prisma";
 import { getCurrentUserAndPermissions } from "@/lib/permissions";
-import { getCrmAccess, canEditLead, canAddTask } from "@/lib/crm-rbac";
+import { getCrmAccess, canEditLead, canAddTask, visibleTasksWhere } from "@/lib/crm-rbac";
 import { WA_UI_ADMIN_ONLY, canSeePage, isCrmLeadsOnly } from "@/lib/rbac";
 import { AGREEMENTS_PAGE } from "@/lib/esign/requests";
 import { recordLeadOpenedOncePerDay } from "@/lib/crm-activity";
@@ -63,7 +63,11 @@ export default async function LeadDetailPage({ params }: { params: { id: string 
       take: 200,
       include: activityInclude,
     }),
-    prisma.crmTask.findMany({ where: { leadId: params.id }, orderBy: taskOrderBy, include: taskInclude }),
+    prisma.crmTask.findMany({
+      where: { leadId: params.id, ...visibleTasksWhere(access, userId) },
+      orderBy: taskOrderBy,
+      include: taskInclude,
+    }),
     prisma.crmLeadStatus.findMany({
       where: { active: true },
       orderBy: [{ displayOrder: "asc" }, { label: "asc" }],
@@ -138,6 +142,18 @@ export default async function LeadDetailPage({ params }: { params: { id: string 
     };
   });
 
+  // Someone who only sees their own tasks mustn't read everyone else's off the
+  // Timeline either: drop the task entries (created / completed / edited …) for
+  // tasks that aren't theirs. Entries for a task since deleted go with them.
+  const ownTaskIds = new Set(tasks.map((t) => t.id));
+  const timeline = access.ownTasksOnly
+    ? activities.filter((a) => {
+        if (!a.type.startsWith("TASK_")) return true;
+        const meta = a.metadata && typeof a.metadata === "object" ? (a.metadata as Record<string, unknown>) : null;
+        return typeof meta?.taskId === "string" && ownTaskIds.has(meta.taskId);
+      })
+    : activities;
+
   const masters = {
     statuses,
     sources,
@@ -192,7 +208,7 @@ export default async function LeadDetailPage({ params }: { params: { id: string 
         <LeadDetail
           lead={serializeLead(lead)}
           notes={notes.map(serializeNote)}
-          timeline={activities.map((a) => serializeActivity(a, { includeMetadata: false }))}
+          timeline={timeline.map((a) => serializeActivity(a, { includeMetadata: false }))}
           tasks={tasks.map(serializeTask)}
           duplicates={duplicates}
           masters={masters}
