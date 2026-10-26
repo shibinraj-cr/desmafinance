@@ -39,6 +39,11 @@ export type Masters = {
 };
 export type LeadsAccess = {
   canCreate: boolean;
+  /**
+   * May create candidate referrals only (CrmAccess.referralLeadsOnly): the form
+   * shows the source fixed and drops Stage/Status, which the server ignores.
+   */
+  referralLeadsOnly: boolean;
   canAssign: boolean;
   canBulkImport: boolean;
   canBulkEmail: boolean;
@@ -377,7 +382,7 @@ function NewLeadButton({ masters, access }: { masters: Masters; access: LeadsAcc
         <span className="material-symbols-outlined" style={{ fontSize: 18 }}>
           add
         </span>
-        New lead
+        {access.referralLeadsOnly ? "New referral" : "New lead"}
       </button>
       {open &&
         mounted &&
@@ -391,7 +396,7 @@ function NewLeadButton({ masters, access }: { masters: Masters; access: LeadsAcc
               onSubmit={submit}
               className="w-full max-w-md max-h-[90vh] overflow-y-auto bg-surface-container-lowest border border-outline-variant rounded-xl shadow-lg p-lg space-y-md"
             >
-              <h3 className="text-h3 text-on-surface">New lead</h3>
+              <h3 className="text-h3 text-on-surface">{access.referralLeadsOnly ? "New referral lead" : "New lead"}</h3>
               {error && <div className="rounded-lg bg-error-container text-on-error-container px-md py-sm">{error}</div>}
               <Field label="Candidate name *">
                 <input
@@ -427,18 +432,22 @@ function NewLeadButton({ masters, access }: { masters: Masters; access: LeadsAcc
               </Field>
               <div className="grid grid-cols-2 gap-md">
                 <Field label="Source">
-                  <select
-                    className={inputCls}
-                    value={form.sourceId}
-                    onChange={(e) => setForm({ ...form, sourceId: e.target.value })}
-                  >
-                    <option value="">—</option>
-                    {masters.sources.map((s) => (
-                      <option key={s.id} value={s.id}>
-                        {s.label}
-                      </option>
-                    ))}
-                  </select>
+                  {access.referralLeadsOnly ? (
+                    <input className={inputCls} value="Candidate Referral" disabled readOnly />
+                  ) : (
+                    <select
+                      className={inputCls}
+                      value={form.sourceId}
+                      onChange={(e) => setForm({ ...form, sourceId: e.target.value })}
+                    >
+                      <option value="">—</option>
+                      {masters.sources.map((s) => (
+                        <option key={s.id} value={s.id}>
+                          {s.label}
+                        </option>
+                      ))}
+                    </select>
+                  )}
                 </Field>
                 <Field label="Service">
                   <select
@@ -484,45 +493,49 @@ function NewLeadButton({ masters, access }: { masters: Masters; access: LeadsAcc
                     />
                   </Field>
                 )}
-                <Field label="Stage">
-                  <select
-                    className={inputCls}
-                    value={form.statusId}
-                    onChange={(e) => setForm({ ...form, statusId: e.target.value })}
-                  >
-                    <option value="">Default</option>
-                    {/* Pipeline & Enrolled are set by actions (Set deal / Enroll), not at
-                        creation — exclude them here (server also rejects them). */}
-                    {masters.statuses
-                      .filter((s) => !isActionOnlyStatus(s.code))
-                      .map((s) => (
-                        <option key={s.id} value={s.id}>
-                          {s.label}
-                        </option>
-                      ))}
-                  </select>
-                </Field>
+                {!access.referralLeadsOnly && (
+                  <Field label="Stage">
+                    <select
+                      className={inputCls}
+                      value={form.statusId}
+                      onChange={(e) => setForm({ ...form, statusId: e.target.value })}
+                    >
+                      <option value="">Default</option>
+                      {/* Pipeline & Enrolled are set by actions (Set deal / Enroll), not at
+                          creation — exclude them here (server also rejects them). */}
+                      {masters.statuses
+                        .filter((s) => !isActionOnlyStatus(s.code))
+                        .map((s) => (
+                          <option key={s.id} value={s.id}>
+                            {s.label}
+                          </option>
+                        ))}
+                    </select>
+                  </Field>
+                )}
                 {/* The other axis: where they are in the pipeline vs what is
                     actually happening to them. Left blank, the server assigns
                     the default status. */}
-                <Field label="Status">
-                  <select
-                    className={inputCls}
-                    value={form.subStatusId}
-                    onChange={(e) => setForm({ ...form, subStatusId: e.target.value })}
-                  >
-                    <option value="">Default</option>
-                    {groupedSubStatuses(masters.subStatuses).map(([group, rows]) => (
-                      <optgroup key={group} label={group || "Other"}>
-                        {rows.map((r) => (
-                          <option key={r.id} value={r.id}>
-                            {r.label}
-                          </option>
-                        ))}
-                      </optgroup>
-                    ))}
-                  </select>
-                </Field>
+                {!access.referralLeadsOnly && (
+                  <Field label="Status">
+                    <select
+                      className={inputCls}
+                      value={form.subStatusId}
+                      onChange={(e) => setForm({ ...form, subStatusId: e.target.value })}
+                    >
+                      <option value="">Default</option>
+                      {groupedSubStatuses(masters.subStatuses).map(([group, rows]) => (
+                        <optgroup key={group} label={group || "Other"}>
+                          {rows.map((r) => (
+                            <option key={r.id} value={r.id}>
+                              {r.label}
+                            </option>
+                          ))}
+                        </optgroup>
+                      ))}
+                    </select>
+                  </Field>
+                )}
                 <Field label="Temperature">
                   <select
                     className={inputCls}

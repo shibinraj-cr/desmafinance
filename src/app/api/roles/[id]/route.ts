@@ -4,7 +4,7 @@ import { prisma } from "@/lib/prisma";
 import { recordAudit } from "@/lib/audit";
 import { canManageUsers } from "@/lib/rbac";
 import { getCurrentUserAndPermissions } from "@/lib/permissions";
-import { ALL_PAGE_HREFS } from "@/lib/pages";
+import { GRANTABLE_HREFS } from "@/lib/modules";
 
 const PatchSchema = z.object({
   description: z.string().max(200).optional().or(z.literal("")),
@@ -48,7 +48,7 @@ export async function PATCH(req: NextRequest, { params }: { params: { id: string
     }
   }
 
-  const allowed = new Set(ALL_PAGE_HREFS);
+  const allowed = new Set(GRANTABLE_HREFS);
   const update: Record<string, unknown> = {};
   if (data.description !== undefined) update.description = data.description || null;
   if (data.isAdmin !== undefined) update.isAdmin = data.isAdmin;

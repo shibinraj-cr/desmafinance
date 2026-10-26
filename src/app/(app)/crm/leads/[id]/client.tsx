@@ -76,7 +76,12 @@ export type DetailAccess = {
    */
   canSeeWhatsApp: boolean;
   /** BDE or CRM admin — may create leads, so may re-enroll an existing candidate. */
-  canCreateLeads: boolean;
+  canReEnroll: boolean;
+  /**
+   * May add tasks here even without `canEdit` — an enrolled-lead task-taker on
+   * an enrolled lead (see canAddTask in crm-rbac). They work only their own.
+   */
+  canAddTask: boolean;
   /**
    * Admin / supervisor / CRM-admin — may undo an accidental enrollment. A tier
    * above `canEdit`, because un-enrolling reaches into Finance, Marketing
@@ -479,7 +484,7 @@ export function LeadDetail({
                 masters={masters}
                 userId={access.userId}
                 canEdit={canEdit}
-                canReEnroll={access.canCreateLeads}
+                canReEnroll={access.canReEnroll}
                 canUnenroll={access.canUnenroll}
               />
               <AssignmentCard lead={lead} masters={masters} canAssign={access.canAssign} />
@@ -495,6 +500,7 @@ export function LeadDetail({
           leadName={lead.candidateName}
           tasks={tasks}
           canEdit={canEdit}
+          canAddTask={access.canAddTask}
           bdes={masters.bdes}
           defaultAssigneeId={lead.assignedTo?.id ?? null}
           currentUserId={access.userId}
@@ -3221,6 +3227,7 @@ function TasksPanel({
   leadName,
   tasks,
   canEdit,
+  canAddTask,
   bdes,
   defaultAssigneeId,
   currentUserId,
@@ -3231,6 +3238,8 @@ function TasksPanel({
   leadName: string;
   tasks: TaskRow[];
   canEdit: boolean;
+  /** May add tasks without `canEdit` — and then work only those assigned to them. */
+  canAddTask: boolean;
   bdes: BdeOpt[];
   defaultAssigneeId: string | null;
   currentUserId: string | null;
@@ -3256,12 +3265,13 @@ function TasksPanel({
         </span>
       </div>
 
-      {canEdit ? (
+      {canEdit || canAddTask ? (
         <TaskComposer
           leadId={leadId}
           bdes={bdes}
           defaultAssigneeId={defaultAssigneeId}
           currentUserId={currentUserId}
+          selfAssign={!canEdit}
           reminders={reminders}
         />
       ) : (
@@ -3285,7 +3295,7 @@ function TasksPanel({
                 leadId={leadId}
                 leadName={leadName}
                 task={t}
-                canEdit={canEdit}
+                canEdit={canEdit || (canAddTask && t.assignedToId === currentUserId)}
                 bdes={bdes}
                 reminders={reminders}
                 nextStepEnrolled={nextStepEnrolled}
@@ -3306,7 +3316,7 @@ function TasksPanel({
                 leadId={leadId}
                 leadName={leadName}
                 task={t}
-                canEdit={canEdit}
+                canEdit={canEdit || (canAddTask && t.assignedToId === currentUserId)}
                 bdes={bdes}
                 reminders={reminders}
                 nextStepEnrolled={nextStepEnrolled}
@@ -3325,6 +3335,7 @@ function TaskComposer({
   bdes,
   defaultAssigneeId,
   currentUserId,
+  selfAssign,
   reminders,
 }: {
   leadId: string;
@@ -3332,13 +3343,18 @@ function TaskComposer({
   defaultAssigneeId: string | null;
   /** Falls to the creator when the lead is unassigned — as the API does. */
   currentUserId: string | null;
+  /**
+   * The creator isn't this lead's consultant (an enrolled-lead task-taker), so
+   * the task is theirs by default and "Me" heads the assignee list.
+   */
+  selfAssign: boolean;
   reminders: TaskReminderPreviewDTO;
 }) {
   const router = useRouter();
   const [subject, setSubject] = useState("");
   const [due, setDue] = useState("");
   const [priority, setPriority] = useState("normal");
-  const [assignee, setAssignee] = useState(defaultAssigneeId ?? "");
+  const [assignee, setAssignee] = useState((selfAssign ? currentUserId : defaultAssigneeId) ?? "");
   const [note, setNote] = useState("");
   const [busy, setBusy] = useState(false);
   // Ticked by default — the tasks that get forgotten are precisely the ones
@@ -3409,6 +3425,9 @@ function TaskComposer({
         </Field>
         <Field label="Assign to">
           <select value={assignee} onChange={(e) => setAssignee(e.target.value)} className={inputCls}>
+            {selfAssign && currentUserId && !bdes.some((b) => b.userId === currentUserId) && (
+              <option value={currentUserId}>Me</option>
+            )}
             <option value="">Lead owner</option>
             {bdes.map((b) => (
               <option key={b.userId} value={b.userId}>
@@ -3519,6 +3538,13 @@ function TaskItem({
   const [editError, setEditError] = useState<string | null>(null);
   const done = task.status === "done";
   const due = taskDueLabel(task.dueAt);
+  // A task can belong to someone off the BDE roster (an admin, or an
+  // enrolled-lead task-taker who took it themselves); list them so the edit
+  // dialog's picker shows who has it rather than falling back to "Unassigned".
+  const editAssignees =
+    task.assignedToId && !bdes.some((b) => b.userId === task.assignedToId)
+      ? [...bdes, { userId: task.assignedToId, displayName: task.assignedToName ?? "Current assignee" }]
+      : bdes;
 
   // Complete the task; if it's the active lead's last open task the API returns
   // 422 next_task_required, so we collect the next follow-up and retry with it.
@@ -3612,7 +3638,7 @@ function TaskItem({
       {editing && (
         <TaskEditDialog
           task={{ subject: task.subject, dueAt: task.dueAt, priority: task.priority, assignedToId: task.assignedToId, note: task.note }}
-          bdes={bdes}
+          bdes={editAssignees}
           reminders={task.reminders}
           busy={editBusy}
           error={editError}

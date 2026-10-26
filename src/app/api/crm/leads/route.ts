@@ -5,7 +5,7 @@ import { prisma } from "@/lib/prisma";
 import { withApiHandler } from "@/lib/api";
 import { unauthorized, forbidden, badRequest } from "@/lib/http-error";
 import { getCurrentUserAndPermissions } from "@/lib/permissions";
-import { getCrmAccess } from "@/lib/crm-rbac";
+import { getCrmAccess, CANDIDATE_REFERRAL_SOURCE_CODE } from "@/lib/crm-rbac";
 import { recordLeadActivity } from "@/lib/crm-activity";
 import { notifyLeadAssigned } from "@/lib/crm-notify";
 import { normalizePhone, computeDedupeKey, emailKeyOf, phoneMatchKeys, LEAD_TEMPERATURE_VALUES, QUALIFICATION_OTHER_MAX } from "@/lib/crm";
@@ -96,6 +96,25 @@ export const POST = withApiHandler(async (req: Request) => {
 
   const body = await req.json().catch(() => null);
   const data = CreateSchema.parse(body);
+
+  // A referral-only creator (not a BDE or CRM admin) logs candidate referrals and
+  // nothing else: the source is stamped here whatever the form sent, and the
+  // lead starts at the default stage and status for a consultant to pick up.
+  if (access.referralLeadsOnly) {
+    const referral = await prisma.leadPulseSource.findFirst({
+      where: { code: CANDIDATE_REFERRAL_SOURCE_CODE, active: true },
+      select: { id: true },
+    });
+    if (!referral) {
+      throw badRequest(
+        "The “Candidate Referral” lead source is missing or inactive — ask an admin to set it up.",
+        "referral_source_missing",
+      );
+    }
+    data.sourceId = referral.id;
+    data.statusId = undefined;
+    data.subStatusId = undefined;
+  }
 
   const email = data.email || null;
   const phone = data.phone || null;

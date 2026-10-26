@@ -43,6 +43,7 @@ const Body = z.discriminatedUnion("action", [
     defaultFlat: z.number().nullable().optional(),
     isActive: z.boolean().optional(),
     applyToOpen: z.boolean().optional(),
+    installmentPlans: z.array(z.number().int()).max(6).optional(),
   }),
   z.object({ action: z.literal("grant"), userId: z.string().max(60), programs: z.array(z.string().max(10)).max(10) }),
 ]);

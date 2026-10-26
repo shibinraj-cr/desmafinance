@@ -31,7 +31,7 @@ export const POST = withApiHandler(async (req: Request, { params }: { params: { 
   const { userId, perms } = await getCurrentUserAndPermissions();
   if (!userId || !perms) throw unauthorized();
   const access = await getCrmAccess(userId, perms);
-  if (!access.canCreateLeads) throw forbidden();
+  if (!access.canReEnroll) throw forbidden();
 
   const d = Schema.parse(await req.json().catch(() => null));
   const result = await reopenForAnotherService({

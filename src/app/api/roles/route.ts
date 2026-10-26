@@ -4,7 +4,7 @@ import { prisma } from "@/lib/prisma";
 import { recordAudit } from "@/lib/audit";
 import { canManageUsers } from "@/lib/rbac";
 import { getCurrentUserAndPermissions } from "@/lib/permissions";
-import { ALL_PAGE_HREFS } from "@/lib/pages";
+import { GRANTABLE_HREFS } from "@/lib/modules";
 
 const CreateSchema = z.object({
   name: z
@@ -44,7 +44,7 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: "validation_failed" }, { status: 400 });
   }
   const data = parsed.data;
-  const allowed = new Set(ALL_PAGE_HREFS);
+  const allowed = new Set(GRANTABLE_HREFS);
   const pages = data.pages.filter((p) => allowed.has(p));
 
   const existing = await prisma.role.findUnique({ where: { name: data.name } });

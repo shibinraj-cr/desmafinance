@@ -128,6 +128,7 @@ export default async function LeadsPage({ searchParams }: { searchParams: SP }) 
   };
   const accessProps = {
     canCreate: access.canCreateLeads,
+    referralLeadsOnly: access.referralLeadsOnly,
     canAssign: access.canAssign,
     canBulkImport: access.canBulkImport,
     canBulkEmail: access.canBulkEmail,
