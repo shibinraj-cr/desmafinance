@@ -302,6 +302,14 @@ export function AttendanceClient({
             →
           </button>
           <span className="text-label-sm text-on-surface-variant">{cycleLabel}</span>
+          <a
+            href={`/api/hr/attendance/report?month=${monthKey}`}
+            title="Download this cycle's attendance sheet (.xlsx) — in/out times, P/A per day and monthly totals"
+            className="ml-auto inline-flex items-center gap-xs px-md py-sm rounded border border-outline-variant text-on-surface hover:bg-surface-container-low"
+          >
+            <span className="material-symbols-outlined text-[18px]">download</span>
+            Attendance sheet
+          </a>
           {canUpload && (
             <>
               <button
@@ -309,7 +317,7 @@ export function AttendanceClient({
                 onClick={onSync}
                 disabled={syncing || pending}
                 title="Fetch in/out punches from the eTimeOffice biometric cloud (earlier data is never modified)"
-                className="ml-auto px-md py-sm rounded border border-primary text-primary font-bold disabled:opacity-50"
+                className="px-md py-sm rounded border border-primary text-primary font-bold disabled:opacity-50"
               >
                 {syncing ? "Syncing…" : "Sync from eTimeOffice"}
               </button>
