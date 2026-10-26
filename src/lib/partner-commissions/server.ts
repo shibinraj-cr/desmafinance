@@ -26,6 +26,7 @@ import {
   invoiceTotal,
   isEditableInvoice,
   isIntakeMonth,
+  canTrackEnrollment,
   looksLikeSeries,
   openAud,
   round2,
@@ -80,6 +81,10 @@ export type PcAccess = {
   isBde: boolean;
   /** Programs this person may ADD enrollments for. */
   programs: ProgramCode[];
+  /** Programs from a personal grant — every enrollment in them can be tracked. */
+  grantPrograms: ProgramCode[];
+  /** Programs opened to BDEs, when this person is an active BDE (else empty). */
+  bdePrograms: ProgramCode[];
 };
 
 export async function getAccess(): Promise<PcAccess | null> {
@@ -99,7 +104,15 @@ export async function getAccess(): Promise<PcAccess | null> {
     grantPrograms: grant?.programs ?? [],
     allPrograms: PROGRAM_CODES,
   }) as ProgramCode[];
-  return { userId, isFinance, canApprove: isFinance && (perms.isAdmin || perms.canApprove), isBde, programs };
+  return {
+    userId,
+    isFinance,
+    canApprove: isFinance && (perms.isAdmin || perms.canApprove),
+    isBde,
+    programs,
+    grantPrograms: (grant?.programs ?? []).filter(isProgramCode),
+    bdePrograms: isBde ? settings.bdePrograms.filter(isProgramCode) : [],
+  };
 }
 
 export async function requireAccess(need: "any" | "finance" | "approve"): Promise<PcAccess> {
@@ -159,7 +172,8 @@ export async function createEnrollment(a: PcAccess, input: EnrollmentInput) {
     const lead = await prisma.lead.findUnique({ where: { id: input.leadId }, select: { id: true } });
     if (!lead) throw badRequest("That CRM lead no longer exists.");
   }
-  const first = a.isFinance ? input.firstPayment : null;
+  // Whoever adds the enrollment may record a 1st installment already paid — they track this candidate's fee.
+  const first = input.firstPayment ?? null;
   const today = todayIst();
   if (first) {
     const err = checkInstallment({ courseFee: input.courseFee, payments: [], amount: first.amount, paidOn: first.paidOn, today });
@@ -191,10 +205,28 @@ export async function createEnrollment(a: PcAccess, input: EnrollmentInput) {
 async function loadEnrollment(id: string) {
   const e = await prisma.commissionEnrollment.findUnique({
     where: { id },
-    include: { payments: { orderBy: { seq: "asc" } }, invoice: { select: { status: true } } },
+    include: { payments: { orderBy: { seq: "asc" } }, invoice: { select: { status: true } }, lead: { select: { assignedToId: true } } },
   });
   if (!e) throw notFound("That enrollment no longer exists.");
   return e;
+}
+
+/** Record/undo installments: Finance, the program's coordinator, or the BDE whose candidate it is. */
+function assertCanTrack(a: PcAccess, e: { program: string; createdById: string | null; lead: { assignedToId: string | null } | null }) {
+  const ok = canTrackEnrollment(a, { program: e.program, createdById: e.createdById, leadAssignedToId: e.lead?.assignedToId ?? null });
+  if (!ok) throw forbidden("You can record installments only for enrollments you added or whose CRM lead is assigned to you.");
+}
+
+/**
+ * The enrollments a person sees on Partner Enrollments — exactly the ones they
+ * may record installments for (canTrackEnrollment), plus any they added.
+ */
+export function trackableWhere(a: PcAccess): Prisma.CommissionEnrollmentWhereInput {
+  if (a.isFinance) return {};
+  const or: Prisma.CommissionEnrollmentWhereInput[] = [{ createdById: a.userId }];
+  if (a.grantPrograms.length) or.push({ program: { in: a.grantPrograms } });
+  if (a.bdePrograms.length) or.push({ program: { in: a.bdePrograms }, lead: { assignedToId: a.userId } });
+  return { OR: or };
 }
 
 /** Recompute fullyPaidOn after the fee or the payments changed. */
@@ -225,7 +257,7 @@ export async function updateEnrollment(a: PcAccess, id: string, patch: Enrollmen
   // Outside Finance: only your own enrollment, and only until the first payment is recorded.
   if (!a.isFinance) {
     if (e.createdById !== a.userId) throw forbidden("You can only edit enrollments you added.");
-    if (e.payments.length > 0) throw conflict("Finance has started recording payments, so ask Finance to change it.");
+    if (e.payments.length > 0) throw conflict("Installments are recorded against it now, so ask Finance to change it.");
     if (patch.commissionPct !== undefined || patch.courseName !== undefined) throw forbidden();
   }
   const data: Prisma.CommissionEnrollmentUpdateInput = {};
@@ -268,8 +300,8 @@ export async function updateEnrollment(a: PcAccess, id: string, patch: Enrollmen
 }
 
 export async function addFeePayment(a: PcAccess, id: string, p: { amount: number; paidOn: string; reference?: string | null }) {
-  if (!a.isFinance) throw forbidden("Finance records fee payments.");
   const e = await loadEnrollment(id);
+  assertCanTrack(a, e);
   if (e.status === "withdrawn") throw conflict("This enrollment is withdrawn.");
   if (e.invoiceId) throw conflict("This enrollment is already invoiced.");
   const payments = e.payments.map((x) => ({ amount: num(x.amount) }));
@@ -289,8 +321,8 @@ export async function addFeePayment(a: PcAccess, id: string, p: { amount: number
 }
 
 export async function undoLastFeePayment(a: PcAccess, id: string) {
-  if (!a.isFinance) throw forbidden();
   const e = await loadEnrollment(id);
+  assertCanTrack(a, e);
   if (e.invoiceId) throw conflict("This enrollment is already invoiced.");
   const last = e.payments[e.payments.length - 1];
   if (!last) throw conflict("There's no installment to undo.");
@@ -969,17 +1001,23 @@ export async function saveGrant(a: PcAccess, userId: string, programs: string[])
 // ── reads ────────────────────────────────────────────────────────────────────
 
 export const ENROLLMENT_INCLUDE = {
-  payments: { orderBy: { seq: "asc" } },
+  payments: { orderBy: { seq: "asc" }, include: { createdBy: { select: { username: true } } } },
   invoice: { select: { id: true, number: true, status: true, source: true } },
   createdBy: { select: { username: true } },
-  lead: { select: { id: true, candidateName: true } },
+  lead: { select: { id: true, candidateName: true, assignedToId: true } },
   partner: { select: { name: true } },
 } satisfies Prisma.CommissionEnrollmentInclude;
 
 export type EnrollmentRow = Prisma.CommissionEnrollmentGetPayload<{ include: typeof ENROLLMENT_INCLUDE }>;
 
 export function serializeEnrollment(e: EnrollmentRow) {
-  const payments = e.payments.map((p) => ({ seq: p.seq, amount: num(p.amount), paidOn: isoDate(p.paidOn)!, reference: p.reference }));
+  const payments = e.payments.map((p) => ({
+    seq: p.seq,
+    amount: num(p.amount),
+    paidOn: isoDate(p.paidOn)!,
+    reference: p.reference,
+    recordedBy: p.createdBy?.username ?? null,
+  }));
   return {
     id: e.id,
     program: e.program as ProgramCode,

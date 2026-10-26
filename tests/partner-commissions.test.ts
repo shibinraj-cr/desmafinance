@@ -5,6 +5,7 @@ import { PDFDocument } from "pdf-lib";
 import {
   amountInWords,
   balanceOf,
+  canTrackEnrollment,
   checkInstallment,
   commissionOf,
   defaultLineDescription,
@@ -201,5 +202,26 @@ describe("invoice PDF", () => {
     const lines = Array.from({ length: 60 }, (_, i) => ({ ...base.lines[0], description: `Ŝṙeeja ${i} | OSCE | Full Fee Paid` }));
     const doc = await PDFDocument.load(await buildInvoicePdf({ ...base, layout: "detailed", lines, total: 30000 }));
     expect(doc.getPageCount()).toBeGreaterThan(1);
+  });
+});
+
+describe("who records fee installments", () => {
+  const coord = { isFinance: false, userId: "u_coord", grantPrograms: ["OSCE", "NCLEX"], bdePrograms: [] };
+  const bde = { isFinance: false, userId: "u_bde", grantPrograms: [], bdePrograms: ["GCAN"] };
+  const fin = { isFinance: true, userId: "u_fe", grantPrograms: [], bdePrograms: [] };
+  const e = (program: string, createdById: string | null, leadAssignedToId: string | null = null) => ({ program, createdById, leadAssignedToId });
+  it("lets Finance record anything", () => {
+    expect(canTrackEnrollment(fin, e("GCAN", "someone"))).toBe(true);
+  });
+  it("lets the coordinator record every enrollment in their programs, whoever added it", () => {
+    expect(canTrackEnrollment(coord, e("OSCE", "u_fe"))).toBe(true);
+    expect(canTrackEnrollment(coord, e("NCLEX", null))).toBe(true);
+    expect(canTrackEnrollment(coord, e("GCAN", "u_coord"))).toBe(false);
+  });
+  it("lets a BDE record the GCAN enrollments they added or whose lead is theirs", () => {
+    expect(canTrackEnrollment(bde, e("GCAN", "u_bde"))).toBe(true);
+    expect(canTrackEnrollment(bde, e("GCAN", "u_fe", "u_bde"))).toBe(true);
+    expect(canTrackEnrollment(bde, e("GCAN", "other_bde", "other_bde"))).toBe(false);
+    expect(canTrackEnrollment(bde, e("OSCE", "u_bde"))).toBe(false);
   });
 });

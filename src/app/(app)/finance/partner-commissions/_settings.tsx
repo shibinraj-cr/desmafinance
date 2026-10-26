@@ -212,9 +212,9 @@ function AccessCard({ ctx }: { ctx: PcCtx }) {
   const grantedIds = new Set(data.grants.map((g) => g.userId));
   return (
     <div className={`${cardCls} p-md flex flex-col gap-sm`}>
-      <h4 className="font-semibold text-body-lg">Who can add enrollments</h4>
+      <h4 className="font-semibold text-body-lg">Who can add enrollments and record installments</h4>
       <p className="text-caption text-on-surface-variant">
-        Finance (anyone with this page) can add every program. The people below get a <b>Partner Enrollments</b> page in CRM where they can add enrollments for their programs, and see the ones they added. Finance still records the fee installments.
+        Finance (anyone with this page) can do everything. The people below get a <b>Partner Enrollments</b> page in CRM where they add enrollments for their programs and record each fee installment as it&apos;s paid; Finance invoices once the fee is fully paid. A BDE tracks the candidates they added or whose CRM lead is assigned to them; a person given a program here tracks every enrollment in it.
       </p>
       <div className="border border-outline-variant rounded-lg p-sm flex flex-wrap items-center gap-md">
         <div className="flex-1 min-w-[220px]"><b>All BDEs</b> <span className="text-caption text-on-surface-variant">· every active L1/L2 consultant on the Lead Pulse roster ({data.bdeCount} now)</span></div>

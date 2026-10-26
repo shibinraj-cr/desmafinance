@@ -272,6 +272,26 @@ export function isEditableInvoice(status: string): boolean {
 }
 
 /**
+ * Whether someone may record (or undo) course-fee installments on an enrollment.
+ * Finance invoices; the people who enroll candidates keep their fees up to date.
+ *   - Finance: every enrollment.
+ *   - A personal grant for the program (e.g. the OSCE/NCLEX coordinator): every
+ *     enrollment in that program, whoever added it.
+ *   - A BDE, for programs opened to BDEs: the enrollments they added, and those
+ *     linked to a CRM lead assigned to them.
+ * `bdePrograms` is empty for someone who isn't an active BDE.
+ */
+export function canTrackEnrollment(
+  who: { isFinance: boolean; userId: string; grantPrograms: string[]; bdePrograms: string[] },
+  e: { program: string; createdById: string | null; leadAssignedToId: string | null },
+): boolean {
+  if (who.isFinance) return true;
+  if (who.grantPrograms.includes(e.program)) return true;
+  if (who.bdePrograms.includes(e.program)) return e.createdById === who.userId || e.leadAssignedToId === who.userId;
+  return false;
+}
+
+/**
  * Programs a person may add enrollments for.
  *   - Finance (anyone with the Finance page): every program.
  *   - Active BDEs (Lead Pulse L1/L2): the programs Settings opens to BDEs (GCAN by default).

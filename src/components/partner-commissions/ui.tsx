@@ -274,7 +274,7 @@ export function EnrollmentForm({
     if (!(feeN > 0)) return setErr("Enter the total course fee in AUD.");
     if (finance && !(pctN >= 0 && pctN <= 100)) return setErr("Commission % must be between 0 and 100.");
     let firstPayment = null;
-    if (finance && paidNow) {
+    if (paidNow) {
       const a = parseFloat(paidAmt);
       if (!(a > 0)) return setErr("Enter the 1st installment, or untick the box.");
       if (a > feeN) return setErr("The 1st installment can't be more than the course fee.");
@@ -312,7 +312,7 @@ export function EnrollmentForm({
   return (
     <Modal
       title="New enrollment"
-      subtitle="The total course fee is fixed here. Each installment Finance records later comes off the balance."
+      subtitle="The total course fee is fixed here. Each installment recorded later comes off the balance."
       onClose={onCancel}
       footer={
         <>
@@ -369,23 +369,17 @@ export function EnrollmentForm({
         )}
       </div>
       {feeN > 0 && pctN >= 0 ? <p className="text-caption text-on-surface-variant">Commission when fully paid: {AUD(commissionOf(feeN, pctN))}</p> : null}
-      {finance ? (
-        <>
-          <label className="flex items-center gap-2 text-body-md font-medium">
-            <input type="checkbox" checked={paidNow} onChange={(e) => { setPaidNow(e.target.checked); if (e.target.checked && !paidAmt && feeN > 0) setPaidAmt(String(Math.round(feeN / 2))); }} />
-            The 1st installment is already paid
-          </label>
-          {paidNow ? (
-            <div className="grid grid-cols-1 sm:grid-cols-3 gap-sm">
-              <Field label="1st installment (AUD)"><input className={inputCls} type="number" min={1} step="0.01" value={paidAmt} onChange={(e) => setPaidAmt(e.target.value)} /></Field>
-              <Field label="Paid on"><input className={inputCls} type="date" max={today} value={paidOn} onChange={(e) => setPaidOn(e.target.value)} /></Field>
-              <Field label="Reference"><input className={inputCls} value={paidRef} onChange={(e) => setPaidRef(e.target.value)} placeholder="Receipt no. or note" /></Field>
-            </div>
-          ) : null}
-        </>
-      ) : (
-        <p className="text-caption text-on-surface-variant">Finance records the fee installments as the candidate pays.</p>
-      )}
+      <label className="flex items-center gap-2 text-body-md font-medium">
+        <input type="checkbox" checked={paidNow} onChange={(e) => { setPaidNow(e.target.checked); if (e.target.checked && !paidAmt && feeN > 0) setPaidAmt(String(Math.round(feeN / 2))); }} />
+        The 1st installment is already paid
+      </label>
+      {paidNow ? (
+        <div className="grid grid-cols-1 sm:grid-cols-3 gap-sm">
+          <Field label="1st installment (AUD)"><input className={inputCls} type="number" min={1} step="0.01" value={paidAmt} onChange={(e) => setPaidAmt(e.target.value)} /></Field>
+          <Field label="Paid on"><input className={inputCls} type="date" max={today} value={paidOn} onChange={(e) => setPaidOn(e.target.value)} /></Field>
+          <Field label="Reference"><input className={inputCls} value={paidRef} onChange={(e) => setPaidRef(e.target.value)} placeholder="Receipt no. or note" /></Field>
+        </div>
+      ) : null}
       {err ? <p className="text-body-md text-error font-medium">{err}</p> : null}
     </Modal>
   );
