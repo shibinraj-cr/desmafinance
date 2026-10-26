@@ -65,6 +65,7 @@ import { cloudProvider } from "./wa/cloud-provider";
 import { findOrCreateConversationForLead } from "./wa/mirror";
 import { RANK, type WaDeliveryUpdate } from "./wa/delivery-status";
 import { isPermanentUndeliverable } from "./wa/undeliverable";
+import { checkAutomatedSend, logAutomatedSend } from "./wa/send-policy";
 
 /** The Follow-Up stage a responding lead advances to. */
 export const FOLLOW_UP_STATUS_CODE = "follow_up";
@@ -944,6 +945,8 @@ export async function runRemarketingScheduler(): Promise<{
   touchesSent: number;
   completed: number;
   stopped: number;
+  /** Touches due but held back by the send policy (quiet hours, contact limit) — sent on a later run. */
+  deferred?: number;
   skipped?: string;
 }> {
   const config = await getRemarketingConfig();
@@ -969,6 +972,7 @@ export async function runRemarketingScheduler(): Promise<{
           id: true,
           candidateName: true,
           phone: true,
+          phoneE164: true,
           email: true,
           assignedToId: true,
           whatsappUndeliverableAt: true,
@@ -991,6 +995,8 @@ export async function runRemarketingScheduler(): Promise<{
   // collect the touches that are due. No Wabis POST happens here, so it stays fast
   // even for a large backlog.
   const dueSends: { c: (typeof campaigns)[number]; due: number }[] = [];
+  const phonesThisRun = new Set<string>();
+  let deferred = 0;
   for (const c of campaigns) {
     try {
       // The lead left Re-marketing without closing the campaign (e.g. a path we
@@ -1036,6 +1042,31 @@ export async function runRemarketingScheduler(): Promise<{
       const due = dueTouchIndex({ startedAt: c.startedAt, now, offsets: config.offsets, sent });
 
       if (due) {
+        // The shared send policy, asked per PHONE: an opt-out on any of this
+        // person's leads ends the drip; quiet hours or the contact limit hold the
+        // touch back — it stays due and a later run sends it. Two campaigns on
+        // one number (re-enrollment) never both send in the same run.
+        const phone = c.lead.phoneE164;
+        if (phone) {
+          if (phonesThisRun.has(phone)) {
+            deferred++;
+            continue;
+          }
+          const verdict = await checkAutomatedSend({ phoneE164: phone, purpose: "marketing", now });
+          if (!verdict.ok && verdict.reason === "opted_out") {
+            await prisma.crmRemarketingCampaign.update({
+              where: { id: c.id },
+              data: { status: "stopped", endedReason: "opted_out", endedAt: now },
+            });
+            stopped++;
+            continue;
+          }
+          if (!verdict.ok) {
+            deferred++;
+            continue;
+          }
+          phonesThisRun.add(phone);
+        }
         dueSends.push({ c, due }); // at most one touch per campaign per run
         continue;
       }
@@ -1096,6 +1127,9 @@ export async function runRemarketingScheduler(): Promise<{
             summary: `Re-marketing touch ${due} sent`,
             metadata: { touch: due },
           });
+          if (c.lead.phoneE164) {
+            await logAutomatedSend({ phoneE164: c.lead.phoneE164, purpose: "marketing", source: "drip", leadId: c.leadId, at: now });
+          }
           return true;
         } catch (e) {
           console.error(`[crm-remarketing] send failed for campaign ${c.id}:`, e);
@@ -1106,7 +1140,7 @@ export async function runRemarketingScheduler(): Promise<{
     touchesSent += results.filter(Boolean).length;
   }
 
-  return { touchesSent, completed, stopped };
+  return { touchesSent, completed, stopped, deferred };
 }
 
 // ── Bulk enrolment (one-off: touch every un-touched Re-marketing lead) ───────

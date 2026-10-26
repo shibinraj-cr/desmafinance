@@ -3698,6 +3698,10 @@ model WaBroadcastRecipient {
 
   attempts Int       @default(0)
   sentAt   DateTime?
+  /// Held back by the send policy (quiet hours in the candidate's timezone, or
+  /// the per-phone contact limit): the drain leaves the row pending and skips it
+  /// until this moment. See src/lib/wa/send-policy.ts.
+  notBefore DateTime?
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -6508,4 +6512,22 @@ model CommissionRun {
   month      String   @unique
   ranAt      DateTime @default(now())
   invoiceIds String[] @default([])
+}
+
+/// Every AUTOMATED WhatsApp message that reached a candidate — broadcast, drip
+/// touch, task reminder, assignment intro — one row per send, keyed by phone.
+/// The send policy reads it to enforce the per-person contact limit across all
+/// of those senders at once (src/lib/wa/send-policy.ts); a consultant's own
+/// messages are not logged here and are never limited.
+model WaContactLog {
+  id        String   @id @default(cuid())
+  phoneE164 String
+  /// 'marketing' (counts toward the limit) | 'service' (logged, never limited).
+  purpose   String
+  /// 'broadcast' | 'drip' | 'reminder' | 'intro'
+  source    String
+  leadId    String?
+  sentAt    DateTime @default(now())
+
+  @@index([phoneE164, sentAt])
 }

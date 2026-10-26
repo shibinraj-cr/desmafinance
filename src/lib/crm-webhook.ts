@@ -43,6 +43,7 @@ import {
 } from "./app-settings";
 import { cloudProvider, isCloudConfigured, renderTemplatePreview } from "./wa/cloud-provider";
 import { findOrCreateConversationForLead } from "./wa/mirror";
+import { isPhoneOptedOut, logAutomatedSend } from "./wa/send-policy";
 
 export const LEAD_ASSIGNED_EVENT = "lead_assigned";
 /**
@@ -250,6 +251,19 @@ export function isIntroExcludedRole(role: string | null | undefined): boolean {
  * comment says to prefer over adding a name: it is set from the UI, survives a
  * rename, and keeps employee names out of the code.
  */
+/**
+ * Has this candidate opted out — on this lead, or on any other lead with the
+ * same number? Consent is per person, and a person is a phone here.
+ */
+async function leadOptedOut(leadId: string): Promise<boolean> {
+  const lead = await prisma.lead
+    .findUnique({ where: { id: leadId }, select: { whatsappOptedOutAt: true, phoneE164: true } })
+    .catch(() => null);
+  if (!lead) return false;
+  if (lead.whatsappOptedOutAt) return true;
+  return lead.phoneE164 ? isPhoneOptedOut(lead.phoneE164).catch(() => false) : false;
+}
+
 export function leadAssignedSkipReason(opts: {
   /**
    * The candidate asked us to stop messaging (`Lead.whatsappOptedOutAt` set).
@@ -617,6 +631,7 @@ async function attemptCloudLeadAssignedDelivery(row: {
   });
 
   if (result.ok) {
+    await logAutomatedSend({ phoneE164: toE164, purpose: "service", source: "intro", leadId: row.leadId });
     // Best-effort: the candidate already has the message (this mirrors it into
     // the CRM's own inbox, it doesn't send it), so a mirror problem must never
     // flip a genuinely-sent delivery back to anything but "sent" — it would
@@ -765,8 +780,7 @@ export async function attemptDelivery(deliveryId: string): Promise<boolean> {
   // retry can fire minutes or hours later, and a candidate who replied STOP in
   // between must not receive it.
   if (row.event === LEAD_ASSIGNED_EVENT && row.leadId) {
-    const lead = await prisma.lead.findUnique({ where: { id: row.leadId }, select: { whatsappOptedOutAt: true } });
-    if (lead?.whatsappOptedOutAt) {
+    if (await leadOptedOut(row.leadId)) {
       await prisma.crmWebhookDelivery.update({
         where: { id: row.id },
         data: {
@@ -898,10 +912,7 @@ export async function enqueueLeadAssignedWebhook(opts: {
   assigneeIntroEnabled: boolean | null | undefined;
 }): Promise<void> {
   try {
-    const consent = await prisma.lead
-      .findUnique({ where: { id: opts.leadId }, select: { whatsappOptedOutAt: true } })
-      .catch(() => null);
-    const skipReason = leadAssignedSkipReason({ ...opts, candidateOptedOut: !!consent?.whatsappOptedOutAt });
+    const skipReason = leadAssignedSkipReason({ ...opts, candidateOptedOut: await leadOptedOut(opts.leadId) });
     if (skipReason) {
       await prisma.crmWebhookDelivery
         .create({

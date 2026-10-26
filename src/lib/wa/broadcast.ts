@@ -30,6 +30,7 @@ import {
 } from "../app-settings";
 import { getWaProvider } from "./registry";
 import { isPermanentUndeliverable } from "./undeliverable";
+import { checkAutomatedSend, logAutomatedSend, type SendPurpose } from "./send-policy";
 
 /**
  * Recipients per drain run, unless an admin overrides it via `wa_broadcast_batch`.
@@ -466,6 +467,7 @@ export async function drainBroadcasts(now: Date = new Date(), opts: DrainOptions
     // was also the ceiling for the whole run — a 300s cron pass would have spent
     // five minutes to send one batch. drainOne re-reads `pending` each time, so
     // this loop is just the same resumable pass without the HTTP round trip.
+    const purpose = await broadcastPurpose(broadcast.templateName);
     for (;;) {
       const result = await drainOne(
         broadcast.id,
@@ -474,6 +476,7 @@ export async function drainBroadcasts(now: Date = new Date(), opts: DrainOptions
         config.batchSize,
         deadline,
         headerMedia,
+        purpose,
       );
       summary.sent += result.sent;
       summary.failed += result.failed;
@@ -484,11 +487,27 @@ export async function drainBroadcasts(now: Date = new Date(), opts: DrainOptions
         summary.stoppedEarly = true;
         return summary;
       }
-      if (result.remaining === 0) break;
+      // `eligible`, not `remaining`: recipients the send policy is holding back
+      // (quiet hours, contact limit) stay pending but cannot go this run.
+      if (result.eligible === 0) break;
     }
   }
 
   return summary;
+}
+
+/**
+ * Marketing or service, for the send policy: a Marketing-category template
+ * counts toward the per-person contact limit, a Utility one does not. Read
+ * from the catalogue (Meta can recategorise after approval); an unknown
+ * template is treated as marketing, the stricter answer.
+ */
+async function broadcastPurpose(templateName: string): Promise<SendPurpose> {
+  const [name, language] = templateName.split(":");
+  const tpl = await prisma.waTemplate
+    .findFirst({ where: { name, ...(language ? { language } : {}) }, select: { category: true } })
+    .catch(() => null);
+  return tpl && tpl.category.toUpperCase() !== "MARKETING" ? "service" : "marketing";
 }
 
 async function drainOne(
@@ -498,13 +517,14 @@ async function drainOne(
   batchSize: number,
   deadline: number,
   headerMedia: { kind: "image" | "video" | "document"; link: string } | null,
-): Promise<{ sent: number; failed: number; remaining: number; stoppedEarly: boolean }> {
+  purpose: SendPurpose = "marketing",
+): Promise<{ sent: number; failed: number; remaining: number; eligible: number; stoppedEarly: boolean }> {
   let sent = 0;
   let failed = 0;
   let stoppedEarly = false;
 
   const pending = await prisma.waBroadcastRecipient.findMany({
-    where: { broadcastId, status: "pending" },
+    where: { broadcastId, status: "pending", ...eligibleNow(new Date()) },
     orderBy: { id: "asc" },
     take: batchSize,
     select: {
@@ -535,6 +555,24 @@ async function drainOne(
       continue;
     }
 
+    // The shared send policy: an opt-out on ANY lead with this number, quiet
+    // hours in the candidate's timezone, and (for a Marketing template) the
+    // per-person contact limit across every automated sender. Held-back rows
+    // stay pending with a `notBefore`, so a later drain sends them.
+    if (recipient.phoneE164) {
+      const verdict = await checkAutomatedSend({ phoneE164: recipient.phoneE164, purpose });
+      if (!verdict.ok) {
+        await prisma.waBroadcastRecipient.updateMany({
+          where: { id: recipient.id, status: "pending" },
+          data:
+            verdict.reason === "opted_out"
+              ? { status: "skipped", skipReason: "opted_out" }
+              : { notBefore: verdict.notBefore },
+        });
+        continue;
+      }
+    }
+
     // Claim it. The conditional `status: "pending"` means two concurrent
     // runners cannot both take this row — the loser updates zero rows and skips.
     const claimed = await prisma.waBroadcastRecipient.updateMany({
@@ -562,6 +600,7 @@ async function drainOne(
           waStatus: "sent",
         },
       });
+      await logAutomatedSend({ phoneE164: recipient.phoneE164, purpose, source: "broadcast", leadId: recipient.leadId });
     } else if (result.retryable) {
       // A rate limit or a dropped connection says nothing about this recipient.
       // Back to `pending` so a later run tries again — `attempts` already
@@ -611,7 +650,10 @@ async function drainOne(
     if (INTER_SEND_DELAY_MS > 0) await sleep(INTER_SEND_DELAY_MS);
   }
 
-  const remaining = await prisma.waBroadcastRecipient.count({ where: { broadcastId, status: "pending" } });
+  const [remaining, eligible] = await Promise.all([
+    prisma.waBroadcastRecipient.count({ where: { broadcastId, status: "pending" } }),
+    prisma.waBroadcastRecipient.count({ where: { broadcastId, status: "pending", ...eligibleNow(new Date()) } }),
+  ]);
 
   // Counters are recomputed rather than incremented, so a crashed run cannot
   // leave the totals permanently wrong.
@@ -646,7 +688,12 @@ async function drainOne(
 
   if (done) logger.info("wa_broadcast_completed", { broadcastId, sent: sentTotal, failed: failedTotal });
 
-  return { sent, failed, remaining, stoppedEarly };
+  return { sent, failed, remaining, eligible, stoppedEarly };
+}
+
+/** Pending recipients the send policy is not holding back at `now`. */
+function eligibleNow(now: Date): Prisma.WaBroadcastRecipientWhereInput {
+  return { OR: [{ notBefore: null }, { notBefore: { lte: now } }] };
 }
 
 function sleep(ms: number): Promise<void> {
