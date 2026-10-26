@@ -8,6 +8,7 @@ import {
   canTrackEnrollment,
   checkInstallment,
   commissionOf,
+  commissionTerms,
   defaultLineDescription,
   enrollablePrograms,
   enrollmentState,
@@ -51,6 +52,12 @@ describe("course fee and installments", () => {
   it("computes commission and balance", () => {
     expect(commissionOf(2300, 20)).toBe(460);
     expect(commissionOf(8000, 10)).toBe(800);
+    // A flat program (GCAN): the same amount whatever the course fee, the % is ignored.
+    expect(commissionOf(7500, 10, 800)).toBe(800);
+    expect(commissionOf(9200, 0, 800)).toBe(800);
+    expect(commissionOf(2400, 20, null)).toBe(480);
+    expect(commissionTerms(20, null)).toBe("20%");
+    expect(commissionTerms(10, 800)).toBe("Flat AUD 800");
     expect(balanceOf(fee, [{ amount: 1000 }, { amount: 500 }])).toBe(800);
     expect(balanceOf(fee, [{ amount: 2300 }])).toBe(0);
   });
@@ -196,6 +203,11 @@ describe("invoice PDF", () => {
   };
   it("builds a one-page invoice", async () => {
     const doc = await PDFDocument.load(await buildInvoicePdf(base));
+    expect(doc.getPageCount()).toBe(1);
+  });
+  it("prints a flat commission line", async () => {
+    const flatLine = { ...base.lines[0], description: "GCAN candidate", courseName: "GCAN Online", courseFee: 7500, commissionPct: 0, commissionFlat: 800, amount: 800 };
+    const doc = await PDFDocument.load(await buildInvoicePdf({ ...base, layout: "detailed", lines: [flatLine], total: 800, words: "AUD Eight Hundred" }));
     expect(doc.getPageCount()).toBe(1);
   });
   it("runs onto more pages for a long invoice, with names Helvetica can't encode", async () => {

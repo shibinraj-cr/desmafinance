@@ -79,6 +79,7 @@ export default async function PartnerCommissionsPage({ searchParams }: { searchP
         courseName: p?.courseName ?? code,
         defaultFee: n(p?.defaultFee),
         defaultPct: n(p?.defaultPct),
+        defaultFlat: n(p?.defaultFlat),
         isActive: p?.isActive ?? false,
       };
     }),
@@ -112,6 +113,7 @@ export default async function PartnerCommissionsPage({ searchParams }: { searchP
         intakeMonth: l.intakeMonth,
         courseFee: Number(l.courseFee),
         commissionPct: Number(l.commissionPct),
+        commissionFlat: l.commissionFlat == null ? null : Number(l.commissionFlat),
         amount: Number(l.amount),
       })),
       receipts: i.receipts.map((r) => ({

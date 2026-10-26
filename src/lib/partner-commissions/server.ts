@@ -135,6 +135,8 @@ export type EnrollmentInput = {
   intakeMonth: string;
   courseFee: number;
   commissionPct?: number | null;
+  /** Finance only: a flat AUD commission (null = use the percentage). Omitted = the program's default. */
+  commissionFlat?: number | null;
   notes?: string | null;
   firstPayment?: { amount: number; paidOn: string; reference?: string | null } | null;
 };
@@ -153,6 +155,10 @@ function checkFee(fee: number) {
 function checkPct(pct: number) {
   if (!(pct >= 0 && pct <= 100)) throw badRequest("Commission % must be between 0 and 100.");
 }
+function checkFlat(flat: number) {
+  if (!(flat > 0) || flat > 1_000_000) throw badRequest("Enter the flat commission in AUD.");
+}
+const flatOf = (d: Prisma.Decimal | null | undefined): number | null => (d == null ? null : num(d));
 
 export async function createEnrollment(a: PcAccess, input: EnrollmentInput) {
   if (!isProgramCode(input.program)) throw badRequest("Pick NCLEX, OSCE or GCAN.");
@@ -162,11 +168,14 @@ export async function createEnrollment(a: PcAccess, input: EnrollmentInput) {
   if (!isIntakeMonth(input.intakeMonth)) throw badRequest("Pick the intake month.");
   checkFee(input.courseFee);
   const prog = await programConfig(input.program);
-  // Only Finance sets the commission % and the course name; everyone else gets the program's defaults.
+  // Only Finance sets the commission and the course name; everyone else gets the program's defaults.
+  // A program pays either a flat amount (e.g. GCAN) or a percentage of the course fee.
+  const flat = a.isFinance && input.commissionFlat !== undefined ? input.commissionFlat : flatOf(prog.defaultFlat);
   const pct = a.isFinance && input.commissionPct != null ? input.commissionPct : num(prog.defaultPct);
-  checkPct(pct);
-  if (!a.isFinance && prog.defaultPct == null) {
-    throw unprocessable(`${input.program}'s commission % isn't set yet. Ask Finance to set it in Settings.`, "program_not_set_up");
+  if (flat != null) checkFlat(flat);
+  else checkPct(pct);
+  if (!a.isFinance && prog.defaultPct == null && prog.defaultFlat == null) {
+    throw unprocessable(`${input.program}'s commission isn't set yet. Ask Finance to set it in Settings.`, "program_not_set_up");
   }
   if (input.leadId) {
     const lead = await prisma.lead.findUnique({ where: { id: input.leadId }, select: { id: true } });
@@ -190,6 +199,7 @@ export async function createEnrollment(a: PcAccess, input: EnrollmentInput) {
       intakeMonth: input.intakeMonth,
       courseFee: round2(input.courseFee),
       commissionPct: pct,
+      commissionFlat: flat,
       notes: clean(input.notes),
       createdById: a.userId,
       fullyPaidOn: first && round2(first.amount) === round2(input.courseFee) ? toDate(first.paidOn) : null,
@@ -245,6 +255,8 @@ export type EnrollmentPatch = {
   intakeMonth?: string;
   courseFee?: number;
   commissionPct?: number;
+  /** Finance only: a flat AUD commission, or null to go back to the percentage. */
+  commissionFlat?: number | null;
   courseName?: string;
   leadId?: string | null;
   notes?: string | null;
@@ -258,7 +270,7 @@ export async function updateEnrollment(a: PcAccess, id: string, patch: Enrollmen
   if (!a.isFinance) {
     if (e.createdById !== a.userId) throw forbidden("You can only edit enrollments you added.");
     if (e.payments.length > 0) throw conflict("Installments are recorded against it now, so ask Finance to change it.");
-    if (patch.commissionPct !== undefined || patch.courseName !== undefined) throw forbidden();
+    if (patch.commissionPct !== undefined || patch.commissionFlat !== undefined || patch.courseName !== undefined) throw forbidden();
   }
   const data: Prisma.CommissionEnrollmentUpdateInput = {};
   if (patch.candidateName !== undefined) {
@@ -280,6 +292,10 @@ export async function updateEnrollment(a: PcAccess, id: string, patch: Enrollmen
   if (patch.commissionPct !== undefined) {
     checkPct(patch.commissionPct);
     data.commissionPct = patch.commissionPct;
+  }
+  if (patch.commissionFlat !== undefined) {
+    if (patch.commissionFlat != null) checkFlat(patch.commissionFlat);
+    data.commissionFlat = patch.commissionFlat;
   }
   if (patch.courseName !== undefined) {
     const c = patch.courseName.trim();
@@ -423,7 +439,8 @@ export async function createInvoice(opts: {
           intakeMonth: e.intakeMonth,
           courseFee: e.courseFee,
           commissionPct: e.commissionPct,
-          amount: commissionOf(num(e.courseFee), num(e.commissionPct)),
+          commissionFlat: e.commissionFlat,
+          amount: commissionOf(num(e.courseFee), num(e.commissionPct), flatOf(e.commissionFlat)),
         })),
       });
       return inv;
@@ -453,7 +470,7 @@ export type InvoicePatch = {
   billToEmail?: string | null;
   billToFor?: string | null;
   amountWords?: string | null;
-  lines?: Array<{ id: string; description?: string; commissionPct?: number }>;
+  lines?: Array<{ id: string; description?: string; commissionPct?: number; commissionFlat?: number | null }>;
 };
 
 export async function updateInvoice(a: PcAccess, id: string, patch: InvoicePatch) {
@@ -488,12 +505,16 @@ export async function updateInvoice(a: PcAccess, id: string, patch: InvoicePatch
           if (!d) throw badRequest("A line needs a description.");
           lineData.description = d.slice(0, 200);
         }
-        if (l.commissionPct !== undefined) {
-          checkPct(l.commissionPct);
-          lineData.commissionPct = l.commissionPct;
-          lineData.amount = commissionOf(num(line.courseFee), l.commissionPct);
-          // Keep the enrollment's % in step, so a line removed later queues at the agreed rate.
-          if (line.enrollmentId) await tx.commissionEnrollment.update({ where: { id: line.enrollmentId }, data: { commissionPct: l.commissionPct } });
+        if (l.commissionPct !== undefined || l.commissionFlat !== undefined) {
+          const pct = l.commissionPct !== undefined ? l.commissionPct : num(line.commissionPct);
+          const flat = l.commissionFlat !== undefined ? l.commissionFlat : flatOf(line.commissionFlat);
+          if (flat != null) checkFlat(flat);
+          else checkPct(pct);
+          lineData.commissionPct = pct;
+          lineData.commissionFlat = flat;
+          lineData.amount = commissionOf(num(line.courseFee), pct, flat);
+          // Keep the enrollment's terms in step, so a line removed later queues at the agreed commission.
+          if (line.enrollmentId) await tx.commissionEnrollment.update({ where: { id: line.enrollmentId }, data: { commissionPct: pct, commissionFlat: flat } });
         }
         await tx.commissionInvoiceLine.update({ where: { id: l.id }, data: lineData });
       }
@@ -539,7 +560,8 @@ export async function addInvoiceLine(a: PcAccess, id: string, enrollmentId: stri
         intakeMonth: e.intakeMonth,
         courseFee: e.courseFee,
         commissionPct: e.commissionPct,
-        amount: commissionOf(num(e.courseFee), num(e.commissionPct)),
+        commissionFlat: e.commissionFlat,
+        amount: commissionOf(num(e.courseFee), num(e.commissionPct), flatOf(e.commissionFlat)),
       },
     });
   });
@@ -968,7 +990,18 @@ export async function savePartner(a: PcAccess, id: string | null, p: PartnerInpu
   }
 }
 
-export type ProgramInput = { code: string; partnerId: string; courseName: string; defaultFee: number | null; defaultPct: number | null; isActive?: boolean };
+export type ProgramInput = {
+  code: string;
+  partnerId: string;
+  courseName: string;
+  defaultFee: number | null;
+  defaultPct: number | null;
+  /** A flat AUD commission per enrollment; when set it replaces the percentage. */
+  defaultFlat?: number | null;
+  isActive?: boolean;
+  /** Also move enrollments not yet invoiced onto the new commission. */
+  applyToOpen?: boolean;
+};
 
 export async function saveProgram(a: PcAccess, p: ProgramInput) {
   if (!a.canApprove) throw forbidden();
@@ -979,10 +1012,21 @@ export async function saveProgram(a: PcAccess, p: ProgramInput) {
   if (!courseName) throw badRequest("Enter the course name printed on the invoice.");
   if (p.defaultFee != null) checkFee(p.defaultFee);
   if (p.defaultPct != null) checkPct(p.defaultPct);
-  const data = { partnerId: p.partnerId, courseName, defaultFee: p.defaultFee, defaultPct: p.defaultPct, isActive: p.isActive ?? true };
+  const defaultFlat = p.defaultFlat ?? null;
+  if (defaultFlat != null) checkFlat(defaultFlat);
+  const data = { partnerId: p.partnerId, courseName, defaultFee: p.defaultFee, defaultPct: p.defaultPct, defaultFlat, isActive: p.isActive ?? true };
   const saved = await prisma.commissionProgram.upsert({ where: { code: p.code }, create: { code: p.code, ...data }, update: data });
-  await recordAudit({ entityType: "CommissionProgram", entityId: saved.id, action: "UPDATE", userId: a.userId, changes: { code: p.code, ...data } });
-  return saved;
+  // Enrollments already on an invoice keep what was billed; the rest can follow the new terms.
+  let applied = 0;
+  if (p.applyToOpen) {
+    const res = await prisma.commissionEnrollment.updateMany({
+      where: { program: p.code, invoiceId: null, status: "active" },
+      data: defaultFlat != null ? { commissionFlat: defaultFlat } : { commissionFlat: null, ...(p.defaultPct != null ? { commissionPct: p.defaultPct } : {}) },
+    });
+    applied = res.count;
+  }
+  await recordAudit({ entityType: "CommissionProgram", entityId: saved.id, action: "UPDATE", userId: a.userId, changes: { code: p.code, ...data, appliedToOpenEnrollments: applied } });
+  return { saved, applied };
 }
 
 export async function saveGrant(a: PcAccess, userId: string, programs: string[]) {
@@ -1031,6 +1075,7 @@ export function serializeEnrollment(e: EnrollmentRow) {
     intakeMonth: e.intakeMonth,
     courseFee: num(e.courseFee),
     commissionPct: num(e.commissionPct),
+    commissionFlat: flatOf(e.commissionFlat),
     status: e.status,
     fullyPaidOn: isoDate(e.fullyPaidOn),
     invoice: e.invoice ? { id: e.invoice.id, number: e.invoice.number, status: e.invoice.status, source: e.invoice.source } : null,

@@ -43,6 +43,7 @@ export async function loadInvoicePdfData(id: string): Promise<InvoicePdfData> {
     intakeMonth: l.intakeMonth,
     courseFee: Number(l.courseFee),
     commissionPct: Number(l.commissionPct),
+    commissionFlat: l.commissionFlat == null ? null : Number(l.commissionFlat),
     amount: Number(l.amount),
   }));
   const total = invoiceTotal(lines);

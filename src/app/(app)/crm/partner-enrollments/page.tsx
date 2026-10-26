@@ -45,6 +45,7 @@ export default async function PartnerEnrollmentsPage() {
             courseName: p.courseName,
             defaultFee: p.defaultFee == null ? null : Number(p.defaultFee),
             defaultPct: p.defaultPct == null ? null : Number(p.defaultPct),
+            defaultFlat: p.defaultFlat == null ? null : Number(p.defaultFlat),
             layout: p.partner.layout,
           }))}
         enrollments={rows.map((e) => ({

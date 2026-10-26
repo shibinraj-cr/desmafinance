@@ -35,7 +35,7 @@ export function programOptions(data: PcPageData, allowed?: string[]): ProgramOpt
     .filter((p) => p.configured && p.isActive && (!allowed || allowed.includes(p.code)))
     .map((p) => {
       const partner = data.partners.find((x) => x.id === p.partnerId);
-      return { code: p.code, partnerName: partner?.name ?? "", courseName: p.courseName, defaultFee: p.defaultFee, defaultPct: p.defaultPct, layout: partner?.layout ?? "compact" };
+      return { code: p.code, partnerName: partner?.name ?? "", courseName: p.courseName, defaultFee: p.defaultFee, defaultPct: p.defaultPct, defaultFlat: p.defaultFlat, layout: partner?.layout ?? "compact" };
     })
     .filter((p) => p.partnerName);
 }
@@ -102,7 +102,7 @@ export function EnrollmentsTab({ ctx }: { ctx: PcCtx }) {
                       <div className="text-caption text-on-surface-variant tabular-nums mt-1">{fmtMoney(e.courseFee - e.balance)} of {fmtMoney(e.courseFee)} · {e.payments.length} of {MAX_INSTALLMENTS} installments</div>
                     </td>
                     <td className={`px-sm py-2.5 text-right tabular-nums ${e.balance ? "font-semibold" : "text-on-surface-variant"}`}>{e.balance ? AUD(e.balance) : "—"}</td>
-                    <td className="px-sm py-2.5 text-right tabular-nums">{AUD(commissionOf(e.courseFee, e.commissionPct))} <span className="text-caption text-on-surface-variant">{fmtMoney(e.commissionPct)}%</span></td>
+                    <td className="px-sm py-2.5 text-right tabular-nums">{AUD(commissionOf(e.courseFee, e.commissionPct, e.commissionFlat))} <span className="text-caption text-on-surface-variant">{e.commissionFlat != null ? "flat" : `${fmtMoney(e.commissionPct)}%`}</span></td>
                     <td className="px-sm py-2.5">
                       <EnrollmentPill state={st} />
                       {e.invoice ? <div className="text-caption text-on-surface-variant mt-0.5">{e.invoice.number}</div> : null}
@@ -195,7 +195,10 @@ function EnrollmentDrawer({ ctx, e, onClose }: { ctx: PcCtx; e: EnrollmentDTO; o
 
         <section className="flex flex-col gap-2">
           <h4 className="text-label-sm uppercase tracking-wider text-on-surface-variant">Commission</h4>
-          <p><b className="tabular-nums">{AUD(commissionOf(e.courseFee, e.commissionPct))}</b> <span className="text-on-surface-variant">= {fmtMoney(e.commissionPct)}% of {AUD(e.courseFee)}</span></p>
+          <p>
+            <b className="tabular-nums">{AUD(commissionOf(e.courseFee, e.commissionPct, e.commissionFlat))}</b>{" "}
+            <span className="text-on-surface-variant">{e.commissionFlat != null ? "flat per enrollment, whatever the course fee" : `= ${fmtMoney(e.commissionPct)}% of ${AUD(e.courseFee)}`}</span>
+          </p>
           {locked ? <p className="text-caption text-on-surface-variant">{e.invoice ? "Locked because it's on an invoice. Change the % on the invoice while it's a draft or sent." : ""}</p> : null}
         </section>
 
@@ -265,6 +268,8 @@ function EditDetails({ e, today, busy, onCancel, onSave }: { e: EnrollmentDTO; t
   const [intake, setIntake] = useState(e.intakeMonth);
   const [fee, setFee] = useState(String(e.courseFee));
   const [pct, setPct] = useState(String(e.commissionPct));
+  const [isFlat, setIsFlat] = useState(e.commissionFlat != null);
+  const [flat, setFlat] = useState(e.commissionFlat != null ? String(e.commissionFlat) : "");
   const [course, setCourse] = useState(e.courseName);
   const [notes, setNotes] = useState(e.notes ?? "");
   const months = intakeMonthOptions(today);
@@ -276,7 +281,20 @@ function EditDetails({ e, today, busy, onCancel, onSave }: { e: EnrollmentDTO; t
         <Field label="Student ID"><input className={inputCls} value={sid} onChange={(x) => setSid(x.target.value)} /></Field>
         <Field label="Intake month"><select className={inputCls} value={intake} onChange={(x) => setIntake(x.target.value)}>{months.map((m) => <option key={m}>{m}</option>)}</select></Field>
         <Field label="Course fee (AUD)"><input className={inputCls} type="number" min={1} value={fee} onChange={(x) => setFee(x.target.value)} /></Field>
-        <Field label="Commission %"><input className={inputCls} type="number" min={0} max={100} step="0.5" value={pct} onChange={(x) => setPct(x.target.value)} /></Field>
+        <div className="flex flex-col gap-1 min-w-0">
+          <span className="text-label-sm font-semibold text-on-surface-variant">Commission</span>
+          <div className="flex gap-2">
+            <select className={`${inputCls} !w-28 shrink-0`} aria-label="Commission type" value={isFlat ? "flat" : "pct"} onChange={(x) => setIsFlat(x.target.value === "flat")}>
+              <option value="pct">% of fee</option>
+              <option value="flat">Flat AUD</option>
+            </select>
+            {isFlat ? (
+              <input className={inputCls} type="number" min={1} step="1" value={flat} onChange={(x) => setFlat(x.target.value)} aria-label="Flat commission (AUD)" />
+            ) : (
+              <input className={inputCls} type="number" min={0} max={100} step="0.5" value={pct} onChange={(x) => setPct(x.target.value)} aria-label="Commission %" />
+            )}
+          </div>
+        </div>
       </div>
       <Field label="Course name on invoice"><input className={inputCls} value={course} onChange={(x) => setCourse(x.target.value)} /></Field>
       <Field label="Notes"><textarea className={`${inputCls} !h-auto py-2`} rows={2} value={notes} onChange={(x) => setNotes(x.target.value)} /></Field>
@@ -285,7 +303,7 @@ function EditDetails({ e, today, busy, onCancel, onSave }: { e: EnrollmentDTO; t
         <button
           className={primaryBtnCls}
           disabled={busy}
-          onClick={() => onSave({ candidateName: name, studentId: sid || null, intakeMonth: intake, courseFee: parseFloat(fee), commissionPct: parseFloat(pct), courseName: course, notes: notes || null })}
+          onClick={() => onSave({ candidateName: name, studentId: sid || null, intakeMonth: intake, courseFee: parseFloat(fee), commissionPct: parseFloat(pct), commissionFlat: isFlat ? parseFloat(flat) : null, courseName: course, notes: notes || null })}
         >
           Save
         </button>

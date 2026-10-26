@@ -14,6 +14,8 @@ export type InvoiceLineDTO = {
   intakeMonth: string;
   courseFee: number;
   commissionPct: number;
+  /** Set when the line is a flat commission (printed as "Flat"). */
+  commissionFlat: number | null;
   amount: number;
 };
 
@@ -79,7 +81,7 @@ export type SettingsDTO = {
 };
 
 export type PartnerDTO = { id: string; name: string; address: string; email: string | null; forLine: string | null; layout: string; isActive: boolean };
-export type ProgramDTO = { code: string; configured: boolean; partnerId: string | null; courseName: string; defaultFee: number | null; defaultPct: number | null; isActive: boolean };
+export type ProgramDTO = { code: string; configured: boolean; partnerId: string | null; courseName: string; defaultFee: number | null; defaultPct: number | null; defaultFlat: number | null; isActive: boolean };
 
 export type PcPageData = {
   today: string;

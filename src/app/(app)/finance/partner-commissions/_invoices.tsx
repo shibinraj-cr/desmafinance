@@ -50,7 +50,7 @@ function InvoiceList({ ctx }: { ctx: PcCtx }) {
   const { data } = ctx;
   const [generating, setGenerating] = useState(false);
   const queued = data.enrollments.filter((e) => stateOf(e) === "fullypaid");
-  const qAud = queued.reduce((s, e) => s + commissionOf(e.courseFee, e.commissionPct), 0);
+  const qAud = queued.reduce((s, e) => s + commissionOf(e.courseFee, e.commissionPct, e.commissionFlat), 0);
   return (
     <div className="flex flex-col gap-md">
       <div className={`${cardCls} flex flex-wrap items-center gap-md px-md py-sm`}>
@@ -177,7 +177,7 @@ function GenerateModal({ ctx, onClose }: { ctx: PcCtx; onClose: () => void }) {
       <Field label="Invoice date"><input className={`${inputCls} !w-48`} type="date" value={date} onChange={(e) => setDate(e.target.value)} /></Field>
       {partnerIds.map((pid) => {
         const rows = queued.filter((e) => e.partnerId === pid);
-        const sum = rows.filter((e) => picked.has(e.id)).reduce((s, e) => s + commissionOf(e.courseFee, e.commissionPct), 0);
+        const sum = rows.filter((e) => picked.has(e.id)).reduce((s, e) => s + commissionOf(e.courseFee, e.commissionPct, e.commissionFlat), 0);
         return (
           <div key={pid} className="border border-outline-variant rounded-lg p-sm flex flex-col gap-2">
             <div className="flex flex-wrap items-end gap-sm justify-between">
@@ -188,7 +188,7 @@ function GenerateModal({ ctx, onClose }: { ctx: PcCtx; onClose: () => void }) {
               <label key={e.id} className="flex items-center gap-2 text-body-md">
                 <input type="checkbox" checked={picked.has(e.id)} onChange={(x) => { const n = new Set(picked); if (x.target.checked) n.add(e.id); else n.delete(e.id); setPicked(n); }} />
                 <span className="flex-1">{e.candidateName} <ProgramTag code={e.program} /> <span className="text-caption text-on-surface-variant">fully paid {fmtDate(e.fullyPaidOn)}</span></span>
-                <span className="tabular-nums">{AUD(commissionOf(e.courseFee, e.commissionPct))}</span>
+                <span className="tabular-nums">{AUD(commissionOf(e.courseFee, e.commissionPct, e.commissionFlat))}</span>
               </label>
             ))}
             <div className="text-right text-body-md">Total <b className="tabular-nums">{AUD(sum)}</b></div>
@@ -210,7 +210,8 @@ type Draft = {
   billToEmail: string;
   billToFor: string;
   amountWords: string | null;
-  lines: Record<string, { description: string; pct: string }>;
+  /** Per line: description, and the % or (for a flat line) the AUD amount being edited. */
+  lines: Record<string, { description: string; pct: string; flat: string }>;
 };
 
 function draftOf(inv: InvoiceDTO): Draft {
@@ -222,7 +223,7 @@ function draftOf(inv: InvoiceDTO): Draft {
     billToEmail: inv.billToEmail ?? "",
     billToFor: inv.billToFor ?? "",
     amountWords: inv.amountWords,
-    lines: Object.fromEntries(inv.lines.map((l) => [l.id, { description: l.description, pct: String(l.commissionPct) }])),
+    lines: Object.fromEntries(inv.lines.map((l) => [l.id, { description: l.description, pct: String(l.commissionPct), flat: l.commissionFlat != null ? String(l.commissionFlat) : "" }])),
   };
 }
 
@@ -237,9 +238,12 @@ function InvoiceEditor({ ctx, inv }: { ctx: PcCtx; inv: InvoiceDTO }) {
   useEffect(() => setD(draftOf(inv)), [inv]);
 
   const previewLines: InvoiceLineDTO[] = inv.lines.map((l) => {
-    const pct = parseFloat(d.lines[l.id]?.pct ?? "");
+    const x = d.lines[l.id];
+    const pct = parseFloat(x?.pct ?? "");
     const p = pct >= 0 && pct <= 100 ? pct : l.commissionPct;
-    return { ...l, description: d.lines[l.id]?.description ?? l.description, commissionPct: p, amount: commissionOf(l.courseFee, p) };
+    const fl = parseFloat(x?.flat ?? "");
+    const f = l.commissionFlat == null ? null : fl > 0 ? fl : l.commissionFlat;
+    return { ...l, description: x?.description ?? l.description, commissionPct: p, commissionFlat: f, amount: commissionOf(l.courseFee, p, f) };
   });
   const total = round2(previewLines.reduce((s, l) => s + l.amount, 0));
   const words = d.amountWords ?? amountInWords(total, inv.currency);
@@ -256,10 +260,15 @@ function InvoiceEditor({ ctx, inv }: { ctx: PcCtx; inv: InvoiceDTO }) {
     const lines = inv.lines
       .map((l) => {
         const x = d.lines[l.id];
-        const out: { id: string; description?: string; commissionPct?: number } = { id: l.id };
+        const out: { id: string; description?: string; commissionPct?: number; commissionFlat?: number } = { id: l.id };
         if (x && x.description !== l.description) out.description = x.description;
-        const p = parseFloat(x?.pct ?? "");
-        if (x && p >= 0 && p <= 100 && p !== l.commissionPct) out.commissionPct = p;
+        if (l.commissionFlat != null) {
+          const f = parseFloat(x?.flat ?? "");
+          if (x && f > 0 && f !== l.commissionFlat) out.commissionFlat = f;
+        } else {
+          const p = parseFloat(x?.pct ?? "");
+          if (x && p >= 0 && p <= 100 && p !== l.commissionPct) out.commissionPct = p;
+        }
         return out;
       })
       .filter((l) => Object.keys(l).length > 1);
@@ -358,7 +367,7 @@ function InvoiceEditor({ ctx, inv }: { ctx: PcCtx; inv: InvoiceDTO }) {
           <h4 className="text-label-sm uppercase tracking-wider text-on-surface-variant mt-1">Lines ({inv.lines.length})</h4>
           {inv.lines.length === 0 ? <p className="text-caption text-on-surface-variant">No lines left. Delete this draft, or add a fully paid enrollment below.</p> : null}
           {inv.lines.map((l) => {
-            const x = d.lines[l.id] ?? { description: l.description, pct: String(l.commissionPct) };
+            const x = d.lines[l.id] ?? { description: l.description, pct: String(l.commissionPct), flat: l.commissionFlat != null ? String(l.commissionFlat) : "" };
             const pv = previewLines.find((p) => p.id === l.id)!;
             return (
               <div key={l.id} className="border border-outline-variant rounded-lg px-sm py-2 flex flex-col gap-1.5">
@@ -372,12 +381,20 @@ function InvoiceEditor({ ctx, inv }: { ctx: PcCtx; inv: InvoiceDTO }) {
                   ) : null}
                 </div>
                 <input className={`${inputCls} !h-8 text-[13px]`} value={x.description} disabled={!editable} aria-label="Line description" onChange={(e) => set({ lines: { ...d.lines, [l.id]: { ...x, description: e.target.value } } })} />
-                <div className="flex items-center gap-1.5 text-[13px] flex-wrap">
-                  <span className="text-on-surface-variant tabular-nums">Fee {fmtInvoiceNumber(l.courseFee)} ×</span>
-                  <input className={`${inputCls} !h-8 !w-20 tabular-nums`} type="number" min={0} max={100} step="0.5" value={x.pct} disabled={!editable} aria-label="Commission %" onChange={(e) => set({ lines: { ...d.lines, [l.id]: { ...x, pct: e.target.value } } })} />
-                  <span className="text-on-surface-variant">%</span>
-                  <b className="ml-auto tabular-nums">{AUD(pv.amount)}</b>
-                </div>
+                {l.commissionFlat != null ? (
+                  <div className="flex items-center gap-1.5 text-[13px] flex-wrap">
+                    <span className="text-on-surface-variant tabular-nums">Fee {fmtInvoiceNumber(l.courseFee)} · Flat AUD</span>
+                    <input className={`${inputCls} !h-8 !w-24 tabular-nums`} type="number" min={1} step="1" value={x.flat} disabled={!editable} aria-label="Flat commission (AUD)" onChange={(e) => set({ lines: { ...d.lines, [l.id]: { ...x, flat: e.target.value } } })} />
+                    <b className="ml-auto tabular-nums">{AUD(pv.amount)}</b>
+                  </div>
+                ) : (
+                  <div className="flex items-center gap-1.5 text-[13px] flex-wrap">
+                    <span className="text-on-surface-variant tabular-nums">Fee {fmtInvoiceNumber(l.courseFee)} ×</span>
+                    <input className={`${inputCls} !h-8 !w-20 tabular-nums`} type="number" min={0} max={100} step="0.5" value={x.pct} disabled={!editable} aria-label="Commission %" onChange={(e) => set({ lines: { ...d.lines, [l.id]: { ...x, pct: e.target.value } } })} />
+                    <span className="text-on-surface-variant">%</span>
+                    <b className="ml-auto tabular-nums">{AUD(pv.amount)}</b>
+                  </div>
+                )}
               </div>
             );
           })}
@@ -385,7 +402,7 @@ function InvoiceEditor({ ctx, inv }: { ctx: PcCtx; inv: InvoiceDTO }) {
             <Field label="Add a fully paid enrollment">
               <select className={inputCls} value="" disabled={busy || dirty} onChange={(e) => e.target.value && call({ action: "add-line", enrollmentId: e.target.value }, "Line added.")}>
                 <option value="">Choose…</option>
-                {addable.map((e) => <option key={e.id} value={e.id}>{e.candidateName} · {e.program} · {AUD(commissionOf(e.courseFee, e.commissionPct))}</option>)}
+                {addable.map((e) => <option key={e.id} value={e.id}>{e.candidateName} · {e.program} · {AUD(commissionOf(e.courseFee, e.commissionPct, e.commissionFlat))}</option>)}
               </select>
             </Field>
           ) : null}
@@ -611,7 +628,7 @@ export function InvoicePaper({ inv, draft, lines, total, words, settings }: { in
               {detailed ? <><td className={cell}>{l.studentId ?? ""}</td><td className={`${cell} text-center`}>{l.courseName}</td></> : null}
               <td className={cell}>{l.intakeMonth}</td>
               <td className={`${cell} text-center`}>{fmtInvoiceNumber(l.courseFee)}</td>
-              <td className={`${cell} text-center`}>{fmtInvoiceNumber(l.commissionPct)}%</td>
+              <td className={`${cell} text-center`}>{l.commissionFlat != null ? "Flat" : `${fmtInvoiceNumber(l.commissionPct)}%`}</td>
               <td className={`${cell} text-center`}>{fmtInvoiceNumber(l.amount)}</td>
             </tr>
           ))}

@@ -8,9 +8,18 @@ import { MAX_INSTALLMENTS, type EnrollmentState, type InvoiceLayout, type Invoic
 
 export const round2 = (n: number): number => Math.round((n + Number.EPSILON) * 100) / 100;
 
-/** Commission on a course fee at a percentage, to the cent. */
-export function commissionOf(courseFee: number, pct: number): number {
+/**
+ * The commission on one enrollment, to the cent: a flat amount when the
+ * program pays one (e.g. GCAN), otherwise the course fee × the percentage.
+ */
+export function commissionOf(courseFee: number, pct: number, flat?: number | null): number {
+  if (flat != null) return round2(flat);
   return round2((courseFee * pct) / 100);
+}
+
+/** "20%" or "Flat AUD 800" — how an enrollment's commission terms read. */
+export function commissionTerms(pct: number, flat?: number | null): string {
+  return flat != null ? `Flat AUD ${fmtMoney(flat)}` : `${fmtMoney(pct)}%`;
 }
 
 export function paidOf(payments: Array<{ amount: number }>): number {
