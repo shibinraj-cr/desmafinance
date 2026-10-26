@@ -19,6 +19,7 @@ import {
   canEditLead,
   canAddTask,
   canEditTask,
+  visibleTasksWhere,
   getCrmAccess,
   CRM_ASSIGN_PAGE,
   CRM_HISTORY_PAGE,
@@ -56,6 +57,7 @@ function access(partial: Partial<CrmAccess>): CrmAccess {
     referralLeadsOnly: false,
     canReEnroll: false,
     canTaskEnrolledLeads: false,
+    ownTasksOnly: false,
     canBulkImport: false,
     canBulkEmail: false,
     canBulkStatus: false,
@@ -291,5 +293,36 @@ describe("ROLE_PERMISSIONS (markers grantable in /roles)", () => {
       // The roles API keeps only GRANTABLE_HREFS — a missing marker is stripped on save.
       expect(GRANTABLE_HREFS).toContain(marker);
     }
+  });
+});
+
+describe("own tasks only (an enrolled-lead task-taker who isn't a consultant)", () => {
+  function nextLeadPulseRole(role: "l2" | "supervisor") {
+    vi.mocked(getLeadPulseAccess).mockResolvedValueOnce({
+      role,
+      displayName: "Test",
+      canSupervise: role === "supervisor",
+      canSubmitEntries: role !== "supervisor",
+      desfinAdmin: false,
+    });
+  }
+
+  it("scopes a plain task-taker to their own tasks", async () => {
+    const a = await getCrmAccess("u1", perms(["/crm/leads", CRM_ENROLLED_TASKS_PAGE]));
+    expect(a.ownTasksOnly).toBe(true);
+    expect(visibleTasksWhere(a, "u1")).toEqual({ assignedToId: "u1" });
+  });
+
+  it("leaves everyone else seeing every task", async () => {
+    expect(visibleTasksWhere(await getCrmAccess("u1", perms(["/crm/leads"])), "u1")).toEqual({});
+    expect((await getCrmAccess("u1", perms([CRM_ENROLLED_TASKS_PAGE], true))).ownTasksOnly).toBe(false);
+    expect((await getCrmAccess("u1", perms(["/crm/settings", CRM_ENROLLED_TASKS_PAGE]))).ownTasksOnly).toBe(false);
+    expect(
+      (await getCrmAccess("u1", perms(["/crm/leads", CRM_TEAM_LEAD_PAGE, CRM_ENROLLED_TASKS_PAGE]))).ownTasksOnly,
+    ).toBe(false);
+    nextLeadPulseRole("l2");
+    expect((await getCrmAccess("u1", perms(["/crm/leads", CRM_ENROLLED_TASKS_PAGE]))).ownTasksOnly).toBe(false);
+    nextLeadPulseRole("supervisor");
+    expect((await getCrmAccess("u1", perms(["/crm/leads", CRM_ENROLLED_TASKS_PAGE]))).ownTasksOnly).toBe(false);
   });
 });

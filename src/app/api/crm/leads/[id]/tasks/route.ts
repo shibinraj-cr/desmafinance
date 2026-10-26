@@ -4,7 +4,7 @@ import { prisma } from "@/lib/prisma";
 import { withApiHandler } from "@/lib/api";
 import { unauthorized, forbidden, notFound, badRequest } from "@/lib/http-error";
 import { getCurrentUserAndPermissions } from "@/lib/permissions";
-import { getCrmAccess, canAddTask } from "@/lib/crm-rbac";
+import { getCrmAccess, canAddTask, visibleTasksWhere } from "@/lib/crm-rbac";
 import { recordLeadActivity } from "@/lib/crm-activity";
 import { taskInclude, serializeTask, taskOrderBy, isActiveBde } from "@/lib/crm-leads";
 import {
@@ -15,7 +15,8 @@ import {
 
 export const dynamic = "force-dynamic";
 
-// GET /api/crm/leads/[id]/tasks — list tasks (any CRM viewer)
+// GET /api/crm/leads/[id]/tasks — list tasks (any CRM viewer; an own-tasks-only
+// user gets just theirs)
 export const GET = withApiHandler(async (_req: Request, { params }: { params: { id: string } }) => {
   const { userId, perms } = await getCurrentUserAndPermissions();
   if (!userId || !perms) throw unauthorized();
@@ -23,7 +24,7 @@ export const GET = withApiHandler(async (_req: Request, { params }: { params: { 
   if (!access.canViewLeads) throw forbidden();
 
   const tasks = await prisma.crmTask.findMany({
-    where: { leadId: params.id },
+    where: { leadId: params.id, ...visibleTasksWhere(access, userId) },
     orderBy: taskOrderBy,
     include: taskInclude,
   });

@@ -3,7 +3,7 @@ import { prisma } from "@/lib/prisma";
 import { withApiHandler } from "@/lib/api";
 import { unauthorized, forbidden } from "@/lib/http-error";
 import { getCurrentUserAndPermissions } from "@/lib/permissions";
-import { getCrmAccess } from "@/lib/crm-rbac";
+import { getCrmAccess, visibleTasksWhere } from "@/lib/crm-rbac";
 import {
   buildCrmTaskWhere,
   crmTaskListInclude,
@@ -28,9 +28,14 @@ export const GET = withApiHandler(async (req: Request) => {
   if (!access.canViewLeads) throw forbidden();
 
   const sp = new URL(req.url).searchParams;
-  const where = buildCrmTaskWhere(
-    crmTaskFilterParamsFromQuery(sp, { isBde: access.isBde, userId, now: new Date() }),
-  );
+  const where = {
+    AND: [
+      buildCrmTaskWhere(
+        crmTaskFilterParamsFromQuery(sp, { isBde: access.isBde || access.ownTasksOnly, userId, now: new Date() }),
+      ),
+      visibleTasksWhere(access, userId),
+    ],
+  };
 
   const rows = await prisma.crmTask.findMany({
     where,

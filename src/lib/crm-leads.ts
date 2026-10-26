@@ -982,7 +982,7 @@ export const crmTaskListInclude = Prisma.validator<Prisma.CrmTaskInclude>()({
       // Drives the canEdit rule (admin, or the lead's own BDE) — identical to
       // the per-task PATCH route's `canEditLead(access, task.lead, userId)`.
       assignedToId: true,
-      status: { select: { label: true, color: true } },
+      status: { select: { code: true, label: true, color: true } },
     },
   },
   // Same reason as taskInclude: the board is where an overdue task is worked, so
@@ -1013,7 +1013,8 @@ export type CrmTaskListRow = {
     phone: string | null;
     phoneE164: string | null;
     assignedToId: string | null;
-    status: { label: string; color: string | null };
+    /** `code` drives the enrolled-lead task-taker's edit rule (see canEditTask). */
+    status: { code: string; label: string; color: string | null };
   };
 };
 
@@ -1045,7 +1046,7 @@ export function serializeCrmTaskListRow(t: CrmTaskWithRels): CrmTaskListRow {
       phone: t.lead.phone,
       phoneE164: t.lead.phoneE164,
       assignedToId: t.lead.assignedToId,
-      status: { label: t.lead.status.label, color: t.lead.status.color },
+      status: { code: t.lead.status.code, label: t.lead.status.label, color: t.lead.status.color },
     },
   };
 }
