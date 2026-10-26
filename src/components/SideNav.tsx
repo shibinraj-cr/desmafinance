@@ -109,7 +109,7 @@ function groupNavForModule(
     .map((g) => {
       const first = g.pages[0];
       const hasApprovals = g.pages.some((p) => p.href === "/finance/approvals");
-      // The CRM "Pipeline" group leads with /crm/leads — badge it with the
+      // The CRM "Leads" group leads with /crm/leads — badge it with the
       // signed-in BDE's count of fresh, not-yet-worked leads.
       const hasNewLeads = g.pages.some((p) => p.href === "/crm/leads");
       // The Operations "Work" group holds My Tasks — badge it with the user's
