@@ -101,8 +101,10 @@ function ModuleGroupedPageAccess({
     <div className="space-y-md">
       {groups.map(({ module: m, pages }) => {
         const moduleHrefs = pages.map((p) => p.href);
+        // "All" grants every page but no permission — those are ticked on purpose.
+        const pageHrefs = pages.filter((p) => !p.permission).map((p) => p.href);
         const selectedInModule = moduleHrefs.filter((h) => selected.has(h)).length;
-        const allChecked = selectedInModule === moduleHrefs.length;
+        const allChecked = pageHrefs.every((h) => selected.has(h));
         const noneChecked = selectedInModule === 0;
         return (
           <div
@@ -122,7 +124,7 @@ function ModuleGroupedPageAccess({
               <div className="ml-auto inline-flex items-center gap-xs">
                 <button
                   type="button"
-                  onClick={() => onSetMany(moduleHrefs, true)}
+                  onClick={() => onSetMany(pageHrefs, true)}
                   disabled={allChecked}
                   className="h-7 px-sm rounded text-[11px] font-semibold border border-outline-variant text-on-surface-variant hover:text-on-surface hover:bg-surface-container disabled:opacity-40"
                 >
@@ -201,6 +203,14 @@ function PageCheckbox({
       {p.adminOnly && (
         <span className="text-[10px] uppercase tracking-widest text-accent font-bold">
           Admin
+        </span>
+      )}
+      {p.permission && (
+        <span
+          className="text-[10px] uppercase tracking-widest text-accent font-bold"
+          title="A permission, not a page — it never appears in the menu"
+        >
+          Permission
         </span>
       )}
     </label>
@@ -315,9 +325,12 @@ function FilterablePageAccess({
       ) : (
         <div className="space-y-md pt-xs">
           {visibleGroups.map(({ module: m, pages }) => {
-            const moduleHrefs = groups.find((g) => g.module.id === m.id)!.pages.map((p) => p.href);
+            const modulePages = groups.find((g) => g.module.id === m.id)!.pages;
+            const moduleHrefs = modulePages.map((p) => p.href);
+            // "All" grants every page but no permission — those are ticked on purpose.
+            const pageHrefs = modulePages.filter((p) => !p.permission).map((p) => p.href);
             const selectedInModule = moduleHrefs.filter((h) => selected.has(h)).length;
-            const allChecked = selectedInModule === moduleHrefs.length;
+            const allChecked = pageHrefs.every((h) => selected.has(h));
             const noneChecked = selectedInModule === 0;
             return (
               <div key={m.id}>
@@ -335,7 +348,7 @@ function FilterablePageAccess({
                   <div className="ml-auto inline-flex items-center gap-xs">
                     <button
                       type="button"
-                      onClick={() => onSetMany(moduleHrefs, true)}
+                      onClick={() => onSetMany(pageHrefs, true)}
                       disabled={allChecked}
                       className="h-7 px-sm rounded text-[11px] font-semibold border border-outline-variant text-on-surface-variant hover:text-on-surface hover:bg-surface-container disabled:opacity-40"
                     >

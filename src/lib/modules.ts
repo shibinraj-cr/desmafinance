@@ -2,7 +2,7 @@
 // pages into `src/app/(app)/<basePath>/...`, and update Role.pages on roles
 // that should see those pages.
 
-import { isAdmin, canSeePage, type Permissions } from "@/lib/rbac";
+import { isAdmin, canSeePage, CRM_LEADS_ONLY_PAGE, type Permissions } from "@/lib/rbac";
 
 export type ModuleStatus = "active" | "coming_soon";
 
@@ -18,6 +18,8 @@ export type AppPage = {
    * the sidebar. Untagged pages render flat. Does not affect routing or RBAC.
    */
   group?: string;
+  /** A capability marker, not a page you can open — see ROLE_PERMISSIONS. */
+  permission?: boolean;
 };
 
 export type AppModule = {
@@ -592,6 +594,31 @@ export const MODULES: AppModule[] = [
 /** Flat list of every page across every module — for the role-management page-access UI. */
 export const ALL_PAGES: AppPage[] = MODULES.flatMap((m) => m.pages);
 export const ALL_PAGE_HREFS: string[] = ALL_PAGES.map((p) => p.href);
+
+/**
+ * Capability markers an admin can tick on a role in /roles, beside its pages.
+ * They live in Role.pages but are not pages: none is in MODULES, so none ever
+ * renders in the nav, and each is read by its own gate (crm-rbac.ts / rbac.ts —
+ * hrefs kept in sync there, enforced by tests/crm-rbac.test.ts). Listing them
+ * here is also what lets the roles API keep them: it drops any href it doesn't
+ * know, which would strip a marker the first time its role was saved.
+ */
+export const ROLE_PERMISSIONS: AppPage[] = [
+  { href: "/crm/assign", label: "Assign & reassign leads", icon: "assignment_ind", permission: true },
+  { href: "/crm/history", label: "Full lead history", icon: "history", permission: true },
+  { href: "/crm/team-all", label: "Whole-team dashboard (view-only)", icon: "groups", permission: true },
+  { href: "/crm/referral-leads", label: "Create referral leads", icon: "person_add", permission: true },
+  { href: "/crm/enrolled-tasks", label: "Tasks on enrolled leads", icon: "add_task", permission: true },
+  {
+    href: CRM_LEADS_ONLY_PAGE,
+    label: "Leads only (hide Inbox, reports, notifications)",
+    icon: "visibility_off",
+    permission: true,
+  },
+];
+
+/** Everything a role may hold in Role.pages: every page plus every permission. */
+export const GRANTABLE_HREFS: string[] = [...ALL_PAGE_HREFS, ...ROLE_PERMISSIONS.map((p) => p.href)];
 
 /** Pages every non-admin role gets by default (Finance only, no system). */
 export const DEFAULT_NON_ADMIN_PAGES: string[] = MODULES.filter(
