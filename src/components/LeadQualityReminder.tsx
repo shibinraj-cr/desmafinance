@@ -28,8 +28,8 @@ import {
   type QualityReminderLead,
   type QualityReminderSnapshot,
 } from "@/lib/crm-lead-quality";
+import { subscribeAttention } from "./crm-attention-feed";
 
-const POLL_MS = 120_000;
 
 function overdueBy(iso: string, now: number): string {
   const days = Math.max(0, Math.floor((now - new Date(iso).getTime()) / 86_400_000));
@@ -73,12 +73,9 @@ export function LeadQualityReminder({ userId }: { userId: string }) {
     setOpen(value);
   }, []);
 
-  const poll = useCallback(async () => {
-    if (document.visibilityState !== "visible") return;
-    try {
-      const res = await fetch("/api/crm/lead-quality/overdue", { cache: "no-store" });
-      if (!res.ok) return;
-      const data = (await res.json()) as QualityReminderSnapshot;
+  const onData = useCallback(
+    (raw: unknown) => {
+      const data = raw as QualityReminderSnapshot;
       const t = Date.now();
       setNow(t);
       setSnap(data);
@@ -90,24 +87,15 @@ export function LeadQualityReminder({ userId }: { userId: string }) {
         writeLastShown(t);
         show(true);
       }
-    } catch {
-      /* offline or a deploy in progress — try again next tick */
-    }
-  }, [readLastShown, show, writeLastShown]);
+    },
+    [readLastShown, show, writeLastShown],
+  );
 
+  // The data arrives on the shared CRM attention poll (crm-attention-feed).
   useEffect(() => {
     setMounted(true);
-    void poll();
-    const id = window.setInterval(() => void poll(), POLL_MS);
-    const onVisible = () => {
-      if (document.visibilityState === "visible") void poll();
-    };
-    document.addEventListener("visibilitychange", onVisible);
-    return () => {
-      window.clearInterval(id);
-      document.removeEventListener("visibilitychange", onVisible);
-    };
-  }, [poll]);
+    return subscribeAttention("quality", onData);
+  }, [onData]);
 
   const dismiss = useCallback(() => {
     writeLastShown(Date.now());

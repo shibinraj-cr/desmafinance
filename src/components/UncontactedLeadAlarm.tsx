@@ -27,8 +27,8 @@ import {
   type UncontactedScope,
   type UncontactedSnapshot,
 } from "@/lib/crm-uncontacted-alarm";
+import { subscribeAttention } from "./crm-attention-feed";
 
-const POLL_MS = 60_000;
 
 function since(iso: string, now: number): string {
   const mins = Math.max(0, Math.floor((now - new Date(iso).getTime()) / 60_000));
@@ -121,12 +121,9 @@ export function UncontactedLeadAlarm({ userId, scope }: { userId: string; scope:
     }
   }, []);
 
-  const poll = useCallback(async () => {
-    if (document.visibilityState !== "visible") return;
-    try {
-      const res = await fetch("/api/crm/uncontacted-leads", { cache: "no-store" });
-      if (!res.ok) return;
-      const data = (await res.json()) as UncontactedSnapshot | { scope: null };
+  const onData = useCallback(
+    (raw: unknown) => {
+      const data = raw as UncontactedSnapshot | { scope: null };
       const t = Date.now();
       setNow(t);
       if (!data.scope) {
@@ -144,24 +141,15 @@ export function UncontactedLeadAlarm({ userId, scope }: { userId: string; scope:
         show(true);
         chime();
       }
-    } catch {
-      /* offline or a deploy in progress — try again next tick */
-    }
-  }, [chime, readLastShown, show, writeLastShown]);
+    },
+    [chime, readLastShown, show, writeLastShown],
+  );
 
+  // The data arrives on the shared CRM attention poll (crm-attention-feed).
   useEffect(() => {
     setMounted(true);
-    void poll();
-    const id = window.setInterval(() => void poll(), POLL_MS);
-    const onVisible = () => {
-      if (document.visibilityState === "visible") void poll();
-    };
-    document.addEventListener("visibilitychange", onVisible);
-    return () => {
-      window.clearInterval(id);
-      document.removeEventListener("visibilitychange", onVisible);
-    };
-  }, [poll]);
+    return subscribeAttention("uncontacted", onData);
+  }, [onData]);
 
   // "Remind me later" — the 20 minutes count from when it was put away.
   const dismiss = useCallback(() => {
