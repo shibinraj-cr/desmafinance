@@ -37,11 +37,17 @@ export type CrmBdeFunnel = {
 
 /** Per active L1/L2 BDE: leads assigned, enrollments, lost, conversion% for the month. */
 export async function getCrmFunnelByBde(year: number, month: number): Promise<CrmBdeFunnel[]> {
-  const { start, end } = monthBounds(year, month);
-  // assignedAt is a full DateTime → use [monthStart, nextMonthStart) in UTC.
-  const mStart = new Date(Date.UTC(year, month - 1, 1));
-  const mEnd = new Date(Date.UTC(year, month, 1));
+  return getCrmFunnelByBdeInRange({ from: new Date(Date.UTC(year, month - 1, 1)), to: new Date(Date.UTC(year, month, 1)) });
+}
 
+/**
+ * {@link getCrmFunnelByBde} over any half-open [from, to) range of UTC-midnight
+ * dates (the shape `rangeFor` in period.ts returns); an open side is unbounded.
+ * `assignedAt` (a full DateTime) and `closedDate` (a pure @db.Date, stored as UTC
+ * midnight) both compare directly against those bounds, so a one-month range
+ * gives exactly the month figures.
+ */
+export async function getCrmFunnelByBdeInRange(range: { from?: Date; to?: Date }): Promise<CrmBdeFunnel[]> {
   const roles = await prisma.leadPulseRole.findMany({
     where: { active: true, role: { in: ["l1", "l2"] } },
     select: { userId: true, displayName: true, role: true },
@@ -59,6 +65,11 @@ export async function getCrmFunnelByBde(year: number, month: number): Promise<Cr
   // column to a related column. `lost` is the same set narrowed to lost-kind.
   // Leads the CRM has flagged as duplicates (email/phone collision → `duplicate`
   // status) are excluded so a re-assigned duplicate is never double-counted.
+  const assignedFrom = range.from ? Prisma.sql`AND l."assignedAt" >= ${range.from}` : Prisma.empty;
+  const assignedTo = range.to ? Prisma.sql`AND l."assignedAt" < ${range.to}` : Prisma.empty;
+  const closedDate: { gte?: Date; lt?: Date } = {};
+  if (range.from) closedDate.gte = range.from;
+  if (range.to) closedDate.lt = range.to;
   const [rows, enrolled] = await Promise.all([
     prisma.$queryRaw<Array<{ userId: string; assigned: bigint; lost: bigint }>>(Prisma.sql`
       SELECT l."assignedToId" AS "userId",
@@ -68,14 +79,14 @@ export async function getCrmFunnelByBde(year: number, month: number): Promise<Cr
       LEFT JOIN "LeadImportBatch" b ON l."importBatchId" = b.id
       JOIN "CrmLeadStatus" st ON l."statusId" = st.id
       WHERE l."assignedToId" IN (${Prisma.join(ids)})
-        AND l."assignedAt" >= ${mStart} AND l."assignedAt" < ${mEnd}
+        AND l."assignedAt" IS NOT NULL ${assignedFrom} ${assignedTo}
         AND (l."importBatchId" IS NULL OR l."assignedAt" > b."createdAt" + interval '10 minutes')
         AND st.code <> 'duplicate'
       GROUP BY l."assignedToId"
     `),
     prisma.leadPulsePipeline.groupBy({
       by: ["userId"],
-      where: { userId: { in: ids }, status: "closed_won", closedDate: { gte: toPrismaDate(start), lte: toPrismaDate(end) } },
+      where: { userId: { in: ids }, status: "closed_won", closedDate },
       _count: true,
     }),
   ]);
@@ -97,6 +108,21 @@ export async function getCrmFunnelByBde(year: number, month: number): Promise<Cr
       conversionPct: pct(en, leadsAssigned),
     };
   });
+}
+
+/**
+ * Each BDE's total enrollment target for a month: every LeadPulseTarget row
+ * (service-group and legacy per-service) summed per user — the "of N target"
+ * figure on the BDE Enrollment dashboard. BDEs with no target rows are absent.
+ */
+export async function getMonthlyTargetByBde(year: number, month: number, userIds: string[]): Promise<Map<string, number>> {
+  if (!userIds.length) return new Map();
+  const groups = await prisma.leadPulseTarget.groupBy({
+    by: ["userId"],
+    where: { year, month, userId: { in: userIds } },
+    _sum: { target: true },
+  });
+  return new Map(groups.map((g) => [g.userId, g._sum.target ?? 0]));
 }
 
 /**

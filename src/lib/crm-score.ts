@@ -7,7 +7,7 @@
  * `TeamBdeRow` import below is type-only, so this module never loads prisma).
  *
  * Model — outcome-weighted:
- *   - Conversion       35  (enrolled ÷ assigned, this month)
+ *   - Conversion       35  (enrolled ÷ assigned, selected range)
  *   - Responsiveness   20  (median hours to first outbound contact)
  *   - Task discipline  20  (share of completed tasks finished on time)
  *   - Pipeline hygiene 25  (attention flags per active owned lead — a penalty band)
@@ -15,8 +15,8 @@
  * Each component is clamped to its band. A component with no underlying data earns
  * its midpoint — a missing metric is neither rewarded nor punished — mirroring the
  * org `healthScore` in ceo-dashboard.ts. Windows follow the Team Activity page:
- * conversion is the current calendar month, responsiveness & discipline follow the
- * selected date range, hygiene is live (now).
+ * conversion, responsiveness & discipline follow the selected date range (the page
+ * opens on the current month), hygiene is live (now).
  */
 import type { TeamBdeRow } from "./crm-team";
 
@@ -28,7 +28,7 @@ export const SCORE_WEIGHTS = {
   hygiene: 25,
 } as const;
 
-/** Month conversion % that earns full conversion marks. L2 conversions run low, so the ceiling is modest. */
+/** Conversion % that earns full conversion marks. L2 conversions run low, so the ceiling is modest. */
 export const CONVERSION_TARGET_PCT = 20;
 /** Median first-response at/under this many hours earns full responsiveness marks. */
 export const FIRST_RESPONSE_FAST_HOURS = 6;
@@ -54,7 +54,7 @@ export type ScoreComponent = {
   max: number;
   /** True when the metric had no data and the component fell back to its midpoint. */
   neutral: boolean;
-  /** One-line explanation of the underlying numbers, e.g. "18% — 11 enrolled of 62 assigned this month." */
+  /** One-line explanation of the underlying numbers, e.g. "18% — 11 enrolled of 62 assigned in this period." */
   detail: string;
 };
 
@@ -97,7 +97,7 @@ function scoreConversion(row: TeamBdeRow): ScoreComponent {
   const max = SCORE_WEIGHTS.conversion;
   const p = row.conversionPct;
   if (p === null) {
-    return { key: "conversion", label: "Conversion", earned: max / 2, max, neutral: true, detail: "No leads assigned this month yet." };
+    return { key: "conversion", label: "Conversion", earned: max / 2, max, neutral: true, detail: "No leads assigned in this period." };
   }
   const earned = clamp((p / CONVERSION_TARGET_PCT) * max, 0, max);
   return {
@@ -106,7 +106,7 @@ function scoreConversion(row: TeamBdeRow): ScoreComponent {
     earned,
     max,
     neutral: false,
-    detail: `${Math.round(p)}% — ${row.enrolledMonth} enrolled of ${row.assignedMonth} assigned this month.`,
+    detail: `${Math.round(p)}% — ${row.enrolledPeriod} enrolled of ${row.assignedPeriod} assigned in this period.`,
   };
 }
 
@@ -241,7 +241,7 @@ export function scoreL2Member(row: TeamBdeRow): L2Score {
   const score = components.reduce((s, c) => s + c.earned, 0);
   const band = bandFor(score);
   const scored =
-    row.activeOwned > 0 || row.contacts > 0 || row.tasksCompleted > 0 || row.assignedMonth > 0 || row.assignedRange > 0;
+    row.activeOwned > 0 || row.contacts > 0 || row.tasksCompleted > 0 || row.assignedPeriod > 0 || row.assignedRange > 0;
   return {
     userId: row.userId,
     displayName: row.displayName,

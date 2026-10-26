@@ -4,12 +4,17 @@ import { useRouter, useSearchParams, usePathname } from "next/navigation";
 import { useState } from "react";
 import { MONTH_LABELS } from "@/lib/period";
 
-export function DateFilter() {
+/**
+ * `defaultPeriod` is the period the page shows when the URL has none (it must
+ * match the page's own fallback). With a non-"all" default, picking "All time"
+ * writes `period=all` explicitly, since an empty URL would mean the default.
+ */
+export function DateFilter({ defaultPeriod = "all" }: { defaultPeriod?: string } = {}) {
   const router = useRouter();
   const pathname = usePathname();
   const search = useSearchParams();
 
-  const period = search.get("period") ?? "all";
+  const period = search.get("period") ?? defaultPeriod;
   const fromQ = search.get("from") ?? "";
   const toQ = search.get("to") ?? "";
 
@@ -19,7 +24,8 @@ export function DateFilter() {
   function applyPreset(p: string) {
     const params = new URLSearchParams(search.toString());
     if (p === "all") {
-      params.delete("period");
+      if (defaultPeriod === "all") params.delete("period");
+      else params.set("period", "all");
       params.delete("from");
       params.delete("to");
     } else {

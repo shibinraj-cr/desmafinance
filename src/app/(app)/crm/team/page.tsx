@@ -5,7 +5,8 @@ import { KpiCard, Section } from "@/components/Cards";
 import { DateFilter } from "@/components/DateFilter";
 import { getCurrentUserAndPermissions } from "@/lib/permissions";
 import { getCrmAccess } from "@/lib/crm-rbac";
-import { parsePeriod, rangeFor, periodLabel } from "@/lib/period";
+import { parsePeriod, rangeFor, periodLabel, monthLabelFor, singleMonthOf } from "@/lib/period";
+import { todayIst } from "@/lib/lead-pulse-dates";
 import {
   resolveTeamScope,
   getTeamActivity,
@@ -18,7 +19,9 @@ import {
   type TeamBdeRow,
 } from "@/lib/crm-team";
 import { buildL2Scorecard, type L2Score, type ScoreComponent } from "@/lib/crm-score";
+import { buildBestPerformers, BEST_PERFORMER_WEIGHTS, type BestPerformerEntry } from "@/lib/crm-best-performer";
 import { getPipelineForecast } from "@/lib/lead-pulse-metrics";
+import { getMonthlyTargetByBde } from "@/lib/lead-pulse-crm-metrics";
 import { inr } from "@/lib/format";
 import { QUALITY_DUE_AFTER_DAYS } from "@/lib/crm-lead-quality";
 import { getCrmUsageByUser } from "@/lib/usage-metrics";
@@ -265,6 +268,156 @@ function ScoreCard({ entry, rank }: { entry: L2Score; rank: number }) {
   );
 }
 
+function fmtPts(n: number): string {
+  return n.toFixed(1);
+}
+
+function fmtConv(p: number | null): string {
+  return p === null ? "—" : `${p}%`;
+}
+
+/** Monthly Best Performer: the leader's breakdown beside the full standings. */
+function BestPerformerSection({
+  year,
+  month,
+  today,
+  entries,
+}: {
+  year: number;
+  month: number;
+  /** Today in IST, YYYY-MM-DD — decides "so far" vs a finished month. */
+  today: string;
+  entries: BestPerformerEntry[];
+}) {
+  const W = BEST_PERFORMER_WEIGHTS;
+  const monthLabel = new Date(Date.UTC(year, month - 1, 1)).toLocaleString("en-US", {
+    month: "long",
+    year: "numeric",
+    timeZone: "UTC",
+  });
+  const ym = `${year}-${String(month).padStart(2, "0")}`;
+  const inProgress = today.slice(0, 7) === ym;
+  const isPast = today.slice(0, 7) > ym;
+  const daysLeft = inProgress ? new Date(Date.UTC(year, month, 0)).getUTCDate() - Number(today.slice(8, 10)) : 0;
+  const top = entries[0];
+  const hasLeader = !!top && top.points > 0;
+
+  return (
+    <Section
+      title={`Best Performer — ${monthLabel}`}
+      action={
+        <span className="text-caption text-on-surface-variant">
+          Points /100 · enrollments vs target {W.enrollment}% · L2 score {W.scorecard}% · conversion {W.conversion}%
+        </span>
+      }
+    >
+      {entries.length === 0 ? (
+        <p className="py-md text-center text-on-surface-variant text-label-sm">No L2 consultants to rank.</p>
+      ) : (
+        <div className="grid grid-cols-1 gap-gutter lg:grid-cols-12">
+          <div className="rounded-xl border border-amber-300 bg-amber-50 p-lg lg:col-span-4">
+            {hasLeader ? (
+              <>
+                <div className="flex items-center gap-xs text-amber-900">
+                  <span className="material-symbols-outlined" style={{ fontSize: 22 }}>
+                    emoji_events
+                  </span>
+                  <span className="text-caption font-semibold uppercase tracking-wider">
+                    {inProgress ? "Leading so far" : "Best performer"}
+                  </span>
+                </div>
+                <div className="mt-sm truncate text-h3 text-on-surface">{top.displayName}</div>
+                <div className="mt-xs text-[32px] font-bold leading-none tabular-nums text-amber-900">
+                  {fmtPts(top.points)}
+                  <span className="ml-xs text-label-sm font-semibold text-amber-900/70">/ 100</span>
+                </div>
+                <ul className="mt-md space-y-xs text-caption text-amber-900">
+                  <li className="flex justify-between gap-sm">
+                    <span>
+                      Enrollments {top.enrolled} of {top.target > 0 ? `${top.target} target` : "no target"}
+                    </span>
+                    <span className="font-semibold tabular-nums">
+                      {fmtPts(top.parts.enrollment)}/{W.enrollment}
+                    </span>
+                  </li>
+                  <li className="flex justify-between gap-sm">
+                    <span>L2 score {top.scored ? top.scorecardScore : "not scored"}</span>
+                    <span className="font-semibold tabular-nums">
+                      {fmtPts(top.parts.scorecard)}/{W.scorecard}
+                    </span>
+                  </li>
+                  <li className="flex justify-between gap-sm">
+                    <span>
+                      Conversion {fmtConv(top.conversionPct)} → score {fmtPts(top.conversionScore)}
+                    </span>
+                    <span className="font-semibold tabular-nums">
+                      {fmtPts(top.parts.conversion)}/{W.conversion}
+                    </span>
+                  </li>
+                </ul>
+              </>
+            ) : (
+              <p className="py-md text-center text-label-sm text-amber-900">No points on the board for {monthLabel} yet.</p>
+            )}
+          </div>
+
+          <div className="overflow-x-auto lg:col-span-8">
+            <table className="w-full min-w-[640px] border-collapse text-label-sm">
+              <thead>
+                <tr className="border-b border-outline-variant text-left text-caption uppercase tracking-wider text-on-surface-variant">
+                  <th className="py-sm pr-sm font-semibold">#</th>
+                  <th className="px-sm py-sm font-semibold">Consultant</th>
+                  <th className="px-sm py-sm text-right font-semibold" title="Enrolled ÷ the month's Lead Pulse target">
+                    Enrolled / target
+                  </th>
+                  <th className="px-sm py-sm text-right font-semibold">Enroll. /{W.enrollment}</th>
+                  <th className="px-sm py-sm text-right font-semibold" title="L2 Scorecard score for the month">
+                    L2 score /{W.scorecard}
+                  </th>
+                  <th className="px-sm py-sm text-right font-semibold" title="Conversion score = 10 × conversion %">
+                    Conv. /{W.conversion}
+                  </th>
+                  <th className="pl-sm py-sm text-right font-semibold">Points</th>
+                </tr>
+              </thead>
+              <tbody>
+                {entries.map((e, i) => (
+                  <tr key={e.userId} className="border-b border-outline-variant/60 hover:bg-surface-container-low">
+                    <td className="py-sm pr-sm tabular-nums text-on-surface-variant">{i + 1}</td>
+                    <td className="px-sm py-sm font-medium text-on-surface">{e.displayName}</td>
+                    <td className="px-sm py-sm text-right tabular-nums">
+                      {e.enrolled}
+                      <span className="text-on-surface-variant"> / {e.target > 0 ? e.target : "—"}</span>
+                    </td>
+                    <td className="px-sm py-sm text-right tabular-nums">{fmtPts(e.parts.enrollment)}</td>
+                    <td className="px-sm py-sm text-right tabular-nums" title={e.scored ? `Score ${e.scorecardScore}` : "Not scored"}>
+                      {fmtPts(e.parts.scorecard)}
+                    </td>
+                    <td
+                      className="px-sm py-sm text-right tabular-nums"
+                      title={`${fmtConv(e.conversionPct)} of ${e.assigned} assigned → score ${fmtPts(e.conversionScore)}`}
+                    >
+                      {fmtPts(e.parts.conversion)}
+                    </td>
+                    <td className="pl-sm py-sm text-right font-semibold tabular-nums">{fmtPts(e.points)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
+      <p className="mt-md text-caption text-on-surface-variant">
+        Enrollments: enrolled ÷ the month&apos;s Lead Pulse target × 100, capped at 100 (no target = 0), credited to the
+        deal owner on the enrollment date. L2 score: the L2 Scorecard below for the month. Conversion: 10 × conversion %
+        (1.5% → 15), capped at 100.
+        {inProgress && ` Month in progress — ${daysLeft} day${daysLeft === 1 ? "" : "s"} left, so standings can still change.`}
+        {isPast && " For a past month, the scorecard's pipeline-hygiene part reflects today's book."}
+      </p>
+    </Section>
+  );
+}
+
 export default async function TeamActivityPage({ searchParams }: { searchParams: SP }) {
   const { userId, perms } = await getCurrentUserAndPermissions();
   if (!userId || !perms) redirect("/login");
@@ -284,8 +437,12 @@ export default async function TeamActivityPage({ searchParams }: { searchParams:
   }
 
   const scope = resolveTeamScope(access, str(searchParams, "scope"));
+  // Opens on the current (IST) month, so enrollments, the scorecard and the Best
+  // Performer box agree by default; "All time" is an explicit choice.
+  const today = todayIst();
+  const defaultPeriod = monthLabelFor(today) ?? "all";
   const period = parsePeriod({
-    period: str(searchParams, "period"),
+    period: str(searchParams, "period") ?? defaultPeriod,
     from: str(searchParams, "from"),
     to: str(searchParams, "to"),
   });
@@ -320,7 +477,7 @@ export default async function TeamActivityPage({ searchParams }: { searchParams:
         contacts: r.contacts,
         contactsPerHour: hrs >= 0.05 ? r.contacts / hrs : null,
         tasksCompleted: r.tasksCompleted,
-        enrolledMonth: r.enrolledMonth,
+        enrolledPeriod: r.enrolledPeriod,
       };
     })
     .sort((a, b) => b.seconds - a.seconds || a.displayName.localeCompare(b.displayName));
@@ -351,6 +508,17 @@ export default async function TeamActivityPage({ searchParams }: { searchParams:
     : (await getTeamActivity({ scope: wholeTeamScope(scope.selfUserId), range, now })).bdeRows;
   const excludedUserIds = await getScorecardExcludedUserIds(scoreRows.map((r) => r.userId));
   const scorecard = buildL2Scorecard(scoreRows, { excludeUserIds: excludedUserIds });
+
+  // Best Performer — a monthly award, so it shows only when the range is exactly
+  // one calendar month. It ranks the scorecard's members on the same rows.
+  const bestMonth = singleMonthOf(range);
+  const bestPerformers = bestMonth
+    ? buildBestPerformers(
+        scorecard,
+        scoreRows,
+        await getMonthlyTargetByBde(bestMonth.year, bestMonth.month, scorecard.map((s) => s.userId)),
+      )
+    : null;
 
   // BDE table sorted worst-first by total attention pressure, then by name.
   const pressure = (r: TeamBdeRow) => r.slaBreaches + r.abandoned + r.stuck + r.noTask + r.firstResponseBreached;
@@ -392,8 +560,17 @@ export default async function TeamActivityPage({ searchParams }: { searchParams:
               live (now).
             </p>
           </div>
-          <DateFilter />
+          <DateFilter defaultPeriod={defaultPeriod} />
         </div>
+
+        {bestMonth && bestPerformers ? (
+          <BestPerformerSection year={bestMonth.year} month={bestMonth.month} today={today} entries={bestPerformers} />
+        ) : (
+          <div className="rounded-xl border border-outline-variant bg-surface-container-lowest px-lg py-md text-label-sm text-on-surface-variant">
+            <span className="font-semibold text-on-surface">Best Performer</span> is a monthly award — pick a single month
+            in the date filter to see it.
+          </div>
+        )}
 
         {/* Daily pulse */}
         <section className="grid grid-cols-2 gap-gutter md:grid-cols-3 lg:grid-cols-5">
@@ -546,7 +723,7 @@ export default async function TeamActivityPage({ searchParams }: { searchParams:
           title="L2 Scorecard"
           action={
             <span className="text-caption text-on-surface-variant">
-              Score /100 · conversion = this month · responsiveness &amp; discipline = {rangeText} · hygiene = live
+              Score /100 · conversion, responsiveness &amp; discipline = {rangeText} · hygiene = live
             </span>
           }
         >
@@ -585,7 +762,7 @@ export default async function TeamActivityPage({ searchParams }: { searchParams:
                     <th className="px-sm py-sm text-right font-semibold">Contacts</th>
                     <th className="px-sm py-sm text-right font-semibold">Contacts / hr</th>
                     <th className="px-sm py-sm text-right font-semibold">Tasks ✓</th>
-                    <th className="pl-sm py-sm text-right font-semibold">Enrolled (mo)</th>
+                    <th className="pl-sm py-sm text-right font-semibold">Enrolled</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -613,7 +790,7 @@ export default async function TeamActivityPage({ searchParams }: { searchParams:
                         {e.contactsPerHour === null ? "—" : e.contactsPerHour.toFixed(1)}
                       </td>
                       <td className="px-sm py-sm text-right tabular-nums">{e.tasksCompleted}</td>
-                      <td className="pl-sm py-sm text-right tabular-nums">{e.enrolledMonth}</td>
+                      <td className="pl-sm py-sm text-right tabular-nums">{e.enrolledPeriod}</td>
                     </tr>
                   ))}
                 </tbody>
@@ -621,7 +798,7 @@ export default async function TeamActivityPage({ searchParams }: { searchParams:
               <p className="mt-md text-caption text-on-surface-variant">
                 Active time = tab focused and the consultant interacting (mouse/keyboard/scroll) within the last minute.
                 Leaving the CRM open in the background or walking away does not count. &ldquo;Contacts / hr&rdquo; puts
-                that effort next to logged output; enrolments are this calendar month.
+                that effort next to logged output; enrolments follow the date filter.
               </p>
             </div>
           )}
@@ -630,14 +807,18 @@ export default async function TeamActivityPage({ searchParams }: { searchParams:
         {/* BDE performance table */}
         <Section
           title={scope.teamWide ? "Consultant performance" : "My numbers"}
-          action={<span className="text-caption text-on-surface-variant">Conversion = this month · activity = {rangeText}</span>}
+          action={
+            <span className="text-caption text-on-surface-variant">
+              Assigned, enrolled, conversion &amp; activity = {rangeText} · SLA → Quality due = live
+            </span>
+          }
         >
           <div className="overflow-x-auto">
             <table className="w-full min-w-[920px] border-collapse text-label-sm">
               <thead>
                 <tr className="border-b border-outline-variant text-left text-caption uppercase tracking-wider text-on-surface-variant">
                   <th className="py-sm pr-sm font-semibold">Consultant</th>
-                  <th className="px-sm py-sm text-right font-semibold">Assigned (mo)</th>
+                  <th className="px-sm py-sm text-right font-semibold">Assigned</th>
                   <th className="px-sm py-sm text-right font-semibold">Enrolled</th>
                   <th className="px-sm py-sm text-right font-semibold">Conv.</th>
                   <th className="px-sm py-sm text-right font-semibold">Contacts</th>
@@ -669,8 +850,8 @@ export default async function TeamActivityPage({ searchParams }: { searchParams:
                         </Link>
                         <span className="ml-xs text-caption uppercase text-on-surface-variant">{r.role}</span>
                       </td>
-                      <td className="px-sm py-sm text-right tabular-nums">{r.assignedMonth}</td>
-                      <td className="px-sm py-sm text-right tabular-nums">{r.enrolledMonth}</td>
+                      <td className="px-sm py-sm text-right tabular-nums">{r.assignedPeriod}</td>
+                      <td className="px-sm py-sm text-right tabular-nums">{r.enrolledPeriod}</td>
                       <td className="px-sm py-sm text-right tabular-nums">
                         {r.conversionPct === null ? "—" : `${r.conversionPct}%`}
                       </td>
