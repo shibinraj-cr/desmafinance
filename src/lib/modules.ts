@@ -387,6 +387,15 @@ export const MODULES: AppModule[] = [
         group: "ADMIN",
       },
       {
+        // The Follow-Up / Re-marketing time limits: preview, switch on, and
+        // extend leads near the limit. Page grant (Admin + Marketing Admin); the
+        // page and its API also require the bulk-stage tier (canBulkStatus).
+        href: "/crm/lifecycle",
+        label: "Lead Lifecycle",
+        icon: "hourglass_bottom",
+        group: "ADMIN",
+      },
+      {
         // Companion to Meta Reconcile: audit whether Voxbay incoming callers are
         // in the CRM. Same page-grant gating (Admin + Marketing Admin).
         href: "/crm/voxbay-reconcile",

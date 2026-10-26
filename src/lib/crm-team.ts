@@ -21,7 +21,7 @@
  *     activity/first-response metrics use the page's selected date range;
  *     attention buckets (SLA breach / abandoned / no-task / stuck) are
  *     point-in-time snapshots that ignore the range. Each is labelled in the UI.
- *   - A lead with an *upcoming* scheduled task (an open task due today or later)
+ *   - A lead with an *upcoming* scheduled task (an open task due today or within the next 30 days)
  *     is exempt from the SLA-breach and stuck-in-stage buckets: a planned, not-yet-
  *     lapsed next step means the consultant is on it. Abandoned and no-next-step
  *     are unaffected. See {@link hasUpcomingTask} / {@link attentionFlags}.
@@ -90,25 +90,38 @@ export const FIRST_RESPONSE_SLA_HOURS = 24;
 /** Cap on how many rows each attention list returns (worst-first); UI links to the full set. */
 export const ATTENTION_LIST_LIMIT = 12;
 
-/**
- * Passive activity types that never count as a "touch" — kept in sync with
- * `NON_BUMPING_TYPES` in crm-activity.ts (a merely-viewed lead must not look
- * worked).
- */
-export const PASSIVE_ACTIVITY_TYPES = ["LEAD_OPENED"] as const;
-
 /** Outbound-contact activity types — the "reach-out" actions behind the leaderboard and first-response. */
 export const OUTBOUND_CONTACT_TYPES = ["CALL_LOGGED", "EMAIL_SENT", "WHATSAPP_SENT"] as const;
+
+/**
+ * The activity that counts as WORKING a lead — contacting the candidate,
+ * recording what was learned, moving the lead on, or finishing a task. An
+ * allow-list on purpose: bookkeeping (pushing a task's due date, re-rating,
+ * reassigning, editing a field, linking a party) and events that happen TO the
+ * lead (a re-inquiry, an import) leave the clock where it was, so the SLA and
+ * abandoned flags can't be reset without doing the work they measure.
+ */
+export const WORK_ACTIVITY_TYPES = [
+  ...OUTBOUND_CONTACT_TYPES,
+  "NOTE_ADDED",
+  "STATUS_CHANGED",
+  "SUB_STATUS_CHANGED",
+  "TASK_COMPLETED",
+  "ENROLLED",
+] as const;
+
+/** A scheduled task further out than this doesn't count as "already on it" for SLA / stuck. */
+export const UPCOMING_TASK_MAX_DAYS = 30;
 
 // ── Pure helpers (unit-tested) ───────────────────────────────────────────────
 
 /**
  * Prisma `where` selecting the `LeadActivity` rows that count as a real "touch":
- * any activity EXCEPT a passive view (`LEAD_OPENED`), EXCEPT a bulk-email send
- * (`EMAIL_SENT` with `metadata.bulk === true`), and EXCEPT anything the system
- * wrote on its own (`actorId` null — an automated task reminder, a re-marketing
- * touch, a cron sweep). This is the rule used everywhere a lead's last-worked
- * time is computed.
+ * one of the {@link WORK_ACTIVITY_TYPES} by a person — never a passive view, a
+ * bulk-email send (`EMAIL_SENT` with `metadata.bulk === true`), or anything the
+ * system wrote on its own (`actorId` null — an automated task reminder, a
+ * re-marketing touch, a cron sweep). This is the rule used everywhere a lead's
+ * last-worked time is computed.
  *
  * The actor rule is what keeps the clock honest: an automation that messages the
  * candidate on a consultant's behalf is not the consultant working the lead, and
@@ -117,7 +130,7 @@ export const OUTBOUND_CONTACT_TYPES = ["CALL_LOGGED", "EMAIL_SENT", "WHATSAPP_SE
  */
 export function touchActivityWhere(): Prisma.LeadActivityWhereInput {
   return {
-    type: { notIn: [...PASSIVE_ACTIVITY_TYPES] },
+    type: { in: [...WORK_ACTIVITY_TYPES] },
     actorId: { not: null },
     NOT: { type: "EMAIL_SENT", metadata: { path: ["bulk"], equals: true } },
   };
@@ -271,7 +284,11 @@ export function startOfNextLocalDay(d: Date): Date {
  * date (null) does not count — there is no scheduled date to be "in the future".
  */
 export function hasUpcomingTask(nextTaskDueAt: Date | null, now: Date): boolean {
-  return nextTaskDueAt !== null && nextTaskDueAt.getTime() >= startOfLocalDay(now).getTime();
+  if (nextTaskDueAt === null) return false;
+  if (nextTaskDueAt.getTime() < startOfLocalDay(now).getTime()) return false;
+  // A follow-up parked months out is not "on it" — otherwise one far-future
+  // task silences the SLA and stuck flags indefinitely.
+  return nextTaskDueAt.getTime() < startOfNextLocalDay(now).getTime() + UPCOMING_TASK_MAX_DAYS * 86_400_000;
 }
 
 /**
@@ -280,10 +297,13 @@ export function hasUpcomingTask(nextTaskDueAt: Date | null, now: Date): boolean 
  * its due day has fully passed. A task with no due date has no SLA to miss (on
  * time); an uncompleted task is never on time.
  */
-export function isTaskOnTime(t: { completedAt: Date | null; dueAt: Date | null }): boolean {
+export function isTaskOnTime(t: { completedAt: Date | null; dueAt: Date | null; originalDueAt?: Date | null }): boolean {
   if (!t.completedAt) return false;
-  if (!t.dueAt) return true;
-  return t.completedAt.getTime() < startOfNextLocalDay(t.dueAt).getTime();
+  // Judged against the FIRST due date the task was given: a due date pushed back
+  // after it lapsed must not turn a late completion into an on-time one.
+  const due = t.originalDueAt ?? t.dueAt;
+  if (!due) return true;
+  return t.completedAt.getTime() < startOfNextLocalDay(due).getTime();
 }
 
 /**
@@ -622,7 +642,7 @@ export async function getTeamActivity(opts: {
         completedAt: occurredAt ?? { not: null },
         ...(self ? { assignedToId: self } : { assignedToId: { in: ids } }),
       },
-      select: { assignedToId: true, completedAt: true, dueAt: true },
+      select: { assignedToId: true, completedAt: true, dueAt: true, originalDueAt: true },
     }),
     // Leads assigned in the range (assignedRange counts + first-response population).
     // Carryover-filtered below so imports stamped at import time aren't counted.

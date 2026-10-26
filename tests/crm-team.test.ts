@@ -32,8 +32,13 @@ import {
 const DAY = 86_400_000;
 
 describe("touchActivityWhere", () => {
-  it("excludes the passive LEAD_OPENED view", () => {
-    expect(touchActivityWhere().type).toEqual({ notIn: ["LEAD_OPENED"] });
+  it("counts only real work — contact, notes, stage/status moves, finished tasks", () => {
+    const types = (touchActivityWhere().type as { in: string[] }).in;
+    expect(types).toEqual(expect.arrayContaining(["CALL_LOGGED", "WHATSAPP_SENT", "NOTE_ADDED", "STATUS_CHANGED", "TASK_COMPLETED"]));
+    // Bookkeeping and things that happen TO the lead never reset its clock.
+    for (const t of ["LEAD_OPENED", "TASK_UPDATED", "ASSIGNED", "REASSIGNED", "RE_INQUIRY", "QUALITY_RATED", "FIELD_UPDATED"]) {
+      expect(types).not.toContain(t);
+    }
   });
 
   it("excludes bulk-email sends (EMAIL_SENT with metadata.bulk = true)", () => {
@@ -277,6 +282,31 @@ describe("local day helpers", () => {
   });
   it("startOfNextLocalDay advances one calendar day", () => {
     expect(startOfNextLocalDay(new Date(2026, 5, 24, 15, 30)).getDate()).toBe(25);
+  });
+});
+
+describe("hasUpcomingTask — far-future tasks", () => {
+  const now = new Date(2026, 5, 24, 12, 0);
+  it("a task within 30 days still counts as a planned next step", () => {
+    expect(hasUpcomingTask(new Date(2026, 6, 20, 9, 0), now)).toBe(true);
+  });
+  it("a task parked months out does not silence the SLA / stuck flags", () => {
+    expect(hasUpcomingTask(new Date(2026, 9, 1, 9, 0), now)).toBe(false);
+  });
+});
+
+describe("isTaskOnTime — judged against the original due date", () => {
+  it("a due date pushed back after it lapsed does not make a late completion on time", () => {
+    expect(
+      isTaskOnTime({
+        completedAt: new Date(2026, 5, 15, 10),
+        dueAt: new Date(2026, 5, 16),
+        originalDueAt: new Date(2026, 5, 10),
+      }),
+    ).toBe(false);
+  });
+  it("falls back to dueAt when no original was recorded", () => {
+    expect(isTaskOnTime({ completedAt: new Date(2026, 5, 9, 10), dueAt: new Date(2026, 5, 10), originalDueAt: null })).toBe(true);
   });
 });
 

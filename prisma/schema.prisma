@@ -2846,6 +2846,17 @@ model Lead {
   // Cleared when the lead leaves Re-marketing.
   remarketingStartedAt DateTime?
 
+  /// When the lead entered the stage it is in now. Maintained by a database
+  /// trigger on every write that changes `statusId` (and on insert), so every
+  /// path into a stage — the stage picker, bulk moves, revival, enroll, the
+  /// lifecycle sweep — stamps it without each having to remember. The clock
+  /// behind the Follow-Up and Re-marketing caps (src/lib/crm-lifecycle.ts).
+  stageEnteredAt DateTime?
+  /// A Marketing Admin's extension of the Follow-Up cap: the lifecycle sweep
+  /// leaves the lead with its consultant until this moment, even past 45 days.
+  /// Cleared whenever the lead changes stage.
+  followUpExtendedUntil DateTime?
+
   // Set when a WhatsApp touch to this lead HARD-failed as undeliverable (Meta
   // 131026 — not on WhatsApp / bad number), reported by the Wabis delivery-status
   // webhook. The re-marketing engine refuses to open or continue a campaign for a
@@ -2993,6 +3004,7 @@ model Lead {
   @@index([qualityReasonId])
   // Backs the "rating overdue" queue: unrated leads whose due date has passed.
   @@index([qualityDueAt, qualityRating])
+  @@index([statusId, stageEnteredAt])
   @@index([dob])
   @@index([country])
   @@index([studyDestination])
@@ -3144,6 +3156,11 @@ model CrmTask {
   lead          Lead      @relation(fields: [leadId], references: [id], onDelete: Cascade)
   subject       String
   dueAt         DateTime?
+  /// The first due date this task was given. Set by a database trigger (on
+  /// insert, or the first time `dueAt` is filled) and never moved after, so
+  /// "completed on time" is judged against the promise made, not against a due
+  /// date that was pushed back the day it lapsed.
+  originalDueAt DateTime?
   // 'low' | 'normal' | 'high'
   priority      String    @default("normal")
   // 'open' | 'done'

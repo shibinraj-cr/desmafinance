@@ -84,6 +84,10 @@
     {
       "path": "/api/cron/bank-statements",
       "schedule": "*/5 * * * *"
+    },
+    {
+      "path": "/api/cron/crm-lifecycle",
+      "schedule": "50 2 * * *"
     }
   ]
 }

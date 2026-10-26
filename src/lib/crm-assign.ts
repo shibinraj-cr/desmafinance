@@ -16,10 +16,31 @@ import { syncConversationAssignee } from "./wa/mirror";
 import { qualityDueAtOnAssign } from "./crm-lead-quality";
 import { leadRowInclude, crmTaskFollowAssignmentWhere, type LeadWithRels } from "./crm-leads";
 
+/**
+ * The consultant a lead was last released FROM into the central pool, or null.
+ * Read from the latest UNASSIGNED entry, which carries `centralPool: true` when
+ * the release was a move into Centralised (Re-)marketing.
+ */
+export async function lastCentralPoolOwner(leadId: string): Promise<string | null> {
+  const last = await prisma.leadActivity.findFirst({
+    where: { leadId, type: "UNASSIGNED" },
+    orderBy: { occurredAt: "desc" },
+    select: { metadata: true },
+  });
+  const m = (last?.metadata ?? null) as { centralPool?: unknown; fromUserId?: unknown } | null;
+  return m && m.centralPool === true && typeof m.fromUserId === "string" ? m.fromUserId : null;
+}
+
+/** The operative rule: a lead revived from the central pool goes to a different consultant. */
+export function isSameOwnerRevival(previousOwnerId: string | null, targetUserId: string | null): boolean {
+  return !!previousOwnerId && !!targetUserId && previousOwnerId === targetUserId;
+}
+
 export async function assignLeadTo(
   leadId: string,
   targetUserId: string | null,
   actorUserId: string,
+  opts: { centralPool?: boolean } = {},
 ): Promise<LeadWithRels> {
   const existing = await prisma.lead.findUnique({
     where: { id: leadId },
@@ -51,6 +72,15 @@ export async function assignLeadTo(
     targetName = role.displayName;
     targetRole = role.role;
     targetIntroEnabled = role.sendAssignIntro;
+  }
+
+  // Fresh interest out of the central pool is a new consultant's lead — the
+  // previous owner already had their chance (Sales SOP, hard rule).
+  if (targetUserId && !existing.assignedToId && isSameOwnerRevival(await lastCentralPoolOwner(leadId), targetUserId)) {
+    throw badRequest(
+      "This lead came back from the central pool — assign it to a different consultant than its previous owner.",
+      "same_owner_revival",
+    );
   }
 
   if (existing.assignedToId === targetUserId) {
@@ -109,7 +139,11 @@ export async function assignLeadTo(
     actorId: actorUserId,
     type,
     summary,
-    metadata: { fromUserId: existing.assignedToId, toUserId: targetUserId },
+    metadata: {
+      fromUserId: existing.assignedToId,
+      toUserId: targetUserId,
+      ...(opts.centralPool && !targetUserId ? { centralPool: true } : {}),
+    },
   });
 
   // In-app notify the new owner (best-effort; no-op on unassign or self-assign).
@@ -184,7 +218,8 @@ export async function assignLeadTo(
  */
 export async function releaseLeads(
   leads: { id: string; assignedToId: string | null }[],
-  actorUserId: string,
+  /** Null when the system does the releasing (the lifecycle sweep). */
+  actorUserId: string | null,
 ): Promise<number> {
   const owned = leads.filter(
     (l): l is { id: string; assignedToId: string } => !!l.assignedToId,
@@ -216,7 +251,8 @@ export async function releaseLeads(
         actorId: actorUserId,
         type: "UNASSIGNED",
         summary: "Unassigned — moved to the central pool",
-        metadata: { fromUserId: l.assignedToId, toUserId: null, bulk: true },
+        // centralPool marks a release INTO the pool — see lastCentralPoolOwner.
+        metadata: { fromUserId: l.assignedToId, toUserId: null, bulk: true, centralPool: true },
       })),
     }),
   ]);

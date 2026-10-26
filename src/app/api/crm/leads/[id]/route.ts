@@ -3,7 +3,7 @@ import { Prisma } from "@prisma/client";
 import { z } from "zod";
 import { prisma } from "@/lib/prisma";
 import { withApiHandler } from "@/lib/api";
-import { unauthorized, forbidden, notFound, badRequest, unprocessable } from "@/lib/http-error";
+import { unauthorized, forbidden, notFound, badRequest, unprocessable, conflict } from "@/lib/http-error";
 import { getCurrentUserAndPermissions } from "@/lib/permissions";
 import { getCrmAccess, canEditLead } from "@/lib/crm-rbac";
 import { recordLeadActivity } from "@/lib/crm-activity";
@@ -315,11 +315,23 @@ export const PATCH = withApiHandler(async (req: Request, { params }: Ctx) => {
     return NextResponse.json({ lead: serializeLead(unchanged!) });
   }
 
-  const updated = await prisma.lead.update({
-    where: { id: params.id },
-    data: update,
-    include: leadRowInclude,
-  });
+  // A stage change is conditional on the stage this request read. Two people
+  // moving the same lead at once (or a bulk sweep / enroll landing in between)
+  // would otherwise have the second write silently undo the first — and an
+  // Enrolled lead moved back out of Enrolled desyncs its party, pipeline,
+  // finance draft and operations project.
+  const updated = await prisma.lead
+    .update({
+      where: { id: params.id, ...("statusId" in update ? { statusId: existing.statusId } : {}) },
+      data: update,
+      include: leadRowInclude,
+    })
+    .catch((e: unknown) => {
+      if (e instanceof Prisma.PrismaClientKnownRequestError && e.code === "P2025") {
+        throw conflict("Someone else changed this lead's stage just now — reload and try again.", "stage_changed");
+      }
+      throw e;
+    });
 
   // Activity logging. recordLeadActivity bumps lastActivityAt.
   if (statusChange) {
@@ -397,7 +409,7 @@ export const PATCH = withApiHandler(async (req: Request, { params }: Ctx) => {
     updated.assignedToId &&
     isCentralisedStatus({ code: statusCodeChange.toCode, label: statusChange?.to })
   ) {
-    lead = await assignLeadTo(updated.id, null, userId);
+    lead = await assignLeadTo(updated.id, null, userId, { centralPool: true });
   }
 
   return NextResponse.json({ lead: serializeLead(lead) });
