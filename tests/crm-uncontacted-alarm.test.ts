@@ -1,5 +1,6 @@
 import { describe, it, expect } from "vitest";
 import {
+  contactedSinceAssignment,
   UNCONTACTED_AFTER_MINUTES,
   UNCONTACTED_REMIND_EVERY_MINUTES,
   uncontactedAlarmScope,
@@ -71,5 +72,18 @@ describe("shouldPopUp", () => {
 
   it("pops straight away when the last reminder was long ago", () => {
     expect(shouldPopUp({ now, lastShownAt: now - 6 * 60 * MIN, overdueCount: 1 })).toBe(true);
+  });
+});
+
+describe("contactedSinceAssignment", () => {
+  const assignedAt = new Date("2026-10-26T08:00:00Z");
+  it("a contact after the assignment clears the alarm", () => {
+    expect(contactedSinceAssignment(assignedAt, new Date("2026-10-26T09:00:00Z"))).toBe(true);
+  });
+  it("a contact by the previous owner (before this assignment) does not", () => {
+    expect(contactedSinceAssignment(assignedAt, new Date("2026-10-25T09:00:00Z"))).toBe(false);
+  });
+  it("no contact at all does not", () => {
+    expect(contactedSinceAssignment(assignedAt, null)).toBe(false);
   });
 });

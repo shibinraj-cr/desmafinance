@@ -29,6 +29,7 @@ import {
   WA_BROADCAST_ENABLED_KEY,
 } from "../app-settings";
 import { getWaProvider } from "./registry";
+import { isPermanentUndeliverable } from "./undeliverable";
 
 /**
  * Recipients per drain run, unless an admin overrides it via `wa_broadcast_batch`.
@@ -211,15 +212,6 @@ const AUDIENCE_SELECT = {
   assignedTo: { select: { username: true, leadPulseRole: { select: { displayName: true, phone: true } } } },
 } as const;
 
-/**
- * Meta error codes that mean the NUMBER cannot receive WhatsApp at all, so a
- * broadcast that hits one flags the lead and every later broadcast + the
- * re-marketing drip skip it. Deliberately narrow: only 131026 ("not on WhatsApp /
- * invalid number") is a true dead-number verdict. Transient/window codes (131000
- * generic, 131047 24h re-engagement, 131049 frequency cap) are NOT here — flagging
- * a valid lead undeliverable over one of those would silence it forever.
- */
-const PERMANENT_UNDELIVERABLE_CODES: ReadonlySet<string> = new Set(["131026"]);
 
 /**
  * The audience where-clause. `buildLeadWhere` for the stage/service/source
@@ -606,7 +598,7 @@ async function drainOne(
       // of the PHONE, not this campaign or this lead row: flag every lead sharing
       // the number (re-enrollment copies it per service) so every later broadcast
       // AND the re-marketing drip skip it, instead of re-hitting a dead number.
-      if (recipient.phoneE164 && result.errorCode && PERMANENT_UNDELIVERABLE_CODES.has(result.errorCode)) {
+      if (recipient.phoneE164 && isPermanentUndeliverable(result.errorCode)) {
         await prisma.lead
           .updateMany({
             where: { phoneE164: recipient.phoneE164, whatsappUndeliverableAt: null },

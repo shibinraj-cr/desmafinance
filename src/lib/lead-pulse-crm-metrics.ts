@@ -69,7 +69,7 @@ export async function getCrmFunnelByBde(year: number, month: number): Promise<Cr
       JOIN "CrmLeadStatus" st ON l."statusId" = st.id
       WHERE l."assignedToId" IN (${Prisma.join(ids)})
         AND l."assignedAt" >= ${mStart} AND l."assignedAt" < ${mEnd}
-        AND (l."importBatchId" IS NULL OR l."assignedAt" > b."createdAt" + interval '10 minutes')
+        AND ${DELIBERATE}
         AND st.code <> 'duplicate'
       GROUP BY l."assignedToId"
     `),
@@ -211,7 +211,9 @@ function assignRange(start: string, end: string): { gte: Date; lt: Date } {
   return { gte, lt };
 }
 // SQL fragment: a lead counts as deliberately assigned (not bulk-import carryover).
-const DELIBERATE = Prisma.sql`(l."importBatchId" IS NULL OR l."assignedAt" > b."createdAt" + interval '10 minutes')`;
+// Only a file a person uploaded (`uploadedById` set) can carry owners over; a
+// sheet-sync batch creates its leads unassigned — see carryoverBatchCreatedAt.
+const DELIBERATE = Prisma.sql`(l."importBatchId" IS NULL OR b."uploadedById" IS NULL OR l."assignedAt" > b."createdAt" + interval '10 minutes')`;
 // SQL fragment: exclude leads the CRM has flagged as duplicates (email/phone
 // collision → `duplicate` status) so a re-assigned duplicate is never
 // double-counted in "leads assigned". Requires a `CrmLeadStatus st` join.

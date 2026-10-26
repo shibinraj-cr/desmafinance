@@ -13,6 +13,7 @@ import { recordLeadActivity } from "./crm-activity";
 import { notifyLeadAssigned } from "./crm-notify";
 import { enqueueLeadAssignedWebhook } from "./crm-webhook";
 import { syncConversationAssignee } from "./wa/mirror";
+import { qualityDueAtOnAssign } from "./crm-lead-quality";
 import { leadRowInclude, crmTaskFollowAssignmentWhere, type LeadWithRels } from "./crm-leads";
 
 export async function assignLeadTo(
@@ -22,7 +23,13 @@ export async function assignLeadTo(
 ): Promise<LeadWithRels> {
   const existing = await prisma.lead.findUnique({
     where: { id: leadId },
-    select: { id: true, assignedToId: true, assignedTo: { select: { username: true } } },
+    select: {
+      id: true,
+      assignedToId: true,
+      assignedTo: { select: { username: true } },
+      qualityDueAt: true,
+      qualityRating: true,
+    },
   });
   if (!existing) throw notFound();
 
@@ -65,12 +72,19 @@ export async function assignLeadTo(
 
   // Propagate the (re)assignment to the lead's OPEN tasks so the Tasks board's
   // "Unassigned" filter and consultant column track the lead owner.
+  const assignedAt = new Date();
+  // The new owner's five days to rate the lead start now (see qualityDueAtOnAssign).
+  const qualityDueAt = targetUserId ? qualityDueAtOnAssign(existing, assignedAt) : undefined;
   const updated = await prisma.$transaction(async (tx) => {
     const lead = await tx.lead.update({
       where: { id: leadId },
       // Stamp the assignment moment (cleared on unassign) so the list can show an
       // "Assigned" date and filter by it.
-      data: { assignedToId: targetUserId, assignedAt: targetUserId ? new Date() : null },
+      data: {
+        assignedToId: targetUserId,
+        assignedAt: targetUserId ? assignedAt : null,
+        ...(qualityDueAt ? { qualityDueAt } : {}),
+      },
       include: leadRowInclude,
     });
     await tx.crmTask.updateMany({

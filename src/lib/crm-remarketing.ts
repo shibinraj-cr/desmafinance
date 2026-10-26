@@ -64,6 +64,7 @@ import {
 import { cloudProvider } from "./wa/cloud-provider";
 import { findOrCreateConversationForLead } from "./wa/mirror";
 import { RANK, type WaDeliveryUpdate } from "./wa/delivery-status";
+import { isPermanentUndeliverable } from "./wa/undeliverable";
 
 /** The Follow-Up stage a responding lead advances to. */
 export const FOLLOW_UP_STATUS_CODE = "follow_up";
@@ -90,13 +91,10 @@ const RUN_TIME_BUDGET_MS = 45_000;
  * sequentially drains only ~25 in the time budget; firing a batch concurrently
  * lifts that to the low hundreds. Kept modest so we don't stampede Wabis/Meta. */
 const SEND_CONCURRENCY = 20;
-/**
- * Meta error codes that mark a number PERMANENTLY undeliverable (bad number / not
- * on WhatsApp) — these flag the lead so a future campaign also skips it. Transient
- * codes (e.g. 131049, the marketing frequency cap) still STOP the current campaign
- * under the "any hard failure" policy, but do not permanently flag the lead.
- */
-const PERMANENT_UNDELIVERABLE_CODES: ReadonlySet<string> = new Set(["131026", "131000", "131047"]);
+// Meta error codes that mark a number PERMANENTLY undeliverable live in
+// wa/undeliverable.ts, shared with broadcasts. Transient codes (e.g. 131049, the
+// marketing frequency cap) still STOP the current campaign under the "any hard
+// failure" policy, but do not permanently flag the lead.
 
 // ── Config ──────────────────────────────────────────────────────────────────
 
@@ -210,6 +208,18 @@ const NEGATIVE_REPLY_TERMS = [
   "no thank you",
 ] as const;
 
+/**
+ * Is this reply a refusal ("not interested", "wrong number", "stop" …)? A refusal
+ * ends the running drip — it is the candidate telling us the nurturing is
+ * unwanted — but is NOT a global opt-out: only an explicit opt-out message
+ * (wa/inbound.ts) silences every channel. A false positive here costs one
+ * campaign, never the candidate's reachability.
+ */
+export function isRefusalReply(text: string | null | undefined): boolean {
+  const t = (text ?? "").toLowerCase();
+  return NEGATIVE_REPLY_TERMS.some((k) => t.includes(k));
+}
+
 /** Whole calendar days between two instants (≥ 0; 0 when `to` precedes `from`). */
 export function daysBetween(from: Date, to: Date): number {
   const ms = to.getTime() - from.getTime();
@@ -262,7 +272,7 @@ export function matchesReengageKeyword(text: string | null | undefined, keywords
   // real gate; once every inbound message reaches us directly it is not, and
   // "not interested" would move the lead to Follow-Up and tell a consultant to
   // ring somebody who had just asked to be left alone.
-  if (NEGATIVE_REPLY_TERMS.some((k) => t.includes(k))) return false;
+  if (isRefusalReply(t)) return false;
   // A reply with no text is still a reply — a photo of a passport page is
   // engagement, and the candidate chose to send it. Only the keyword-matching
   // branch below needs words to work with.
@@ -1287,12 +1297,32 @@ export async function handleRemarketingReply(input: {
     leadId: found.id,
     type: "REMARKETING_RESPONSE",
     summary: advance
-      ? "Candidate replied in Wabis — advancing to Follow-Up"
-      : "Candidate replied in Wabis (no matching intent keyword)",
+      ? "Candidate replied — advancing to Follow-Up"
+      : "Candidate replied (no matching intent keyword)",
     metadata: { text: (input.text ?? "").slice(0, 500), matched: advance, keywords: config.keywords },
   });
 
   if (!advance) {
+    // A refusal ends the drip. Without this, "not interested" / "wrong number"
+    // was recognised (it can never advance the lead) and then ignored, and the
+    // next touch went out anyway. The lead stays in Re-marketing and its
+    // `remarketingStartedAt` clock is left alone — only the messaging stops; the
+    // thread keeps awaitingReply, so a person still answers her.
+    if (campaign && isRefusalReply(input.text)) {
+      const closed = await prisma.crmRemarketingCampaign.updateMany({
+        where: { id: campaign.id, status: "running" },
+        data: { status: "stopped", endedReason: "declined", endedAt: new Date() },
+      });
+      if (closed.count > 0) {
+        await recordLeadActivity({
+          leadId: found.id,
+          type: "REMARKETING_ENDED",
+          summary: "Re-marketing messages stopped — the candidate declined",
+          metadata: { reason: "declined" },
+        });
+      }
+      return { ok: true, action: "ignored", reason: "declined", leadId: found.id };
+    }
     return { ok: true, action: "ignored", reason: "no_keyword_match", leadId: found.id };
   }
 
@@ -1608,7 +1638,7 @@ async function applyHardDeliveryFailure(input: {
   touch: number | null;
   now: Date;
 }): Promise<boolean> {
-  const permanent = input.errorCode ? PERMANENT_UNDELIVERABLE_CODES.has(input.errorCode) : false;
+  const permanent = input.errorCode ? isPermanentUndeliverable(input.errorCode) : false;
 
   await prisma.crmRemarketingCampaign
     .updateMany({
@@ -1847,7 +1877,7 @@ export async function importWabisDeliveryReport(opts: {
       summary.matched++;
       if (row.status === "failed") summary.failures++;
       if (row.status === "delivered" || row.status === "read") summary.delivered++;
-      if (row.errorCode && PERMANENT_UNDELIVERABLE_CODES.has(row.errorCode)) summary.flagged++;
+      if (isPermanentUndeliverable(row.errorCode)) summary.flagged++;
     } else {
       summary.unmatched++;
       if (summary.unmatchedPhones.length < 100) summary.unmatchedPhones.push(row.phone);

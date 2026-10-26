@@ -20,6 +20,7 @@ import {
   hasUpcomingTask,
   isTaskOnTime,
   isDeliberateAssignment,
+  carryoverBatchCreatedAt,
   IMPORT_CARRYOVER_GRACE_MS,
   resolveTeamScope,
   median,
@@ -41,6 +42,10 @@ describe("touchActivityWhere", () => {
       metadata: { path: ["bulk"], equals: true },
     });
   });
+
+  it("excludes activity the system wrote on its own (no actor)", () => {
+    expect(touchActivityWhere().actorId).toEqual({ not: null });
+  });
 });
 
 describe("outboundContactWhere", () => {
@@ -48,6 +53,10 @@ describe("outboundContactWhere", () => {
     const where = outboundContactWhere();
     expect(where.type).toEqual({ in: ["CALL_LOGGED", "EMAIL_SENT", "WHATSAPP_SENT"] });
     expect(where.NOT).toEqual({ type: "EMAIL_SENT", metadata: { path: ["bulk"], equals: true } });
+  });
+
+  it("never counts an automated send (no actor) as a consultant's contact", () => {
+    expect(outboundContactWhere().actorId).toEqual({ not: null });
   });
 });
 
@@ -312,6 +321,31 @@ describe("isDeliberateAssignment", () => {
   it("accepts an imported lead reassigned meaningfully later", () => {
     const assignedAt = new Date(importedAt.getTime() + IMPORT_CARRYOVER_GRACE_MS + 60_000);
     expect(isDeliberateAssignment({ assignedToId: "u1", assignedAt, importBatchCreatedAt: importedAt })).toBe(true);
+  });});
+
+describe("carryoverBatchCreatedAt", () => {
+  const createdAt = new Date("2026-06-01T00:00:00Z");
+
+  it("judges an uploaded file against its import time", () => {
+    expect(carryoverBatchCreatedAt({ createdAt, uploadedById: "u9" })).toEqual(createdAt);
+  });
+
+  it("never treats a sheet-sync batch (no uploader) as carryover", () => {
+    expect(carryoverBatchCreatedAt({ createdAt, uploadedById: null })).toBeNull();
+    // A sheet lead assigned two minutes after the sync is a real assignment.
+    const assignedAt = new Date(createdAt.getTime() + 2 * 60_000);
+    expect(
+      isDeliberateAssignment({
+        assignedToId: "u1",
+        assignedAt,
+        importBatchCreatedAt: carryoverBatchCreatedAt({ createdAt, uploadedById: null }),
+      }),
+    ).toBe(true);
+  });
+
+  it("is null for a lead with no batch", () => {
+    expect(carryoverBatchCreatedAt(null)).toBeNull();
+    expect(carryoverBatchCreatedAt(undefined)).toBeNull();
   });
 });
 

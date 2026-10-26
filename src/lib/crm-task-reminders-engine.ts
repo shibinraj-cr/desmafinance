@@ -836,6 +836,9 @@ async function sendWhatsAppReminder(reminder: DueReminder, task: TaskWithLead): 
     template: reminder.templateName,
     templateParams: (reminder.templateParams ?? {}) as Record<string, string>,
     renderedBody: reminder.body,
+    // recordSend() writes the timeline entry (with the task it belongs to), so
+    // the generic one from the send path would log the same message twice.
+    recordActivity: false,
   });
 
   if (result.ok) return { ok: true, providerMessageId: result.providerMessageId, detail: "", retryable: true };

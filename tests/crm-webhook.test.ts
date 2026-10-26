@@ -150,6 +150,12 @@ describe("leadAssignedSkipReason", () => {
   it("sends for an L2 consultant with the intro switched on", () => {
     expect(leadAssignedSkipReason(send)).toBeNull();
   });
+  it("never sends to a candidate who opted out — checked before every other reason", () => {
+    expect(leadAssignedSkipReason({ ...send, candidateOptedOut: true })).toMatch(/opted out/);
+    const all = { isStudyAbroad: true, assigneeRole: "l1", assigneeIntroEnabled: false, agentDisplayName: "x" };
+    expect(leadAssignedSkipReason({ ...all, candidateOptedOut: true })).toMatch(/opted out/);
+    expect(leadAssignedSkipReason({ ...send, candidateOptedOut: false })).toBeNull();
+  });
   it("skips when the assignee's Team Roster switch is off", () => {
     expect(leadAssignedSkipReason({ ...send, assigneeIntroEnabled: false })).toMatch(/switched off .* Team Roster/);
   });

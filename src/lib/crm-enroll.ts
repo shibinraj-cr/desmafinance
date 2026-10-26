@@ -460,6 +460,17 @@ export async function enrollLead(
   const deal = { serviceId, sourceId: lead.sourceId, ownerUserId, expectedValue, expectedCloseDate };
 
   const result = await prisma.$transaction(async (tx) => {
+    // The idempotency check above reads outside this transaction, so two
+    // near-simultaneous calls (a double-click, two tabs) can both pass it. This
+    // conditional write is the real guard: the first transaction to flip the
+    // stage holds the row lock, the second re-evaluates `statusId` once it is
+    // released, matches nothing, and rolls back — so revenue is drafted once.
+    const claimed = await tx.lead.updateMany({
+      where: { id: lead.id, statusId: { not: enrolled.id } },
+      data: { statusId: enrolled.id },
+    });
+    if (claimed.count !== 1) throw badRequest("This lead is already enrolled.", "already_enrolled");
+
     const partyId = await findOrCreateParty(tx, lead, ownerUserId);
     const partyService = await tx.partyService.upsert({
       where: { partyId_serviceId: { partyId, serviceId } },

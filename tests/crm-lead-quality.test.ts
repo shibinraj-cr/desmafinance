@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  qualityDueAtOnAssign,
   QUALITY_REMIND_EVERY_MINUTES,
   daysUntilQualityDue,
   isQualityOverdue,
@@ -136,5 +137,27 @@ describe("shouldRemindQuality", () => {
   });
   it("stays shut when nothing is overdue", () => {
     expect(shouldRemindQuality({ now: t, lastShownAt: null, overdueCount: 0 })).toBe(false);
+  });
+});
+
+describe("qualityDueAtOnAssign — the five days run from the assignment", () => {
+  const now = new Date("2026-10-26T10:00:00Z");
+  const day = 86_400_000;
+
+  it("gives a newly assigned consultant five days from now", () => {
+    const insertedDue = new Date(now.getTime() - 3 * day); // inserted 8 days ago
+    expect(qualityDueAtOnAssign({ qualityDueAt: insertedDue, qualityRating: null }, now)).toEqual(
+      new Date(now.getTime() + 5 * day),
+    );
+  });
+
+  it("never pulls a due date earlier", () => {
+    const later = new Date(now.getTime() + 6 * day);
+    expect(qualityDueAtOnAssign({ qualityDueAt: later, qualityRating: null }, now)).toBeUndefined();
+  });
+
+  it("leaves rated leads and leads outside the rule alone", () => {
+    expect(qualityDueAtOnAssign({ qualityDueAt: now, qualityRating: "good" }, now)).toBeUndefined();
+    expect(qualityDueAtOnAssign({ qualityDueAt: null, qualityRating: null }, now)).toBeUndefined();
   });
 });

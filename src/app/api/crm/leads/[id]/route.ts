@@ -229,6 +229,12 @@ export const PATCH = withApiHandler(async (req: Request, { params }: Ctx) => {
     update.phoneE164 = e164;
     update.emailKey = emailKeyOf(finalEmail);
     update.dedupeKey = computeDedupeKey(finalEmail, e164);
+    // A corrected number has no delivery history: the dead-number flag belonged
+    // to the old one, and keeping it would block every send to the fixed number.
+    if (e164 !== existing.phoneE164) {
+      update.whatsappUndeliverableAt = null;
+      update.whatsappUndeliverableReason = null;
+    }
   }
   // Re-normalize the alternate number on change. It doesn't feed dedupe keys.
   if ("altPhone" in update) {

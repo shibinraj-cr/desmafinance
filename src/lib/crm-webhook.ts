@@ -251,12 +251,21 @@ export function isIntroExcludedRole(role: string | null | undefined): boolean {
  * rename, and keeps employee names out of the code.
  */
 export function leadAssignedSkipReason(opts: {
+  /**
+   * The candidate asked us to stop messaging (`Lead.whatsappOptedOutAt` set).
+   * Checked first: it is a promise to the candidate, not a routing detail, and
+   * no service, tier or roster setting may override it.
+   */
+  candidateOptedOut?: boolean | null;
   isStudyAbroad: boolean | null | undefined;
   assigneeRole: string | null | undefined;
   /** `LeadPulseRole.sendAssignIntro`; only an explicit false skips. */
   assigneeIntroEnabled: boolean | null | undefined;
   agentDisplayName: string | null | undefined;
 }): string | null {
+  if (opts.candidateOptedOut) {
+    return "the candidate has opted out of WhatsApp messages";
+  }
   if (opts.isStudyAbroad) {
     return "this lead's service is Study Abroad, which has its own separate intro (not this template)";
   }
@@ -752,6 +761,24 @@ export async function attemptDelivery(deliveryId: string): Promise<boolean> {
   const row = await prisma.crmWebhookDelivery.findUnique({ where: { id: deliveryId } });
   if (!row) return false;
 
+  // Consent is re-checked at SEND time, not just when the intro was queued: a
+  // retry can fire minutes or hours later, and a candidate who replied STOP in
+  // between must not receive it.
+  if (row.event === LEAD_ASSIGNED_EVENT && row.leadId) {
+    const lead = await prisma.lead.findUnique({ where: { id: row.leadId }, select: { whatsappOptedOutAt: true } });
+    if (lead?.whatsappOptedOutAt) {
+      await prisma.crmWebhookDelivery.update({
+        where: { id: row.id },
+        data: {
+          status: "failed",
+          nextAttemptAt: null,
+          responseBody: "Not sent — the candidate opted out of WhatsApp messages before this went out.",
+        },
+      });
+      return false;
+    }
+  }
+
   // Cut-over path: the assignment intro only, gated by its own switch (see
   // `isLeadAssignedCloudEnabled`) so this can go live without touching
   // study-abroad, the re-marketing drip, or the broader wa_provider cutover.
@@ -871,7 +898,10 @@ export async function enqueueLeadAssignedWebhook(opts: {
   assigneeIntroEnabled: boolean | null | undefined;
 }): Promise<void> {
   try {
-    const skipReason = leadAssignedSkipReason(opts);
+    const consent = await prisma.lead
+      .findUnique({ where: { id: opts.leadId }, select: { whatsappOptedOutAt: true } })
+      .catch(() => null);
+    const skipReason = leadAssignedSkipReason({ ...opts, candidateOptedOut: !!consent?.whatsappOptedOutAt });
     if (skipReason) {
       await prisma.crmWebhookDelivery
         .create({

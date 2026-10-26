@@ -104,21 +104,35 @@ export const OUTBOUND_CONTACT_TYPES = ["CALL_LOGGED", "EMAIL_SENT", "WHATSAPP_SE
 
 /**
  * Prisma `where` selecting the `LeadActivity` rows that count as a real "touch":
- * any activity EXCEPT a passive view (`LEAD_OPENED`) and EXCEPT a bulk-email send
- * (`EMAIL_SENT` with `metadata.bulk === true`). This is the "any activity except
- * bulk email" rule used everywhere a lead's last-worked time is computed.
+ * any activity EXCEPT a passive view (`LEAD_OPENED`), EXCEPT a bulk-email send
+ * (`EMAIL_SENT` with `metadata.bulk === true`), and EXCEPT anything the system
+ * wrote on its own (`actorId` null — an automated task reminder, a re-marketing
+ * touch, a cron sweep). This is the rule used everywhere a lead's last-worked
+ * time is computed.
+ *
+ * The actor rule is what keeps the clock honest: an automation that messages the
+ * candidate on a consultant's behalf is not the consultant working the lead, and
+ * letting it reset the SLA / abandoned clock would hide exactly the neglected
+ * leads those flags exist to surface.
  */
 export function touchActivityWhere(): Prisma.LeadActivityWhereInput {
   return {
     type: { notIn: [...PASSIVE_ACTIVITY_TYPES] },
+    actorId: { not: null },
     NOT: { type: "EMAIL_SENT", metadata: { path: ["bulk"], equals: true } },
   };
 }
 
-/** Prisma `where` selecting outbound contacts (calls/emails/whatsapp), excluding bulk emails. */
+/**
+ * Prisma `where` selecting outbound contacts (calls/emails/whatsapp) made by a
+ * person, excluding bulk emails. An automated send (`actorId` null) is never a
+ * consultant's first response — the operative rule is that the automated intro
+ * or reminder does not count as contact.
+ */
 export function outboundContactWhere(): Prisma.LeadActivityWhereInput {
   return {
     type: { in: [...OUTBOUND_CONTACT_TYPES] },
+    actorId: { not: null },
     NOT: { type: "EMAIL_SENT", metadata: { path: ["bulk"], equals: true } },
   };
 }
@@ -280,6 +294,20 @@ export function isTaskOnTime(t: { completedAt: Date | null; dueAt: Date | null }
  * rule in `getCrmFunnelByBde` so the team monitor agrees with CRM Metrics.
  */
 export const IMPORT_CARRYOVER_GRACE_MS = 10 * 60 * 1000;
+
+/**
+ * The import time to judge carryover against, or null when the batch cannot
+ * have carried an assignment over. Only a FILE a person uploaded (lead import,
+ * Voxbay import — `uploadedById` set) stamps owners at import time. A sheet-sync
+ * batch (no uploader) always creates its leads unassigned, so every owner such a
+ * lead has was given by somebody afterwards — and the faster that happened, the
+ * more it is exactly the deliberate assignment these metrics exist to measure.
+ */
+export function carryoverBatchCreatedAt(
+  batch: { createdAt: Date; uploadedById: string | null } | null | undefined,
+): Date | null {
+  return batch?.uploadedById ? batch.createdAt : null;
+}
 
 /**
  * True when a lead is genuinely owned by a consultant — assigned, and not merely
@@ -565,7 +593,7 @@ export async function getTeamActivity(opts: {
         assignedToId: true,
         assignedAt: true,
         createdAt: true,
-        importBatch: { select: { createdAt: true } },
+        importBatch: { select: { createdAt: true, uploadedById: true } },
         status: { select: { code: true, parked: true, label: true, color: true } },
       },
     }),
@@ -600,7 +628,7 @@ export async function getTeamActivity(opts: {
     // Carryover-filtered below so imports stamped at import time aren't counted.
     prisma.lead.findMany({
       where: { assignedToId: self ? self : { in: ids }, assignedAt: occurredAt ?? { not: null } },
-      select: { id: true, assignedToId: true, assignedAt: true, importBatch: { select: { createdAt: true } } },
+      select: { id: true, assignedToId: true, assignedAt: true, importBatch: { select: { createdAt: true, uploadedById: true } } },
     }),
     // New leads in the last 14 days, for the trend sparkline + "today".
     prisma.lead.findMany({
@@ -625,7 +653,7 @@ export async function getTeamActivity(opts: {
     isDeliberateAssignment({
       assignedToId: l.assignedToId,
       assignedAt: l.assignedAt,
-      importBatchCreatedAt: l.importBatch?.createdAt ?? null,
+      importBatchCreatedAt: carryoverBatchCreatedAt(l.importBatch),
     }),
   );
   const attentionLeadIds = attentionLeads.map((l) => l.id);
@@ -635,7 +663,7 @@ export async function getTeamActivity(opts: {
       isDeliberateAssignment({
         assignedToId: l.assignedToId,
         assignedAt: l.assignedAt,
-        importBatchCreatedAt: l.importBatch?.createdAt ?? null,
+        importBatchCreatedAt: carryoverBatchCreatedAt(l.importBatch),
       }),
     )
     .map((l) => ({ leadId: l.id, assignedToId: l.assignedToId, assignedAt: l.assignedAt as Date }));
@@ -956,7 +984,7 @@ export async function getAttentionQueue(opts: {
       assignedToId: true,
       assignedAt: true,
       createdAt: true,
-      importBatch: { select: { createdAt: true } },
+      importBatch: { select: { createdAt: true, uploadedById: true } },
       status: { select: { code: true, parked: true, label: true, color: true } },
     },
   });
@@ -965,7 +993,7 @@ export async function getAttentionQueue(opts: {
     isDeliberateAssignment({
       assignedToId: l.assignedToId,
       assignedAt: l.assignedAt,
-      importBatchCreatedAt: l.importBatch?.createdAt ?? null,
+      importBatchCreatedAt: carryoverBatchCreatedAt(l.importBatch),
     }),
   );
   const ids = attentionLeads.map((l) => l.id);
@@ -1190,7 +1218,7 @@ export async function getFirstResponseGapQueue(opts: {
       candidateName: true,
       assignedToId: true,
       assignedAt: true,
-      importBatch: { select: { createdAt: true } },
+      importBatch: { select: { createdAt: true, uploadedById: true } },
       status: { select: { code: true, parked: true, label: true, color: true } },
     },
   });
@@ -1198,7 +1226,7 @@ export async function getFirstResponseGapQueue(opts: {
     isDeliberateAssignment({
       assignedToId: l.assignedToId,
       assignedAt: l.assignedAt,
-      importBatchCreatedAt: l.importBatch?.createdAt ?? null,
+      importBatchCreatedAt: carryoverBatchCreatedAt(l.importBatch),
     }),
   );
   const ownedIds = owned.map((l) => l.id);
