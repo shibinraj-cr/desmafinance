@@ -49,6 +49,31 @@ export const CRM_HISTORY_PAGE = "/crm/history";
 export const CRM_BDE_ENROLLMENT_PAGE = "/crm/team/bde-enrollment";
 
 /**
+ * Capability marker (NOT a real route) letting a non-BDE create new leads, but
+ * only as candidate referrals: the create route stamps the
+ * {@link CANDIDATE_REFERRAL_SOURCE_CODE} source whatever the form sent (see
+ * {@link CrmAccess.referralLeadsOnly}), so source reporting can't be skewed by
+ * someone who isn't working the funnel. The lead is born unassigned, for an
+ * admin to hand to a consultant. Purely a permission flag; not in MODULES.
+ */
+export const CRM_REFERRAL_LEADS_PAGE = "/crm/referral-leads";
+
+/** LeadPulseSource.code of the "Candidate Referral" source (seed-lead-pulse.ts). */
+export const CANDIDATE_REFERRAL_SOURCE_CODE = "candidate_referral";
+
+/**
+ * Capability marker (NOT a real route) letting a non-BDE add tasks to any
+ * ENROLLED lead — e.g. a referral follow-up call to a candidate who has already
+ * joined — without edit rights on the lead itself. They may then work (edit,
+ * complete, delete) only the tasks assigned to them. See {@link canAddTask} /
+ * {@link canEditTask}. Purely a permission flag; not in MODULES.
+ */
+export const CRM_ENROLLED_TASKS_PAGE = "/crm/enrolled-tasks";
+
+/** CrmLeadStatus.code of the Enrolled stage. */
+const ENROLLED_STATUS_CODE = "enrolled";
+
+/**
  * Resolved CRM capabilities for the current user. Mirrors the shape of
  * `LeadPulseAccess` — a single object the page/API layers branch on.
  *
@@ -99,6 +124,20 @@ export type CrmAccess = {
 
   canViewLeads: boolean;
   canCreateLeads: boolean;
+  /**
+   * The user's create right comes ONLY from {@link CRM_REFERRAL_LEADS_PAGE}, so
+   * every lead they create is a candidate referral (the create route forces the
+   * source). False for BDEs and CRM admins, who create any kind of lead.
+   */
+  referralLeadsOnly: boolean;
+  /**
+   * Re-enroll an enrolled candidate for another service. Narrower than
+   * `canCreateLeads`: the re-enrolled lead goes to the creating BDE (see
+   * crm-reenroll.ts), so a referral-only creator, who is not a BDE, can't.
+   */
+  canReEnroll: boolean;
+  /** Add tasks to any enrolled lead ({@link CRM_ENROLLED_TASKS_PAGE}). */
+  canTaskEnrolledLeads: boolean;
   canBulkImport: boolean;
   /** Send a bulk email to many leads at once (CRM-admin, like bulk import). */
   canBulkEmail: boolean;
@@ -162,6 +201,13 @@ export async function getCrmAccess(
   // Template authoring: full CRM admins, plus any role explicitly granted the
   // Message Templates page (e.g. a marketing supervisor).
   const canManageTemplates = canManageCrm || (perms ? canSeePage(perms, CRM_TEMPLATES_PAGE) : false);
+  // Referral creators and enrolled-lead task-takers: one narrow power each, for
+  // a role that supports the funnel without working it. Both also need CRM view
+  // access — neither marker is a way into the CRM by itself.
+  const canViewLeads = admin || isBde || isSupervisor || isCrmTeamLead || hasPage;
+  const canCreateAnyLead = canManageCrm || isBde;
+  const canCreateReferrals = canViewLeads && !!perms && canSeePage(perms, CRM_REFERRAL_LEADS_PAGE);
+  const canTaskEnrolledLeads = canViewLeads && !!perms && canSeePage(perms, CRM_ENROLLED_TASKS_PAGE);
 
   return {
     userId,
@@ -172,8 +218,11 @@ export async function getCrmAccess(
     canManageCrm,
     canManageTemplates,
     bdeDisplayName: lp.displayName,
-    canViewLeads: admin || isBde || isSupervisor || isCrmTeamLead || hasPage,
-    canCreateLeads: canManageCrm || isBde,
+    canViewLeads,
+    canCreateLeads: canCreateAnyLead || canCreateReferrals,
+    referralLeadsOnly: !canCreateAnyLead && canCreateReferrals,
+    canReEnroll: canCreateAnyLead,
+    canTaskEnrolledLeads,
     canBulkImport: canManageCrm,
     canBulkEmail: canManageCrm,
     // Mirrors canEditLead's "may edit any lead" arm exactly (admin | supervisor).
@@ -200,5 +249,38 @@ export function canEditLead(
     access.isAdmin ||
     access.isSupervisor ||
     (access.isBde && lead.assignedToId === userId)
+  );
+}
+
+/**
+ * Whether the current user may ADD a task to a lead: anyone who may edit it,
+ * plus — on an enrolled lead only — a role granted {@link CRM_ENROLLED_TASKS_PAGE}.
+ * Enforced identically in the API and the UI.
+ */
+export function canAddTask(
+  access: CrmAccess,
+  lead: { assignedToId: string | null; status: { code: string } | null },
+  userId: string,
+): boolean {
+  return (
+    canEditLead(access, lead, userId) ||
+    (access.canTaskEnrolledLeads && lead.status?.code === ENROLLED_STATUS_CODE)
+  );
+}
+
+/**
+ * Whether the current user may edit, complete or delete an existing task:
+ * anyone who may edit the lead, plus an enrolled-lead task-taker for the tasks
+ * assigned to them — never a consultant's task on the same lead.
+ */
+export function canEditTask(
+  access: CrmAccess,
+  task: { assignedToId: string | null },
+  lead: { assignedToId: string | null; status: { code: string } | null },
+  userId: string,
+): boolean {
+  return (
+    canEditLead(access, lead, userId) ||
+    (canAddTask(access, lead, userId) && task.assignedToId === userId)
   );
 }

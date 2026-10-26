@@ -131,6 +131,23 @@ export const ADMIN_RESTRICTED_PAGES = [
   ...(WA_UI_ADMIN_ONLY ? ["/crm/inbox", "/crm/broadcasts"] : []),
 ];
 
+/**
+ * Capability marker (NOT a real route) that switches off the CRM-user pages
+ * canSeePage hands every role with /crm/leads — Notifications, Daily Report,
+ * Campaign Delivery, the WhatsApp Inbox, the Broadcast Report and Sales
+ * Training — so a role that only works the lead list (e.g. a communication
+ * executive chasing referrals) sees just Leads in the CRM nav; the lead page's
+ * WhatsApp tab goes too. Sales Training can still be granted explicitly. This
+ * is visibility, not data access: those pages still authorise themselves via
+ * getCrmAccess.
+ */
+export const CRM_LEADS_ONLY_PAGE = "/crm/leads-only";
+
+/** Whether this (non-admin) role carries {@link CRM_LEADS_ONLY_PAGE}. */
+export function isCrmLeadsOnly(p: Permissions | null): boolean {
+  return !!p && !p.isAdmin && p.pages.includes(CRM_LEADS_ONLY_PAGE);
+}
+
 export function canSeePage(p: Permissions, href: string): boolean {
   if (!href.startsWith("/")) return false;
   // Admins see every page — keeps newly added admin-only routes visible
@@ -144,7 +161,9 @@ export function canSeePage(p: Permissions, href: string): boolean {
   // the WhatsApp Inbox and the Broadcast Report are visible to every CRM user — anyone who can reach
   // the CRM Leads page — so they need no separate Role.pages grant (and never
   // leak the CRM module to non-CRM users, who can't see /crm/leads). Each page
-  // itself authorises via getCrmAccess.
+  // itself authorises via getCrmAccess. CRM_LEADS_ONLY_PAGE opts a role out.
+  const crmUser =
+    p.pages.some((pg) => pg === "/crm/leads" || pg.startsWith("/crm/leads/")) && !isCrmLeadsOnly(p);
   if (
     href === "/crm/notifications" ||
     href.startsWith("/crm/notifications/") ||
@@ -160,16 +179,13 @@ export function canSeePage(p: Permissions, href: string): boolean {
     href === "/crm/broadcasts/report" ||
     href.startsWith("/crm/broadcasts/report/")
   ) {
-    return p.pages.some((pg) => pg === "/crm/leads" || pg.startsWith("/crm/leads/"));
+    return crmUser;
   }
   // Sales Training is for sales consultants, who are CRM users — show it to
   // them without a separate grant, so an HR enrolment is never stranded behind
   // a missing Role.pages entry. Other roles can still be granted it explicitly;
   // the page itself only opens for enrolled learners.
-  if (
-    (href === "/me/sales-training" || href.startsWith("/me/sales-training/")) &&
-    p.pages.some((pg) => pg === "/crm/leads" || pg.startsWith("/crm/leads/"))
-  ) {
+  if ((href === "/me/sales-training" || href.startsWith("/me/sales-training/")) && crmUser) {
     return true;
   }
   // Agreement templates are setup, not day-to-day work: a role granted
