@@ -44,6 +44,14 @@ import {
   type QualityReasonOpt,
   type QualitySubject,
 } from "@/lib/crm-lead-quality";
+import {
+  CALL_OUTCOMES,
+  CALL_OUTCOME_LABEL,
+  NEW_STAGE_CODE,
+  followUpPreset,
+  suggestedFollowUpSubject,
+  type CallOutcome,
+} from "@/lib/crm-outcome";
 
 export type PartyOpt = { id: string; label: string; phone: string | null };
 export type DetailMasters = {
@@ -468,7 +476,14 @@ export function LeadDetail({
         <EmailModal lead={lead} emailConfigured={emailConfigured} templates={templates} onClose={() => setComm(null)} />
       )}
       {comm === "whatsapp" && <WhatsAppModal lead={lead} templates={templates} onClose={() => setComm(null)} />}
-      {comm === "call" && <CallModal lead={lead} onClose={() => setComm(null)} />}
+      {comm === "call" && (
+        <CallModal
+          lead={lead}
+          subStatuses={masters.subStatuses}
+          onClose={() => setComm(null)}
+          onQualityRequired={requireQuality}
+        />
+      )}
       {qualityDialog && (
         <LeadQualityDialog
           leadId={lead.id}
@@ -2528,33 +2543,88 @@ function WhatsAppModal({
   );
 }
 
-const CALL_OUTCOMES = [
-  { value: "connected", label: "Connected" },
-  { value: "no_answer", label: "No answer" },
-  { value: "busy", label: "Busy" },
-  { value: "wrong_number", label: "Wrong number" },
+const OUTCOME_CHOICES: { value: CallOutcome; label: string }[] = CALL_OUTCOMES.map((value) => ({
+  value,
+  label: CALL_OUTCOME_LABEL[value],
+}));
+
+const FOLLOW_UP_PRESETS: { value: "later_today" | "tomorrow" | "in_3_days" | "next_week"; label: string }[] = [
+  { value: "later_today", label: "Later today" },
+  { value: "tomorrow", label: "Tomorrow" },
+  { value: "in_3_days", label: "In 3 days" },
+  { value: "next_week", label: "Next week" },
 ];
 
-function CallModal({ lead, onClose }: { lead: LeadRow; onClose: () => void }) {
+/** `datetime-local` value for a Date, in the browser's local time. */
+function toLocalInput(d: Date): string {
+  const pad = (n: number) => String(n).padStart(2, "0");
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
+}
+
+/**
+ * Log a call — and, in the same step, what it changed: the conversation Status,
+ * the next follow-up, and (when the candidate was reached) a New lead moving to
+ * Follow-Up. One save instead of four (POST /api/crm/leads/[id]/outcome).
+ */
+function CallModal({
+  lead,
+  subStatuses,
+  onClose,
+  onQualityRequired,
+}: {
+  lead: LeadRow;
+  subStatuses: DetailMasters["subStatuses"];
+  onClose: () => void;
+  onQualityRequired: (gate?: QualityGate) => void;
+}) {
   const router = useRouter();
-  const [outcome, setOutcome] = useState("connected");
-  const [duration, setDuration] = useState("");
+  const [outcome, setOutcome] = useState<CallOutcome>("connected");
+  const [minutes, setMinutes] = useState("");
   const [note, setNote] = useState("");
+  const [subStatusId, setSubStatusId] = useState("");
+  const [book, setBook] = useState(true);
+  const [dueAt, setDueAt] = useState(() => toLocalInput(followUpPreset("tomorrow", new Date())));
+  const [subject, setSubject] = useState(suggestedFollowUpSubject("connected"));
+  const [subjectTouched, setSubjectTouched] = useState(false);
   const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  function pickOutcome(o: CallOutcome) {
+    setOutcome(o);
+    if (!subjectTouched) setSubject(suggestedFollowUpSubject(o));
+    if (o !== "connected") setDueAt(toLocalInput(followUpPreset("later_today", new Date())));
+  }
 
   async function save() {
     setBusy(true);
-    const durationSec = duration.trim() ? Math.max(0, parseInt(duration, 10) || 0) : undefined;
-    const res = await fetch(`/api/crm/leads/${lead.id}/comms`, {
+    setError(null);
+    const mins = minutes.trim() ? Math.max(0, parseInt(minutes, 10) || 0) : undefined;
+    const res = await fetch(`/api/crm/leads/${lead.id}/outcome`, {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ channel: "call", outcome, durationSec, note: note.trim() || undefined }),
+      body: JSON.stringify({
+        outcome,
+        durationMin: mins,
+        note: note.trim() || undefined,
+        subStatusId: subStatusId || undefined,
+        next: book && dueAt && subject.trim() ? { dueAt: new Date(dueAt).toISOString(), subject: subject.trim() } : undefined,
+      }),
     });
     setBusy(false);
     if (res.ok) {
       onClose();
       router.refresh();
+      return;
     }
+    const data = (await res.json().catch(() => ({}))) as { message?: string; error?: string };
+    if (data.error === QUALITY_REQUIRED_CODE) {
+      onClose();
+      onQualityRequired("overdue");
+      return;
+    }
+    // Shown, never swallowed: a call that silently failed to log is a call the
+    // consultant thinks is on the record.
+    setError(data.message || `The call was not logged (HTTP ${res.status}).`);
   }
 
   return (
@@ -2570,25 +2640,88 @@ function CallModal({ lead, onClose }: { lead: LeadRow; onClose: () => void }) {
         <p className="text-on-surface-variant text-body-md">No phone number on file.</p>
       )}
       <Field label="Outcome">
-        <select className={inputCls} value={outcome} onChange={(e) => setOutcome(e.target.value)}>
-          {CALL_OUTCOMES.map((o) => (
-            <option key={o.value} value={o.value}>
+        <div className="flex flex-wrap gap-xs">
+          {OUTCOME_CHOICES.map((o) => (
+            <button
+              key={o.value}
+              type="button"
+              onClick={() => pickOutcome(o.value)}
+              className={
+                "h-8 rounded-full border px-md text-label-sm font-semibold " +
+                (outcome === o.value
+                  ? "border-primary bg-primary text-on-primary"
+                  : "border-outline-variant text-on-surface hover:bg-surface-container-low")
+              }
+            >
               {o.label}
-            </option>
+            </button>
+          ))}
+        </div>
+      </Field>
+      <Field label="Status after this call">
+        <select className={inputCls} value={subStatusId} onChange={(e) => setSubStatusId(e.target.value)}>
+          <option value="">Keep “{lead.subStatus?.label ?? "—"}”</option>
+          {groupedStatuses(subStatuses).map(([group, rows]) => (
+            <optgroup key={group || "—"} label={group || "Status"}>
+              {rows.map((r) => (
+                <option key={r.id} value={r.id}>
+                  {r.label}
+                </option>
+              ))}
+            </optgroup>
           ))}
         </select>
       </Field>
-      <Field label="Duration (seconds)">
-        <input className={inputCls} type="number" min={0} value={duration} onChange={(e) => setDuration(e.target.value)} />
+      <Field label="Next follow-up">
+        <label className="flex items-center gap-xs text-label-sm text-on-surface">
+          <input type="checkbox" checked={book} onChange={(e) => setBook(e.target.checked)} /> Book it now
+        </label>
+        {book && (
+          <div className="mt-xs space-y-xs">
+            <div className="flex flex-wrap gap-xs">
+              {FOLLOW_UP_PRESETS.map((p) => (
+                <button
+                  key={p.value}
+                  type="button"
+                  onClick={() => setDueAt(toLocalInput(followUpPreset(p.value, new Date())))}
+                  className="h-7 rounded-md border border-outline-variant px-sm text-label-sm hover:bg-surface-container-low"
+                >
+                  {p.label}
+                </button>
+              ))}
+            </div>
+            <input className={inputCls} type="datetime-local" value={dueAt} onChange={(e) => setDueAt(e.target.value)} />
+            <input
+              className={inputCls}
+              value={subject}
+              onChange={(e) => {
+                setSubject(e.target.value);
+                setSubjectTouched(true);
+              }}
+              placeholder="What the follow-up is for"
+            />
+          </div>
+        )}
       </Field>
-      <Field label="Note">
-        <textarea
-          className="w-full px-md py-sm rounded-lg border border-outline-variant bg-surface-container-lowest outline-none focus:border-primary text-body-md resize-y"
-          rows={3}
-          value={note}
-          onChange={(e) => setNote(e.target.value)}
-        />
-      </Field>
+      <div className="grid grid-cols-3 gap-sm">
+        <Field label="Minutes">
+          <input className={inputCls} type="number" min={0} value={minutes} onChange={(e) => setMinutes(e.target.value)} />
+        </Field>
+        <div className="col-span-2">
+          <Field label="Note">
+            <textarea
+              className="w-full px-md py-sm rounded-lg border border-outline-variant bg-surface-container-lowest outline-none focus:border-primary text-body-md resize-y"
+              rows={2}
+              value={note}
+              onChange={(e) => setNote(e.target.value)}
+            />
+          </Field>
+        </div>
+      </div>
+      {outcome === "connected" && lead.status.code === NEW_STAGE_CODE && (
+        <p className="text-caption text-on-surface-variant">The lead moves from New to Follow-Up.</p>
+      )}
+      {error && <p className="text-label-sm font-semibold text-error">{error}</p>}
       <div className="flex justify-end gap-base">
         <button type="button" className={secondaryBtn} disabled={busy} onClick={onClose}>
           Cancel
