@@ -30,6 +30,9 @@ export const STORED_DIMS = [
   "country",
   "destination",
   "campaign",
+  // Meta ad set / ad, read from the lead sheet's own columns (meta-ad-fields.ts).
+  "adSet",
+  "ad",
   "temperature",
   "customerType",
   "revenueCategory",
@@ -62,6 +65,8 @@ export const DIM_LABELS: Record<DimKey, string> = {
   country: "Country",
   destination: "Study destination",
   campaign: "Campaign",
+  adSet: "Meta ad set",
+  ad: "Meta ad",
   temperature: "Temperature",
   customerType: "New vs repeat",
   revenueCategory: "Revenue category",

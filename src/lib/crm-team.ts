@@ -35,7 +35,7 @@
 import { Prisma } from "@prisma/client";
 import { prisma } from "./prisma";
 import { getAssignableBdes, REINQUIRY_TASK_SUBJECT_NEEDLE } from "./crm-leads";
-import { getCrmFunnelByBde } from "./lead-pulse-crm-metrics";
+import { getCrmFunnelByBde, getCrmCohortConversionByBde } from "./lead-pulse-crm-metrics";
 import { CRM_TEAM_LEAD_PAGE } from "./crm-rbac";
 import { qualityOverdueWhere } from "./crm-lead-quality-data";
 
@@ -498,6 +498,10 @@ export type TeamBdeRow = {
   assignedMonth: number;
   enrolledMonth: number;
   conversionPct: number | null;
+  /** Cohort conversion: of the leads assigned in the last 90 days, how many are enrolled now. */
+  cohortAssigned: number;
+  cohortEnrolled: number;
+  cohortConversionPct: number | null;
   // Activity (selected range).
   assignedRange: number;
   calls: number;
@@ -590,6 +594,7 @@ export async function getTeamActivity(opts: {
 
   const [
     funnel,
+    cohort,
     activeAssignedRaw,
     reinquiryByBde,
     contactGroups,
@@ -602,6 +607,8 @@ export async function getTeamActivity(opts: {
   ] = await Promise.all([
     // Conversion (current month, carryover-safe). Narrowed to self below.
     getCrmFunnelByBde(now.getFullYear(), now.getMonth() + 1),
+    // Cohort conversion (last 90 days of assignments → enrolled now).
+    getCrmCohortConversionByBde(now),
     // Assigned active leads — the population for staleness / stuck / no-task. Only
     // OWNED leads (assignedToId set); the deliberate-assignment filter below drops
     // bulk-import carryover so the unassigned/imported backlog can't inflate counts.
@@ -732,6 +739,9 @@ export async function getTeamActivity(opts: {
     assignedMonth: 0,
     enrolledMonth: 0,
     conversionPct: null,
+    cohortAssigned: 0,
+    cohortEnrolled: 0,
+    cohortConversionPct: null,
     assignedRange: 0,
     calls: 0,
     emails: 0,
@@ -761,6 +771,12 @@ export async function getTeamActivity(opts: {
       a.assignedMonth = f.leadsAssigned;
       a.enrolledMonth = f.enrolled;
       a.conversionPct = f.conversionPct;
+    }
+    const c = cohort.get(b.userId);
+    if (c) {
+      a.cohortAssigned = c.assigned;
+      a.cohortEnrolled = c.enrolled;
+      a.cohortConversionPct = c.conversionPct;
     }
   }
 
