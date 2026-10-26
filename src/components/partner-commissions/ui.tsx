@@ -2,7 +2,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import { ENROLLMENT_STATE_LABEL, INVOICE_STATUS_LABEL, type EnrollmentState, type InvoiceStatus } from "@/lib/partner-commissions/constants";
-import { commissionOf, fmtMoney, intakeMonthOptions } from "@/lib/partner-commissions/logic";
+import { commissionOf, fmtMoney, intakeMonthOptions, planLabel, suggestedInstallment } from "@/lib/partner-commissions/logic";
 
 /** Shared building blocks for the Partner Commissions pages (Finance + Partner Enrollments). */
 
@@ -171,6 +171,8 @@ export type ProgramOption = {
   defaultPct: number | null;
   /** Flat AUD commission per enrollment; when set it replaces the percentage. */
   defaultFlat?: number | null;
+  /** Installment plans to pick from when enrolling (e.g. GCAN: [1, 2, 6]); empty = no plan. */
+  installmentPlans?: number[];
   layout: string;
 };
 
@@ -258,6 +260,7 @@ export function EnrollmentForm({
   const [pct, setPct] = useState(cfg?.defaultPct != null ? String(cfg.defaultPct) : "");
   const [isFlat, setIsFlat] = useState(cfg?.defaultFlat != null);
   const [flat, setFlat] = useState(cfg?.defaultFlat != null ? String(cfg.defaultFlat) : "");
+  const [plan, setPlan] = useState("");
   const [paidNow, setPaidNow] = useState(false);
   const [paidAmt, setPaidAmt] = useState("");
   const [paidOn, setPaidOn] = useState(today);
@@ -274,6 +277,7 @@ export function EnrollmentForm({
     setPct(c.defaultPct != null ? String(c.defaultPct) : "");
     setIsFlat(c.defaultFlat != null);
     setFlat(c.defaultFlat != null ? String(c.defaultFlat) : "");
+    setPlan("");
   }
 
   const feeN = parseFloat(fee);
@@ -291,6 +295,8 @@ export function EnrollmentForm({
     if (finance && isFlat && !(flatN != null && flatN > 0)) return setErr("Enter the flat commission in AUD.");
     if (finance && !isFlat && !(pctN >= 0 && pctN <= 100)) return setErr("Commission % must be between 0 and 100.");
     let firstPayment = null;
+    const plans = cfg?.installmentPlans ?? [];
+    if (plans.length && !plan) return setErr(`Pick the installment plan: ${plans.map(planLabel).join(", ")}.`);
     if (paidNow) {
       const a = parseFloat(paidAmt);
       if (!(a > 0)) return setErr("Enter the 1st installment, or untick the box.");
@@ -310,6 +316,7 @@ export function EnrollmentForm({
         commissionPct: finance && !isFlat ? pctN : null,
         ...(finance ? { commissionFlat: isFlat ? flatN : null } : {}),
         firstPayment,
+        installmentPlan: plan ? Number(plan) : null,
       });
       onCreated(res.id, candidateName);
     } catch (e) {
@@ -358,6 +365,16 @@ export function EnrollmentForm({
         <input className={inputCls} value={name} onChange={(e) => setName(e.target.value)} placeholder="As the partner knows them" />
       </Field>
       <div className="grid grid-cols-1 sm:grid-cols-2 gap-sm">
+        {cfg?.installmentPlans?.length ? (
+          <Field label="Installment plan">
+            <select className={inputCls} value={plan} onChange={(e) => setPlan(e.target.value)}>
+              <option value="">Choose…</option>
+              {cfg.installmentPlans.map((n) => (
+                <option key={n} value={n}>{planLabel(n)}</option>
+              ))}
+            </select>
+          </Field>
+        ) : null}
         <Field label="Intake month">
           <select className={inputCls} value={intake} onChange={(e) => setIntake(e.target.value)}>
             {months.map((m) => <option key={m}>{m}</option>)}
@@ -403,7 +420,7 @@ export function EnrollmentForm({
       </div>
       {preview >= 0 ? <p className="text-caption text-on-surface-variant">Commission when fully paid: {AUD(preview)}</p> : null}
       <label className="flex items-center gap-2 text-body-md font-medium">
-        <input type="checkbox" checked={paidNow} onChange={(e) => { setPaidNow(e.target.checked); if (e.target.checked && !paidAmt && feeN > 0) setPaidAmt(String(Math.round(feeN / 2))); }} />
+        <input type="checkbox" checked={paidNow} onChange={(e) => { setPaidNow(e.target.checked); if (e.target.checked && !paidAmt && feeN > 0) setPaidAmt(String(plan ? suggestedInstallment(feeN, Number(plan), 0) : Math.round(feeN / 2))); }} />
         The 1st installment is already paid
       </label>
       {paidNow ? (
