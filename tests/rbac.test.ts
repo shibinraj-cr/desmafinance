@@ -210,3 +210,20 @@ describe("CRM leads-only marker", () => {
     expect(canSeePage(admin, "/crm/inbox")).toBe(true);
   });
 });
+
+describe("canSeePage — CRM Lead Quality report", () => {
+  const page = "/crm/team/lead-quality";
+
+  it("opens to admins and to the Marketing Admin role by name, with no Role.pages entry", () => {
+    expect(canSeePage(perms({ isAdmin: true }), page)).toBe(true);
+    expect(canSeePage(perms({ roleName: "Marketing Admin", pages: ["/marketing/lead-pulse"] }), page)).toBe(true);
+  });
+
+  it("stays closed to a BDE, even one who can see the rest of the CRM Activity pages", () => {
+    expect(canSeePage(perms({ roleName: "Sales", pages: ["/crm/leads", "/crm/team"] }), page)).toBe(false);
+  });
+
+  it("can still be granted to another role explicitly", () => {
+    expect(canSeePage(perms({ roleName: "Sales Lead", pages: [page] }), page)).toBe(true);
+  });
+});

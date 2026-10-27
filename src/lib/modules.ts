@@ -285,6 +285,16 @@ export const MODULES: AppModule[] = [
         adminOnly: true,
       },
       {
+        // Campaign quality, reasons leads go bad and BDE rating discipline, for
+        // Admins and the Marketing Admin (opened to that role by name in
+        // canSeePage — see CRM_LEAD_QUALITY_PAGE).
+        href: "/crm/team/lead-quality",
+        label: "Lead Quality",
+        icon: "grade",
+        group: "ACTIVITY",
+        adminOnly: true,
+      },
+      {
         // A BDE's end-of-day report (auto-filled from their activity) + manager
         // review. Personal to every CRM user, so visibility is handled in
         // canSeePage (any CRM user), not a per-role Role.pages grant.

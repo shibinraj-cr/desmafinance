@@ -32,7 +32,7 @@ import {
   type QualityCounts,
   type QualityGroupRow,
 } from "@/lib/lead-quality-report";
-import { PeriodBar, type Range } from "./client";
+import { AnalysisPeriodBar, type AnalysisRange } from "@/components/AnalysisPeriodBar";
 
 /** The cuts the mix chart offers; each is a dimension the lead facts carry. */
 const GROUP_DIMS: DimKey[] = ["source", "campaign", "adSet", "service", "bde", "originalSource", "country", "month", "week"];
@@ -48,7 +48,7 @@ function isGroupDim(v: string | null): v is DimKey {
   return !!v && (GROUP_DIMS as string[]).includes(v);
 }
 
-export function LeadQualityView({ payload, range }: { payload: SalesAnalysisPayload; range: Range }) {
+export function LeadQualityView({ payload, range }: { payload: SalesAnalysisPayload; range: AnalysisRange }) {
   const router = useRouter();
   const pathname = usePathname();
   const search = useSearchParams();
@@ -128,7 +128,7 @@ export function LeadQualityView({ payload, range }: { payload: SalesAnalysisPayl
 
   return (
     <div className="p-margin space-y-lg">
-      <PeriodBar range={range} onChange={setPeriod} />
+      <AnalysisPeriodBar range={range} onChange={setPeriod} />
 
       <div className="flex flex-wrap items-center gap-sm">
         {FILTER_DIMS.map((d) => (

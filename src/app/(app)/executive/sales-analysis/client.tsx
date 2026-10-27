@@ -5,6 +5,7 @@ import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { Bar, BarChart, CartesianGrid, Legend, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
 import { Section } from "@/components/Cards";
 import { MultiSelect } from "@/components/MultiSelect";
+import { AnalysisPeriodBar, rangeText, type AnalysisRange } from "@/components/AnalysisPeriodBar";
 import { inr } from "@/lib/format";
 import {
   COLLECTION_ONLY_DIMS,
@@ -15,7 +16,6 @@ import {
   MEASURE_META,
   NOT_APPLICABLE,
   OTHER_KEY,
-  PERIODS,
   RATIO_MEASURES,
   STORED_DIMS,
   TIME_DIMS,
@@ -34,7 +34,7 @@ import {
 } from "@/lib/sales-analysis";
 import type { SalesAnalysisPayload } from "@/lib/sales-analysis-data";
 
-export type Range = { period: string; from: string; to: string; prevFrom: string; prevTo: string };
+type Range = AnalysisRange;
 
 const ALL_DIMS: DimKey[] = [...STORED_DIMS, ...TIME_DIMS];
 
@@ -103,12 +103,6 @@ function isDim(v: string | null): v is DimKey {
 
 function isMeasure(v: string | null): v is MeasureKey {
   return !!v && (MEASURES as readonly string[]).includes(v);
-}
-
-function rangeText(from: string, to: string): string {
-  const f = (s: string) =>
-    new Date(`${s}T00:00:00Z`).toLocaleDateString("en-IN", { day: "numeric", month: "short", year: "numeric", timeZone: "UTC" });
-  return `${f(from)} – ${f(to)}`;
 }
 
 export function SalesAnalysisView({ payload, range }: { payload: SalesAnalysisPayload; range: Range }) {
@@ -195,7 +189,7 @@ export function SalesAnalysisView({ payload, range }: { payload: SalesAnalysisPa
 
   return (
     <div className="p-margin space-y-lg">
-      <PeriodBar range={range} onChange={setPeriod} />
+      <AnalysisPeriodBar range={range} onChange={setPeriod} />
 
       {/* KPI tiles — each one picks the measure the rest of the page analyses. */}
       <section className="grid grid-cols-2 md:grid-cols-4 xl:grid-cols-7 gap-gutter">
@@ -408,57 +402,6 @@ function AddFilter({ exclude, onAdd }: { exclude: DimKey[]; onAdd: (d: DimKey) =
         </option>
       ))}
     </select>
-  );
-}
-
-export function PeriodBar({ range, onChange }: { range: Range; onChange: (period: string, from?: string, to?: string) => void }) {
-  const [from, setFrom] = useState(range.from);
-  const [to, setTo] = useState(range.to);
-  const [custom, setCustom] = useState(range.period === "custom");
-  return (
-    <div className="flex flex-wrap items-center gap-sm">
-      {PERIODS.map((p) => {
-        const on = p.value === "custom" ? custom : !custom && range.period === p.value;
-        return (
-          <button
-            key={p.value}
-            type="button"
-            onClick={() => {
-              if (p.value === "custom") setCustom(true);
-              else {
-                setCustom(false);
-                onChange(p.value);
-              }
-            }}
-            className={
-              "h-9 px-md rounded-lg border text-label-sm font-semibold transition " +
-              (on ? "bg-brand text-on-brand border-brand" : "border-outline-variant bg-surface-container-lowest hover:border-primary")
-            }
-          >
-            {p.label}
-          </button>
-        );
-      })}
-      {custom && (
-        <form
-          className="flex items-center gap-xs"
-          onSubmit={(e) => {
-            e.preventDefault();
-            if (from && to && from <= to) onChange("custom", from, to);
-          }}
-        >
-          <input type="date" value={from} onChange={(e) => setFrom(e.target.value)} aria-label="From"
-            className="h-9 px-sm rounded-lg border border-outline-variant bg-surface-container-lowest text-label-sm" />
-          <span className="text-on-surface-variant">→</span>
-          <input type="date" value={to} onChange={(e) => setTo(e.target.value)} aria-label="To"
-            className="h-9 px-sm rounded-lg border border-outline-variant bg-surface-container-lowest text-label-sm" />
-          <button type="submit" className="h-9 px-md rounded-lg bg-primary text-on-primary text-label-sm font-semibold">
-            Apply
-          </button>
-        </form>
-      )}
-      <span className="text-caption text-on-surface-variant ml-auto">{rangeText(range.from, range.to)}</span>
-    </div>
   );
 }
 

@@ -75,6 +75,12 @@ export const CRM_ENROLLED_TASKS_PAGE = "/crm/enrolled-tasks";
 const ENROLLED_STATUS_CODE = "enrolled";
 
 /**
+ * The CRM Lead Quality report — defined in rbac.ts, which needs it in
+ * `canSeePage` and must not import this module back.
+ */
+export { CRM_LEAD_QUALITY_PAGE } from "./rbac";
+
+/**
  * Resolved CRM capabilities for the current user. Mirrors the shape of
  * `LeadPulseAccess` — a single object the page/API layers branch on.
  *

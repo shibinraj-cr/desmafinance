@@ -106,7 +106,8 @@ function leadRows(facts: Fact[], dicts: Dicts, scope: Scope): Array<{ fact: Fact
   return out;
 }
 
-function add(c: QualityCounts, bucket: QualityBucket, enrolled: boolean): void {
+/** Count one lead into a tally. */
+export function addToCounts(c: QualityCounts, bucket: QualityBucket, enrolled: boolean): void {
   c.leads += 1;
   c.byBucket[bucket] += 1;
   if (enrolled) {
@@ -117,7 +118,7 @@ function add(c: QualityCounts, bucket: QualityBucket, enrolled: boolean): void {
 
 export function qualityTotals(facts: Fact[], dicts: Dicts, scope: Scope): QualityCounts {
   const c = emptyCounts();
-  for (const r of leadRows(facts, dicts, scope)) add(c, r.bucket, r.enrolled);
+  for (const r of leadRows(facts, dicts, scope)) addToCounts(c, r.bucket, r.enrolled);
   return c;
 }
 
@@ -136,7 +137,7 @@ export function qualityByGroup(facts: Fact[], dicts: Dicts, scope: Scope & { dim
       row = { key, label: bucketLabel(key, scope.dim, dicts), counts: emptyCounts() };
       rows.set(key, row);
     }
-    add(row.counts, r.bucket, r.enrolled);
+    addToCounts(row.counts, r.bucket, r.enrolled);
   }
   const list = [...rows.values()];
   if (isTimeDim(scope.dim)) list.sort((a, b) => (a.key < b.key ? -1 : a.key > b.key ? 1 : 0));
