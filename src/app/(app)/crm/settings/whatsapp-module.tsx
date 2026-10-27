@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import { useCallback, useEffect, useRef, useState } from "react";
 
 /**
@@ -471,6 +472,15 @@ export function WhatsAppModuleCard() {
               )}
             </div>
           )}
+        </div>
+
+        <div className="pt-md border-t border-outline-variant space-y-xs">
+          <span className="block text-label-sm text-on-surface-variant">
+            A number that runs on the WhatsApp Business app on a phone can feed the CRM too, without leaving the phone.
+          </span>
+          <Link href="/crm/settings/whatsapp-connect" className="inline-block text-label-sm text-primary font-semibold hover:underline">
+            Connect a WhatsApp Business app number →
+          </Link>
         </div>
       </div>
 
