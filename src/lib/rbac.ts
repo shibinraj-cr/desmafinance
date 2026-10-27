@@ -2,6 +2,16 @@
 // capability flags + page list) and fall back to the legacy string `role`
 // field on User when no relation is present.
 
+import { MARKETING_ADMIN_ROLE_NAME } from "./crm-uncontacted-alarm";
+
+/**
+ * The CRM Lead Quality report (`/crm/team/lead-quality`) — campaign quality,
+ * reasons leads go bad, BDE rating discipline. For Admins and the Marketing
+ * Admin: `canSeePage` opens it to the "Marketing Admin" role by name, so no
+ * Role.pages edit is needed; any other role can still be granted the page.
+ */
+export const CRM_LEAD_QUALITY_PAGE = "/crm/team/lead-quality";
+
 export type Permissions = {
   isAdmin: boolean;
   canApprove: boolean;
@@ -188,6 +198,12 @@ export function canSeePage(p: Permissions, href: string): boolean {
   // the page itself only opens for enrolled learners.
   if ((href === "/me/sales-training" || href.startsWith("/me/sales-training/")) && crmUser) {
     return true;
+  }
+  // The CRM Lead Quality report belongs to the Marketing Admin as well as
+  // admins, so that role sees it by name — no Role.pages edit, and re-running
+  // the Marketing Admin setup can't drop it. Other roles need an explicit grant.
+  if (href === CRM_LEAD_QUALITY_PAGE || href.startsWith(CRM_LEAD_QUALITY_PAGE + "/")) {
+    return p.roleName === MARKETING_ADMIN_ROLE_NAME || p.pages.some((pg) => pg === CRM_LEAD_QUALITY_PAGE);
   }
   // Agreement templates are setup, not day-to-day work: a role granted
   // /operations/agreements (send and track agreements) must not inherit the
