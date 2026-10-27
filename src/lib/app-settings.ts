@@ -161,6 +161,19 @@ export const WA_CLOUD_APP_SECRET_KEY = "wa_cloud_app_secret";
 export const WA_CLOUD_API_VERSION_KEY = "wa_cloud_api_version";
 
 /**
+ * Embedded Signup (CRM → Settings → WhatsApp → Connect a Business app number).
+ *
+ * - META_APP_ID: the Meta app's id, public — the browser SDK needs it.
+ * - ES_CONFIG_ID: the Facebook Login for Business configuration created from
+ *   Meta's "WhatsApp embedded sign-up" template. Also public.
+ * - COEXISTENCE_NUMBERS: JSON list of numbers connected through the flow, with
+ *   what each follow-up step returned — see src/lib/wa/coexistence.ts.
+ */
+export const WA_META_APP_ID_KEY = "wa_meta_app_id";
+export const WA_ES_CONFIG_ID_KEY = "wa_es_config_id";
+export const WA_COEXISTENCE_NUMBERS_KEY = "wa_coexistence_numbers";
+
+/**
  * Wabis developer API key (avatar menu → API Developer). Used ONLY by the
  * one-off history import (src/lib/wa/wabis-import.ts) — sending still goes
  * through the provider seam. Sent as an `apiToken` request parameter, which is
