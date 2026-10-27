@@ -68,7 +68,10 @@ export default async function CareersLayout({ children }: { children: React.Reac
             <Link className="underline" href="/privacy-policy">
               How we handle your data
             </Link>
-            .
+            {" · "}
+            <Link className="underline" href="/terms">
+              Terms
+            </Link>
           </p>
         </div>
       </footer>
