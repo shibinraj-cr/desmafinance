@@ -1,6 +1,6 @@
 "use client";
 
-import { Fragment, useCallback, useEffect, useMemo, useState } from "react";
+import { Fragment, useCallback, useEffect, useId, useMemo, useState } from "react";
 import { createPortal } from "react-dom";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
@@ -111,6 +111,20 @@ function Field({ label, children }: { label: string; children: React.ReactNode }
       <span className="block text-label-sm text-on-surface-variant mb-xs">{label}</span>
       {children}
     </label>
+  );
+}
+
+// For a set of buttons or several controls. A <label> would forward any click on
+// its caption or blank space to the first control inside it — e.g. untick a checkbox.
+function FieldGroup({ label, children }: { label: string; children: React.ReactNode }) {
+  const id = useId();
+  return (
+    <div role="group" aria-labelledby={id}>
+      <span id={id} className="block text-label-sm text-on-surface-variant mb-xs">
+        {label}
+      </span>
+      {children}
+    </div>
   );
 }
 
@@ -2682,7 +2696,7 @@ function CallModal({
       ) : (
         <p className="text-on-surface-variant text-body-md">No phone number on file.</p>
       )}
-      <Field label="Outcome">
+      <FieldGroup label="Outcome">
         <div className="flex flex-wrap gap-xs">
           {OUTCOME_CHOICES.map((o) => (
             <button
@@ -2700,7 +2714,7 @@ function CallModal({
             </button>
           ))}
         </div>
-      </Field>
+      </FieldGroup>
       <Field label="Status after this call">
         <select className={inputCls} value={subStatusId} onChange={(e) => setSubStatusId(e.target.value)}>
           <option value="">Keep “{lead.subStatus?.label ?? "—"}”</option>
@@ -2715,7 +2729,7 @@ function CallModal({
           ))}
         </select>
       </Field>
-      <Field label="Next follow-up">
+      <FieldGroup label="Next follow-up">
         <label className="flex items-center gap-xs text-label-sm text-on-surface">
           <input type="checkbox" checked={book} onChange={(e) => setBook(e.target.checked)} /> Book it now
         </label>
@@ -2745,7 +2759,7 @@ function CallModal({
             />
           </div>
         )}
-      </Field>
+      </FieldGroup>
       <div className="grid grid-cols-3 gap-sm">
         <Field label="Minutes">
           <input className={inputCls} type="number" min={0} value={minutes} onChange={(e) => setMinutes(e.target.value)} />
