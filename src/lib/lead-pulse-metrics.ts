@@ -1407,6 +1407,20 @@ export async function getSourceDisqualifiedAnalysis(
  * `forecastCount = actualCount + openCount`. The supervisor card on the
  * dashboard uses the per-BDE roll-up of these totals.
  */
+/**
+ * Total of a BDE's targets across forecast rows, counting each target once. A
+ * group target sits on every service row of its group (so each row can show the
+ * goal it is measured against), and adding it up per row inflated the total —
+ * and with it "Behind N" — by the number of services in the group.
+ */
+export function sumDistinctTargets(rows: Array<{ key: string; target: number }>): number {
+  const seen = new Map<string, number>();
+  for (const r of rows) if (!seen.has(r.key)) seen.set(r.key, r.target);
+  let total = 0;
+  for (const t of seen.values()) total += t;
+  return total;
+}
+
 export async function getPipelineForecast(
   year: number,
   month: number,
@@ -1567,14 +1581,14 @@ export async function getPipelineForecast(
 
   const byBde = roles.map((r) => {
     const userMap = perBde.get(r.userId) ?? new Map<string, Bucket>();
+    // Which target each row reads — a GROUP target is one number shared by every
+    // service in the group, so it must be summed once, not once per service row.
+    const targetKeyByService = new Map<string, string>();
     const rows = Array.from(userMap.values())
       .map((b) => {
-        const targetCount =
-          (b.serviceGroupId
-            ? targetByGroup.get(`${r.userId}|${b.serviceGroupId}`)
-            : undefined) ??
-          targetByService.get(`${r.userId}|${b.serviceId}`) ??
-          0;
+        const groupTarget = b.serviceGroupId ? targetByGroup.get(`${r.userId}|${b.serviceGroupId}`) : undefined;
+        targetKeyByService.set(b.serviceId, groupTarget !== undefined ? `g:${b.serviceGroupId}` : `s:${b.serviceId}`);
+        const targetCount = groupTarget ?? targetByService.get(`${r.userId}|${b.serviceId}`) ?? 0;
         return {
           ...b,
           targetCount,
@@ -1588,7 +1602,7 @@ export async function getPipelineForecast(
         actualCount: acc.actualCount + x.actualCount,
         openCount: acc.openCount + x.openCount,
         forecastCount: acc.forecastCount + x.forecastCount,
-        targetCount: acc.targetCount + x.targetCount,
+        targetCount: acc.targetCount,
         expectedRevenue: acc.expectedRevenue + x.expectedRevenue,
         actualRevenue: acc.actualRevenue + x.actualRevenue,
       }),
@@ -1596,7 +1610,9 @@ export async function getPipelineForecast(
         actualCount: 0,
         openCount: 0,
         forecastCount: 0,
-        targetCount: 0,
+        targetCount: sumDistinctTargets(
+          rows.map((x) => ({ key: targetKeyByService.get(x.serviceId) ?? `s:${x.serviceId}`, target: x.targetCount })),
+        ),
         expectedRevenue: 0,
         actualRevenue: 0,
       },

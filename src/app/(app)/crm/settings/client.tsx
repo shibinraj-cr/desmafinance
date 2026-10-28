@@ -75,6 +75,12 @@ const subStatusErrors: Record<string, string> = {
   is_default: "This is the status new leads start in — make another the default first.",
   default_required: "Every new lead has to start somewhere — promote another status instead.",
 };
+const reasonErrors: Record<string, string> = {
+  label_taken: "A reason with that label already exists.",
+  validation_error: "Please check the fields.",
+  not_found: "Reason no longer exists.",
+  in_use: "Reason is used by leads — deactivate instead.",
+};
 const qualErrors: Record<string, string> = {
   label_taken: "A qualification with that label already exists.",
   validation_error: "Please check the fields.",
@@ -82,7 +88,7 @@ const qualErrors: Record<string, string> = {
   in_use: "Qualification is used by leads — deactivate instead.",
 };
 
-type TabKey = "statuses" | "sub_statuses" | "qualifications" | "capture" | "whatsapp" | "wa_module" | "remarketing" | "email";
+type TabKey = "statuses" | "sub_statuses" | "qualifications" | "quality_reasons" | "capture" | "whatsapp" | "wa_module" | "remarketing" | "email";
 
 // One tab per settings section. `group` is a soft caption shown above the active
 // panel so the old "Reference data / Integrations" split isn't lost.
@@ -93,6 +99,7 @@ const TABS: { key: TabKey; label: string; icon: string; group: string }[] = [
   { key: "statuses", label: "Stages", icon: "flag", group: "Reference data" },
   { key: "sub_statuses", label: "Statuses", icon: "label", group: "Reference data" },
   { key: "qualifications", label: "Qualifications", icon: "school", group: "Reference data" },
+  { key: "quality_reasons", label: "Lead Quality", icon: "grade", group: "Reference data" },
   { key: "capture", label: "Lead Capture", icon: "sync_alt", group: "Integrations" },
   { key: "whatsapp", label: "Wabis", icon: "forum", group: "Integrations" },
   { key: "wa_module", label: "WhatsApp Inbox", icon: "chat", group: "Integrations" },
@@ -106,10 +113,12 @@ export function SettingsClient({
   statuses,
   subStatuses,
   qualifications,
+  qualityReasons,
 }: {
   statuses: StatusRow[];
   subStatuses: SubStatusRow[];
   qualifications: QualRow[];
+  qualityReasons: QualRow[];
 }) {
   const [tab, setTab] = useState<TabKey>("statuses");
 
@@ -164,6 +173,7 @@ export function SettingsClient({
         {tab === "statuses" && <StatusEditor statuses={statuses} />}
         {tab === "sub_statuses" && <SubStatusEditor subStatuses={subStatuses} />}
         {tab === "qualifications" && <QualificationEditor qualifications={qualifications} />}
+        {tab === "quality_reasons" && <QualityReasonEditor reasons={qualityReasons} />}
         {tab === "capture" && <IntegrationsCard />}
         {tab === "whatsapp" && <WabisWebhookCard />}
         {tab === "wa_module" && <WhatsAppModuleCard />}
@@ -1003,6 +1013,236 @@ function NewQualificationButton() {
               className="w-full max-w-md bg-surface-container-lowest border border-outline-variant rounded-xl shadow-lg p-lg space-y-md"
             >
               <h3 className="text-h3 text-on-surface">New qualification</h3>
+              {error && <div className="rounded-lg bg-error-container text-on-error-container px-md py-sm">{error}</div>}
+              <Field label="Label">
+                <input className={inputCls} value={form.label} onChange={(e) => setForm({ ...form, label: e.target.value })} autoFocus />
+              </Field>
+              <Field label="Display order">
+                <input
+                  type="number"
+                  min={0}
+                  className={inputCls}
+                  value={form.displayOrder}
+                  onChange={(e) => setForm({ ...form, displayOrder: Number(e.target.value) || 0 })}
+                />
+              </Field>
+              <div className="flex justify-end gap-base">
+                <button type="button" className={secondaryBtn} disabled={busy} onClick={() => setOpen(false)}>
+                  Cancel
+                </button>
+                <button type="submit" className={primaryBtn} disabled={busy}>
+                  {busy ? "Saving…" : "Create"}
+                </button>
+              </div>
+            </form>
+          </div>,
+          document.body,
+        )}
+    </>
+  );
+}
+
+// ── Lead quality reasons ───────────────────────────────────────────────────
+function QualityReasonEditor({ reasons }: { reasons: QualRow[] }) {
+  return (
+    <section className="bg-surface-container-lowest border border-outline-variant rounded-xl shadow-sm overflow-hidden">
+      <div className="flex items-center justify-between px-lg py-md border-b border-outline-variant">
+        <div>
+          <h3 className="text-h3 text-on-surface">Lead quality reasons</h3>
+          <p className="text-label-sm text-on-surface-variant">
+            Why a lead was rated Poor or Junk. Consultants must pick one for those two ratings, and the Lead Quality report
+            in Sales Analysis breaks them down by source and campaign.
+          </p>
+        </div>
+        <NewQualityReasonButton />
+      </div>
+      <div className="overflow-auto">
+        <table className="w-full text-body-md">
+          <thead className="bg-surface-container-low text-on-surface-variant">
+            <tr>
+              <Th className="text-left">Order</Th>
+              <Th className="text-left">Label</Th>
+              <Th className="text-left">Active</Th>
+              <Th className="text-right">Actions</Th>
+            </tr>
+          </thead>
+          <tbody>
+            {reasons.map((q) => (
+              <QualityReasonRowView key={q.id} qual={q} />
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </section>
+  );
+}
+
+function QualityReasonRowView({ qual }: { qual: QualRow }) {
+  const router = useRouter();
+  const [editing, setEditing] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [draft, setDraft] = useState({ label: qual.label, displayOrder: qual.displayOrder });
+
+  async function patch(body: Record<string, unknown>, after?: () => void) {
+    setBusy(true);
+    setError(null);
+    const res = await fetch(`/api/crm/lead-quality/reasons/${qual.id}`, {
+      method: "PATCH",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(body),
+    });
+    setBusy(false);
+    if (!res.ok) {
+      const d = (await res.json().catch(() => ({}))) as { error?: string };
+      setError(reasonErrors[d.error ?? ""] ?? "Failed to save.");
+      return;
+    }
+    after?.();
+    router.refresh();
+  }
+  async function remove() {
+    if (!confirm(`Delete reason "${qual.label}"?`)) return;
+    setBusy(true);
+    setError(null);
+    const res = await fetch(`/api/crm/lead-quality/reasons/${qual.id}`, { method: "DELETE" });
+    setBusy(false);
+    if (!res.ok) {
+      const d = (await res.json().catch(() => ({}))) as { error?: string };
+      setError(reasonErrors[d.error ?? ""] ?? "Failed to delete.");
+      return;
+    }
+    router.refresh();
+  }
+
+  return (
+    <tr className="border-t border-outline-variant/60">
+      <Td>
+        {editing ? (
+          <input
+            type="number"
+            min={0}
+            className={smInput + " w-[64px] text-right"}
+            value={draft.displayOrder}
+            onChange={(e) => setDraft({ ...draft, displayOrder: Number(e.target.value) || 0 })}
+          />
+        ) : (
+          qual.displayOrder
+        )}
+      </Td>
+      <Td>
+        {editing ? (
+          <input className={smInput + " w-full"} value={draft.label} onChange={(e) => setDraft({ ...draft, label: e.target.value })} />
+        ) : (
+          qual.label
+        )}
+        {error && <div className="text-label-sm text-error mt-xs">{error}</div>}
+      </Td>
+      <Td>
+        <button
+          type="button"
+          disabled={busy}
+          onClick={() => patch({ active: !qual.active })}
+          className="text-on-surface-variant hover:text-accent"
+          title={qual.active ? "Deactivate" : "Activate"}
+        >
+          <span className="material-symbols-outlined" style={{ fontSize: 20 }}>
+            {qual.active ? "toggle_on" : "toggle_off"}
+          </span>
+        </button>
+      </Td>
+      <Td className="text-right">
+        {editing ? (
+          <span className="inline-flex gap-xs">
+            <button
+              type="button"
+              disabled={busy}
+              onClick={() => patch({ label: draft.label, displayOrder: draft.displayOrder }, () => setEditing(false))}
+              className="text-primary hover:underline text-label-sm font-semibold"
+            >
+              Save
+            </button>
+            <button type="button" disabled={busy} onClick={() => setEditing(false)} className="text-on-surface-variant text-label-sm">
+              Cancel
+            </button>
+          </span>
+        ) : (
+          <span className="inline-flex gap-xs">
+            <button type="button" onClick={() => setEditing(true)} className="text-on-surface-variant hover:text-accent" title="Edit">
+              <span className="material-symbols-outlined" style={{ fontSize: 18 }}>
+                edit
+              </span>
+            </button>
+            <button
+              type="button"
+              onClick={remove}
+              disabled={busy || qual.leadCount > 0}
+              title={qual.leadCount > 0 ? `Used by ${qual.leadCount} leads — deactivate instead` : "Delete"}
+              className="text-on-surface-variant hover:text-error disabled:opacity-40"
+            >
+              <span className="material-symbols-outlined" style={{ fontSize: 18 }}>
+                delete
+              </span>
+            </button>
+          </span>
+        )}
+      </Td>
+    </tr>
+  );
+}
+
+function NewQualityReasonButton() {
+  const router = useRouter();
+  const [open, setOpen] = useState(false);
+  const [mounted, setMounted] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [form, setForm] = useState({ label: "", displayOrder: 0 });
+
+  useEffect(() => setMounted(true), []);
+
+  async function submit(e: React.FormEvent) {
+    e.preventDefault();
+    setError(null);
+    setBusy(true);
+    const res = await fetch("/api/crm/lead-quality/reasons", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(form),
+    });
+    setBusy(false);
+    if (!res.ok) {
+      const d = (await res.json().catch(() => ({}))) as { error?: string };
+      setError(reasonErrors[d.error ?? ""] ?? "Failed to create.");
+      return;
+    }
+    setForm({ label: "", displayOrder: 0 });
+    setOpen(false);
+    router.refresh();
+  }
+
+  return (
+    <>
+      <button
+        type="button"
+        onClick={() => setOpen(true)}
+        className="inline-flex items-center gap-xs h-9 px-md rounded-lg bg-primary text-on-primary text-label-sm font-semibold hover:bg-primary-container transition"
+      >
+        <span className="material-symbols-outlined" style={{ fontSize: 18 }}>
+          add
+        </span>
+        New reason
+      </button>
+      {open &&
+        mounted &&
+        createPortal(
+          <div className="fixed inset-0 z-[1000] grid place-items-center bg-black/50 p-md" onClick={() => !busy && setOpen(false)}>
+            <form
+              onClick={(e) => e.stopPropagation()}
+              onSubmit={submit}
+              className="w-full max-w-md bg-surface-container-lowest border border-outline-variant rounded-xl shadow-lg p-lg space-y-md"
+            >
+              <h3 className="text-h3 text-on-surface">New quality reason</h3>
               {error && <div className="rounded-lg bg-error-container text-on-error-container px-md py-sm">{error}</div>}
               <Field label="Label">
                 <input className={inputCls} value={form.label} onChange={(e) => setForm({ ...form, label: e.target.value })} autoFocus />

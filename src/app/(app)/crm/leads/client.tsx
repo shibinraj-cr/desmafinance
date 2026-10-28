@@ -16,6 +16,8 @@ import { ageFromDob } from "@/lib/age";
 import { COUNTRIES, countryCodeFor } from "@/lib/countries";
 import { MultiSelect } from "@/components/MultiSelect";
 import { listParam, applyFilterPatch } from "@/lib/filter-params";
+import { QualityPill } from "@/components/crm/LeadQualityPicker";
+import { LEAD_QUALITIES, QUALITY_UNRATED_BUCKETS, qualityBucket } from "@/lib/crm-lead-quality";
 
 // ── Shared prop shapes ──────────────────────────────────────────────────────
 export type StatusOpt = { id: string; code: string; label: string; kind: string; color: string | null };
@@ -37,6 +39,11 @@ export type Masters = {
 };
 export type LeadsAccess = {
   canCreate: boolean;
+  /**
+   * May create candidate referrals only (CrmAccess.referralLeadsOnly): the form
+   * shows the source fixed and drops Stage/Status, which the server ignores.
+   */
+  referralLeadsOnly: boolean;
   canAssign: boolean;
   canBulkImport: boolean;
   canBulkEmail: boolean;
@@ -375,7 +382,7 @@ function NewLeadButton({ masters, access }: { masters: Masters; access: LeadsAcc
         <span className="material-symbols-outlined" style={{ fontSize: 18 }}>
           add
         </span>
-        New lead
+        {access.referralLeadsOnly ? "New referral" : "New lead"}
       </button>
       {open &&
         mounted &&
@@ -389,7 +396,7 @@ function NewLeadButton({ masters, access }: { masters: Masters; access: LeadsAcc
               onSubmit={submit}
               className="w-full max-w-md max-h-[90vh] overflow-y-auto bg-surface-container-lowest border border-outline-variant rounded-xl shadow-lg p-lg space-y-md"
             >
-              <h3 className="text-h3 text-on-surface">New lead</h3>
+              <h3 className="text-h3 text-on-surface">{access.referralLeadsOnly ? "New referral lead" : "New lead"}</h3>
               {error && <div className="rounded-lg bg-error-container text-on-error-container px-md py-sm">{error}</div>}
               <Field label="Candidate name *">
                 <input
@@ -425,18 +432,22 @@ function NewLeadButton({ masters, access }: { masters: Masters; access: LeadsAcc
               </Field>
               <div className="grid grid-cols-2 gap-md">
                 <Field label="Source">
-                  <select
-                    className={inputCls}
-                    value={form.sourceId}
-                    onChange={(e) => setForm({ ...form, sourceId: e.target.value })}
-                  >
-                    <option value="">—</option>
-                    {masters.sources.map((s) => (
-                      <option key={s.id} value={s.id}>
-                        {s.label}
-                      </option>
-                    ))}
-                  </select>
+                  {access.referralLeadsOnly ? (
+                    <input className={inputCls} value="Candidate Referral" disabled readOnly />
+                  ) : (
+                    <select
+                      className={inputCls}
+                      value={form.sourceId}
+                      onChange={(e) => setForm({ ...form, sourceId: e.target.value })}
+                    >
+                      <option value="">—</option>
+                      {masters.sources.map((s) => (
+                        <option key={s.id} value={s.id}>
+                          {s.label}
+                        </option>
+                      ))}
+                    </select>
+                  )}
                 </Field>
                 <Field label="Service">
                   <select
@@ -482,45 +493,49 @@ function NewLeadButton({ masters, access }: { masters: Masters; access: LeadsAcc
                     />
                   </Field>
                 )}
-                <Field label="Stage">
-                  <select
-                    className={inputCls}
-                    value={form.statusId}
-                    onChange={(e) => setForm({ ...form, statusId: e.target.value })}
-                  >
-                    <option value="">Default</option>
-                    {/* Pipeline & Enrolled are set by actions (Set deal / Enroll), not at
-                        creation — exclude them here (server also rejects them). */}
-                    {masters.statuses
-                      .filter((s) => !isActionOnlyStatus(s.code))
-                      .map((s) => (
-                        <option key={s.id} value={s.id}>
-                          {s.label}
-                        </option>
-                      ))}
-                  </select>
-                </Field>
+                {!access.referralLeadsOnly && (
+                  <Field label="Stage">
+                    <select
+                      className={inputCls}
+                      value={form.statusId}
+                      onChange={(e) => setForm({ ...form, statusId: e.target.value })}
+                    >
+                      <option value="">Default</option>
+                      {/* Pipeline & Enrolled are set by actions (Set deal / Enroll), not at
+                          creation — exclude them here (server also rejects them). */}
+                      {masters.statuses
+                        .filter((s) => !isActionOnlyStatus(s.code))
+                        .map((s) => (
+                          <option key={s.id} value={s.id}>
+                            {s.label}
+                          </option>
+                        ))}
+                    </select>
+                  </Field>
+                )}
                 {/* The other axis: where they are in the pipeline vs what is
                     actually happening to them. Left blank, the server assigns
                     the default status. */}
-                <Field label="Status">
-                  <select
-                    className={inputCls}
-                    value={form.subStatusId}
-                    onChange={(e) => setForm({ ...form, subStatusId: e.target.value })}
-                  >
-                    <option value="">Default</option>
-                    {groupedSubStatuses(masters.subStatuses).map(([group, rows]) => (
-                      <optgroup key={group} label={group || "Other"}>
-                        {rows.map((r) => (
-                          <option key={r.id} value={r.id}>
-                            {r.label}
-                          </option>
-                        ))}
-                      </optgroup>
-                    ))}
-                  </select>
-                </Field>
+                {!access.referralLeadsOnly && (
+                  <Field label="Status">
+                    <select
+                      className={inputCls}
+                      value={form.subStatusId}
+                      onChange={(e) => setForm({ ...form, subStatusId: e.target.value })}
+                    >
+                      <option value="">Default</option>
+                      {groupedSubStatuses(masters.subStatuses).map(([group, rows]) => (
+                        <optgroup key={group} label={group || "Other"}>
+                          {rows.map((r) => (
+                            <option key={r.id} value={r.id}>
+                              {r.label}
+                            </option>
+                          ))}
+                        </optgroup>
+                      ))}
+                    </select>
+                  </Field>
+                )}
                 <Field label="Temperature">
                   <select
                     className={inputCls}
@@ -632,7 +647,7 @@ const SORT_OPTIONS: { value: string; label: string }[] = [
 // fixed). Order is remembered per browser in localStorage.
 const LEADS_COL_ORDER_KEY = "crm.leads.columnOrder.v1";
 const LEADS_DEFAULT_COLUMNS = [
-  "created", "source", "campaign", "status", "substatus", "temperature", "candidate", "email", "phone", "age", "country", "code", "studyDestination", "service", "qualification", "consultant", "assigned",
+  "created", "source", "campaign", "status", "substatus", "temperature", "quality", "candidate", "email", "phone", "age", "country", "code", "studyDestination", "service", "qualification", "consultant", "assigned",
 ] as const;
 
 
@@ -848,6 +863,7 @@ export function LeadsTable({
     assigneeIsFilter ||
     picked("campaign").length > 0 ||
     picked("temperature").length > 0 ||
+    picked("quality").length > 0 ||
     picked("substatus").length > 0 ||
     picked("country").length > 0 ||
     picked("studyDestination").length > 0 ||
@@ -938,6 +954,46 @@ export function LeadsTable({
         ) : (
           <TemperaturePill temperature={null} />
         ),
+    },
+    {
+      id: "quality",
+      label: "Quality",
+      className: "whitespace-nowrap",
+      render: (l) => {
+        const bucket = qualityBucket(
+          {
+            qualityRating: l.quality.rating,
+            qualityDueAt: l.quality.dueAt,
+            assignedToId: l.assignedTo?.id ?? null,
+            statusCode: l.status.code,
+          },
+          new Date(),
+        );
+        if (l.quality.rating) {
+          return (
+            <button
+              type="button"
+              onClick={() => update({ quality: bucket })}
+              title={l.quality.reason ? `${l.quality.reason.label} (click to filter)` : "Filter by this rating"}
+            >
+              <QualityPill rating={l.quality.rating} />
+            </button>
+          );
+        }
+        // Unrated: only the overdue ones are worth the ink.
+        return bucket === "overdue" ? (
+          <button
+            type="button"
+            onClick={() => update({ quality: "overdue" })}
+            className="text-label-sm font-semibold text-error hover:underline"
+            title="Rating overdue: click to list every overdue lead"
+          >
+            Overdue
+          </button>
+        ) : (
+          <span className="text-on-surface-variant">—</span>
+        );
+      },
     },
     {
       id: "candidate",
@@ -1177,6 +1233,16 @@ export function LeadsTable({
           options={LEAD_TEMPERATURES.map((t) => ({ value: t.value, label: t.label }))}
           selected={picked("temperature")}
           onChange={(next) => update({ temperature: next })}
+        />
+
+        <MultiSelect
+          placeholder="All quality"
+          options={[
+            ...LEAD_QUALITIES.map((q) => ({ value: q.value, label: q.label })),
+            ...QUALITY_UNRATED_BUCKETS.map((b) => ({ value: b.value, label: b.label })),
+          ]}
+          selected={picked("quality")}
+          onChange={(next) => update({ quality: next })}
         />
 
         {/* The cross-stage filter. Picking "Details Sent and Not Responding"

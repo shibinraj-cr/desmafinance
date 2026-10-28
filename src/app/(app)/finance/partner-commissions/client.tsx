@@ -64,7 +64,7 @@ export function PartnerCommissionsClient({ data, initialTab, initialInvoice, pag
       paying: paying.length,
       payingAud: paying.reduce((s, e) => s + e.balance, 0),
       queued: queued.length,
-      queuedAud: queued.reduce((s, e) => s + commissionOf(e.courseFee, e.commissionPct), 0),
+      queuedAud: queued.reduce((s, e) => s + commissionOf(e.courseFee, e.commissionPct, e.commissionFlat), 0),
       openAud: open.reduce((s, i) => s + Math.max(0, totalOf(i) - approvedAud(i)), 0),
       drafts: data.invoices.filter((i) => i.status === "draft").length,
       awaiting: receipts.filter((r) => r.status === "awaiting").length,

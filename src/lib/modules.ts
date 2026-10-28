@@ -2,7 +2,7 @@
 // pages into `src/app/(app)/<basePath>/...`, and update Role.pages on roles
 // that should see those pages.
 
-import { isAdmin, canSeePage, type Permissions } from "@/lib/rbac";
+import { isAdmin, canSeePage, CRM_LEADS_ONLY_PAGE, type Permissions } from "@/lib/rbac";
 
 export type ModuleStatus = "active" | "coming_soon";
 
@@ -18,6 +18,8 @@ export type AppPage = {
    * the sidebar. Untagged pages render flat. Does not affect routing or RBAC.
    */
   group?: string;
+  /** A capability marker, not a page you can open — see ROLE_PERMISSIONS. */
+  permission?: boolean;
 };
 
 export type AppModule = {
@@ -259,6 +261,15 @@ export const MODULES: AppModule[] = [
     status: "active",
     pages: [
       {
+        // A consultant's ordered to-do: WhatsApp replies owed, uncontacted new
+        // leads, tasks due, ratings due. Personal to every CRM user, so (like
+        // the Daily Report) visibility is handled in canSeePage.
+        href: "/crm/my-day",
+        label: "My Day",
+        icon: "today",
+        group: "ACTIVITY",
+      },
+      {
         href: "/crm/team",
         label: "Dashboard",
         icon: "insights",
@@ -270,6 +281,16 @@ export const MODULES: AppModule[] = [
         href: "/crm/team/bde-enrollment",
         label: "BDE Enrollment",
         icon: "leaderboard",
+        group: "ACTIVITY",
+        adminOnly: true,
+      },
+      {
+        // Campaign quality, reasons leads go bad and BDE rating discipline, for
+        // Admins and the Marketing Admin (opened to that role by name in
+        // canSeePage — see CRM_LEAD_QUALITY_PAGE).
+        href: "/crm/team/lead-quality",
+        label: "Lead Quality",
+        icon: "grade",
         group: "ACTIVITY",
         adminOnly: true,
       },
@@ -295,13 +316,13 @@ export const MODULES: AppModule[] = [
         href: "/crm/leads",
         label: "Leads",
         icon: "groups",
-        group: "PIPELINE",
+        group: "LEADS",
       },
       {
         href: "/crm/tasks",
         label: "Tasks",
         icon: "task_alt",
-        group: "PIPELINE",
+        group: "LEADS",
       },
       {
         // Add NCLEX / OSCE / GCAN partner enrollments. Granted per PERSON, not
@@ -311,17 +332,17 @@ export const MODULES: AppModule[] = [
         href: "/crm/partner-enrollments",
         label: "Partner Enrollments",
         icon: "school",
-        group: "PIPELINE",
+        group: "LEADS",
       },
       {
         // Its own group, so WhatsApp is a destination in the left bar rather
-        // than a page buried inside Pipeline — the left bar lists GROUPS, so
+        // than a page buried inside Leads — the left bar lists GROUPS, so
         // anything sharing a group with Leads is invisible until you are already
-        // in Pipeline. Answering candidates is its own job, not a sub-task of
+        // in Leads. Answering candidates is its own job, not a sub-task of
         // working the pipeline.
         //
         // Group order follows first appearance in this list (see moduleGroups),
-        // so sitting here puts WhatsApp directly below Pipeline.
+        // so sitting here puts WhatsApp directly below Leads.
         //
         // Not adminOnly: any CRM user works their own threads. Page enforces
         // canViewLeads; each conversation re-checks who may act on it.
@@ -384,6 +405,15 @@ export const MODULES: AppModule[] = [
         href: "/crm/meta-reconcile",
         label: "Meta Reconcile",
         icon: "rule",
+        group: "ADMIN",
+      },
+      {
+        // The Follow-Up / Re-marketing time limits: preview, switch on, and
+        // extend leads near the limit. Page grant (Admin + Marketing Admin); the
+        // page and its API also require the bulk-stage tier (canBulkStatus).
+        href: "/crm/lifecycle",
+        label: "Lead Lifecycle",
+        icon: "hourglass_bottom",
         group: "ADMIN",
       },
       {
@@ -592,6 +622,31 @@ export const MODULES: AppModule[] = [
 /** Flat list of every page across every module — for the role-management page-access UI. */
 export const ALL_PAGES: AppPage[] = MODULES.flatMap((m) => m.pages);
 export const ALL_PAGE_HREFS: string[] = ALL_PAGES.map((p) => p.href);
+
+/**
+ * Capability markers an admin can tick on a role in /roles, beside its pages.
+ * They live in Role.pages but are not pages: none is in MODULES, so none ever
+ * renders in the nav, and each is read by its own gate (crm-rbac.ts / rbac.ts —
+ * hrefs kept in sync there, enforced by tests/crm-rbac.test.ts). Listing them
+ * here is also what lets the roles API keep them: it drops any href it doesn't
+ * know, which would strip a marker the first time its role was saved.
+ */
+export const ROLE_PERMISSIONS: AppPage[] = [
+  { href: "/crm/assign", label: "Assign & reassign leads", icon: "assignment_ind", permission: true },
+  { href: "/crm/history", label: "Full lead history", icon: "history", permission: true },
+  { href: "/crm/team-all", label: "Whole-team dashboard (view-only)", icon: "groups", permission: true },
+  { href: "/crm/referral-leads", label: "Create referral leads", icon: "person_add", permission: true },
+  { href: "/crm/enrolled-tasks", label: "Tasks on enrolled leads", icon: "add_task", permission: true },
+  {
+    href: CRM_LEADS_ONLY_PAGE,
+    label: "Leads only (hide Inbox, reports, notifications)",
+    icon: "visibility_off",
+    permission: true,
+  },
+];
+
+/** Everything a role may hold in Role.pages: every page plus every permission. */
+export const GRANTABLE_HREFS: string[] = [...ALL_PAGE_HREFS, ...ROLE_PERMISSIONS.map((p) => p.href)];
 
 /** Pages every non-admin role gets by default (Finance only, no system). */
 export const DEFAULT_NON_ADMIN_PAGES: string[] = MODULES.filter(

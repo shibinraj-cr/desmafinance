@@ -148,13 +148,13 @@ export function ReportForm({
 
   return (
     <div className="space-y-md">
-      <Field label="Summary of the day" hint="What you worked on, wins, key conversations.">
+      <Field label="Summary of the day" hint="The numbers above are filled in for you — add what they don't show.">
         <textarea
           className={textareaClass}
           rows={4}
           value={summary}
           onChange={(e) => setSummary(e.target.value)}
-          placeholder="e.g. Followed up 12 leads, 3 moved to pipeline, 1 enrolment confirmed…"
+          placeholder="e.g. Two candidates waiting on IELTS/OET results; one asked for an EMI plan; a hot lead wants a call back Friday…"
         />
       </Field>
       <div className="grid grid-cols-1 gap-md md:grid-cols-2">

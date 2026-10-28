@@ -57,6 +57,12 @@ export type WaSendInput = {
    * the thread shows real content instead of the template's technical name.
    */
   renderedBody?: string | null;
+  /**
+   * Put the generic WHATSAPP_SENT row on the lead's timeline. Defaults to true;
+   * an automation that writes its own, more specific timeline entry (the task
+   * reminder engine) passes false so the send is not logged twice.
+   */
+  recordActivity?: boolean;
 };
 
 /**
@@ -293,17 +299,20 @@ async function recordSentMessage(
 
   // `lastMessageAt` only. Sending must never extend the reply window — a
   // business that could reopen its own 24-hour window by messaging would make
-  // the rule meaningless. `awaitingReply` clears here: someone has now answered.
+  // the rule meaningless. `awaitingReply` clears only when a PERSON sent this:
+  // an automated reminder or notice is not an answer to what the candidate
+  // wrote, and clearing the flag would drop her out of "Needs reply" while she
+  // is still waiting for a human.
   await prisma.waConversation.update({
     where: { id: conversation.id },
-    data: { lastMessageAt: now, status: "open", awaitingReply: false },
+    data: { lastMessageAt: now, status: "open", ...(input.sentById ? { awaitingReply: false } : {}) },
   });
 
   // Unlike inbound (deliberately silent, or a chatty thread would bury the
   // timeline), an outbound message is something a consultant DID — the same
   // reasoning that already puts WHATSAPP_SENT on the timeline from the
   // single-lead composer.
-  if (conversation.leadId) {
+  if (conversation.leadId && input.recordActivity !== false) {
     await recordLeadActivity({
       leadId: conversation.leadId,
       actorId: input.sentById,

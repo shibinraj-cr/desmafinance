@@ -2,7 +2,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import { ENROLLMENT_STATE_LABEL, INVOICE_STATUS_LABEL, type EnrollmentState, type InvoiceStatus } from "@/lib/partner-commissions/constants";
-import { commissionOf, fmtMoney, intakeMonthOptions } from "@/lib/partner-commissions/logic";
+import { commissionOf, fmtMoney, intakeMonthOptions, planLabel, suggestedInstallment } from "@/lib/partner-commissions/logic";
 
 /** Shared building blocks for the Partner Commissions pages (Finance + Partner Enrollments). */
 
@@ -163,7 +163,18 @@ export function useToast() {
 
 // ── enrollment form (shared by Finance and Partner Enrollments) ──────────────
 
-export type ProgramOption = { code: string; partnerName: string; courseName: string; defaultFee: number | null; defaultPct: number | null; layout: string };
+export type ProgramOption = {
+  code: string;
+  partnerName: string;
+  courseName: string;
+  defaultFee: number | null;
+  defaultPct: number | null;
+  /** Flat AUD commission per enrollment; when set it replaces the percentage. */
+  defaultFlat?: number | null;
+  /** Installment plans to pick from when enrolling (e.g. GCAN: [1, 2, 6]); empty = no plan. */
+  installmentPlans?: number[];
+  layout: string;
+};
 
 type LeadHit = { id: string; name: string; hint: string };
 
@@ -247,6 +258,9 @@ export function EnrollmentForm({
   const [intake, setIntake] = useState(months[13] ?? months[0]);
   const [fee, setFee] = useState(cfg?.defaultFee != null ? String(cfg.defaultFee) : "");
   const [pct, setPct] = useState(cfg?.defaultPct != null ? String(cfg.defaultPct) : "");
+  const [isFlat, setIsFlat] = useState(cfg?.defaultFlat != null);
+  const [flat, setFlat] = useState(cfg?.defaultFlat != null ? String(cfg.defaultFlat) : "");
+  const [plan, setPlan] = useState("");
   const [paidNow, setPaidNow] = useState(false);
   const [paidAmt, setPaidAmt] = useState("");
   const [paidOn, setPaidOn] = useState(today);
@@ -261,10 +275,16 @@ export function EnrollmentForm({
     setCourseName(c.courseName);
     setFee(c.defaultFee != null ? String(c.defaultFee) : "");
     setPct(c.defaultPct != null ? String(c.defaultPct) : "");
+    setIsFlat(c.defaultFlat != null);
+    setFlat(c.defaultFlat != null ? String(c.defaultFlat) : "");
+    setPlan("");
   }
 
   const feeN = parseFloat(fee);
   const pctN = finance ? parseFloat(pct) : (cfg?.defaultPct ?? NaN);
+  // Flat (e.g. GCAN) or a percentage of the fee; outside Finance it's always the program's terms.
+  const flatN = finance ? (isFlat ? parseFloat(flat) : null) : (cfg?.defaultFlat ?? null);
+  const preview = flatN != null ? (flatN > 0 ? flatN : NaN) : feeN > 0 && pctN >= 0 ? commissionOf(feeN, pctN) : NaN;
 
   async function submit() {
     setErr(null);
@@ -272,9 +292,12 @@ export function EnrollmentForm({
     const candidateName = name.trim() || lead?.name || "";
     if (!candidateName) return setErr("Enter the candidate's name.");
     if (!(feeN > 0)) return setErr("Enter the total course fee in AUD.");
-    if (finance && !(pctN >= 0 && pctN <= 100)) return setErr("Commission % must be between 0 and 100.");
+    if (finance && isFlat && !(flatN != null && flatN > 0)) return setErr("Enter the flat commission in AUD.");
+    if (finance && !isFlat && !(pctN >= 0 && pctN <= 100)) return setErr("Commission % must be between 0 and 100.");
     let firstPayment = null;
-    if (finance && paidNow) {
+    const plans = cfg?.installmentPlans ?? [];
+    if (plans.length && !plan) return setErr(`Pick the installment plan: ${plans.map(planLabel).join(", ")}.`);
+    if (paidNow) {
       const a = parseFloat(paidAmt);
       if (!(a > 0)) return setErr("Enter the 1st installment, or untick the box.");
       if (a > feeN) return setErr("The 1st installment can't be more than the course fee.");
@@ -290,8 +313,10 @@ export function EnrollmentForm({
         courseName: finance ? courseName : null,
         intakeMonth: intake,
         courseFee: feeN,
-        commissionPct: finance ? pctN : null,
+        commissionPct: finance && !isFlat ? pctN : null,
+        ...(finance ? { commissionFlat: isFlat ? flatN : null } : {}),
         firstPayment,
+        installmentPlan: plan ? Number(plan) : null,
       });
       onCreated(res.id, candidateName);
     } catch (e) {
@@ -312,7 +337,7 @@ export function EnrollmentForm({
   return (
     <Modal
       title="New enrollment"
-      subtitle="The total course fee is fixed here. Each installment Finance records later comes off the balance."
+      subtitle="The total course fee is fixed here. Each installment recorded later comes off the balance."
       onClose={onCancel}
       footer={
         <>
@@ -340,6 +365,16 @@ export function EnrollmentForm({
         <input className={inputCls} value={name} onChange={(e) => setName(e.target.value)} placeholder="As the partner knows them" />
       </Field>
       <div className="grid grid-cols-1 sm:grid-cols-2 gap-sm">
+        {cfg?.installmentPlans?.length ? (
+          <Field label="Installment plan">
+            <select className={inputCls} value={plan} onChange={(e) => setPlan(e.target.value)}>
+              <option value="">Choose…</option>
+              {cfg.installmentPlans.map((n) => (
+                <option key={n} value={n}>{planLabel(n)}</option>
+              ))}
+            </select>
+          </Field>
+        ) : null}
         <Field label="Intake month">
           <select className={inputCls} value={intake} onChange={(e) => setIntake(e.target.value)}>
             {months.map((m) => <option key={m}>{m}</option>)}
@@ -359,33 +394,42 @@ export function EnrollmentForm({
           <input className={inputCls} type="number" min={1} step="1" value={fee} onChange={(e) => setFee(e.target.value)} />
         </Field>
         {finance ? (
-          <Field label="Commission %">
-            <input className={inputCls} type="number" min={0} max={100} step="0.5" value={pct} onChange={(e) => setPct(e.target.value)} />
-          </Field>
+          <div className="flex flex-col gap-1 min-w-0">
+            <span className="text-label-sm font-semibold text-on-surface-variant">Commission</span>
+            <div className="flex gap-2">
+              <select className={`${inputCls} !w-36 shrink-0`} aria-label="Commission type" value={isFlat ? "flat" : "pct"} onChange={(e) => setIsFlat(e.target.value === "flat")}>
+                <option value="pct">% of fee</option>
+                <option value="flat">Flat AUD</option>
+              </select>
+              {isFlat ? (
+                <input className={inputCls} type="number" min={1} step="1" value={flat} onChange={(e) => setFlat(e.target.value)} aria-label="Flat commission (AUD)" />
+              ) : (
+                <input className={inputCls} type="number" min={0} max={100} step="0.5" value={pct} onChange={(e) => setPct(e.target.value)} aria-label="Commission %" />
+              )}
+            </div>
+          </div>
         ) : (
           <Field label="Commission">
-            <input className={inputCls} value={cfg?.defaultPct != null ? `${cfg.defaultPct}% (set by Finance)` : "Not set yet"} disabled />
+            <input
+              className={inputCls}
+              value={cfg?.defaultFlat != null ? `Flat AUD ${fmtMoney(cfg.defaultFlat)} (set by Finance)` : cfg?.defaultPct != null ? `${cfg.defaultPct}% (set by Finance)` : "Not set yet"}
+              disabled
+            />
           </Field>
         )}
       </div>
-      {feeN > 0 && pctN >= 0 ? <p className="text-caption text-on-surface-variant">Commission when fully paid: {AUD(commissionOf(feeN, pctN))}</p> : null}
-      {finance ? (
-        <>
-          <label className="flex items-center gap-2 text-body-md font-medium">
-            <input type="checkbox" checked={paidNow} onChange={(e) => { setPaidNow(e.target.checked); if (e.target.checked && !paidAmt && feeN > 0) setPaidAmt(String(Math.round(feeN / 2))); }} />
-            The 1st installment is already paid
-          </label>
-          {paidNow ? (
-            <div className="grid grid-cols-1 sm:grid-cols-3 gap-sm">
-              <Field label="1st installment (AUD)"><input className={inputCls} type="number" min={1} step="0.01" value={paidAmt} onChange={(e) => setPaidAmt(e.target.value)} /></Field>
-              <Field label="Paid on"><input className={inputCls} type="date" max={today} value={paidOn} onChange={(e) => setPaidOn(e.target.value)} /></Field>
-              <Field label="Reference"><input className={inputCls} value={paidRef} onChange={(e) => setPaidRef(e.target.value)} placeholder="Receipt no. or note" /></Field>
-            </div>
-          ) : null}
-        </>
-      ) : (
-        <p className="text-caption text-on-surface-variant">Finance records the fee installments as the candidate pays.</p>
-      )}
+      {preview >= 0 ? <p className="text-caption text-on-surface-variant">Commission when fully paid: {AUD(preview)}</p> : null}
+      <label className="flex items-center gap-2 text-body-md font-medium">
+        <input type="checkbox" checked={paidNow} onChange={(e) => { setPaidNow(e.target.checked); if (e.target.checked && !paidAmt && feeN > 0) setPaidAmt(String(plan ? suggestedInstallment(feeN, Number(plan), 0) : Math.round(feeN / 2))); }} />
+        The 1st installment is already paid
+      </label>
+      {paidNow ? (
+        <div className="grid grid-cols-1 sm:grid-cols-3 gap-sm">
+          <Field label="1st installment (AUD)"><input className={inputCls} type="number" min={1} step="0.01" value={paidAmt} onChange={(e) => setPaidAmt(e.target.value)} /></Field>
+          <Field label="Paid on"><input className={inputCls} type="date" max={today} value={paidOn} onChange={(e) => setPaidOn(e.target.value)} /></Field>
+          <Field label="Reference"><input className={inputCls} value={paidRef} onChange={(e) => setPaidRef(e.target.value)} placeholder="Receipt no. or note" /></Field>
+        </div>
+      ) : null}
       {err ? <p className="text-body-md text-error font-medium">{err}</p> : null}
     </Modal>
   );

@@ -15,6 +15,8 @@ import {
   needsApproval,
   canSeePage,
   roleLabel,
+  isCrmLeadsOnly,
+  CRM_LEADS_ONLY_PAGE,
   type Permissions,
 } from "@/lib/rbac";
 import { isHrUser, canApproveHr, canDownloadAxis, isEmployeePortalUser } from "@/lib/hr-rbac";
@@ -169,5 +171,59 @@ describe("agreement templates need their own grant", () => {
     expect(canSeePage(editor, "/operations/agreements/templates/t1/builder")).toBe(true);
     expect(canSeePage(editor, "/operations/agreements")).toBe(false);
     expect(canSeePage(perms({ isAdmin: true }), "/operations/agreements/templates")).toBe(true);
+  });
+});
+
+describe("CRM leads-only marker", () => {
+  const AUTO_CRM_PAGES = [
+    "/crm/notifications",
+    "/crm/report",
+    "/crm/deliveries",
+    "/crm/inbox",
+    "/crm/broadcasts/report",
+    "/me/sales-training",
+  ];
+
+  it("a CRM user gets the CRM-user pages without a grant", () => {
+    const p = perms({ pages: ["/crm/leads"] });
+    for (const href of AUTO_CRM_PAGES) expect(canSeePage(p, href)).toBe(true);
+  });
+
+  it("the marker hides them and keeps Leads", () => {
+    const p = perms({ pages: ["/crm/leads", CRM_LEADS_ONLY_PAGE] });
+    expect(isCrmLeadsOnly(p)).toBe(true);
+    expect(canSeePage(p, "/crm/leads")).toBe(true);
+    expect(canSeePage(p, "/crm/leads/abc")).toBe(true);
+    for (const href of AUTO_CRM_PAGES) expect(canSeePage(p, href)).toBe(false);
+  });
+
+  it("Sales Training can still be granted explicitly", () => {
+    const p = perms({ pages: ["/crm/leads", CRM_LEADS_ONLY_PAGE, "/me/sales-training"] });
+    expect(canSeePage(p, "/me/sales-training")).toBe(true);
+    expect(canSeePage(p, "/crm/inbox")).toBe(false);
+  });
+
+  it("does not read as the Leads page itself, and admins ignore it", () => {
+    expect(canSeePage(perms({ pages: [CRM_LEADS_ONLY_PAGE] }), "/crm/leads")).toBe(false);
+    const admin = perms({ isAdmin: true, pages: [CRM_LEADS_ONLY_PAGE] });
+    expect(isCrmLeadsOnly(admin)).toBe(false);
+    expect(canSeePage(admin, "/crm/inbox")).toBe(true);
+  });
+});
+
+describe("canSeePage — CRM Lead Quality report", () => {
+  const page = "/crm/team/lead-quality";
+
+  it("opens to admins and to the Marketing Admin role by name, with no Role.pages entry", () => {
+    expect(canSeePage(perms({ isAdmin: true }), page)).toBe(true);
+    expect(canSeePage(perms({ roleName: "Marketing Admin", pages: ["/marketing/lead-pulse"] }), page)).toBe(true);
+  });
+
+  it("stays closed to a BDE, even one who can see the rest of the CRM Activity pages", () => {
+    expect(canSeePage(perms({ roleName: "Sales", pages: ["/crm/leads", "/crm/team"] }), page)).toBe(false);
+  });
+
+  it("can still be granted to another role explicitly", () => {
+    expect(canSeePage(perms({ roleName: "Sales Lead", pages: [page] }), page)).toBe(true);
   });
 });

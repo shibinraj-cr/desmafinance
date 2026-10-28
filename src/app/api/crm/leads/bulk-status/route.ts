@@ -77,7 +77,7 @@ export const POST = withApiHandler(async (req: Request) => {
   });
 
   type Row = (typeof leads)[number];
-  const moving: Row[] = [];
+  let moving: Row[] = [];
   let skippedEnrolled = 0;
   let skippedUnchanged = 0;
   let skippedForbidden = 0;
@@ -114,29 +114,44 @@ export const POST = withApiHandler(async (req: Request) => {
     });
   }
 
-  const movingIds = moving.map((l) => l.id);
   const now = new Date();
 
-  // The status write itself: one update for the stage + activity stamp, one
-  // insert for the timeline entries. `lastActivityAt` is bumped here for the
+  // The status write itself, conditional per lead on the stage this request
+  // read: a lead someone else moved (or enrolled) since then is left where they
+  // put it rather than silently dragged along. Then one insert for the timeline
+  // entries of the leads that actually moved. `lastActivityAt` is bumped for the
   // same reason recordLeadActivity bumps it on the single-lead path.
-  await prisma.$transaction([
-    prisma.lead.updateMany({
-      where: { id: { in: movingIds } },
-      data: { statusId: target.id, lastActivityAt: now },
-    }),
-    prisma.leadActivity.createMany({
-      data: moving.map((lead) => ({
-        leadId: lead.id,
-        actorId: userId,
-        type: "STATUS_CHANGED",
-        summary: `Status changed: ${lead.status.label} → ${target.label}`,
-        // Same shape the single-lead path writes, plus a bulk marker so the
-        // History can tell a sweep from a one-off.
-        metadata: { from: lead.status.label, to: target.label, bulk: true },
-      })),
-    }),
-  ]);
+  const landedIds = await prisma.$transaction(async (tx) => {
+    const byFrom = new Map<string, string[]>();
+    for (const l of moving) byFrom.set(l.statusId, [...(byFrom.get(l.statusId) ?? []), l.id]);
+    for (const [fromId, ids] of byFrom) {
+      await tx.lead.updateMany({
+        where: { id: { in: ids }, statusId: fromId },
+        data: { statusId: target.id, lastActivityAt: now },
+      });
+    }
+    const landed = await tx.lead.findMany({
+      where: { id: { in: moving.map((l) => l.id) }, statusId: target.id },
+      select: { id: true },
+    });
+    const ids = new Set(landed.map((l) => l.id));
+    await tx.leadActivity.createMany({
+      data: moving
+        .filter((lead) => ids.has(lead.id))
+        .map((lead) => ({
+          leadId: lead.id,
+          actorId: userId,
+          type: "STATUS_CHANGED",
+          summary: `Status changed: ${lead.status.label} → ${target.label}`,
+          // Same shape the single-lead path writes, plus a bulk marker so the
+          // History can tell a sweep from a one-off.
+          metadata: { from: lead.status.label, to: target.label, bulk: true },
+        })),
+    });
+    return ids;
+  });
+  const skippedRaced = moving.length - landedIds.size;
+  moving = moving.filter((l) => landedIds.has(l.id));
 
   // Keep the Marketing forecast in step: a lost lead's deal drops out of the
   // pipeline, a revived one comes back. Batched from the rows already loaded —
@@ -202,6 +217,8 @@ export const POST = withApiHandler(async (req: Request) => {
     remarketingEntered,
     remarketingLeft,
     unassigned,
+    // Leads someone else moved between this request's read and its write.
+    skippedRaced,
     statusLabel: target.label,
   });
 });

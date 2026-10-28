@@ -1,26 +1,41 @@
 /** @type {import('next').NextConfig} */
 
-const csp = [
-  "default-src 'self'",
-  // YouTube's IFrame Player API (Sales Training tracks how much of each video
-  // actually played) loads its script from youtube.com, which pulls the
-  // player code from s.ytimg.com.
-  "script-src 'self' 'unsafe-inline' 'unsafe-eval' https://www.youtube.com https://s.ytimg.com",
-  "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com",
-  "font-src 'self' https://fonts.gstatic.com data:",
-  "img-src 'self' data: blob: https://i.ytimg.com",
-  // Training videos are unlisted YouTube embeds. Without this, frames fall
-  // back to default-src 'self' and the player is blocked outright.
-  "frame-src https://www.youtube.com https://www.youtube-nocookie.com",
-  // Finance Documents uploads go straight from the browser to Vercel Blob
-  // (the only way past the 4.5 MB request cap), so the browser must be able to
-  // reach the Blob API. Scoped to that path, not the whole of vercel.com; the
-  // trailing slash makes it a prefix so multipart (`/mpu`) is covered too.
-  "connect-src 'self' https://vercel.com/api/blob/",
-  "frame-ancestors 'none'",
-  "base-uri 'self'",
-  "form-action 'self'",
-].join("; ");
+/** `extra` widens individual directives for one route — see FACEBOOK_SDK below. */
+const buildCsp = ({ script = [], img = [], frame = [], connect = [] } = {}) =>
+  [
+    "default-src 'self'",
+    // YouTube's IFrame Player API (Sales Training tracks how much of each video
+    // actually played) loads its script from youtube.com, which pulls the
+    // player code from s.ytimg.com.
+    ["script-src 'self' 'unsafe-inline' 'unsafe-eval' https://www.youtube.com https://s.ytimg.com", ...script].join(" "),
+    "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com",
+    "font-src 'self' https://fonts.gstatic.com data:",
+    ["img-src 'self' data: blob: https://i.ytimg.com", ...img].join(" "),
+    // Training videos are unlisted YouTube embeds. Without this, frames fall
+    // back to default-src 'self' and the player is blocked outright.
+    ["frame-src https://www.youtube.com https://www.youtube-nocookie.com", ...frame].join(" "),
+    // Finance Documents uploads go straight from the browser to Vercel Blob
+    // (the only way past the 4.5 MB request cap), so the browser must be able to
+    // reach the Blob API. Scoped to that path, not the whole of vercel.com; the
+    // trailing slash makes it a prefix so multipart (`/mpu`) is covered too.
+    ["connect-src 'self' https://vercel.com/api/blob/", ...connect].join(" "),
+    "frame-ancestors 'none'",
+    "base-uri 'self'",
+    "form-action 'self'",
+  ].join("; ");
+
+const csp = buildCsp();
+
+// Facebook's JS SDK, which WhatsApp Embedded Signup runs on. Allowed on the one
+// page that launches it (/crm/settings/whatsapp-connect), not site-wide: the
+// script comes from connect.facebook.net and talks to its popup through hidden
+// facebook.com frames.
+const FACEBOOK_SDK = {
+  script: ["https://connect.facebook.net"],
+  img: ["https://www.facebook.com"],
+  frame: ["https://www.facebook.com", "https://web.facebook.com", "https://staticxx.facebook.com"],
+  connect: ["https://www.facebook.com", "https://graph.facebook.com", "https://connect.facebook.net"],
+};
 
 const securityHeaders = [
   { key: "Strict-Transport-Security", value: "max-age=63072000; includeSubDomains; preload" },
@@ -84,6 +99,12 @@ const nextConfig = {
       {
         source: "/:path*",
         headers: securityHeaders,
+      },
+      // Later rules win for the same header key, so this replaces only the CSP
+      // on this page and leaves the other security headers as above.
+      {
+        source: "/crm/settings/whatsapp-connect",
+        headers: [{ key: "Content-Security-Policy", value: buildCsp(FACEBOOK_SDK) }],
       },
     ];
   },

@@ -21,6 +21,37 @@ import { WaMessageText } from "@/components/crm/WaMessageText";
 import { statusTooltip } from "@/lib/wa/status-label";
 import { WaStartComposer } from "@/components/crm/WaStartComposer";
 import { TaskEditDialog, type TaskEditPayload } from "@/components/crm/TaskEditDialog";
+import {
+  LeadQualityDialog,
+  LeadQualityPicker,
+  QualityDot,
+  qualityChipStyle,
+  qualityDraftError,
+  qualityDraftFrom,
+  qualityPayload,
+  type QualityDraft,
+} from "@/components/crm/LeadQualityPicker";
+import {
+  LEAD_QUALITIES,
+  QUALITY_GATE_MESSAGE,
+  QUALITY_REQUIRED_CODE,
+  daysUntilQualityDue,
+  isQualityOverdue,
+  qualityGate,
+  qualityPending,
+  type LeadQualityRating,
+  type QualityGate,
+  type QualityReasonOpt,
+  type QualitySubject,
+} from "@/lib/crm-lead-quality";
+import {
+  CALL_OUTCOMES,
+  CALL_OUTCOME_LABEL,
+  NEW_STAGE_CODE,
+  followUpPreset,
+  suggestedFollowUpSubject,
+  type CallOutcome,
+} from "@/lib/crm-outcome";
 
 export type PartyOpt = { id: string; label: string; phone: string | null };
 export type DetailMasters = {
@@ -29,6 +60,8 @@ export type DetailMasters = {
   services: Opt[];
   qualifications: Opt[];
   subStatuses: { id: string; label: string; group: string; color: string | null }[];
+  /** Active Poor / Junk reasons for the quality picker. */
+  qualityReasons: QualityReasonOpt[];
   bdes: BdeOpt[];
   parties: PartyOpt[];
 };
@@ -43,7 +76,12 @@ export type DetailAccess = {
    */
   canSeeWhatsApp: boolean;
   /** BDE or CRM admin — may create leads, so may re-enroll an existing candidate. */
-  canCreateLeads: boolean;
+  canReEnroll: boolean;
+  /**
+   * May add tasks here even without `canEdit` — an enrolled-lead task-taker on
+   * an enrolled lead (see canAddTask in crm-rbac). They work only their own.
+   */
+  canAddTask: boolean;
   /**
    * Admin / supervisor / CRM-admin — may undo an accidental enrollment. A tier
    * above `canEdit`, because un-enrolling reaches into Finance, Marketing
@@ -119,6 +157,7 @@ const ACTIVITY_ICON: Record<string, string> = {
   LEAD_OPENED: "visibility",
   STATUS_CHANGED: "flag",
   FIELD_UPDATED: "edit",
+  QUALITY_RATED: "grade",
   ASSIGNED: "person_add",
   REASSIGNED: "swap_horiz",
   UNASSIGNED: "person_remove",
@@ -198,13 +237,26 @@ export type DuplicateRow = {
   phone: string | null;
   createdAt: string;
   source: string | null;
+  service?: string | null;
+  /** The consultant who owns that record now. */
+  owner?: string | null;
   status: { label: string; color: string | null };
-  matchedOn: string; // "email", "phone", or "email + phone"
+  matchedOn: string; // "email", "phone", "candidate record", joined with " + "
+};
+
+/** A note written on one of the candidate's OTHER records. */
+export type StoryNoteRow = {
+  id: string;
+  leadId: string;
+  body: string;
+  createdAt: string;
+  author: string | null;
+  service: string | null;
 };
 
 // Banner shown on a lead that shares an email or phone with other lead(s) — so a
 // "Duplicate"-flagged lead reveals exactly which record(s) it matches.
-function DuplicatesBanner({ duplicates }: { duplicates: DuplicateRow[] }) {
+function DuplicatesBanner({ duplicates, notes = [] }: { duplicates: DuplicateRow[]; notes?: StoryNoteRow[] }) {
   const fields = Array.from(new Set(duplicates.flatMap((d) => d.matchedOn.split(" + ")).filter(Boolean)));
   return (
     <div className="rounded-xl border border-amber-300 bg-amber-50 p-md">
@@ -212,7 +264,7 @@ function DuplicatesBanner({ duplicates }: { duplicates: DuplicateRow[] }) {
         <span className="material-symbols-outlined" style={{ fontSize: 20 }}>
           content_copy
         </span>
-        {duplicates.length} possible duplicate{duplicates.length === 1 ? "" : "s"}
+        {duplicates.length} other record{duplicates.length === 1 ? "" : "s"} for this candidate
         {fields.length > 0 && <span className="font-normal text-amber-700">— same {fields.join(" / ")}</span>}
       </div>
       <ul className="mt-sm space-y-xs">
@@ -229,10 +281,32 @@ function DuplicatesBanner({ duplicates }: { duplicates: DuplicateRow[] }) {
             >
               {d.status.label}
             </span>
+            {d.service && <span className="text-on-surface-variant">· {d.service}</span>}
+            {d.owner && <span className="text-on-surface-variant">· with {d.owner}</span>}
             <span className="text-label-sm text-on-surface-variant">matched on {d.matchedOn}</span>
           </li>
         ))}
       </ul>
+      {notes.length > 0 && (
+        <div className="mt-md border-t border-amber-200 pt-sm">
+          <div className="text-label-sm font-semibold text-amber-800">Latest notes on those records</div>
+          <ul className="mt-xs space-y-xs">
+            {notes.map((n) => (
+              <li key={n.id} className="text-body-md text-on-surface">
+                <span className="whitespace-pre-line">{n.body}</span>
+                <span className="text-label-sm text-on-surface-variant">
+                  {" "}
+                  — {n.author ?? "someone"}, {n.createdAt.slice(0, 10)}
+                  {n.service ? ` · ${n.service}` : ""} ·{" "}
+                  <Link href={`/crm/leads/${n.leadId}`} className="hover:underline">
+                    open
+                  </Link>
+                </span>
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
     </div>
   );
 }
@@ -244,6 +318,7 @@ export function LeadDetail({
   timeline,
   tasks,
   duplicates,
+  storyNotes = [],
   masters,
   canEdit,
   emailConfigured,
@@ -257,6 +332,7 @@ export function LeadDetail({
   timeline: ActivityRow[];
   tasks: TaskRow[];
   duplicates: DuplicateRow[];
+  storyNotes?: StoryNoteRow[];
   masters: DetailMasters;
   canEdit: boolean;
   emailConfigured: boolean;
@@ -265,8 +341,27 @@ export function LeadDetail({
   studyAbroad: { eligible: boolean; alreadySent: boolean };
   taskReminders: TaskReminderPreviewDTO;
 }) {
+  const router = useRouter();
   const [tab, setTab] = useState<"overview" | "tasks" | "whatsapp" | "history">("overview");
   const [comm, setComm] = useState<null | "email" | "whatsapp" | "call">(null);
+  // The quality dialog: opened by the band, or forced by the rule (`required`) —
+  // on arrival when the rating is overdue, or when the API refuses a stage
+  // change / task completion until the lead is rated.
+  const [qualityDialog, setQualityDialog] = useState<null | { required: boolean; message?: string; rating?: LeadQualityRating }>(null);
+  const requireQuality = useCallback(
+    (gate: QualityGate = "overdue") => setQualityDialog({ required: true, message: QUALITY_GATE_MESSAGE[gate] }),
+    [],
+  );
+  const overdueForMe =
+    canEdit && qualityGate(qualitySubjectOf(lead), { actorId: access.userId, now: new Date() }) === "overdue";
+  // Ask on arrival: the BDE meets the rating before anything else on the page.
+  // "Not now" closes it to look around, but nothing on the lead moves until
+  // it's rated (the API holds stage changes and task completions).
+  useEffect(() => {
+    if (overdueForMe) requireQuality("overdue");
+    // Once per lead visit, not on every refresh of the same lead.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [lead.id]);
   const openTaskCount = tasks.filter((t) => t.status === "open").length;
   const overdueCount = tasks.filter((t) => t.status === "open" && t.dueAt && new Date(t.dueAt).getTime() < Date.now()).length;
 
@@ -364,15 +459,21 @@ export function LeadDetail({
         )}
       </div>
 
-      {duplicates.length > 0 && <DuplicatesBanner duplicates={duplicates} />}
+      {duplicates.length > 0 && <DuplicatesBanner duplicates={duplicates} notes={storyNotes} />}
 
       {tab === "overview" && (
         <>
-          <StageBar lead={lead} statuses={masters.statuses} canEdit={canEdit} />
+          <StageBar lead={lead} statuses={masters.statuses} canEdit={canEdit} onQualityRequired={requireQuality} />
           <StatusBar lead={lead} subStatuses={masters.subStatuses} canEdit={canEdit} />
+          <QualityBar
+            lead={lead}
+            canEdit={canEdit}
+            overdueForMe={overdueForMe}
+            onRate={(rating) => setQualityDialog({ required: false, rating })}
+          />
           <div className="grid grid-cols-1 lg:grid-cols-3 gap-lg">
             <div className="lg:col-span-1">
-              <SummaryCard lead={lead} masters={masters} canEdit={canEdit} />
+              <SummaryCard lead={lead} masters={masters} canEdit={canEdit} userId={access.userId} />
             </div>
             <div className="lg:col-span-1">
               <Timeline lead={lead} notes={notes} timeline={timeline} canEdit={canEdit} access={access} />
@@ -381,8 +482,9 @@ export function LeadDetail({
               <DealCard
                 lead={lead}
                 masters={masters}
+                userId={access.userId}
                 canEdit={canEdit}
-                canReEnroll={access.canCreateLeads}
+                canReEnroll={access.canReEnroll}
                 canUnenroll={access.canUnenroll}
               />
               <AssignmentCard lead={lead} masters={masters} canAssign={access.canAssign} />
@@ -398,10 +500,12 @@ export function LeadDetail({
           leadName={lead.candidateName}
           tasks={tasks}
           canEdit={canEdit}
+          canAddTask={access.canAddTask}
           bdes={masters.bdes}
           defaultAssigneeId={lead.assignedTo?.id ?? null}
           currentUserId={access.userId}
           reminders={taskReminders}
+          onQualityRequired={requireQuality}
         />
       )}
 
@@ -415,7 +519,29 @@ export function LeadDetail({
         <EmailModal lead={lead} emailConfigured={emailConfigured} templates={templates} onClose={() => setComm(null)} />
       )}
       {comm === "whatsapp" && <WhatsAppModal lead={lead} templates={templates} onClose={() => setComm(null)} />}
-      {comm === "call" && <CallModal lead={lead} onClose={() => setComm(null)} />}
+      {comm === "call" && (
+        <CallModal
+          lead={lead}
+          subStatuses={masters.subStatuses}
+          onClose={() => setComm(null)}
+          onQualityRequired={requireQuality}
+        />
+      )}
+      {qualityDialog && (
+        <LeadQualityDialog
+          leadId={lead.id}
+          leadName={lead.candidateName}
+          initial={{ ...qualityDraftFrom(lead.quality), ...(qualityDialog.rating ? { rating: qualityDialog.rating } : {}) }}
+          reasons={masters.qualityReasons}
+          required={qualityDialog.required}
+          requiredMessage={qualityDialog.message}
+          onClose={() => setQualityDialog(null)}
+          onSaved={() => {
+            setQualityDialog(null);
+            router.refresh();
+          }}
+        />
+      )}
     </div>
   );
 }
@@ -505,7 +631,18 @@ function stageColor(s: StatusOpt, idx: number): string {
   return s.color || STAGE_PALETTE[idx % STAGE_PALETTE.length];
 }
 
-function StageBar({ lead, statuses, canEdit }: { lead: LeadRow; statuses: StatusOpt[]; canEdit: boolean }) {
+function StageBar({
+  lead,
+  statuses,
+  canEdit,
+  onQualityRequired,
+}: {
+  lead: LeadRow;
+  statuses: StatusOpt[];
+  canEdit: boolean;
+  /** The API refused the move until the lead's quality is rated. */
+  onQualityRequired: (gate: QualityGate) => void;
+}) {
   const router = useRouter();
   const [busy, setBusy] = useState(false);
   const active = statuses.filter((s) => s.kind === "active");
@@ -521,7 +658,12 @@ function StageBar({ lead, statuses, canEdit }: { lead: LeadRow; statuses: Status
       body: JSON.stringify({ statusId }),
     });
     setBusy(false);
-    if (res.ok) router.refresh();
+    if (res.ok) {
+      router.refresh();
+      return;
+    }
+    const j = (await res.json().catch(() => null)) as { error?: string } | null;
+    if (j?.error === QUALITY_REQUIRED_CODE) onQualityRequired("overdue");
   }
 
   return (
@@ -589,9 +731,20 @@ function StageBar({ lead, statuses, canEdit }: { lead: LeadRow; statuses: Status
 }
 
 // ── Summary card (inline editable) ──────────────────────────────────────────
-function SummaryCard({ lead, masters, canEdit }: { lead: LeadRow; masters: DetailMasters; canEdit: boolean }) {
+function SummaryCard({
+  lead,
+  masters,
+  canEdit,
+  userId,
+}: {
+  lead: LeadRow;
+  masters: DetailMasters;
+  canEdit: boolean;
+  userId: string;
+}) {
   const router = useRouter();
   const [editing, setEditing] = useState(false);
+  const [quality, setQuality] = useState<QualityDraft>(() => qualityDraftFrom(lead.quality));
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [draft, setDraft] = useState({
@@ -623,10 +776,23 @@ function SummaryCard({ lead, masters, canEdit }: { lead: LeadRow; masters: Detai
     masters.qualifications.find((q) => q.id === draft.qualificationId)?.label,
   );
 
+  // Moving the stage on an unrated lead may need the rating in the same save:
+  // closing it (won / lost), or any move once the rating is overdue.
+  const nextStage = masters.statuses.find((s) => s.id === draft.statusId);
+  const qualityAsk =
+    draft.statusId !== lead.status.id && nextStage
+      ? qualityGate(qualitySubjectOf(lead), { actorId: userId, now: new Date(), nextStage })
+      : null;
+
   async function save() {
     setError(null);
     if (!draft.candidateName.trim()) {
       setError("Name is required.");
+      return;
+    }
+    const qualityProblem = qualityAsk ? qualityDraftError(quality) : null;
+    if (qualityProblem) {
+      setError(qualityProblem);
       return;
     }
     setBusy(true);
@@ -650,11 +816,13 @@ function SummaryCard({ lead, masters, canEdit }: { lead: LeadRow; masters: Detai
         studyDestination: isStudyAbroad ? draft.studyDestination : undefined,
         temperature: draft.temperature,
         statusId: draft.statusId,
+        ...(qualityAsk ? { quality: qualityPayload(quality) } : {}),
       }),
     });
     setBusy(false);
     if (!res.ok) {
-      setError("Failed to save changes.");
+      const j = (await res.json().catch(() => ({}))) as { message?: string };
+      setError(j.message || "Failed to save changes.");
       return;
     }
     setEditing(false);
@@ -820,6 +988,14 @@ function SummaryCard({ lead, masters, canEdit }: { lead: LeadRow; masters: Detai
               </select>
             )}
           </Field>
+          {qualityAsk && (
+            <div className="rounded-lg border border-amber-300 bg-amber-50 p-md space-y-sm">
+              <p className="text-label-sm font-semibold text-amber-900">
+                {qualityAsk === "closing" ? "Rate this lead's quality to close it" : "This lead's quality rating is overdue"}
+              </p>
+              <LeadQualityPicker value={quality} onChange={setQuality} reasons={masters.qualityReasons} disabled={busy} />
+            </div>
+          )}
           {/* The other axis. Stage is where they sit in the pipeline; Status is
               what is actually happening — edited together, saved together. */}
           <Field label="Status">
@@ -1252,6 +1428,114 @@ function StatusBar({
   );
 }
 
+/** The quality rule's view of a lead (see crm-lead-quality.ts). */
+function qualitySubjectOf(lead: LeadRow): QualitySubject {
+  return {
+    qualityRating: lead.quality.rating,
+    qualityDueAt: lead.quality.dueAt,
+    assignedToId: lead.assignedTo?.id ?? null,
+    statusCode: lead.status.code,
+  };
+}
+
+function fmtDay(iso: string): string {
+  const d = new Date(iso);
+  return `${d.getDate()} ${MONTHS[d.getMonth()]}`;
+}
+
+// ── Quality band ────────────────────────────────────────────────────────────
+// The lead's quality rating under the stage and status bands: the four
+// ratings as pills (the current one filled), why, who said so, and — while
+// unrated — when it falls due. Clicking a pill opens the rating dialog with
+// that rating picked; nothing saves on a single click.
+function QualityBar({
+  lead,
+  canEdit,
+  overdueForMe,
+  onRate,
+}: {
+  lead: LeadRow;
+  canEdit: boolean;
+  /** Overdue AND this viewer is the BDE who owes it — the band turns red. */
+  overdueForMe: boolean;
+  onRate: (rating: LeadQualityRating) => void;
+}) {
+  const q = lead.quality;
+  const subject = qualitySubjectOf(lead);
+  const now = new Date();
+  const overdue = isQualityOverdue(subject, now);
+  const days = daysUntilQualityDue(q.dueAt, now);
+
+  let dueText: React.ReactNode = null;
+  if (!q.rating) {
+    if (!qualityPending(subject)) {
+      dueText = <span className="text-on-surface-variant">Not required for this lead</span>;
+    } else if (overdue) {
+      dueText = <span className="text-error font-semibold">Overdue, was due {fmtDay(q.dueAt!)}</span>;
+    } else {
+      dueText = (
+        <span className="text-on-surface-variant">
+          Due by {fmtDay(q.dueAt!)}
+          {days !== null && days <= 1 ? (days <= 0 ? " (today)" : " (tomorrow)") : ""}
+        </span>
+      );
+    }
+  }
+
+  return (
+    <div
+      className={
+        "bg-surface-container-lowest rounded-xl shadow-sm p-md flex flex-wrap items-center gap-xs border " +
+        (overdueForMe ? "border-2 border-error" : "border-outline-variant")
+      }
+    >
+      <span className="text-label-sm uppercase tracking-wider text-on-surface-variant mr-xs">Lead quality</span>
+      {LEAD_QUALITIES.map((opt) => {
+        const isCurrent = q.rating === opt.value;
+        return (
+          <button
+            key={opt.value}
+            type="button"
+            disabled={!canEdit}
+            onClick={() => onRate(opt.value)}
+            style={qualityChipStyle(opt, isCurrent)}
+            className={
+              "inline-flex items-center gap-xs h-9 px-md text-label-sm font-semibold rounded-lg transition text-on-surface disabled:cursor-default" +
+              (canEdit ? " cursor-pointer hover:brightness-105" : "")
+            }
+            title={canEdit ? `${opt.label}: ${opt.hint}` : opt.hint}
+          >
+            {isCurrent ? (
+              <span className="material-symbols-outlined" style={{ fontSize: 16 }}>
+                radio_button_checked
+              </span>
+            ) : (
+              <QualityDot color={opt.color} />
+            )}
+            {opt.label}
+          </button>
+        );
+      })}
+      {q.rating ? (
+        <span className="text-label-sm text-on-surface-variant min-w-0">
+          {q.reason ? <b className="text-on-surface">{q.reason.label}</b> : null}
+          {q.reason && q.note ? " · " : ""}
+          {q.note ? <span className="italic">&ldquo;{q.note}&rdquo;</span> : null}
+          {q.ratedBy || q.ratedAt ? (
+            <>
+              {q.reason || q.note ? " · " : ""}
+              rated{q.ratedBy ? ` by ${q.ratedBy}` : ""}
+              {q.ratedAt ? `, ${fmtDay(q.ratedAt)}` : ""}
+            </>
+          ) : null}
+        </span>
+      ) : (
+        <span className="text-label-sm">{dueText}</span>
+      )}
+    </div>
+  );
+}
+
 /** "Details Sent and Not Responding · 45d" for the Summary read-only row. */
 function summaryStatusText(lead: LeadRow): string {
   if (!lead.subStatus) return "—";
@@ -1331,12 +1615,14 @@ function DealRow({ label, value }: { label: string; value: React.ReactNode }) {
 function DealCard({
   lead,
   masters,
+  userId,
   canEdit,
   canReEnroll,
   canUnenroll,
 }: {
   lead: LeadRow;
   masters: DetailMasters;
+  userId: string;
   canEdit: boolean;
   /** Any consultant (BDE/CRM admin) — may enroll this candidate in a further service. */
   canReEnroll: boolean;
@@ -1452,6 +1738,7 @@ function DealCard({
         <DealModal
           lead={lead}
           masters={masters}
+          userId={userId}
           mode={modal}
           onClose={() => setModal(null)}
           onEnrolled={(name) => {
@@ -1698,12 +1985,14 @@ function UnenrollModal({
 function DealModal({
   lead,
   masters,
+  userId,
   mode,
   onClose,
   onEnrolled,
 }: {
   lead: LeadRow;
   masters: DetailMasters;
+  userId: string;
   mode: "deal" | "enroll";
   onClose: () => void;
   /** Fired on a successful enroll — hands the candidate name to the celebration. */
@@ -1725,6 +2014,12 @@ function DealModal({
   const [ownerId, setOwnerId] = useState(assigneeIsL2 ? lead.assignedTo!.id : "");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // Enrolling closes the lead, so an unrated one is rated here too.
+  const [quality, setQuality] = useState<QualityDraft>(() => qualityDraftFrom(lead.quality));
+  const qualityAsk =
+    mode === "enroll"
+      ? qualityGate(qualitySubjectOf(lead), { actorId: userId, now: new Date(), nextStage: { code: "enrolled", kind: "won" } })
+      : null;
 
   async function submit() {
     setError(null);
@@ -1733,6 +2028,8 @@ function DealModal({
     if (mode === "deal" && !closeDate) return setError("Pick an expected close date.");
     if (mode === "enroll" && !enrollDate) return setError("Pick the enrollment date.");
     if (!assigneeIsL2 && !ownerId) return setError("Choose an L2 BDE as the deal owner.");
+    const qualityProblem = qualityAsk ? qualityDraftError(quality) : null;
+    if (qualityProblem) return setError(qualityProblem);
     setBusy(true);
     const res = await fetch(`/api/crm/leads/${lead.id}/${mode === "enroll" ? "enroll" : "deal"}`, {
       method: "POST",
@@ -1746,6 +2043,7 @@ function DealModal({
         expectedCloseDate: (mode === "enroll" ? enrollDate : closeDate) || undefined,
         ...(mode === "enroll" ? { closedDate: enrollDate || undefined } : {}),
         ownerUserId: assigneeIsL2 ? undefined : ownerId,
+        ...(qualityAsk ? { quality: qualityPayload(quality) } : {}),
       }),
     });
     setBusy(false);
@@ -1808,6 +2106,11 @@ function DealModal({
               </option>
             ))}
           </select>
+        </Field>
+      )}
+      {qualityAsk && (
+        <Field label="Lead quality (required to enroll)">
+          <LeadQualityPicker value={quality} onChange={setQuality} reasons={masters.qualityReasons} disabled={busy} />
         </Field>
       )}
       {error && <p className="text-label-sm text-error">{error}</p>}
@@ -2283,33 +2586,88 @@ function WhatsAppModal({
   );
 }
 
-const CALL_OUTCOMES = [
-  { value: "connected", label: "Connected" },
-  { value: "no_answer", label: "No answer" },
-  { value: "busy", label: "Busy" },
-  { value: "wrong_number", label: "Wrong number" },
+const OUTCOME_CHOICES: { value: CallOutcome; label: string }[] = CALL_OUTCOMES.map((value) => ({
+  value,
+  label: CALL_OUTCOME_LABEL[value],
+}));
+
+const FOLLOW_UP_PRESETS: { value: "later_today" | "tomorrow" | "in_3_days" | "next_week"; label: string }[] = [
+  { value: "later_today", label: "Later today" },
+  { value: "tomorrow", label: "Tomorrow" },
+  { value: "in_3_days", label: "In 3 days" },
+  { value: "next_week", label: "Next week" },
 ];
 
-function CallModal({ lead, onClose }: { lead: LeadRow; onClose: () => void }) {
+/** `datetime-local` value for a Date, in the browser's local time. */
+function toLocalInput(d: Date): string {
+  const pad = (n: number) => String(n).padStart(2, "0");
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
+}
+
+/**
+ * Log a call — and, in the same step, what it changed: the conversation Status,
+ * the next follow-up, and (when the candidate was reached) a New lead moving to
+ * Follow-Up. One save instead of four (POST /api/crm/leads/[id]/outcome).
+ */
+function CallModal({
+  lead,
+  subStatuses,
+  onClose,
+  onQualityRequired,
+}: {
+  lead: LeadRow;
+  subStatuses: DetailMasters["subStatuses"];
+  onClose: () => void;
+  onQualityRequired: (gate?: QualityGate) => void;
+}) {
   const router = useRouter();
-  const [outcome, setOutcome] = useState("connected");
-  const [duration, setDuration] = useState("");
+  const [outcome, setOutcome] = useState<CallOutcome>("connected");
+  const [minutes, setMinutes] = useState("");
   const [note, setNote] = useState("");
+  const [subStatusId, setSubStatusId] = useState("");
+  const [book, setBook] = useState(true);
+  const [dueAt, setDueAt] = useState(() => toLocalInput(followUpPreset("tomorrow", new Date())));
+  const [subject, setSubject] = useState(suggestedFollowUpSubject("connected"));
+  const [subjectTouched, setSubjectTouched] = useState(false);
   const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  function pickOutcome(o: CallOutcome) {
+    setOutcome(o);
+    if (!subjectTouched) setSubject(suggestedFollowUpSubject(o));
+    if (o !== "connected") setDueAt(toLocalInput(followUpPreset("later_today", new Date())));
+  }
 
   async function save() {
     setBusy(true);
-    const durationSec = duration.trim() ? Math.max(0, parseInt(duration, 10) || 0) : undefined;
-    const res = await fetch(`/api/crm/leads/${lead.id}/comms`, {
+    setError(null);
+    const mins = minutes.trim() ? Math.max(0, parseInt(minutes, 10) || 0) : undefined;
+    const res = await fetch(`/api/crm/leads/${lead.id}/outcome`, {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ channel: "call", outcome, durationSec, note: note.trim() || undefined }),
+      body: JSON.stringify({
+        outcome,
+        durationMin: mins,
+        note: note.trim() || undefined,
+        subStatusId: subStatusId || undefined,
+        next: book && dueAt && subject.trim() ? { dueAt: new Date(dueAt).toISOString(), subject: subject.trim() } : undefined,
+      }),
     });
     setBusy(false);
     if (res.ok) {
       onClose();
       router.refresh();
+      return;
     }
+    const data = (await res.json().catch(() => ({}))) as { message?: string; error?: string };
+    if (data.error === QUALITY_REQUIRED_CODE) {
+      onClose();
+      onQualityRequired("overdue");
+      return;
+    }
+    // Shown, never swallowed: a call that silently failed to log is a call the
+    // consultant thinks is on the record.
+    setError(data.message || `The call was not logged (HTTP ${res.status}).`);
   }
 
   return (
@@ -2325,25 +2683,88 @@ function CallModal({ lead, onClose }: { lead: LeadRow; onClose: () => void }) {
         <p className="text-on-surface-variant text-body-md">No phone number on file.</p>
       )}
       <Field label="Outcome">
-        <select className={inputCls} value={outcome} onChange={(e) => setOutcome(e.target.value)}>
-          {CALL_OUTCOMES.map((o) => (
-            <option key={o.value} value={o.value}>
+        <div className="flex flex-wrap gap-xs">
+          {OUTCOME_CHOICES.map((o) => (
+            <button
+              key={o.value}
+              type="button"
+              onClick={() => pickOutcome(o.value)}
+              className={
+                "h-8 rounded-full border px-md text-label-sm font-semibold " +
+                (outcome === o.value
+                  ? "border-primary bg-primary text-on-primary"
+                  : "border-outline-variant text-on-surface hover:bg-surface-container-low")
+              }
+            >
               {o.label}
-            </option>
+            </button>
+          ))}
+        </div>
+      </Field>
+      <Field label="Status after this call">
+        <select className={inputCls} value={subStatusId} onChange={(e) => setSubStatusId(e.target.value)}>
+          <option value="">Keep “{lead.subStatus?.label ?? "—"}”</option>
+          {groupedStatuses(subStatuses).map(([group, rows]) => (
+            <optgroup key={group || "—"} label={group || "Status"}>
+              {rows.map((r) => (
+                <option key={r.id} value={r.id}>
+                  {r.label}
+                </option>
+              ))}
+            </optgroup>
           ))}
         </select>
       </Field>
-      <Field label="Duration (seconds)">
-        <input className={inputCls} type="number" min={0} value={duration} onChange={(e) => setDuration(e.target.value)} />
+      <Field label="Next follow-up">
+        <label className="flex items-center gap-xs text-label-sm text-on-surface">
+          <input type="checkbox" checked={book} onChange={(e) => setBook(e.target.checked)} /> Book it now
+        </label>
+        {book && (
+          <div className="mt-xs space-y-xs">
+            <div className="flex flex-wrap gap-xs">
+              {FOLLOW_UP_PRESETS.map((p) => (
+                <button
+                  key={p.value}
+                  type="button"
+                  onClick={() => setDueAt(toLocalInput(followUpPreset(p.value, new Date())))}
+                  className="h-7 rounded-md border border-outline-variant px-sm text-label-sm hover:bg-surface-container-low"
+                >
+                  {p.label}
+                </button>
+              ))}
+            </div>
+            <input className={inputCls} type="datetime-local" value={dueAt} onChange={(e) => setDueAt(e.target.value)} />
+            <input
+              className={inputCls}
+              value={subject}
+              onChange={(e) => {
+                setSubject(e.target.value);
+                setSubjectTouched(true);
+              }}
+              placeholder="What the follow-up is for"
+            />
+          </div>
+        )}
       </Field>
-      <Field label="Note">
-        <textarea
-          className="w-full px-md py-sm rounded-lg border border-outline-variant bg-surface-container-lowest outline-none focus:border-primary text-body-md resize-y"
-          rows={3}
-          value={note}
-          onChange={(e) => setNote(e.target.value)}
-        />
-      </Field>
+      <div className="grid grid-cols-3 gap-sm">
+        <Field label="Minutes">
+          <input className={inputCls} type="number" min={0} value={minutes} onChange={(e) => setMinutes(e.target.value)} />
+        </Field>
+        <div className="col-span-2">
+          <Field label="Note">
+            <textarea
+              className="w-full px-md py-sm rounded-lg border border-outline-variant bg-surface-container-lowest outline-none focus:border-primary text-body-md resize-y"
+              rows={2}
+              value={note}
+              onChange={(e) => setNote(e.target.value)}
+            />
+          </Field>
+        </div>
+      </div>
+      {outcome === "connected" && lead.status.code === NEW_STAGE_CODE && (
+        <p className="text-caption text-on-surface-variant">The lead moves from New to Follow-Up.</p>
+      )}
+      {error && <p className="text-label-sm font-semibold text-error">{error}</p>}
       <div className="flex justify-end gap-base">
         <button type="button" className={secondaryBtn} disabled={busy} onClick={onClose}>
           Cancel
@@ -2601,6 +3022,7 @@ const HISTORY_TYPES = [
   "LEAD_OPENED",
   "STATUS_CHANGED",
   "FIELD_UPDATED",
+  "QUALITY_RATED",
   "ASSIGNED",
   "REASSIGNED",
   "UNASSIGNED",
@@ -2805,19 +3227,25 @@ function TasksPanel({
   leadName,
   tasks,
   canEdit,
+  canAddTask,
   bdes,
   defaultAssigneeId,
   currentUserId,
   reminders,
+  onQualityRequired,
 }: {
   leadId: string;
   leadName: string;
   tasks: TaskRow[];
   canEdit: boolean;
+  /** May add tasks without `canEdit` — and then work only those assigned to them. */
+  canAddTask: boolean;
   bdes: BdeOpt[];
   defaultAssigneeId: string | null;
   currentUserId: string | null;
   reminders: TaskReminderPreviewDTO;
+  /** The API refused a completion until the lead's quality is rated. */
+  onQualityRequired: (gate: QualityGate) => void;
 }) {
   const open = tasks.filter((t) => t.status === "open");
   // The next-step dialog books a task for the lead's owner (or, unassigned, the
@@ -2837,12 +3265,13 @@ function TasksPanel({
         </span>
       </div>
 
-      {canEdit ? (
+      {canEdit || canAddTask ? (
         <TaskComposer
           leadId={leadId}
           bdes={bdes}
           defaultAssigneeId={defaultAssigneeId}
           currentUserId={currentUserId}
+          selfAssign={!canEdit}
           reminders={reminders}
         />
       ) : (
@@ -2866,10 +3295,11 @@ function TasksPanel({
                 leadId={leadId}
                 leadName={leadName}
                 task={t}
-                canEdit={canEdit}
+                canEdit={canEdit || (canAddTask && t.assignedToId === currentUserId)}
                 bdes={bdes}
                 reminders={reminders}
                 nextStepEnrolled={nextStepEnrolled}
+                onQualityRequired={onQualityRequired}
               />
             ))}
           </ul>
@@ -2886,10 +3316,11 @@ function TasksPanel({
                 leadId={leadId}
                 leadName={leadName}
                 task={t}
-                canEdit={canEdit}
+                canEdit={canEdit || (canAddTask && t.assignedToId === currentUserId)}
                 bdes={bdes}
                 reminders={reminders}
                 nextStepEnrolled={nextStepEnrolled}
+                onQualityRequired={onQualityRequired}
               />
             ))}
           </ul>
@@ -2904,6 +3335,7 @@ function TaskComposer({
   bdes,
   defaultAssigneeId,
   currentUserId,
+  selfAssign,
   reminders,
 }: {
   leadId: string;
@@ -2911,13 +3343,18 @@ function TaskComposer({
   defaultAssigneeId: string | null;
   /** Falls to the creator when the lead is unassigned — as the API does. */
   currentUserId: string | null;
+  /**
+   * The creator isn't this lead's consultant (an enrolled-lead task-taker), so
+   * the task is theirs by default and "Me" heads the assignee list.
+   */
+  selfAssign: boolean;
   reminders: TaskReminderPreviewDTO;
 }) {
   const router = useRouter();
   const [subject, setSubject] = useState("");
   const [due, setDue] = useState("");
   const [priority, setPriority] = useState("normal");
-  const [assignee, setAssignee] = useState(defaultAssigneeId ?? "");
+  const [assignee, setAssignee] = useState((selfAssign ? currentUserId : defaultAssigneeId) ?? "");
   const [note, setNote] = useState("");
   const [busy, setBusy] = useState(false);
   // Ticked by default — the tasks that get forgotten are precisely the ones
@@ -2988,6 +3425,9 @@ function TaskComposer({
         </Field>
         <Field label="Assign to">
           <select value={assignee} onChange={(e) => setAssignee(e.target.value)} className={inputCls}>
+            {selfAssign && currentUserId && !bdes.some((b) => b.userId === currentUserId) && (
+              <option value={currentUserId}>Me</option>
+            )}
             <option value="">Lead owner</option>
             {bdes.map((b) => (
               <option key={b.userId} value={b.userId}>
@@ -3077,6 +3517,7 @@ function TaskItem({
   bdes,
   reminders,
   nextStepEnrolled,
+  onQualityRequired,
 }: {
   leadId: string;
   task: TaskRow;
@@ -3086,6 +3527,7 @@ function TaskItem({
   reminders: TaskReminderPreviewDTO;
   /** Whether the consultant the next task would go to may send reminders. */
   nextStepEnrolled: boolean;
+  onQualityRequired: (gate: QualityGate) => void;
 }) {
   const router = useRouter();
   const [busy, setBusy] = useState(false);
@@ -3096,6 +3538,13 @@ function TaskItem({
   const [editError, setEditError] = useState<string | null>(null);
   const done = task.status === "done";
   const due = taskDueLabel(task.dueAt);
+  // A task can belong to someone off the BDE roster (an admin, or an
+  // enrolled-lead task-taker who took it themselves); list them so the edit
+  // dialog's picker shows who has it rather than falling back to "Unassigned".
+  const editAssignees =
+    task.assignedToId && !bdes.some((b) => b.userId === task.assignedToId)
+      ? [...bdes, { userId: task.assignedToId, displayName: task.assignedToName ?? "Current assignee" }]
+      : bdes;
 
   // Complete the task; if it's the active lead's last open task the API returns
   // 422 next_task_required, so we collect the next follow-up and retry with it.
@@ -3113,6 +3562,13 @@ function TaskItem({
         setBusy(false);
         if (nextTask) setNextError("Couldn’t complete the task. Please try again.");
         else setShowNext(true);
+        return;
+      }
+      // The lead's quality rating is overdue: rate it, then tick this off.
+      if (j?.error === QUALITY_REQUIRED_CODE) {
+        setBusy(false);
+        setShowNext(false);
+        onQualityRequired("overdue");
         return;
       }
     }
@@ -3182,7 +3638,7 @@ function TaskItem({
       {editing && (
         <TaskEditDialog
           task={{ subject: task.subject, dueAt: task.dueAt, priority: task.priority, assignedToId: task.assignedToId, note: task.note }}
-          bdes={bdes}
+          bdes={editAssignees}
           reminders={task.reminders}
           busy={editBusy}
           error={editError}

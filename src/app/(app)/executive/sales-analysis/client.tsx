@@ -5,16 +5,17 @@ import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { Bar, BarChart, CartesianGrid, Legend, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
 import { Section } from "@/components/Cards";
 import { MultiSelect } from "@/components/MultiSelect";
+import { AnalysisPeriodBar, rangeText, type AnalysisRange } from "@/components/AnalysisPeriodBar";
 import { inr } from "@/lib/format";
 import {
   COLLECTION_ONLY_DIMS,
   DIM_LABELS,
   ENROLLMENT_ONLY_DIMS,
+  LEAD_ONLY_DIMS,
   MEASURES,
   MEASURE_META,
   NOT_APPLICABLE,
   OTHER_KEY,
-  PERIODS,
   RATIO_MEASURES,
   STORED_DIMS,
   TIME_DIMS,
@@ -33,7 +34,7 @@ import {
 } from "@/lib/sales-analysis";
 import type { SalesAnalysisPayload } from "@/lib/sales-analysis-data";
 
-type Range = { period: string; from: string; to: string; prevFrom: string; prevTo: string };
+type Range = AnalysisRange;
 
 const ALL_DIMS: DimKey[] = [...STORED_DIMS, ...TIME_DIMS];
 
@@ -53,6 +54,7 @@ const PRESETS: Array<{ label: string; measure: MeasureKey; by: DimKey; split?: D
   { label: "Collections by BDE", measure: "collected", by: "bde", split: "revenueCategory" },
   { label: "Payment modes", measure: "collected", by: "paymentMode" },
   { label: "Lead → close speed", measure: "enrollments", by: "closeSpeed" },
+  { label: "Lead quality by source", measure: "leads", by: "source", split: "quality" },
 ];
 
 /** Where a drill-down goes next after filtering on a row. */
@@ -72,6 +74,9 @@ const DRILL_NEXT: Partial<Record<DimKey, DimKey>> = {
   paymentMode: "bde",
   market: "service",
   closeSpeed: "bde",
+  quality: "source",
+  qualityReason: "source",
+  leadOutcome: "source",
   month: "source",
   quarter: "month",
   week: "source",
@@ -98,12 +103,6 @@ function isDim(v: string | null): v is DimKey {
 
 function isMeasure(v: string | null): v is MeasureKey {
   return !!v && (MEASURES as readonly string[]).includes(v);
-}
-
-function rangeText(from: string, to: string): string {
-  const f = (s: string) =>
-    new Date(`${s}T00:00:00Z`).toLocaleDateString("en-IN", { day: "numeric", month: "short", year: "numeric", timeZone: "UTC" });
-  return `${f(from)} – ${f(to)}`;
 }
 
 export function SalesAnalysisView({ payload, range }: { payload: SalesAnalysisPayload; range: Range }) {
@@ -184,11 +183,13 @@ export function SalesAnalysisView({ payload, range }: { payload: SalesAnalysisPa
     ? "Payment mode, revenue category and export/domestic exist only on collections — enrollments and leads show as “Not applicable”."
     : ENROLLMENT_ONLY_DIMS.includes(by) || (split && ENROLLMENT_ONLY_DIMS.includes(split))
       ? "Lead → close time exists only on enrollments (days from lead created to deal closed)."
-      : null;
+      : LEAD_ONLY_DIMS.includes(by) || (split && LEAD_ONLY_DIMS.includes(split))
+        ? "Lead outcome exists only on leads: where each lead created in the period has ended up."
+        : null;
 
   return (
     <div className="p-margin space-y-lg">
-      <PeriodBar range={range} onChange={setPeriod} />
+      <AnalysisPeriodBar range={range} onChange={setPeriod} />
 
       {/* KPI tiles — each one picks the measure the rest of the page analyses. */}
       <section className="grid grid-cols-2 md:grid-cols-4 xl:grid-cols-7 gap-gutter">
@@ -401,57 +402,6 @@ function AddFilter({ exclude, onAdd }: { exclude: DimKey[]; onAdd: (d: DimKey) =
         </option>
       ))}
     </select>
-  );
-}
-
-function PeriodBar({ range, onChange }: { range: Range; onChange: (period: string, from?: string, to?: string) => void }) {
-  const [from, setFrom] = useState(range.from);
-  const [to, setTo] = useState(range.to);
-  const [custom, setCustom] = useState(range.period === "custom");
-  return (
-    <div className="flex flex-wrap items-center gap-sm">
-      {PERIODS.map((p) => {
-        const on = p.value === "custom" ? custom : !custom && range.period === p.value;
-        return (
-          <button
-            key={p.value}
-            type="button"
-            onClick={() => {
-              if (p.value === "custom") setCustom(true);
-              else {
-                setCustom(false);
-                onChange(p.value);
-              }
-            }}
-            className={
-              "h-9 px-md rounded-lg border text-label-sm font-semibold transition " +
-              (on ? "bg-brand text-on-brand border-brand" : "border-outline-variant bg-surface-container-lowest hover:border-primary")
-            }
-          >
-            {p.label}
-          </button>
-        );
-      })}
-      {custom && (
-        <form
-          className="flex items-center gap-xs"
-          onSubmit={(e) => {
-            e.preventDefault();
-            if (from && to && from <= to) onChange("custom", from, to);
-          }}
-        >
-          <input type="date" value={from} onChange={(e) => setFrom(e.target.value)} aria-label="From"
-            className="h-9 px-sm rounded-lg border border-outline-variant bg-surface-container-lowest text-label-sm" />
-          <span className="text-on-surface-variant">→</span>
-          <input type="date" value={to} onChange={(e) => setTo(e.target.value)} aria-label="To"
-            className="h-9 px-sm rounded-lg border border-outline-variant bg-surface-container-lowest text-label-sm" />
-          <button type="submit" className="h-9 px-md rounded-lg bg-primary text-on-primary text-label-sm font-semibold">
-            Apply
-          </button>
-        </form>
-      )}
-      <span className="text-caption text-on-surface-variant ml-auto">{rangeText(range.from, range.to)}</span>
-    </div>
   );
 }
 

@@ -16,9 +16,12 @@ function row(p: Partial<TeamBdeRow> = {}): TeamBdeRow {
     userId: "u1",
     displayName: "Test Member",
     role: "l2",
-    assignedMonth: 10,
-    enrolledMonth: 2,
+    assignedPeriod: 10,
+    enrolledPeriod: 2,
     conversionPct: 20,
+    cohortAssigned: 0,
+    cohortEnrolled: 0,
+    cohortConversionPct: null,
     assignedRange: 5,
     calls: 0,
     emails: 0,
@@ -30,6 +33,7 @@ function row(p: Partial<TeamBdeRow> = {}): TeamBdeRow {
     firstResponsePending: 0,
     firstResponseBreached: 0,
     activeOwned: 10,
+    qualityOverdue: 0,
     slaBreaches: 0,
     abandoned: 0,
     noTask: 0,
@@ -114,7 +118,7 @@ describe("scoreL2Member — total, band, narrative", () => {
 
   it("marks a member with no activity as not scored", () => {
     const s = scoreL2Member(
-      row({ assignedMonth: 0, assignedRange: 0, contacts: 0, tasksCompleted: 0, tasksOnTime: 0, activeOwned: 0, conversionPct: null, firstResponseMedianHours: null }),
+      row({ assignedPeriod: 0, assignedRange: 0, contacts: 0, tasksCompleted: 0, tasksOnTime: 0, activeOwned: 0, conversionPct: null, firstResponseMedianHours: null }),
     );
     expect(s.scored).toBe(false);
     expect(s.narrative.toLowerCase()).toContain("no activity");
@@ -141,7 +145,7 @@ describe("buildL2Scorecard — roster filtering & ranking", () => {
   it("ranks scored members by score (desc), pushing unscored members last", () => {
     const rows = [
       row({ userId: "low", displayName: "Low", conversionPct: 4, firstResponseMedianHours: 20, tasksCompleted: 10, tasksOnTime: 4, activeOwned: 10, slaBreaches: 3 }),
-      row({ userId: "idle", displayName: "Idle", assignedMonth: 0, assignedRange: 0, contacts: 0, tasksCompleted: 0, tasksOnTime: 0, activeOwned: 0, conversionPct: null, firstResponseMedianHours: null }),
+      row({ userId: "idle", displayName: "Idle", assignedPeriod: 0, assignedRange: 0, contacts: 0, tasksCompleted: 0, tasksOnTime: 0, activeOwned: 0, conversionPct: null, firstResponseMedianHours: null }),
       row({ userId: "high", displayName: "High" }),
     ];
     const out = buildL2Scorecard(rows);

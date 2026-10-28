@@ -1,10 +1,11 @@
+import type { Prisma } from "@prisma/client";
 import Link from "next/link";
 import { notFound, redirect } from "next/navigation";
 import { TopBar } from "@/components/TopBar";
 import { prisma } from "@/lib/prisma";
 import { getCurrentUserAndPermissions } from "@/lib/permissions";
-import { getCrmAccess, canEditLead } from "@/lib/crm-rbac";
-import { WA_UI_ADMIN_ONLY, canSeePage } from "@/lib/rbac";
+import { getCrmAccess, canEditLead, canAddTask, visibleTasksWhere } from "@/lib/crm-rbac";
+import { WA_UI_ADMIN_ONLY, canSeePage, isCrmLeadsOnly } from "@/lib/rbac";
 import { AGREEMENTS_PAGE } from "@/lib/esign/requests";
 import { recordLeadOpenedOncePerDay } from "@/lib/crm-activity";
 import {
@@ -24,6 +25,7 @@ import { listMessageTemplates } from "@/lib/crm-message-templates";
 import { STUDY_ABROAD_EVENT } from "@/lib/crm-webhook";
 import { previewTaskReminders } from "@/lib/crm-task-reminders-engine";
 import { TASK_TYPES } from "@/lib/crm";
+import { activeQualityReasons } from "@/lib/crm-lead-quality-data";
 import { LeadDetail } from "./client";
 
 export const dynamic = "force-dynamic";
@@ -54,7 +56,7 @@ export default async function LeadDetailPage({ params }: { params: { id: string 
   const lead = await prisma.lead.findUnique({ where: { id: params.id }, include: leadRowInclude });
   if (!lead) notFound();
 
-  const [notes, activities, tasks, statuses, sources, services, qualifications, subStatuses, bdes, parties, emailConfigured, templates] = await Promise.all([
+  const [notes, activities, tasks, statuses, sources, services, qualifications, subStatuses, bdes, parties, emailConfigured, templates, qualityReasons] = await Promise.all([
     prisma.leadNote.findMany({ where: { leadId: params.id }, orderBy: { createdAt: "desc" }, include: noteInclude }),
     prisma.leadActivity.findMany({
       where: { leadId: params.id, type: { notIn: TIMELINE_EXCLUDE } },
@@ -62,7 +64,11 @@ export default async function LeadDetailPage({ params }: { params: { id: string 
       take: 200,
       include: activityInclude,
     }),
-    prisma.crmTask.findMany({ where: { leadId: params.id }, orderBy: taskOrderBy, include: taskInclude }),
+    prisma.crmTask.findMany({
+      where: { leadId: params.id, ...visibleTasksWhere(access, userId) },
+      orderBy: taskOrderBy,
+      include: taskInclude,
+    }),
     prisma.crmLeadStatus.findMany({
       where: { active: true },
       orderBy: [{ displayOrder: "asc" }, { label: "asc" }],
@@ -92,16 +98,22 @@ export default async function LeadDetailPage({ params }: { params: { id: string 
     }),
     isEmailConfigured(),
     listMessageTemplates({ activeOnly: true }),
+    activeQualityReasons(),
   ]);
 
   // Best-effort: record that this user opened the lead (once per day).
   await recordLeadOpenedOncePerDay(params.id, userId);
 
-  // Other leads sharing this lead's email or phone — so a flagged duplicate
-  // shows exactly which record(s) it matches (and any lead shows its twins).
-  const dupOr: Array<{ emailKey: string } | { phoneE164: string }> = [];
+  // The same candidate's other records — sharing this lead's email, either of
+  // its phone numbers (each side's primary or alternate), or its candidate
+  // record. A flagged duplicate shows exactly which record(s) it matches, and a
+  // re-enrollment or a reassigned lead shows who worked her before and what
+  // they wrote, so she never has to tell the story twice.
+  const phones = [lead.phoneE164, lead.altPhoneE164].filter((p): p is string => !!p);
+  const dupOr: Prisma.LeadWhereInput[] = [];
   if (lead.emailKey) dupOr.push({ emailKey: lead.emailKey });
-  if (lead.phoneE164) dupOr.push({ phoneE164: lead.phoneE164 });
+  if (phones.length) dupOr.push({ phoneE164: { in: phones } }, { altPhoneE164: { in: phones } });
+  if (lead.partyId) dupOr.push({ partyId: lead.partyId });
   const dupRows = dupOr.length
     ? await prisma.lead.findMany({
         where: { id: { not: lead.id }, OR: dupOr },
@@ -114,16 +126,23 @@ export default async function LeadDetailPage({ params }: { params: { id: string 
           phone: true,
           emailKey: true,
           phoneE164: true,
+          altPhoneE164: true,
+          partyId: true,
           createdAt: true,
           source: { select: { label: true } },
+          service: { select: { name: true } },
           status: { select: { label: true, color: true } },
+          assignedTo: { select: { username: true, leadPulseRole: { select: { displayName: true } } } },
         },
       })
     : [];
   const duplicates = dupRows.map((d) => {
     const on: string[] = [];
     if (lead.emailKey && d.emailKey === lead.emailKey) on.push("email");
-    if (lead.phoneE164 && d.phoneE164 === lead.phoneE164) on.push("phone");
+    if ((d.phoneE164 && phones.includes(d.phoneE164)) || (d.altPhoneE164 && phones.includes(d.altPhoneE164))) {
+      on.push("phone");
+    }
+    if (lead.partyId && d.partyId === lead.partyId) on.push("candidate record");
     return {
       id: d.id,
       candidateName: d.candidateName,
@@ -131,10 +150,48 @@ export default async function LeadDetailPage({ params }: { params: { id: string 
       phone: d.phone,
       createdAt: d.createdAt.toISOString(),
       source: d.source?.label ?? null,
+      service: d.service?.name ?? null,
+      owner: d.assignedTo?.leadPulseRole?.displayName ?? d.assignedTo?.username ?? null,
       status: { label: d.status.label, color: d.status.color },
       matchedOn: on.join(" + "),
     };
   });
+  // What was written about her on those records — newest first, a handful.
+  const storyNotes = dupRows.length
+    ? (
+        await prisma.leadNote.findMany({
+          where: { leadId: { in: dupRows.map((d) => d.id) } },
+          orderBy: { createdAt: "desc" },
+          take: 6,
+          select: {
+            id: true,
+            leadId: true,
+            body: true,
+            createdAt: true,
+            author: { select: { username: true, leadPulseRole: { select: { displayName: true } } } },
+          },
+        })
+      ).map((n) => ({
+        id: n.id,
+        leadId: n.leadId,
+        body: n.body,
+        createdAt: n.createdAt.toISOString(),
+        author: n.author?.leadPulseRole?.displayName ?? n.author?.username ?? null,
+        service: dupRows.find((d) => d.id === n.leadId)?.service?.name ?? null,
+      }))
+    : [];
+
+  // Someone who only sees their own tasks mustn't read everyone else's off the
+  // Timeline either: drop the task entries (created / completed / edited …) for
+  // tasks that aren't theirs. Entries for a task since deleted go with them.
+  const ownTaskIds = new Set(tasks.map((t) => t.id));
+  const timeline = access.ownTasksOnly
+    ? activities.filter((a) => {
+        if (!a.type.startsWith("TASK_")) return true;
+        const meta = a.metadata && typeof a.metadata === "object" ? (a.metadata as Record<string, unknown>) : null;
+        return typeof meta?.taskId === "string" && ownTaskIds.has(meta.taskId);
+      })
+    : activities;
 
   const masters = {
     statuses,
@@ -142,6 +199,7 @@ export default async function LeadDetailPage({ params }: { params: { id: string 
     services: services.map((s) => ({ id: s.id, label: s.name })),
     qualifications,
     subStatuses,
+    qualityReasons,
     bdes,
     parties: parties.map((p) => ({ id: p.id, label: p.name, phone: p.phone })),
   };
@@ -189,9 +247,10 @@ export default async function LeadDetailPage({ params }: { params: { id: string 
         <LeadDetail
           lead={serializeLead(lead)}
           notes={notes.map(serializeNote)}
-          timeline={activities.map((a) => serializeActivity(a, { includeMetadata: false }))}
+          timeline={timeline.map((a) => serializeActivity(a, { includeMetadata: false }))}
           tasks={tasks.map(serializeTask)}
           duplicates={duplicates}
+      storyNotes={storyNotes}
           masters={masters}
           canEdit={canEditLead(access, lead, userId)}
           emailConfigured={emailConfigured}
@@ -202,8 +261,9 @@ export default async function LeadDetailPage({ params }: { params: { id: string 
             isAdmin: access.isAdmin,
             canAssign: access.canAssign,
             canViewHistory: access.canViewHistory,
-            canSeeWhatsApp: !WA_UI_ADMIN_ONLY || access.isAdmin,
-            canCreateLeads: access.canCreateLeads,
+            canSeeWhatsApp: (!WA_UI_ADMIN_ONLY || access.isAdmin) && !isCrmLeadsOnly(perms),
+            canReEnroll: access.canReEnroll,
+            canAddTask: canAddTask(access, lead, userId),
             canUnenroll: access.canUnenroll,
             canSendAgreements: !!perms && canSeePage(perms, AGREEMENTS_PAGE),
             userId,

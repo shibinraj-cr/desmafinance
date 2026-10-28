@@ -84,6 +84,10 @@ const OPT_OUT_WORDS: ReadonlySet<string> = new Set([
   "do not message",
   "dont message",
   "don't message",
+  // The label on Meta's own opt-out quick-reply button under marketing
+  // templates — the one-tap case, so the one that actually arrives.
+  "stop promotions",
+  "stop promotion",
 ]);
 
 /** Is this message the candidate asking to be left alone? */

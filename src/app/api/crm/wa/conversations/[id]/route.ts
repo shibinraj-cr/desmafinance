@@ -10,6 +10,7 @@ import { canActOnConversation, canAssignConversation, canViewConversation } from
 import { leadOwnersForPhone } from "@/lib/wa/identity";
 import { findLeadDuplicates } from "@/lib/crm-leads";
 import { assignLeadTo } from "@/lib/crm-assign";
+import { normalizeQuality } from "@/lib/crm-lead-quality";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -45,6 +46,11 @@ const conversationSelect = {
       country: true,
       studyDestination: true,
       temperature: true,
+      qualityRating: true,
+      qualityReasonId: true,
+      qualityNote: true,
+      qualityDueAt: true,
+      qualityReason: { select: { label: true } },
       emailKey: true,
       phoneE164: true,
       status: { select: { label: true, color: true } },
@@ -200,6 +206,14 @@ export const GET = withApiHandler(async (_req: Request, { params }: { params: { 
             country: conversation.lead.country,
             studyDestination: conversation.lead.studyDestination,
             temperature: conversation.lead.temperature,
+            quality: {
+              rating: normalizeQuality(conversation.lead.qualityRating),
+              reason: conversation.lead.qualityReasonId
+                ? { id: conversation.lead.qualityReasonId, label: conversation.lead.qualityReason?.label ?? "" }
+                : null,
+              note: conversation.lead.qualityNote,
+              dueAt: conversation.lead.qualityDueAt,
+            },
             statusLabel: conversation.lead.status?.label ?? null,
             statusColor: conversation.lead.status?.color ?? null,
             serviceName: conversation.lead.service?.name ?? null,

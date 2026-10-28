@@ -40,7 +40,10 @@ const Body = z.discriminatedUnion("action", [
     courseName: z.string().max(120),
     defaultFee: z.number().nullable(),
     defaultPct: z.number().nullable(),
+    defaultFlat: z.number().nullable().optional(),
     isActive: z.boolean().optional(),
+    applyToOpen: z.boolean().optional(),
+    installmentPlans: z.array(z.number().int()).max(6).optional(),
   }),
   z.object({ action: z.literal("grant"), userId: z.string().max(60), programs: z.array(z.string().max(10)).max(10) }),
 ]);
@@ -65,8 +68,8 @@ export const POST = withApiHandler(async (req: Request) => {
     case "program": {
       const { action: _a, ...p } = body;
       void _a;
-      await saveProgram(a, p);
-      break;
+      const { applied } = await saveProgram(a, p);
+      return NextResponse.json({ ok: true, applied });
     }
     case "grant":
       await saveGrant(a, body.userId, body.programs);

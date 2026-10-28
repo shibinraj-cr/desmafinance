@@ -684,3 +684,45 @@ describe("isCentralisedStatus — the stage that releases the lead's consultant"
     expect(isCentralisedStatus({ code: "follow_up" })).toBe(false);
   });
 });
+
+describe("buildLeadWhere — quality", () => {
+  const now = new Date("2026-10-22T10:00:00Z");
+
+  it("filters by a rating", () => {
+    expect(buildLeadWhere({ quality: "junk", now }).AND).toEqual([{ OR: [{ qualityRating: "junk" }] }]);
+  });
+
+  it("finds overdue ratings: unrated, owned, not a duplicate, due date passed", () => {
+    expect(buildLeadWhere({ quality: "overdue", now }).AND).toEqual([
+      {
+        OR: [
+          {
+            qualityRating: null,
+            assignedToId: { not: null },
+            status: { code: { not: "duplicate" } },
+            qualityDueAt: { lte: now },
+          },
+        ],
+      },
+    ]);
+  });
+
+  it("treats a lead never due a rating as 'not required'", () => {
+    const and = buildLeadWhere({ quality: "exempt", now }).AND as Array<{ OR: unknown[] }>;
+    expect(and[0].OR[0]).toEqual({
+      qualityRating: null,
+      OR: [{ qualityDueAt: null }, { assignedToId: null }, { status: { code: "duplicate" } }],
+    });
+  });
+
+  it("unions several picks and ignores unknown values", () => {
+    const and = buildLeadWhere({ quality: ["good", "pending", "bogus"], now }).AND as Array<{ OR: unknown[] }>;
+    expect(and[0].OR).toHaveLength(2);
+    expect(buildLeadWhere({ quality: "bogus", now }).AND).toBeUndefined();
+  });
+
+  it("is read from the query string like every other filter", () => {
+    const sp = new URLSearchParams("quality=junk&quality=overdue");
+    expect(leadFilterParamsFromQuery(sp, { isBde: false, userId: "u1" }).quality).toEqual(["junk", "overdue"]);
+  });
+});

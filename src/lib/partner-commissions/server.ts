@@ -10,6 +10,7 @@ import { todayIst } from "@/lib/lead-pulse-dates";
 import { badRequest, conflict, forbidden, notFound, unauthorized, unprocessable } from "@/lib/http-error";
 import {
   LEDGER,
+  MAX_INSTALLMENTS,
   PC_FINANCE_PAGE,
   PC_NOTIFY_KIND,
   PROGRAM_CODES,
@@ -26,6 +27,8 @@ import {
   invoiceTotal,
   isEditableInvoice,
   isIntakeMonth,
+  planLabel,
+  canTrackEnrollment,
   looksLikeSeries,
   openAud,
   round2,
@@ -80,6 +83,10 @@ export type PcAccess = {
   isBde: boolean;
   /** Programs this person may ADD enrollments for. */
   programs: ProgramCode[];
+  /** Programs from a personal grant — every enrollment in them can be tracked. */
+  grantPrograms: ProgramCode[];
+  /** Programs opened to BDEs, when this person is an active BDE (else empty). */
+  bdePrograms: ProgramCode[];
 };
 
 export async function getAccess(): Promise<PcAccess | null> {
@@ -99,7 +106,15 @@ export async function getAccess(): Promise<PcAccess | null> {
     grantPrograms: grant?.programs ?? [],
     allPrograms: PROGRAM_CODES,
   }) as ProgramCode[];
-  return { userId, isFinance, canApprove: isFinance && (perms.isAdmin || perms.canApprove), isBde, programs };
+  return {
+    userId,
+    isFinance,
+    canApprove: isFinance && (perms.isAdmin || perms.canApprove),
+    isBde,
+    programs,
+    grantPrograms: (grant?.programs ?? []).filter(isProgramCode),
+    bdePrograms: isBde ? settings.bdePrograms.filter(isProgramCode) : [],
+  };
 }
 
 export async function requireAccess(need: "any" | "finance" | "approve"): Promise<PcAccess> {
@@ -122,8 +137,12 @@ export type EnrollmentInput = {
   intakeMonth: string;
   courseFee: number;
   commissionPct?: number | null;
+  /** Finance only: a flat AUD commission (null = use the percentage). Omitted = the program's default. */
+  commissionFlat?: number | null;
   notes?: string | null;
   firstPayment?: { amount: number; paidOn: string; reference?: string | null } | null;
+  /** The installment plan picked when enrolling — required when the program offers plans (GCAN: 1, 2 or 6). */
+  installmentPlan?: number | null;
 };
 
 async function programConfig(code: string) {
@@ -140,6 +159,10 @@ function checkFee(fee: number) {
 function checkPct(pct: number) {
   if (!(pct >= 0 && pct <= 100)) throw badRequest("Commission % must be between 0 and 100.");
 }
+function checkFlat(flat: number) {
+  if (!(flat > 0) || flat > 1_000_000) throw badRequest("Enter the flat commission in AUD.");
+}
+const flatOf = (d: Prisma.Decimal | null | undefined): number | null => (d == null ? null : num(d));
 
 export async function createEnrollment(a: PcAccess, input: EnrollmentInput) {
   if (!isProgramCode(input.program)) throw badRequest("Pick NCLEX, OSCE or GCAN.");
@@ -149,20 +172,25 @@ export async function createEnrollment(a: PcAccess, input: EnrollmentInput) {
   if (!isIntakeMonth(input.intakeMonth)) throw badRequest("Pick the intake month.");
   checkFee(input.courseFee);
   const prog = await programConfig(input.program);
-  // Only Finance sets the commission % and the course name; everyone else gets the program's defaults.
+  // Only Finance sets the commission and the course name; everyone else gets the program's defaults.
+  // A program pays either a flat amount (e.g. GCAN) or a percentage of the course fee.
+  const flat = a.isFinance && input.commissionFlat !== undefined ? input.commissionFlat : flatOf(prog.defaultFlat);
   const pct = a.isFinance && input.commissionPct != null ? input.commissionPct : num(prog.defaultPct);
-  checkPct(pct);
-  if (!a.isFinance && prog.defaultPct == null) {
-    throw unprocessable(`${input.program}'s commission % isn't set yet. Ask Finance to set it in Settings.`, "program_not_set_up");
+  if (flat != null) checkFlat(flat);
+  else checkPct(pct);
+  if (!a.isFinance && prog.defaultPct == null && prog.defaultFlat == null) {
+    throw unprocessable(`${input.program}'s commission isn't set yet. Ask Finance to set it in Settings.`, "program_not_set_up");
   }
   if (input.leadId) {
     const lead = await prisma.lead.findUnique({ where: { id: input.leadId }, select: { id: true } });
     if (!lead) throw badRequest("That CRM lead no longer exists.");
   }
-  const first = a.isFinance ? input.firstPayment : null;
+  // Whoever adds the enrollment may record a 1st installment already paid — they track this candidate's fee.
+  const first = input.firstPayment ?? null;
+  const plan = choosePlan(input.program, prog.installmentPlans, input.installmentPlan ?? null);
   const today = todayIst();
   if (first) {
-    const err = checkInstallment({ courseFee: input.courseFee, payments: [], amount: first.amount, paidOn: first.paidOn, today });
+    const err = checkInstallment({ courseFee: input.courseFee, payments: [], amount: first.amount, paidOn: first.paidOn, today, plan });
     if (err) throw badRequest(err);
   }
   const created = await prisma.commissionEnrollment.create({
@@ -176,6 +204,8 @@ export async function createEnrollment(a: PcAccess, input: EnrollmentInput) {
       intakeMonth: input.intakeMonth,
       courseFee: round2(input.courseFee),
       commissionPct: pct,
+      commissionFlat: flat,
+      installmentPlan: plan,
       notes: clean(input.notes),
       createdById: a.userId,
       fullyPaidOn: first && round2(first.amount) === round2(input.courseFee) ? toDate(first.paidOn) : null,
@@ -191,10 +221,28 @@ export async function createEnrollment(a: PcAccess, input: EnrollmentInput) {
 async function loadEnrollment(id: string) {
   const e = await prisma.commissionEnrollment.findUnique({
     where: { id },
-    include: { payments: { orderBy: { seq: "asc" } }, invoice: { select: { status: true } } },
+    include: { payments: { orderBy: { seq: "asc" } }, invoice: { select: { status: true } }, lead: { select: { assignedToId: true } } },
   });
   if (!e) throw notFound("That enrollment no longer exists.");
   return e;
+}
+
+/** Record/undo installments: Finance, the program's coordinator, or the BDE whose candidate it is. */
+function assertCanTrack(a: PcAccess, e: { program: string; createdById: string | null; lead: { assignedToId: string | null } | null }) {
+  const ok = canTrackEnrollment(a, { program: e.program, createdById: e.createdById, leadAssignedToId: e.lead?.assignedToId ?? null });
+  if (!ok) throw forbidden("You can record installments only for enrollments you added or whose CRM lead is assigned to you.");
+}
+
+/**
+ * The enrollments a person sees on Partner Enrollments — exactly the ones they
+ * may record installments for (canTrackEnrollment), plus any they added.
+ */
+export function trackableWhere(a: PcAccess): Prisma.CommissionEnrollmentWhereInput {
+  if (a.isFinance) return {};
+  const or: Prisma.CommissionEnrollmentWhereInput[] = [{ createdById: a.userId }];
+  if (a.grantPrograms.length) or.push({ program: { in: a.grantPrograms } });
+  if (a.bdePrograms.length) or.push({ program: { in: a.bdePrograms }, lead: { assignedToId: a.userId } });
+  return { OR: or };
 }
 
 /** Recompute fullyPaidOn after the fee or the payments changed. */
@@ -213,6 +261,8 @@ export type EnrollmentPatch = {
   intakeMonth?: string;
   courseFee?: number;
   commissionPct?: number;
+  /** Finance only: a flat AUD commission, or null to go back to the percentage. */
+  commissionFlat?: number | null;
   courseName?: string;
   leadId?: string | null;
   notes?: string | null;
@@ -225,8 +275,8 @@ export async function updateEnrollment(a: PcAccess, id: string, patch: Enrollmen
   // Outside Finance: only your own enrollment, and only until the first payment is recorded.
   if (!a.isFinance) {
     if (e.createdById !== a.userId) throw forbidden("You can only edit enrollments you added.");
-    if (e.payments.length > 0) throw conflict("Finance has started recording payments, so ask Finance to change it.");
-    if (patch.commissionPct !== undefined || patch.courseName !== undefined) throw forbidden();
+    if (e.payments.length > 0) throw conflict("Installments are recorded against it now, so ask Finance to change it.");
+    if (patch.commissionPct !== undefined || patch.commissionFlat !== undefined || patch.courseName !== undefined) throw forbidden();
   }
   const data: Prisma.CommissionEnrollmentUpdateInput = {};
   if (patch.candidateName !== undefined) {
@@ -249,6 +299,10 @@ export async function updateEnrollment(a: PcAccess, id: string, patch: Enrollmen
     checkPct(patch.commissionPct);
     data.commissionPct = patch.commissionPct;
   }
+  if (patch.commissionFlat !== undefined) {
+    if (patch.commissionFlat != null) checkFlat(patch.commissionFlat);
+    data.commissionFlat = patch.commissionFlat;
+  }
   if (patch.courseName !== undefined) {
     const c = patch.courseName.trim();
     if (!c) throw badRequest("Enter the course name.");
@@ -268,12 +322,12 @@ export async function updateEnrollment(a: PcAccess, id: string, patch: Enrollmen
 }
 
 export async function addFeePayment(a: PcAccess, id: string, p: { amount: number; paidOn: string; reference?: string | null }) {
-  if (!a.isFinance) throw forbidden("Finance records fee payments.");
   const e = await loadEnrollment(id);
+  assertCanTrack(a, e);
   if (e.status === "withdrawn") throw conflict("This enrollment is withdrawn.");
   if (e.invoiceId) throw conflict("This enrollment is already invoiced.");
   const payments = e.payments.map((x) => ({ amount: num(x.amount) }));
-  const err = checkInstallment({ courseFee: num(e.courseFee), payments, amount: p.amount, paidOn: p.paidOn, today: todayIst() });
+  const err = checkInstallment({ courseFee: num(e.courseFee), payments, amount: p.amount, paidOn: p.paidOn, today: todayIst(), plan: e.installmentPlan });
   if (err) throw badRequest(err);
   const seq = e.payments.length + 1;
   try {
@@ -289,8 +343,8 @@ export async function addFeePayment(a: PcAccess, id: string, p: { amount: number
 }
 
 export async function undoLastFeePayment(a: PcAccess, id: string) {
-  if (!a.isFinance) throw forbidden();
   const e = await loadEnrollment(id);
+  assertCanTrack(a, e);
   if (e.invoiceId) throw conflict("This enrollment is already invoiced.");
   const last = e.payments[e.payments.length - 1];
   if (!last) throw conflict("There's no installment to undo.");
@@ -303,6 +357,38 @@ export async function undoLastFeePayment(a: PcAccess, id: string) {
     userId: a.userId,
     changes: { undoFeePayment: { seq: last.seq, amount: num(last.amount), paidOn: isoDate(last.paidOn) } },
   });
+}
+
+/**
+ * The plan for a new enrollment: required and one of the offered plans when the
+ * program has plans (GCAN: 1, 2 or 6); none otherwise.
+ */
+function choosePlan(program: string, offered: number[], picked: number | null): number | null {
+  if (offered.length === 0) return null;
+  if (picked == null || !offered.includes(picked)) {
+    throw badRequest(`Pick ${program}'s installment plan: ${offered.map(planLabel).join(", ")}.`);
+  }
+  return picked;
+}
+
+/**
+ * Change an enrollment's installment plan (e.g. 2 → 6 when the candidate needs
+ * longer). Anyone who records its installments may, until it is invoiced; the
+ * plan can't drop below the installments already recorded.
+ */
+export async function setInstallmentPlan(a: PcAccess, id: string, plan: number) {
+  const e = await loadEnrollment(id);
+  assertCanTrack(a, e);
+  if (e.invoiceId) throw conflict("This enrollment is already invoiced.");
+  if (e.status === "withdrawn") throw conflict("This enrollment is withdrawn.");
+  const prog = await prisma.commissionProgram.findUnique({ where: { code: e.program }, select: { installmentPlans: true } });
+  const offered = prog?.installmentPlans ?? [];
+  if (offered.length ? !offered.includes(plan) : !(Number.isInteger(plan) && plan >= 1 && plan <= MAX_INSTALLMENTS)) {
+    throw badRequest(offered.length ? `Pick one of ${e.program}'s plans: ${offered.map(planLabel).join(", ")}.` : "Pick a plan of 1 to 6 installments.");
+  }
+  if (plan < e.payments.length) throw badRequest(`${e.payments.length} installments are already recorded, so the plan can't be ${plan}.`);
+  await prisma.commissionEnrollment.update({ where: { id }, data: { installmentPlan: plan } });
+  await recordAudit({ entityType: "CommissionEnrollment", entityId: id, action: "UPDATE", userId: a.userId, changes: { installmentPlan: { from: e.installmentPlan, to: plan } } });
 }
 
 export async function setWithdrawn(a: PcAccess, id: string, withdrawn: boolean) {
@@ -391,7 +477,8 @@ export async function createInvoice(opts: {
           intakeMonth: e.intakeMonth,
           courseFee: e.courseFee,
           commissionPct: e.commissionPct,
-          amount: commissionOf(num(e.courseFee), num(e.commissionPct)),
+          commissionFlat: e.commissionFlat,
+          amount: commissionOf(num(e.courseFee), num(e.commissionPct), flatOf(e.commissionFlat)),
         })),
       });
       return inv;
@@ -421,7 +508,7 @@ export type InvoicePatch = {
   billToEmail?: string | null;
   billToFor?: string | null;
   amountWords?: string | null;
-  lines?: Array<{ id: string; description?: string; commissionPct?: number }>;
+  lines?: Array<{ id: string; description?: string; commissionPct?: number; commissionFlat?: number | null }>;
 };
 
 export async function updateInvoice(a: PcAccess, id: string, patch: InvoicePatch) {
@@ -456,12 +543,16 @@ export async function updateInvoice(a: PcAccess, id: string, patch: InvoicePatch
           if (!d) throw badRequest("A line needs a description.");
           lineData.description = d.slice(0, 200);
         }
-        if (l.commissionPct !== undefined) {
-          checkPct(l.commissionPct);
-          lineData.commissionPct = l.commissionPct;
-          lineData.amount = commissionOf(num(line.courseFee), l.commissionPct);
-          // Keep the enrollment's % in step, so a line removed later queues at the agreed rate.
-          if (line.enrollmentId) await tx.commissionEnrollment.update({ where: { id: line.enrollmentId }, data: { commissionPct: l.commissionPct } });
+        if (l.commissionPct !== undefined || l.commissionFlat !== undefined) {
+          const pct = l.commissionPct !== undefined ? l.commissionPct : num(line.commissionPct);
+          const flat = l.commissionFlat !== undefined ? l.commissionFlat : flatOf(line.commissionFlat);
+          if (flat != null) checkFlat(flat);
+          else checkPct(pct);
+          lineData.commissionPct = pct;
+          lineData.commissionFlat = flat;
+          lineData.amount = commissionOf(num(line.courseFee), pct, flat);
+          // Keep the enrollment's terms in step, so a line removed later queues at the agreed commission.
+          if (line.enrollmentId) await tx.commissionEnrollment.update({ where: { id: line.enrollmentId }, data: { commissionPct: pct, commissionFlat: flat } });
         }
         await tx.commissionInvoiceLine.update({ where: { id: l.id }, data: lineData });
       }
@@ -507,7 +598,8 @@ export async function addInvoiceLine(a: PcAccess, id: string, enrollmentId: stri
         intakeMonth: e.intakeMonth,
         courseFee: e.courseFee,
         commissionPct: e.commissionPct,
-        amount: commissionOf(num(e.courseFee), num(e.commissionPct)),
+        commissionFlat: e.commissionFlat,
+        amount: commissionOf(num(e.courseFee), num(e.commissionPct), flatOf(e.commissionFlat)),
       },
     });
   });
@@ -936,7 +1028,20 @@ export async function savePartner(a: PcAccess, id: string | null, p: PartnerInpu
   }
 }
 
-export type ProgramInput = { code: string; partnerId: string; courseName: string; defaultFee: number | null; defaultPct: number | null; isActive?: boolean };
+export type ProgramInput = {
+  code: string;
+  partnerId: string;
+  courseName: string;
+  defaultFee: number | null;
+  defaultPct: number | null;
+  /** A flat AUD commission per enrollment; when set it replaces the percentage. */
+  defaultFlat?: number | null;
+  isActive?: boolean;
+  /** Also move enrollments not yet invoiced onto the new commission. */
+  applyToOpen?: boolean;
+  /** Installment plans offered when enrolling (1–6), e.g. [1, 2, 6]. Omitted = unchanged. */
+  installmentPlans?: number[];
+};
 
 export async function saveProgram(a: PcAccess, p: ProgramInput) {
   if (!a.canApprove) throw forbidden();
@@ -947,10 +1052,32 @@ export async function saveProgram(a: PcAccess, p: ProgramInput) {
   if (!courseName) throw badRequest("Enter the course name printed on the invoice.");
   if (p.defaultFee != null) checkFee(p.defaultFee);
   if (p.defaultPct != null) checkPct(p.defaultPct);
-  const data = { partnerId: p.partnerId, courseName, defaultFee: p.defaultFee, defaultPct: p.defaultPct, isActive: p.isActive ?? true };
+  const defaultFlat = p.defaultFlat ?? null;
+  if (defaultFlat != null) checkFlat(defaultFlat);
+  if (p.installmentPlans && p.installmentPlans.some((n) => !Number.isInteger(n) || n < 1 || n > MAX_INSTALLMENTS)) {
+    throw badRequest(`Installment plans must be whole numbers from 1 to ${MAX_INSTALLMENTS}.`);
+  }
+  const data = {
+    partnerId: p.partnerId,
+    courseName,
+    defaultFee: p.defaultFee,
+    defaultPct: p.defaultPct,
+    defaultFlat,
+    isActive: p.isActive ?? true,
+    ...(p.installmentPlans ? { installmentPlans: [...new Set(p.installmentPlans)].sort((x, y) => x - y) } : {}),
+  };
   const saved = await prisma.commissionProgram.upsert({ where: { code: p.code }, create: { code: p.code, ...data }, update: data });
-  await recordAudit({ entityType: "CommissionProgram", entityId: saved.id, action: "UPDATE", userId: a.userId, changes: { code: p.code, ...data } });
-  return saved;
+  // Enrollments already on an invoice keep what was billed; the rest can follow the new terms.
+  let applied = 0;
+  if (p.applyToOpen) {
+    const res = await prisma.commissionEnrollment.updateMany({
+      where: { program: p.code, invoiceId: null, status: "active" },
+      data: defaultFlat != null ? { commissionFlat: defaultFlat } : { commissionFlat: null, ...(p.defaultPct != null ? { commissionPct: p.defaultPct } : {}) },
+    });
+    applied = res.count;
+  }
+  await recordAudit({ entityType: "CommissionProgram", entityId: saved.id, action: "UPDATE", userId: a.userId, changes: { code: p.code, ...data, appliedToOpenEnrollments: applied } });
+  return { saved, applied };
 }
 
 export async function saveGrant(a: PcAccess, userId: string, programs: string[]) {
@@ -969,17 +1096,23 @@ export async function saveGrant(a: PcAccess, userId: string, programs: string[])
 // ── reads ────────────────────────────────────────────────────────────────────
 
 export const ENROLLMENT_INCLUDE = {
-  payments: { orderBy: { seq: "asc" } },
+  payments: { orderBy: { seq: "asc" }, include: { createdBy: { select: { username: true } } } },
   invoice: { select: { id: true, number: true, status: true, source: true } },
   createdBy: { select: { username: true } },
-  lead: { select: { id: true, candidateName: true } },
+  lead: { select: { id: true, candidateName: true, assignedToId: true } },
   partner: { select: { name: true } },
 } satisfies Prisma.CommissionEnrollmentInclude;
 
 export type EnrollmentRow = Prisma.CommissionEnrollmentGetPayload<{ include: typeof ENROLLMENT_INCLUDE }>;
 
 export function serializeEnrollment(e: EnrollmentRow) {
-  const payments = e.payments.map((p) => ({ seq: p.seq, amount: num(p.amount), paidOn: isoDate(p.paidOn)!, reference: p.reference }));
+  const payments = e.payments.map((p) => ({
+    seq: p.seq,
+    amount: num(p.amount),
+    paidOn: isoDate(p.paidOn)!,
+    reference: p.reference,
+    recordedBy: p.createdBy?.username ?? null,
+  }));
   return {
     id: e.id,
     program: e.program as ProgramCode,
@@ -993,6 +1126,8 @@ export function serializeEnrollment(e: EnrollmentRow) {
     intakeMonth: e.intakeMonth,
     courseFee: num(e.courseFee),
     commissionPct: num(e.commissionPct),
+    commissionFlat: flatOf(e.commissionFlat),
+    installmentPlan: e.installmentPlan,
     status: e.status,
     fullyPaidOn: isoDate(e.fullyPaidOn),
     invoice: e.invoice ? { id: e.invoice.id, number: e.invoice.number, status: e.invoice.status, source: e.invoice.source } : null,

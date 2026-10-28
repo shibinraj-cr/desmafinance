@@ -14,6 +14,8 @@ export const CRM_ACTIVITY_TYPES = [
   // which is the pipeline stage.
   "SUB_STATUS_CHANGED",
   "FIELD_UPDATED",
+  // Lead quality rated or re-rated (src/lib/crm-lead-quality.ts).
+  "QUALITY_RATED",
   "ASSIGNED",
   "REASSIGNED",
   "UNASSIGNED",

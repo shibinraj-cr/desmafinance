@@ -18,6 +18,13 @@ import {
 import { verifyMetaSignature } from "@/lib/wa/signature";
 import { createHmac } from "node:crypto";
 
+describe("isOptOutMessage — Meta's opt-out button", () => {
+  it("treats the 'Stop promotions' quick reply as an opt-out", () => {
+    expect(isOptOutMessage("Stop promotions")).toBe(true);
+    expect(isOptOutMessage("stop promotions.")).toBe(true);
+  });
+});
+
 describe("isOptOutMessage", () => {
   it("catches the one-tap replies WhatsApp actually sends", () => {
     for (const w of ["STOP", "stop", "Stop.", "unsubscribe", "opt out", "Remove me"]) {
@@ -42,7 +49,11 @@ describe("resendScopeWhere", () => {
   // The default must INCLUDE null waStatus (never-sent) — a bare notIn drops
   // NULLs under SQL three-valued logic, which are exactly the rows to re-hit.
   it("targets everyone not confirmed delivered/read by default (incl. never-sent)", () => {
-    const expected = { OR: [{ waStatus: null }, { waStatus: { notIn: ["delivered", "read"] } }] };
+    // …except the control group, which a re-send must never reach.
+    const expected = {
+      OR: [{ waStatus: null }, { waStatus: { notIn: ["delivered", "read"] } }],
+      NOT: { skipReason: "holdout" },
+    };
     expect(resendScopeWhere("not_delivered")).toEqual(expected);
     expect(resendScopeWhere(null)).toEqual(expected);
     expect(resendScopeWhere(undefined)).toEqual(expected);

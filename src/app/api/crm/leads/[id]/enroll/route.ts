@@ -2,10 +2,13 @@ import { NextResponse } from "next/server";
 import { z } from "zod";
 import { prisma } from "@/lib/prisma";
 import { withApiHandler } from "@/lib/api";
-import { unauthorized, forbidden, notFound } from "@/lib/http-error";
+import { unauthorized, forbidden, notFound, unprocessable } from "@/lib/http-error";
 import { getCurrentUserAndPermissions } from "@/lib/permissions";
 import { getCrmAccess, canEditLead } from "@/lib/crm-rbac";
 import { enrollLead } from "@/lib/crm-enroll";
+import { recordLeadActivity } from "@/lib/crm-activity";
+import { QualityInputSchema, resolveQualityChange } from "@/lib/crm-lead-quality-data";
+import { QUALITY_GATE_MESSAGE, QUALITY_REQUIRED_CODE, qualityGate } from "@/lib/crm-lead-quality";
 
 export const dynamic = "force-dynamic";
 
@@ -20,6 +23,9 @@ const Schema = z.object({
   // metrics. Optional; defaults to now server-side when absent.
   closedDate: z.coerce.date().optional().nullable(),
   ownerUserId: z.string().optional().nullable(),
+  // Enrolling closes the lead, so an unrated one is rated in the same step
+  // (see qualityGate in crm-lead-quality.ts).
+  quality: QualityInputSchema.optional(),
 });
 
 export const POST = withApiHandler(async (req: Request, { params }: { params: { id: string } }) => {
@@ -27,11 +33,47 @@ export const POST = withApiHandler(async (req: Request, { params }: { params: { 
   if (!userId || !perms) throw unauthorized();
   const access = await getCrmAccess(userId, perms);
 
-  const lead = await prisma.lead.findUnique({ where: { id: params.id }, select: { id: true, assignedToId: true } });
+  const lead = await prisma.lead.findUnique({
+    where: { id: params.id },
+    select: {
+      id: true,
+      assignedToId: true,
+      qualityRating: true,
+      qualityReasonId: true,
+      qualityNote: true,
+      qualityDueAt: true,
+      status: { select: { code: true } },
+    },
+  });
   if (!lead) throw notFound();
   if (!canEditLead(access, lead, userId)) throw forbidden();
 
   const d = Schema.parse(await req.json().catch(() => null));
+
+  const qualityChange = d.quality ? await resolveQualityChange(lead, d.quality, userId) : null;
+  const gate = qualityGate(
+    {
+      qualityRating: qualityChange?.data.qualityRating ?? lead.qualityRating,
+      qualityDueAt: lead.qualityDueAt,
+      assignedToId: lead.assignedToId,
+      statusCode: lead.status.code,
+    },
+    { actorId: userId, now: new Date(), nextStage: { code: "enrolled", kind: "won" } },
+  );
+  if (gate) throw unprocessable(QUALITY_GATE_MESSAGE[gate], QUALITY_REQUIRED_CODE);
+  // Saved ahead of the enrollment: a rating is true on its own, so an enroll
+  // refused for a missing source doesn't lose it.
+  if (qualityChange) {
+    await prisma.lead.update({ where: { id: lead.id }, data: qualityChange.data });
+    await recordLeadActivity({
+      leadId: lead.id,
+      actorId: userId,
+      type: "QUALITY_RATED",
+      summary: qualityChange.summary,
+      metadata: qualityChange.metadata,
+    });
+  }
+
   const result = await enrollLead({
     leadId: params.id,
     serviceId: d.serviceId ?? undefined,

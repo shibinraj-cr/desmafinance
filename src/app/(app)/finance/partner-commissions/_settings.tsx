@@ -2,8 +2,8 @@
 
 import { useState } from "react";
 import { Callout, Field, Icon, ProgramTag, api, btnCls, cardCls, inputCls, linkBtnCls, primaryBtnCls } from "@/components/partner-commissions/ui";
-import { LEDGER, PROGRAM_CODES } from "@/lib/partner-commissions/constants";
-import { suggestInvoiceNumber } from "@/lib/partner-commissions/logic";
+import { LEDGER, MAX_INSTALLMENTS, PROGRAM_CODES } from "@/lib/partner-commissions/constants";
+import { parsePlans, suggestInvoiceNumber } from "@/lib/partner-commissions/logic";
 import type { PartnerDTO, ProgramDTO } from "./_types";
 import type { PcCtx } from "./client";
 
@@ -137,14 +137,16 @@ function ProgramsCard({ ctx, ro }: { ctx: PcCtx; ro: boolean }) {
   return (
     <div className={`${cardCls} p-md flex flex-col gap-sm`}>
       <h4 className="font-semibold text-body-lg">Programs</h4>
-      <p className="text-caption text-on-surface-variant">Which partner runs each program, and the defaults a new enrollment starts with. Each enrollment can still carry its own fee and %.</p>
+      <p className="text-caption text-on-surface-variant">
+        Which partner runs each program, and the defaults a new enrollment starts with. A program pays either a percentage of the course fee or a flat amount per enrollment. <b>Installment plans</b> (e.g. 1, 2, 6) are offered when enrolling and cap that enrollment&apos;s installments; leave empty for no plan (up to 6). Each enrollment can still carry its own fee and commission.
+      </p>
       {ctx.data.partners.length === 0 ? <Callout icon="info">Add a partner first.</Callout> : null}
       <div className="overflow-x-auto">
-        <table className="w-full min-w-[760px] text-body-md">
+        <table className="w-full min-w-[980px] text-body-md">
           <thead>
             <tr className="text-left text-[11px] uppercase tracking-wider text-on-surface-variant">
               <th className="py-2 pr-sm font-semibold">Program</th><th className="py-2 pr-sm font-semibold">Partner</th><th className="py-2 pr-sm font-semibold">Course name on invoice</th>
-              <th className="py-2 pr-sm font-semibold">Default fee (AUD)</th><th className="py-2 pr-sm font-semibold">Commission %</th><th className="py-2 pr-sm font-semibold">Active</th><th />
+              <th className="py-2 pr-sm font-semibold">Default fee (AUD)</th><th className="py-2 pr-sm font-semibold">Commission</th><th className="py-2 pr-sm font-semibold">Installment plans</th><th className="py-2 pr-sm font-semibold">Active</th><th />
             </tr>
           </thead>
           <tbody>{ctx.data.programs.map((p) => <ProgramRow key={p.code} ctx={ctx} p={p} ro={ro} />)}</tbody>
@@ -158,43 +160,100 @@ function ProgramRow({ ctx, p, ro }: { ctx: PcCtx; p: ProgramDTO; ro: boolean }) 
   const [partnerId, setPartnerId] = useState(p.partnerId ?? "");
   const [course, setCourse] = useState(p.configured ? p.courseName : p.code === "GCAN" ? "GCAN Online" : p.code);
   const [fee, setFee] = useState(p.defaultFee != null ? String(p.defaultFee) : "");
+  const [isFlat, setIsFlat] = useState(p.defaultFlat != null);
   const [pct, setPct] = useState(p.defaultPct != null ? String(p.defaultPct) : "");
+  const [flat, setFlat] = useState(p.defaultFlat != null ? String(p.defaultFlat) : "");
   const [active, setActive] = useState(p.configured ? p.isActive : true);
-  const { busy, err, save } = useSaver(ctx);
-  const dirty =
-    !p.configured ||
-    partnerId !== (p.partnerId ?? "") ||
-    course !== p.courseName ||
-    fee !== (p.defaultFee != null ? String(p.defaultFee) : "") ||
-    pct !== (p.defaultPct != null ? String(p.defaultPct) : "") ||
-    active !== p.isActive;
+  const [applyToOpen, setApplyToOpen] = useState(true);
+  const plansText0 = p.installmentPlans.join(", ");
+  const [plansText, setPlansText] = useState(plansText0);
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+  const commissionChanged =
+    isFlat !== (p.defaultFlat != null) ||
+    (isFlat ? flat !== (p.defaultFlat != null ? String(p.defaultFlat) : "") : pct !== (p.defaultPct != null ? String(p.defaultPct) : ""));
+  const dirty = !p.configured || partnerId !== (p.partnerId ?? "") || course !== p.courseName || fee !== (p.defaultFee != null ? String(p.defaultFee) : "") || commissionChanged || plansText.trim() !== plansText0 || active !== p.isActive;
+  // Enrollments that would follow a change of terms: not yet on an invoice, not withdrawn.
+  const open = ctx.data.enrollments.filter((e) => e.program === p.code && !e.invoice && e.status === "active").length;
+
+  async function save() {
+    setErr(null);
+    if (isFlat && !(parseFloat(flat) > 0)) return setErr(`Enter ${p.code}'s flat commission in AUD.`);
+    const plans = parsePlans(plansText);
+    if (!plans) return setErr(`Installment plans are numbers from 1 to ${MAX_INSTALLMENTS}, e.g. 1, 2, 6 (or leave it empty).`);
+    setBusy(true);
+    try {
+      const res = await api<{ applied: number }>("/api/finance/partner-commissions/settings", {
+        action: "program",
+        code: p.code,
+        partnerId,
+        courseName: course,
+        defaultFee: fee ? parseFloat(fee) : null,
+        defaultPct: pct ? parseFloat(pct) : null,
+        defaultFlat: isFlat ? parseFloat(flat) : null,
+        isActive: active,
+        applyToOpen: commissionChanged && applyToOpen,
+        installmentPlans: plans,
+      });
+      const terms = isFlat ? `flat AUD ${flat}` : `${pct}%`;
+      ctx.done(res.applied ? `${p.code} saved. ${res.applied} enrollment${res.applied === 1 ? " not yet invoiced now uses" : "s not yet invoiced now use"} ${terms}.` : `${p.code} saved.`);
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : "Couldn't save.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
   return (
     <>
       <tr className="border-t border-outline-variant/60 align-top">
         <td className="py-2 pr-sm"><ProgramTag code={p.code} />{!p.configured ? <div className="text-caption text-amber-700 mt-1">Not set up</div> : null}</td>
         <td className="py-2 pr-sm">
-          <select className={inputCls} value={partnerId} disabled={ro} onChange={(e) => setPartnerId(e.target.value)}>
+          <select className={inputCls} value={partnerId} disabled={ro} onChange={(e) => setPartnerId(e.target.value)} aria-label={`${p.code} partner`}>
             <option value="">Choose…</option>
             {ctx.data.partners.map((x) => <option key={x.id} value={x.id}>{x.name}</option>)}
           </select>
         </td>
-        <td className="py-2 pr-sm"><input className={inputCls} value={course} disabled={ro} onChange={(e) => setCourse(e.target.value)} /></td>
-        <td className="py-2 pr-sm"><input className={`${inputCls} !w-28`} type="number" min={1} value={fee} disabled={ro} onChange={(e) => setFee(e.target.value)} /></td>
-        <td className="py-2 pr-sm"><input className={`${inputCls} !w-24`} type="number" min={0} max={100} step="0.5" value={pct} disabled={ro} onChange={(e) => setPct(e.target.value)} /></td>
+        <td className="py-2 pr-sm"><input className={inputCls} value={course} disabled={ro} onChange={(e) => setCourse(e.target.value)} aria-label={`${p.code} course name`} /></td>
+        <td className="py-2 pr-sm"><input className={`${inputCls} !w-28`} type="number" min={1} value={fee} disabled={ro} onChange={(e) => setFee(e.target.value)} aria-label={`${p.code} default fee`} /></td>
+        <td className="py-2 pr-sm">
+          <div className="flex gap-2">
+            <select className={`${inputCls} !w-28 shrink-0`} value={isFlat ? "flat" : "pct"} disabled={ro} onChange={(e) => setIsFlat(e.target.value === "flat")} aria-label={`${p.code} commission type`}>
+              <option value="pct">% of fee</option>
+              <option value="flat">Flat AUD</option>
+            </select>
+            {isFlat ? (
+              <input className={`${inputCls} !w-24`} type="number" min={1} step="1" value={flat} disabled={ro} onChange={(e) => setFlat(e.target.value)} aria-label={`${p.code} flat commission`} />
+            ) : (
+              <input className={`${inputCls} !w-24`} type="number" min={0} max={100} step="0.5" value={pct} disabled={ro} onChange={(e) => setPct(e.target.value)} aria-label={`${p.code} commission %`} />
+            )}
+          </div>
+        </td>
+        <td className="py-2 pr-sm">
+          <input className={`${inputCls} !w-28`} value={plansText} disabled={ro} placeholder="None" onChange={(e) => setPlansText(e.target.value)} aria-label={`${p.code} installment plans`} />
+        </td>
         <td className="py-2 pr-sm"><input type="checkbox" className="mt-3" checked={active} disabled={ro} onChange={(e) => setActive(e.target.checked)} aria-label={`${p.code} active`} /></td>
         <td className="py-2">
           {!ro ? (
-            <button
-              className={btnCls}
-              disabled={busy || !dirty || !partnerId}
-              onClick={() => save({ action: "program", code: p.code, partnerId, courseName: course, defaultFee: fee ? parseFloat(fee) : null, defaultPct: pct ? parseFloat(pct) : null, isActive: active }, `${p.code} saved.`)}
-            >
+            <button className={btnCls} disabled={busy || !dirty || !partnerId} onClick={save}>
               Save
             </button>
           ) : null}
         </td>
       </tr>
-      {err ? <tr><td colSpan={7} className="pb-2 text-body-md text-error font-medium">{err}</td></tr> : null}
+      {!ro && p.configured && commissionChanged && open > 0 ? (
+        <tr>
+          <td />
+          <td colSpan={7} className="pb-2">
+            <label className="flex items-center gap-2 text-body-md">
+              <input type="checkbox" checked={applyToOpen} onChange={(e) => setApplyToOpen(e.target.checked)} />
+              Also apply to the {open} {p.code} enrollment{open === 1 ? "" : "s"} not yet invoiced
+              <span className="text-caption text-on-surface-variant">(invoiced ones keep what was billed)</span>
+            </label>
+          </td>
+        </tr>
+      ) : null}
+      {err ? <tr><td colSpan={8} className="pb-2 text-body-md text-error font-medium">{err}</td></tr> : null}
     </>
   );
 }
@@ -212,9 +271,9 @@ function AccessCard({ ctx }: { ctx: PcCtx }) {
   const grantedIds = new Set(data.grants.map((g) => g.userId));
   return (
     <div className={`${cardCls} p-md flex flex-col gap-sm`}>
-      <h4 className="font-semibold text-body-lg">Who can add enrollments</h4>
+      <h4 className="font-semibold text-body-lg">Who can add enrollments and record installments</h4>
       <p className="text-caption text-on-surface-variant">
-        Finance (anyone with this page) can add every program. The people below get a <b>Partner Enrollments</b> page in CRM where they can add enrollments for their programs, and see the ones they added. Finance still records the fee installments.
+        Finance (anyone with this page) can do everything. The people below get a <b>Partner Enrollments</b> page in CRM where they add enrollments for their programs and record each fee installment as it&apos;s paid; Finance invoices once the fee is fully paid. A BDE tracks the candidates they added or whose CRM lead is assigned to them; a person given a program here tracks every enrollment in it.
       </p>
       <div className="border border-outline-variant rounded-lg p-sm flex flex-wrap items-center gap-md">
         <div className="flex-1 min-w-[220px]"><b>All BDEs</b> <span className="text-caption text-on-surface-variant">· every active L1/L2 consultant on the Lead Pulse roster ({data.bdeCount} now)</span></div>

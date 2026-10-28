@@ -42,8 +42,9 @@ export const config = {
     // the WhatsApp conversation-mirror hook (api/crm/wa/webhook — same reason:
     // a message provider POSTs with a shared `wa_mirror_secret` and has no
     // session; every OTHER route under api/crm/wa stays gated),
-    // the public privacy policy page (required to be reachable without login
-    // for Meta app review), the public careers site and its apply endpoint
+    // the public privacy policy and terms pages (required to be reachable
+    // without login for Meta app review, and linked from the careers site),
+    // the public careers site and its apply endpoint
     // (`careers` + `api/careers` — a job applicant is by definition a stranger
     // with no Desgro login; that endpoint does its own honeypot, dwell-time and
     // rate-limit checks, and every OTHER route under api/hiring stays gated),
@@ -73,6 +74,6 @@ export const config = {
     // revocable, and nothing under it can write),
     // Next.js internal asset routes, and any file with
     // an extension (/desfin.png, /favicon.ico, fonts).
-    "/((?!login|api/auth|api/health|api/whoami|api/integrations|api/crm/integrations/wabis/inbound|api/crm/integrations/wabis/delivery-status|api/crm/wa/webhook|psych/test|api/psych/test|privacy-policy|careers|api/careers|offer|api/offer|partners|api/partners|api/hiring/calendar|api/wa-media|api/cron|share/|api/share/|sign/|api/sign/|verify/|api/verify/|_next/static|_next/image|.*\\..*).*)",
+    "/((?!login|api/auth|api/health|api/whoami|api/integrations|api/crm/integrations/wabis/inbound|api/crm/integrations/wabis/delivery-status|api/crm/wa/webhook|psych/test|api/psych/test|privacy-policy|terms|careers|api/careers|offer|api/offer|partners|api/partners|api/hiring/calendar|api/wa-media|api/cron|share/|api/share/|sign/|api/sign/|verify/|api/verify/|_next/static|_next/image|.*\\..*).*)",
   ],
 };

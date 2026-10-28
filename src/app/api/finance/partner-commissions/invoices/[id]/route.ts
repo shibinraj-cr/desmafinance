@@ -25,7 +25,7 @@ const Body = z.discriminatedUnion("action", [
     billToFor: z.string().max(200).nullable().optional(),
     amountWords: z.string().max(300).nullable().optional(),
     lines: z
-      .array(z.object({ id: z.string().max(60), description: z.string().max(200).optional(), commissionPct: z.number().optional() }))
+      .array(z.object({ id: z.string().max(60), description: z.string().max(200).optional(), commissionPct: z.number().optional(), commissionFlat: z.number().nullable().optional() }))
       .max(500)
       .optional(),
   }),

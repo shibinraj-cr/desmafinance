@@ -8,9 +8,25 @@ import { MAX_INSTALLMENTS, type EnrollmentState, type InvoiceLayout, type Invoic
 
 export const round2 = (n: number): number => Math.round((n + Number.EPSILON) * 100) / 100;
 
-/** Commission on a course fee at a percentage, to the cent. */
-export function commissionOf(courseFee: number, pct: number): number {
+/** 1 → "1st", 2 → "2nd", 3 → "3rd", 4 → "4th" … (for "1st installment"). */
+export function ordinal(n: number): string {
+  const tens = n % 100;
+  if (tens >= 11 && tens <= 13) return `${n}th`;
+  return `${n}${["th", "st", "nd", "rd"][n % 10] ?? "th"}`;
+}
+
+/**
+ * The commission on one enrollment, to the cent: a flat amount when the
+ * program pays one (e.g. GCAN), otherwise the course fee × the percentage.
+ */
+export function commissionOf(courseFee: number, pct: number, flat?: number | null): number {
+  if (flat != null) return round2(flat);
   return round2((courseFee * pct) / 100);
+}
+
+/** "20%" or "Flat AUD 800" — how an enrollment's commission terms read. */
+export function commissionTerms(pct: number, flat?: number | null): string {
+  return flat != null ? `Flat AUD ${fmtMoney(flat)}` : `${fmtMoney(pct)}%`;
 }
 
 export function paidOf(payments: Array<{ amount: number }>): number {
@@ -37,6 +53,39 @@ export function enrollmentState(e: {
   return paidOf(e.payments) === 0 ? "notstarted" : "paying";
 }
 
+/** How many installments an enrollment may have: its plan, else the overall maximum. */
+export function installmentCap(plan: number | null | undefined): number {
+  return plan != null && plan >= 1 ? Math.min(plan, MAX_INSTALLMENTS) : MAX_INSTALLMENTS;
+}
+
+/**
+ * The amount to suggest for the next installment: an even split of what's left
+ * over the installments left on the plan (8,000 on a 6-installment plan →
+ * 1,333.33), the whole balance on the last one or with no plan.
+ */
+export function suggestedInstallment(balance: number, plan: number | null | undefined, paidCount: number): number {
+  if (balance <= 0) return 0;
+  const left = (plan ?? 0) - paidCount;
+  return left > 1 ? round2(balance / left) : round2(balance);
+}
+
+/** Parse "1, 2, 6" into a clean, sorted list of plans (1–MAX_INSTALLMENTS). Null when something isn't valid. */
+export function parsePlans(text: string): number[] | null {
+  const parts = text.split(/[\s,]+/).filter(Boolean);
+  const out = new Set<number>();
+  for (const p of parts) {
+    if (!/^\d+$/.test(p)) return null;
+    const n = Number(p);
+    if (n < 1 || n > MAX_INSTALLMENTS) return null;
+    out.add(n);
+  }
+  return [...out].sort((x, y) => x - y);
+}
+
+export function planLabel(n: number): string {
+  return n === 1 ? "1 installment (full fee)" : `${n} installments`;
+}
+
 /**
  * Validate the next course-fee installment. Returns an error message, or null
  * when it may be recorded. `today` is the IST calendar date (YYYY-MM-DD).
@@ -47,9 +96,16 @@ export function checkInstallment(opts: {
   amount: number;
   paidOn: string;
   today: string;
+  /** The enrollment's installment plan, if it has one. */
+  plan?: number | null;
 }): string | null {
   const { courseFee, payments, amount, paidOn, today } = opts;
-  if (payments.length >= MAX_INSTALLMENTS) return `All ${MAX_INSTALLMENTS} installments are already recorded.`;
+  const cap = installmentCap(opts.plan);
+  if (payments.length >= cap) {
+    return opts.plan != null
+      ? `All ${cap} installments on this plan are recorded. Change the plan to add another.`
+      : `All ${cap} installments are already recorded.`;
+  }
   if (!(amount > 0)) return "Enter the amount the candidate paid.";
   const bal = balanceOf(courseFee, payments);
   if (bal === 0) return "The course fee is already fully paid.";
@@ -269,6 +325,26 @@ export function statusAfterReturn(approvedAud: number): InvoiceStatus {
 
 export function isEditableInvoice(status: string): boolean {
   return status === "draft" || status === "sent";
+}
+
+/**
+ * Whether someone may record (or undo) course-fee installments on an enrollment.
+ * Finance invoices; the people who enroll candidates keep their fees up to date.
+ *   - Finance: every enrollment.
+ *   - A personal grant for the program (e.g. the OSCE/NCLEX coordinator): every
+ *     enrollment in that program, whoever added it.
+ *   - A BDE, for programs opened to BDEs: the enrollments they added, and those
+ *     linked to a CRM lead assigned to them.
+ * `bdePrograms` is empty for someone who isn't an active BDE.
+ */
+export function canTrackEnrollment(
+  who: { isFinance: boolean; userId: string; grantPrograms: string[]; bdePrograms: string[] },
+  e: { program: string; createdById: string | null; leadAssignedToId: string | null },
+): boolean {
+  if (who.isFinance) return true;
+  if (who.grantPrograms.includes(e.program)) return true;
+  if (who.bdePrograms.includes(e.program)) return e.createdById === who.userId || e.leadAssignedToId === who.userId;
+  return false;
 }
 
 /**

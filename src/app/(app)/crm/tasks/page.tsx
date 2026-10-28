@@ -2,7 +2,7 @@ import { redirect } from "next/navigation";
 import { TopBar } from "@/components/TopBar";
 import { prisma } from "@/lib/prisma";
 import { getCurrentUserAndPermissions } from "@/lib/permissions";
-import { getCrmAccess } from "@/lib/crm-rbac";
+import { getCrmAccess, visibleTasksWhere } from "@/lib/crm-rbac";
 import {
   buildCrmTaskWhere,
   crmTaskListInclude,
@@ -14,6 +14,7 @@ import {
   REINQUIRY_TASK_SUBJECT_NEEDLE,
 } from "@/lib/crm-leads";
 import { getTaskReminderConfig } from "@/lib/crm-task-reminders-engine";
+import { activeQualityReasons } from "@/lib/crm-lead-quality-data";
 import { TasksBoard } from "./client";
 
 export const dynamic = "force-dynamic";
@@ -48,14 +49,20 @@ export default async function TasksPage({ searchParams }: { searchParams: SP }) 
   const now = new Date();
   // BDEs default to their own queue ("my tasks") until they pick a consultant or
   // explicitly choose "All tasks"; everyone else sees all tasks. Mirrors the
-  // leads list default.
-  const filters = crmTaskFilterParamsFromQuery(searchParams, { isBde: access.isBde, userId, now });
-  const where = buildCrmTaskWhere(filters);
+  // leads list default. An own-tasks-only user lands on "my tasks" too, and the
+  // visibility filter keeps them there whatever the query string asks for.
+  const filters = crmTaskFilterParamsFromQuery(searchParams, {
+    isBde: access.isBde || access.ownTasksOnly,
+    userId,
+    now,
+  });
+  const visible = visibleTasksWhere(access, userId);
+  const where = { AND: [buildCrmTaskWhere(filters), visible] };
 
   // Scope the stat chips to the same effective assignee so the counts always
   // match the visible list: a BDE sees their own open/overdue/due-today/
   // re-inquiry counts; "all" / unassigned / non-BDE keep the global figures.
-  const scope = crmTaskAssigneeScope(filters.assignee);
+  const scope = { ...crmTaskAssigneeScope(filters.assignee), ...visible };
   const sort = str(searchParams, "sort");
   const requestedPage = Math.max(1, parseInt(str(searchParams, "page") || "1", 10) || 1);
 
@@ -79,8 +86,9 @@ export default async function TasksPage({ searchParams }: { searchParams: SP }) 
     prisma.crmTask.count({ where: { status: "open", dueAt: { lt: today }, ...scope } }),
     prisma.crmTask.count({ where: { status: "open", dueAt: { gte: today, lt: tomorrow }, ...scope } }),
     // The unassigned pool is intentionally global — it's the shared backlog a BDE
-    // can pick from, not part of their own queue.
-    prisma.crmTask.count({ where: { status: "open", assignedToId: null } }),
+    // can pick from, not part of their own queue. Not theirs to see when the
+    // user only sees their own tasks.
+    access.ownTasksOnly ? 0 : prisma.crmTask.count({ where: { status: "open", assignedToId: null } }),
     prisma.crmTask.count({ where: { status: "open", subject: { contains: REINQUIRY_TASK_SUBJECT_NEEDLE, mode: "insensitive" }, ...scope } }),
   ]);
 
@@ -91,11 +99,11 @@ export default async function TasksPage({ searchParams }: { searchParams: SP }) 
     unassignedOpen: unassignedOpenCount,
     reinquiry: reinquiryCount,
   };
-  const accessProps = { isAdmin: access.isAdmin, isBde: access.isBde, userId };
+  const accessProps = { isAdmin: access.isAdmin, isBde: access.isBde, ownTasksOnly: access.ownTasksOnly, userId };
   // Completing a lead's last open task forces the next-step dialog, which arms a
   // reminder on the follow-up it books. The board has to know the defaults so
   // that dialog can say so rather than doing it behind the consultant.
-  const reminderConfig = await getTaskReminderConfig();
+  const [reminderConfig, qualityReasons] = await Promise.all([getTaskReminderConfig(), activeQualityReasons()]);
 
   return (
     <>
@@ -114,6 +122,7 @@ export default async function TasksPage({ searchParams }: { searchParams: SP }) 
             defaultChannels: reminderConfig.defaultChannels,
             consultantIds: reminderConfig.consultantIds,
           }}
+          qualityReasons={qualityReasons}
         />
       </div>
     </>

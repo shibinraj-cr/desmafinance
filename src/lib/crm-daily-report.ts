@@ -29,7 +29,7 @@ import {
   addDays,
   isWithinBackdateWindow,
 } from "./lead-pulse-dates";
-import { touchActivityWhere, outboundContactWhere, isDeliberateAssignment } from "./crm-team";
+import { touchActivityWhere, outboundContactWhere, isDeliberateAssignment, carryoverBatchCreatedAt } from "./crm-team";
 import { getCrmUsageByUser } from "./usage-metrics";
 import { getAssignableBdes } from "./crm-leads";
 
@@ -346,7 +346,7 @@ export async function computeDailyReport(opts: {
     // Leads (re)assigned to the BDE today — carryover-filtered below.
     prisma.lead.findMany({
       where: { assignedToId: userId, assignedAt: window },
-      select: { id: true, assignedToId: true, assignedAt: true, importBatch: { select: { createdAt: true } } },
+      select: { id: true, assignedToId: true, assignedAt: true, importBatch: { select: { createdAt: true, uploadedById: true } } },
     }),
     prisma.leadActivity.count({ where: { actorId: userId, type: "STATUS_CHANGED", occurredAt: window } }),
     prisma.leadActivity.count({ where: { actorId: userId, type: "ENROLLED", occurredAt: window } }),
@@ -395,7 +395,7 @@ export async function computeDailyReport(opts: {
     isDeliberateAssignment({
       assignedToId: l.assignedToId,
       assignedAt: l.assignedAt,
-      importBatchCreatedAt: l.importBatch?.createdAt ?? null,
+      importBatchCreatedAt: carryoverBatchCreatedAt(l.importBatch),
     }),
   ).length;
 

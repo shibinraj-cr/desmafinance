@@ -5,6 +5,7 @@ import {
   addFeePayment,
   deleteEnrollment,
   requireAccess,
+  setInstallmentPlan,
   setWithdrawn,
   undoLastFeePayment,
   updateEnrollment,
@@ -20,12 +21,14 @@ const Body = z.discriminatedUnion("action", [
     intakeMonth: z.string().max(10).optional(),
     courseFee: z.number().optional(),
     commissionPct: z.number().optional(),
+    commissionFlat: z.number().nullable().optional(),
     courseName: z.string().max(120).optional(),
     leadId: z.string().max(60).nullable().optional(),
     notes: z.string().max(1000).nullable().optional(),
   }),
   z.object({ action: z.literal("pay"), amount: z.number(), paidOn: z.string().max(10), reference: z.string().max(120).nullish() }),
   z.object({ action: z.literal("undo-pay") }),
+  z.object({ action: z.literal("set-plan"), plan: z.number().int() }),
   z.object({ action: z.literal("withdraw") }),
   z.object({ action: z.literal("reinstate") }),
   z.object({ action: z.literal("delete") }),
@@ -46,6 +49,9 @@ export const POST = withApiHandler(async (req: Request, { params }: { params: { 
       break;
     case "undo-pay":
       await undoLastFeePayment(a, params.id);
+      break;
+    case "set-plan":
+      await setInstallmentPlan(a, params.id, body.plan);
       break;
     case "withdraw":
     case "reinstate":

@@ -5,7 +5,7 @@ import { prisma } from "@/lib/prisma";
 import { withApiHandler } from "@/lib/api";
 import { unauthorized, forbidden, notFound, badRequest, unprocessable } from "@/lib/http-error";
 import { getCurrentUserAndPermissions } from "@/lib/permissions";
-import { getCrmAccess, canEditLead } from "@/lib/crm-rbac";
+import { getCrmAccess, canEditTask } from "@/lib/crm-rbac";
 import { recordLeadActivity, type CrmActivityType } from "@/lib/crm-activity";
 import { taskInclude, serializeTask, isActiveBde, requiresNextStepOnComplete } from "@/lib/crm-leads";
 import {
@@ -15,6 +15,7 @@ import {
   getTaskReminderConfig,
   TASK_REMINDER_CHANNELS,
 } from "@/lib/crm-task-reminders-engine";
+import { QUALITY_GATE_MESSAGE, QUALITY_REQUIRED_CODE, qualityGate } from "@/lib/crm-lead-quality";
 
 export const dynamic = "force-dynamic";
 
@@ -62,15 +63,23 @@ export const PATCH = withApiHandler(async (req: Request, { params }: Ctx) => {
     where: { id: params.taskId },
     include: {
       ...taskInclude,
-      lead: { select: { id: true, assignedToId: true, status: { select: { kind: true, code: true, parked: true } } } },
+      lead: {
+        select: {
+          id: true,
+          assignedToId: true,
+          qualityRating: true,
+          qualityDueAt: true,
+          status: { select: { kind: true, code: true, parked: true } },
+        },
+      },
     },
   });
   if (!task || task.leadId !== params.id) throw notFound();
-  if (!canEditLead(access, task.lead, userId)) throw forbidden();
+  if (!canEditTask(access, task, task.lead, userId)) throw forbidden();
 
   const data = PatchSchema.parse(await req.json().catch(() => null));
 
-  if (data.assignedToId && !(await isActiveBde(data.assignedToId))) {
+  if (data.assignedToId && data.assignedToId !== userId && !(await isActiveBde(data.assignedToId))) {
     throw badRequest("The selected assignee is not an active BDE.", "assignee_not_bde");
   }
 
@@ -123,6 +132,21 @@ export const PATCH = withApiHandler(async (req: Request, { params }: Ctx) => {
       update.completedBy = { disconnect: true };
       statusActivity = { type: "TASK_REOPENED", summary: `Task reopened: “${task.subject}”` };
     }
+  }
+
+  // An overdue quality rating comes first: the lead's own BDE can't tick off
+  // work on a lead they still haven't rated (see crm-lead-quality.ts).
+  if (completing) {
+    const gate = qualityGate(
+      {
+        qualityRating: task.lead.qualityRating,
+        qualityDueAt: task.lead.qualityDueAt,
+        assignedToId: task.lead.assignedToId,
+        statusCode: task.lead.status?.code ?? "",
+      },
+      { actorId: userId, now: new Date() },
+    );
+    if (gate) throw unprocessable(QUALITY_GATE_MESSAGE[gate], QUALITY_REQUIRED_CODE);
   }
 
   // Mandatory next step: an ACTIVE lead must always have an open task. If this
@@ -251,7 +275,8 @@ export const PATCH = withApiHandler(async (req: Request, { params }: Ctx) => {
   });
 });
 
-// DELETE /api/crm/leads/[id]/tasks/[taskId] — assigned BDE or admin
+// DELETE /api/crm/leads/[id]/tasks/[taskId] — assigned BDE or admin (or the
+// enrolled-lead task-taker whose task it is — see canEditTask)
 export const DELETE = withApiHandler(async (_req: Request, { params }: Ctx) => {
   const { userId, perms } = await getCurrentUserAndPermissions();
   if (!userId || !perms) throw unauthorized();
@@ -260,10 +285,16 @@ export const DELETE = withApiHandler(async (_req: Request, { params }: Ctx) => {
 
   const task = await prisma.crmTask.findUnique({
     where: { id: params.taskId },
-    select: { id: true, leadId: true, subject: true, lead: { select: { id: true, assignedToId: true } } },
+    select: {
+      id: true,
+      leadId: true,
+      subject: true,
+      assignedToId: true,
+      lead: { select: { id: true, assignedToId: true, status: { select: { code: true } } } },
+    },
   });
   if (!task || task.leadId !== params.id) throw notFound();
-  if (!canEditLead(access, task.lead, userId)) throw forbidden();
+  if (!canEditTask(access, task, task.lead, userId)) throw forbidden();
 
   await prisma.crmTask.delete({ where: { id: params.taskId } });
   await recordLeadActivity({

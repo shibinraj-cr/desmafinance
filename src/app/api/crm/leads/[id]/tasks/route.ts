@@ -4,7 +4,7 @@ import { prisma } from "@/lib/prisma";
 import { withApiHandler } from "@/lib/api";
 import { unauthorized, forbidden, notFound, badRequest } from "@/lib/http-error";
 import { getCurrentUserAndPermissions } from "@/lib/permissions";
-import { getCrmAccess, canEditLead } from "@/lib/crm-rbac";
+import { getCrmAccess, canAddTask, visibleTasksWhere } from "@/lib/crm-rbac";
 import { recordLeadActivity } from "@/lib/crm-activity";
 import { taskInclude, serializeTask, taskOrderBy, isActiveBde } from "@/lib/crm-leads";
 import {
@@ -15,7 +15,8 @@ import {
 
 export const dynamic = "force-dynamic";
 
-// GET /api/crm/leads/[id]/tasks — list tasks (any CRM viewer)
+// GET /api/crm/leads/[id]/tasks — list tasks (any CRM viewer; an own-tasks-only
+// user gets just theirs)
 export const GET = withApiHandler(async (_req: Request, { params }: { params: { id: string } }) => {
   const { userId, perms } = await getCurrentUserAndPermissions();
   if (!userId || !perms) throw unauthorized();
@@ -23,14 +24,15 @@ export const GET = withApiHandler(async (_req: Request, { params }: { params: { 
   if (!access.canViewLeads) throw forbidden();
 
   const tasks = await prisma.crmTask.findMany({
-    where: { leadId: params.id },
+    where: { leadId: params.id, ...visibleTasksWhere(access, userId) },
     orderBy: taskOrderBy,
     include: taskInclude,
   });
   return NextResponse.json({ tasks: tasks.map(serializeTask) });
 });
 
-// POST /api/crm/leads/[id]/tasks — create a task (assigned BDE or admin)
+// POST /api/crm/leads/[id]/tasks — create a task (assigned BDE or admin, or an
+// enrolled-lead task-taker on an enrolled lead — see canAddTask)
 const CreateSchema = z.object({
   subject: z.string().trim().min(1).max(500),
   dueAt: z.coerce.date().optional().nullable(),
@@ -54,16 +56,16 @@ export const POST = withApiHandler(async (req: Request, { params }: { params: { 
 
   const lead = await prisma.lead.findUnique({
     where: { id: params.id },
-    select: { id: true, assignedToId: true },
+    select: { id: true, assignedToId: true, status: { select: { code: true } } },
   });
   if (!lead) throw notFound();
-  if (!canEditLead(access, lead, userId)) throw forbidden();
+  if (!canAddTask(access, lead, userId)) throw forbidden();
 
   const data = CreateSchema.parse(await req.json().catch(() => null));
 
-  // Resolve the responsible BDE: explicit choice (must be an active BDE) or the
-  // lead's owner, else the creator.
-  if (data.assignedToId && !(await isActiveBde(data.assignedToId))) {
+  // Resolve the responsible BDE: explicit choice (an active BDE, or the creator
+  // taking it themselves) or the lead's owner, else the creator.
+  if (data.assignedToId && data.assignedToId !== userId && !(await isActiveBde(data.assignedToId))) {
     throw badRequest("The selected assignee is not an active BDE.", "assignee_not_bde");
   }
   const assignedToId = data.assignedToId ?? lead.assignedToId ?? userId;

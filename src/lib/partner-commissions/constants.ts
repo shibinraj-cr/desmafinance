@@ -24,8 +24,8 @@ export function isProgramCode(v: unknown): v is ProgramCode {
   return typeof v === "string" && (PROGRAM_CODES as readonly string[]).includes(v);
 }
 
-/** Up to three course-fee installments per enrollment. */
-export const MAX_INSTALLMENTS = 3;
+/** Up to six course-fee installments per enrollment. */
+export const MAX_INSTALLMENTS = 6;
 
 /** Where an approved commission lands in the ledger. */
 export const LEDGER = {

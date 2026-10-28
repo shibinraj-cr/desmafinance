@@ -28,6 +28,8 @@ export type InvoicePdfData = {
     intakeMonth: string;
     courseFee: number;
     commissionPct: number;
+    /** Flat commission: the Commission% cell reads "Flat". */
+    commissionFlat?: number | null;
     amount: number;
   }>;
   total: number;
@@ -141,7 +143,7 @@ function columns(layout: string): Array<{ title: string; w: number; key: keyof I
 function cellText(line: InvoicePdfData["lines"][number], key: keyof InvoicePdfData["lines"][number]): string {
   const v = line[key];
   if (key === "courseFee" || key === "amount") return fmtInvoiceNumber(Number(v));
-  if (key === "commissionPct") return `${fmtInvoiceNumber(Number(v))}%`;
+  if (key === "commissionPct") return line.commissionFlat != null ? "Flat" : `${fmtInvoiceNumber(Number(v))}%`;
   return v == null ? "" : String(v);
 }
 

@@ -12,8 +12,12 @@
  *     deal, else the candidate's assigned L2 BDE, else the lead's assignee.
  *     Collection service = the finance sub-item's service, else the lead's.
  *   - Lead BDE = the current assignee.
+ *   - Lead quality = the lead's current rating, or which unrated pile it is
+ *     in, judged now; carried onto enrollments and collections through the
+ *     same lead, so "enrollments by lead quality" works too.
  */
 import { prisma } from "./prisma";
+import { qualityBucket, qualityBucketLabel, qualityNeedsReason } from "./crm-lead-quality";
 import {
   STORED_DIMS,
   FACT_COLLECTION,
@@ -28,10 +32,17 @@ import {
   type StoredDim,
   type WireFact,
 } from "./sales-analysis";
+import { metaAdField } from "./meta-ad-fields";
 
 export type SalesAnalysisPayload = {
   dicts: Dicts;
   facts: WireFact[];
+  /**
+   * Label → id for the dims the CRM leads list can filter on, so a row of the
+   * Lead Quality report can open exactly those leads. Labels are what the
+   * dictionaries hold; the leads list wants ids.
+   */
+  leadLinks: { source: Record<string, string>; service: Record<string, string>; bde: Record<string, string> };
 };
 
 /** Interns labels per dimension; -1 is reserved for "not applicable". */
@@ -95,10 +106,15 @@ export async function loadSalesAnalysis(opts: { from: string; to: string }): Pro
     country: true,
     studyDestination: true,
     campaign: true,
+    extra: true,
     temperature: true,
     expectedValue: true,
     qualification: { select: { label: true } },
     qualificationOther: true,
+    qualityRating: true,
+    qualityDueAt: true,
+    qualityReason: { select: { label: true } },
+    status: { select: { code: true, kind: true } },
   } as const;
 
   const [sources, services, users, roles, enrollments, revenue, leads] = await Promise.all([
@@ -165,6 +181,7 @@ export async function loadSalesAnalysis(opts: { from: string; to: string }): Pro
   const serviceBySubItem = new Map(subItems.map((s) => [`${s.category.name}::${s.name}`, s.serviceId!]));
   const existingCandidateIds = new Set(sources.filter((s) => s.code === "existing_candidate").map((s) => s.id));
 
+  const now = new Date();
   const dict = new Dictionary();
   const slot = (dim: StoredDim) => STORED_DIMS.indexOf(dim);
   const blank = () => STORED_DIMS.map(() => NA);
@@ -181,7 +198,22 @@ export async function loadSalesAnalysis(opts: { from: string; to: string }): Pro
     dims[slot("country")] = dict.id("country", tidy(lead?.country));
     dims[slot("destination")] = dict.id("destination", tidy(lead?.studyDestination));
     dims[slot("campaign")] = dict.id("campaign", lead?.campaign);
+    dims[slot("adSet")] = dict.id("adSet", metaAdField(lead?.extra, "adset"));
+    dims[slot("ad")] = dict.id("ad", metaAdField(lead?.extra, "ad"));
     dims[slot("temperature")] = dict.id("temperature", tidy(lead?.temperature));
+    if (lead) {
+      const bucket = qualityBucket(
+        {
+          qualityRating: lead.qualityRating,
+          qualityDueAt: lead.qualityDueAt,
+          assignedToId: lead.assignedToId,
+          statusCode: lead.status.code,
+        },
+        now,
+      );
+      dims[slot("quality")] = dict.id("quality", qualityBucketLabel(bucket));
+      if (qualityNeedsReason(bucket)) dims[slot("qualityReason")] = dict.id("qualityReason", lead.qualityReason?.label);
+    }
   };
 
   const fillSource = (dims: number[], sourceId: string | null | undefined, originalSourceId: string | null | undefined) => {
@@ -248,8 +280,17 @@ export async function loadSalesAnalysis(opts: { from: string; to: string }): Pro
     fillService(dims, l.serviceId);
     dims[slot("bde")] = dict.id("bde", l.assignedToId ? userName.get(l.assignedToId) : "Unassigned");
     fillLeadDims(dims, l);
+    dims[slot("leadOutcome")] = dict.id(
+      "leadOutcome",
+      l.status.kind === "won" ? "Enrolled" : l.status.kind === "lost" ? "Lost" : "Open",
+    );
     facts.push(encodeFact({ kind: FACT_LEAD, day: istDay(l.createdAt), dims, weight: 0, booked: 0, amount: 0 }));
   }
 
-  return { dicts: dict.dicts, facts };
+  const leadLinks: SalesAnalysisPayload["leadLinks"] = { source: {}, service: {}, bde: {} };
+  for (const s of sources) leadLinks.source[s.label] ??= s.id;
+  for (const s of services) leadLinks.service[s.name] ??= s.id;
+  for (const [id, name] of userName) leadLinks.bde[name] ??= id;
+
+  return { dicts: dict.dicts, facts, leadLinks };
 }
