@@ -52,10 +52,15 @@ export type CeoHeadline = {
   myDraftsRevenueCount: number;
 
   /** Sum of pending-approval (kind='create', status='pending') proposed
-   *  Revenue amounts dated in the running calendar month — new revenue
-   *  entries awaiting a manager/admin's approval. */
+   *  Revenue amounts, WHATEVER their date — every new revenue entry on
+   *  Finance → Approvals → Pending (Revenue) awaiting a manager/admin. Counted
+   *  into this month's Forecast as money already in hand. Pending edits and
+   *  deletes are left out: an edit's amount is already in revenue. */
   pendingApprovalRevenue: number;
   pendingApprovalRevenueCount: number;
+  /** The part of pendingApprovalRevenue dated outside the running month
+   *  (once approved it posts to that month, not this one). */
+  pendingApprovalRevenueOtherMonths: number;
 };
 
 /** Run a Prisma query and degrade gracefully on failure: log the cause to
@@ -148,7 +153,7 @@ export async function ceoHeadline(): Promise<CeoHeadline> {
     ),
     // Pending CREATE approvals — proposed Revenue values live in the
     // `proposed` JSON blob, so we fetch the rows and sum in JS (filtering
-    // by type + month below). The queue is small, so this is cheap.
+    // by type below). The queue is small, so this is cheap.
     safe(
       "pendingApproval.findMany(pendingApprovalRevenue)",
       () =>
@@ -169,19 +174,22 @@ export async function ceoHeadline(): Promise<CeoHeadline> {
   const expectedCollections = num(plans._sum.amount);
   const myDraftsRevenue = num(drafts._sum.amount);
 
-  // Sum the proposed Revenue amounts sitting in the pending-approval
-  // queue, scoped to entries dated in the running calendar month.
+  // Sum every proposed Revenue amount sitting in the pending-approval queue —
+  // the same rows Finance → Approvals → Pending lists under Revenue, whatever
+  // their date — noting how much of it is dated outside this month.
   let pendingApprovalRevenue = 0;
   let pendingApprovalRevenueCount = 0;
+  let pendingApprovalRevenueOtherMonths = 0;
   for (const row of pendingApprovalRows) {
     const p = row.proposed as { type?: string; amount?: number; date?: string } | null;
     if (!p || p.type !== "Revenue") continue;
+    const amount = num(p.amount);
+    pendingApprovalRevenue += amount;
+    pendingApprovalRevenueCount += 1;
     const when = p.date ? new Date(p.date) : null;
     if (!when || isNaN(when.getTime()) || when < currentMonthStart || when >= nextMonthStart) {
-      continue;
+      pendingApprovalRevenueOtherMonths += amount;
     }
-    pendingApprovalRevenue += num(p.amount);
-    pendingApprovalRevenueCount += 1;
   }
 
   return {
@@ -196,6 +204,7 @@ export async function ceoHeadline(): Promise<CeoHeadline> {
     myDraftsRevenueCount: drafts._count._all,
     pendingApprovalRevenue,
     pendingApprovalRevenueCount,
+    pendingApprovalRevenueOtherMonths,
   };
 }
 

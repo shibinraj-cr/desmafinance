@@ -79,17 +79,20 @@ export default async function ExecutiveDashboardPage() {
             hero
             hint={`${headline.myDraftsRevenueCount} revenue draft${headline.myDraftsRevenueCount === 1 ? "" : "s"} not yet submitted`}
           />
+          {/* Every new revenue entry on Finance → Approvals → Pending (Revenue),
+              whatever its date — it all counts into this month's Forecast. */}
           <KpiCard
-            label={`Pending Approval · ${headline.currentMonthLabel}`}
+            label="Pending Approval · Revenue"
             value={headline.pendingApprovalRevenue}
             tone="default"
             hero
-            hint={`${headline.pendingApprovalRevenueCount} revenue entr${headline.pendingApprovalRevenueCount === 1 ? "y" : "ies"} awaiting approval · ${headline.pendingApprovalsCount} in the finance queue overall`}
+            hint={`${headline.pendingApprovalRevenueCount} revenue entr${headline.pendingApprovalRevenueCount === 1 ? "y" : "ies"} awaiting approval${headline.pendingApprovalRevenueOtherMonths ? ` · ${inr(headline.pendingApprovalRevenueOtherMonths)} dated in other months` : ""} · ${headline.pendingApprovalsCount} in the finance queue overall`}
           />
           {/* "Forecast" tile — the realistic upper bound on this month's
               revenue: what's already landed (current month revenue) plus the
               collection-plan instalments still due this month, the revenue
-              sitting in My Drafts and the approval queue. */}
+              sitting in My Drafts and every revenue entry awaiting approval
+              (whatever its date). */}
           <KpiCard
             label={`Forecast · ${headline.currentMonthLabel}`}
             value={
@@ -100,7 +103,7 @@ export default async function ExecutiveDashboardPage() {
             }
             tone="success"
             hero
-            hint={`${inr(headline.currentMonthRevenue)} realised + ${inr(headline.expectedCollections)} expected + ${inr(headline.myDraftsRevenue + headline.pendingApprovalRevenue)} drafts/approvals`}
+            hint={`${inr(headline.currentMonthRevenue)} realised + ${inr(headline.expectedCollections)} expected + ${inr(headline.myDraftsRevenue)} drafts + ${inr(headline.pendingApprovalRevenue)} awaiting approval`}
           />
         </section>
 
