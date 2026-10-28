@@ -33,6 +33,9 @@ export default async function ExecutiveDashboardPage() {
   }
 
   const [headline, series] = await Promise.all([ceoHeadline(), fyMonthlySeries()]);
+  const pipelineHref = headline.pipelineStageId
+    ? `/crm/leads?status=${encodeURIComponent(headline.pipelineStageId)}`
+    : "/crm/leads";
   const forecast = forecastFromSeries(series);
   const health = await orgHealth(series);
 
@@ -56,7 +59,7 @@ export default async function ExecutiveDashboardPage() {
       />
       <div className="p-margin space-y-lg">
         {/* Row 1 — Headline KPIs */}
-        <section className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5 gap-gutter">
+        <section className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-gutter">
           <KpiCard
             label={`Current Month Revenue · ${headline.currentMonthLabel}`}
             value={headline.currentMonthRevenue}
@@ -105,6 +108,26 @@ export default async function ExecutiveDashboardPage() {
             hero
             hint={`${inr(headline.currentMonthRevenue)} realised + ${inr(headline.expectedCollections)} expected + ${inr(headline.myDraftsRevenue)} drafts + ${inr(headline.pendingApprovalRevenue)} awaiting approval`}
           />
+          {/* CRM pipeline — leads in the "Pipeline" stage, by expected close
+              date. Information only: deliberately NOT in the Forecast. */}
+          <Link href={pipelineHref} className="grid rounded-xl hover:ring-2 hover:ring-primary/30 transition">
+            <KpiCard
+              label={`Pipeline · ${headline.currentMonthLabel}`}
+              value={headline.pipelineValue}
+              tone="primary"
+              hero
+              hint={`${headline.pipelineCount} CRM lead${headline.pipelineCount === 1 ? "" : "s"} in Pipeline expected to close this month`}
+            />
+          </Link>
+          <Link href={pipelineHref} className="grid rounded-xl hover:ring-2 hover:ring-primary/30 transition">
+            <KpiCard
+              label={`Pipeline · Beyond ${headline.currentMonthLabel}`}
+              value={headline.pipelineValueBeyond}
+              tone="default"
+              hero
+              hint={`${headline.pipelineCountBeyond} CRM lead${headline.pipelineCountBeyond === 1 ? "" : "s"} expected to close in later months${headline.pipelineOverdueCount ? ` · ${headline.pipelineOverdueCount} past their close date (${inr(headline.pipelineOverdueValue)}) not counted` : ""}`}
+            />
+          </Link>
         </section>
 
         {/* Row 2 — Forecast strip */}

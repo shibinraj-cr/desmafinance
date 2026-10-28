@@ -41,6 +41,24 @@ export type CeoHeadline = {
   expectedCollections: number;
   expectedCollectionsCount: number;
 
+  /** CRM pipeline — leads sitting in the CRM "Pipeline" stage (put there by
+   *  "Set deal"), valued at the deal's expected value and bucketed by its
+   *  expected close date. Shown for information only; NOT part of the
+   *  Forecast. Field names are kept from the retired Lead Pulse pipeline
+   *  tiles so older mobile builds keep reading them. */
+  /** Pipeline leads expected to close in the running calendar month. */
+  pipelineValue: number;
+  pipelineCount: number;
+  /** Pipeline leads expected to close after the running month. */
+  pipelineValueBeyond: number;
+  pipelineCountBeyond: number;
+  /** Pipeline leads whose close date has already passed (or was never set) —
+   *  in neither tile, surfaced so they get re-dated, enrolled or dropped. */
+  pipelineOverdueValue: number;
+  pipelineOverdueCount: number;
+  /** Id of the CRM "Pipeline" stage, for linking to the filtered Leads list. */
+  pipelineStageId: string | null;
+
   /** Finance approval queue — distinct from collection plans. Surfaced so the
    *  CEO can see if any reviews are stuck. */
   pendingApprovalsCount: number;
@@ -77,13 +95,40 @@ async function safe<T>(label: string, fn: () => Promise<T>, fallback: T): Promis
   }
 }
 
+type PipelineBucket = { value: number; count: number };
+
+/**
+ * Split CRM Pipeline-stage leads by expected close date: this month, later
+ * months, or overdue (date passed or never set). `@db.Date` close dates are
+ * midnight UTC, matching the UTC month bounds used across this file.
+ */
+export function bucketPipeline(
+  leads: Array<{ expectedValue: { toString(): string } | number | null; expectedCloseDate: Date | null }>,
+  monthStart: Date,
+  nextMonthStart: Date,
+): { current: PipelineBucket; beyond: PipelineBucket; overdue: PipelineBucket } {
+  const out = {
+    current: { value: 0, count: 0 },
+    beyond: { value: 0, count: 0 },
+    overdue: { value: 0, count: 0 },
+  };
+  for (const l of leads) {
+    const d = l.expectedCloseDate;
+    const b =
+      d && d >= nextMonthStart ? out.beyond : d && d >= monthStart ? out.current : out.overdue;
+    b.value += num(l.expectedValue);
+    b.count += 1;
+  }
+  return out;
+}
+
 export async function ceoHeadline(): Promise<CeoHeadline> {
   const now = new Date();
   const currentMonthStart = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1));
   const nextMonthStart = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() + 1, 1));
   const prevMonthStart = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() - 1, 1));
 
-  const [cur, prev, plans, approvals, drafts, pendingApprovalRows] =
+  const [cur, prev, plans, approvals, drafts, pendingApprovalRows, pipelineStage, pipelineLeads] =
     await Promise.all([
     safe(
       "transaction.aggregate(currentMonthRevenue)",
@@ -163,6 +208,22 @@ export async function ceoHeadline(): Promise<CeoHeadline> {
         }),
       [] as Array<{ proposed: unknown }>,
     ),
+    safe(
+      "crmLeadStatus.findFirst(pipeline)",
+      () => prisma.crmLeadStatus.findFirst({ where: { code: "pipeline" }, select: { id: true } }),
+      null as { id: string } | null,
+    ),
+    // Every lead currently in the CRM Pipeline stage with its deal. Bucketed
+    // in JS so a lead with no close date still lands somewhere (overdue).
+    safe(
+      "lead.findMany(crmPipeline)",
+      () =>
+        prisma.lead.findMany({
+          where: { status: { code: "pipeline" } },
+          select: { expectedValue: true, expectedCloseDate: true },
+        }),
+      [] as Array<{ expectedValue: { toString(): string } | null; expectedCloseDate: Date | null }>,
+    ),
   ]);
 
   const currentMonthRevenue = num(cur._sum.amount);
@@ -172,6 +233,7 @@ export async function ceoHeadline(): Promise<CeoHeadline> {
       ? ((currentMonthRevenue - previousMonthRevenue) / previousMonthRevenue) * 100
       : null;
   const expectedCollections = num(plans._sum.amount);
+  const pipeline = bucketPipeline(pipelineLeads, currentMonthStart, nextMonthStart);
   const myDraftsRevenue = num(drafts._sum.amount);
 
   // Sum every proposed Revenue amount sitting in the pending-approval queue —
@@ -199,6 +261,13 @@ export async function ceoHeadline(): Promise<CeoHeadline> {
     currentMonthRevenueTrendPct,
     expectedCollections,
     expectedCollectionsCount: plans._count._all,
+    pipelineValue: pipeline.current.value,
+    pipelineCount: pipeline.current.count,
+    pipelineValueBeyond: pipeline.beyond.value,
+    pipelineCountBeyond: pipeline.beyond.count,
+    pipelineOverdueValue: pipeline.overdue.value,
+    pipelineOverdueCount: pipeline.overdue.count,
+    pipelineStageId: pipelineStage?.id ?? null,
     pendingApprovalsCount: approvals,
     myDraftsRevenue,
     myDraftsRevenueCount: drafts._count._all,
