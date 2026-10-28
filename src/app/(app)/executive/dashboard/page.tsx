@@ -56,7 +56,7 @@ export default async function ExecutiveDashboardPage() {
       />
       <div className="p-margin space-y-lg">
         {/* Row 1 — Headline KPIs */}
-        <section className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-gutter">
+        <section className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5 gap-gutter">
           <KpiCard
             label={`Current Month Revenue · ${headline.currentMonthLabel}`}
             value={headline.currentMonthRevenue}
@@ -73,56 +73,37 @@ export default async function ExecutiveDashboardPage() {
             hint={`${headline.expectedCollectionsCount} installments pending submission · due ${headline.currentMonthLabel}`}
           />
           <KpiCard
-            label={`Pipeline · ${headline.currentMonthLabel}`}
-            value={headline.pipelineValue}
-            tone="primary"
-            hero
-            hint={`${headline.pipelineCount} open deals expected to close this month`}
-          />
-          <KpiCard
-            label={`Pipeline · Beyond ${headline.currentMonthLabel}`}
-            value={headline.pipelineValueBeyond}
-            tone="default"
-            hero
-            hint={`${headline.pipelineCountBeyond} open deals due in later months`}
-          />
-          <KpiCard
-            label="Total Pending"
-            value={headline.totalPending}
-            tone="default"
-            hero
-            hint={`Pending submission + ${headline.currentMonthLabel} pipeline · ${headline.pendingApprovalsCount} approvals queued`}
-          />
-          <KpiCard
             label={`My Drafts · ${headline.currentMonthLabel}`}
             value={headline.myDraftsRevenue}
             tone="default"
             hero
             hint={`${headline.myDraftsRevenueCount} revenue draft${headline.myDraftsRevenueCount === 1 ? "" : "s"} not yet submitted`}
           />
+          {/* Every new revenue entry on Finance → Approvals → Pending (Revenue),
+              whatever its date — it all counts into this month's Forecast. */}
           <KpiCard
-            label={`Pending Approval · ${headline.currentMonthLabel}`}
+            label="Pending Approval · Revenue"
             value={headline.pendingApprovalRevenue}
             tone="default"
             hero
-            hint={`${headline.pendingApprovalRevenueCount} revenue entr${headline.pendingApprovalRevenueCount === 1 ? "y" : "ies"} awaiting approval`}
+            hint={`${headline.pendingApprovalRevenueCount} revenue entr${headline.pendingApprovalRevenueCount === 1 ? "y" : "ies"} awaiting approval${headline.pendingApprovalRevenueOtherMonths ? ` · ${inr(headline.pendingApprovalRevenueOtherMonths)} dated in other months` : ""} · ${headline.pendingApprovalsCount} in the finance queue overall`}
           />
           {/* "Forecast" tile — the realistic upper bound on this month's
-              revenue: what's already landed (current month revenue) plus
-              everything pending for the month — Total Pending (pending-
-              submission collections + this month's open pipeline) PLUS the
-              revenue still sitting in My Drafts and the approval queue. */}
+              revenue: what's already landed (current month revenue) plus the
+              collection-plan instalments still due this month, the revenue
+              sitting in My Drafts and every revenue entry awaiting approval
+              (whatever its date). */}
           <KpiCard
             label={`Forecast · ${headline.currentMonthLabel}`}
             value={
               headline.currentMonthRevenue +
-              headline.totalPending +
+              headline.expectedCollections +
               headline.myDraftsRevenue +
               headline.pendingApprovalRevenue
             }
             tone="success"
             hero
-            hint={`${inr(headline.currentMonthRevenue)} realised + ${inr(headline.totalPending)} pending + ${inr(headline.myDraftsRevenue + headline.pendingApprovalRevenue)} drafts/approvals`}
+            hint={`${inr(headline.currentMonthRevenue)} realised + ${inr(headline.expectedCollections)} expected + ${inr(headline.myDraftsRevenue)} drafts + ${inr(headline.pendingApprovalRevenue)} awaiting approval`}
           />
         </section>
 
@@ -300,7 +281,7 @@ export default async function ExecutiveDashboardPage() {
             href="/marketing/lead-pulse"
             icon="campaign"
             title="Marketing"
-            body="Lead Pulse funnel, pipeline, BDE performance."
+            body="Lead Pulse funnel and BDE performance."
           />
           <QuickLink
             href="/finance/collection-plan"
