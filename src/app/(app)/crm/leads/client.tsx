@@ -11,7 +11,7 @@ import {
   LEAD_TASK_FILTERS,
   LEAD_IDLE_BUCKETS,
 } from "@/lib/crm-leads";
-import { DEFAULT_STATUS_COLOR, BULK_EMAIL_MERGE_FIELDS, fillTemplate, LEAD_TEMPERATURES, leadTemperatureMeta, isOtherQualification, qualificationText, QUALIFICATION_OTHER_MAX, daysInStatus, type MessageTemplateDTO } from "@/lib/crm";
+import { DEFAULT_STATUS_COLOR, BULK_EMAIL_COOLDOWN_DAYS, BULK_EMAIL_MERGE_FIELDS, fillTemplate, LEAD_TEMPERATURES, leadTemperatureMeta, isOtherQualification, qualificationText, QUALIFICATION_OTHER_MAX, daysInStatus, type MessageTemplateDTO } from "@/lib/crm";
 import { ageFromDob } from "@/lib/age";
 import { COUNTRIES, countryCodeFor } from "@/lib/countries";
 import { MultiSelect } from "@/components/MultiSelect";
@@ -1696,9 +1696,9 @@ const SAMPLE_VARS: Record<string, string> = {
   qualification: "BSN",
 };
 
-type BulkProgress = { done: number; sent: number; failed: number; skippedNoEmail: number; skippedCap: number; capReached: boolean };
+type BulkProgress = { done: number; sent: number; failed: number; skippedNoEmail: number; skippedRecent: number; skippedCap: number; capReached: boolean };
 
-const ZERO_PROGRESS: BulkProgress = { done: 0, sent: 0, failed: 0, skippedNoEmail: 0, skippedCap: 0, capReached: false };
+const ZERO_PROGRESS: BulkProgress = { done: 0, sent: 0, failed: 0, skippedNoEmail: 0, skippedRecent: 0, skippedCap: 0, capReached: false };
 
 function BulkEmailModal({
   leadIds,
@@ -1784,18 +1784,19 @@ function BulkEmailModal({
         const d = res ? ((await res.json().catch(() => ({}))) as { message?: string; error?: string }) : {};
         setError(
           (d.message || d.error || "Sending was interrupted.") +
-            " Some emails in this batch may already have been sent — they're logged on the leads' timelines, so review before retrying to avoid duplicates.",
+            ` Some emails in this batch may already have been sent. Retrying skips anyone emailed in the last ${BULK_EMAIL_COOLDOWN_DAYS} days, so they won't get it twice.`,
         );
         setProgress({ ...agg });
         setCursor(i); // resume here
         setStatus("error");
         return;
       }
-      const d = (await res.json()) as { sent: number; failed: number; skippedNoEmail: number; skippedCap: number; capReached: boolean; rateLimited: boolean; remaining: number };
+      const d = (await res.json()) as { sent: number; failed: number; skippedNoEmail: number; skippedRecent: number; skippedCap: number; capReached: boolean; rateLimited: boolean; remaining: number };
       agg.done += chunk.length;
       agg.sent += d.sent;
       agg.failed += d.failed;
       agg.skippedNoEmail += d.skippedNoEmail;
+      agg.skippedRecent += d.skippedRecent;
       agg.skippedCap += d.skippedCap;
       agg.capReached = agg.capReached || d.capReached;
       setProgress({ ...agg });
@@ -1847,7 +1848,8 @@ function BulkEmailModal({
           <>
             <p className="text-label-sm text-on-surface-variant">
               Each lead receives its own individual email (no shared To/CC). A copy lands in the team mailbox&apos;s Sent
-              folder and on each lead&apos;s timeline.
+              folder and on each lead&apos;s timeline. Anyone already emailed in the last {BULK_EMAIL_COOLDOWN_DAYS} days is
+              skipped automatically.
             </p>
             {noEmail > 0 && (
               <p className="text-label-sm text-on-surface-variant">
@@ -1949,6 +1951,7 @@ function BulkEmailModal({
                 <p className="text-label-sm text-on-surface-variant">
                   {progress.failed > 0 && `${progress.failed} failed · `}
                   {progress.skippedNoEmail > 0 && `${progress.skippedNoEmail} had no email · `}
+                  {progress.skippedRecent > 0 && `${progress.skippedRecent} skipped (emailed in the last ${BULK_EMAIL_COOLDOWN_DAYS} days) · `}
                   {progress.skippedCap > 0 && `${progress.skippedCap} skipped (daily limit) · `}
                   logged on each lead&apos;s timeline.
                 </p>
@@ -1956,7 +1959,8 @@ function BulkEmailModal({
             </div>
             {progress.capReached && (
               <div className="rounded-lg bg-amber-50 text-amber-800 border border-amber-200 px-md py-sm text-label-sm">
-                The daily send limit (or a Gmail throttle) was reached, so some leads weren&apos;t emailed. Try the rest later.
+                The daily send limit (or a Gmail throttle) was reached, so some leads weren&apos;t emailed. Send to the same
+                selection later: anyone already emailed is skipped.
               </div>
             )}
             <div className="flex justify-end">
