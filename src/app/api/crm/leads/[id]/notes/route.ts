@@ -4,7 +4,7 @@ import { prisma } from "@/lib/prisma";
 import { withApiHandler } from "@/lib/api";
 import { unauthorized, forbidden, notFound } from "@/lib/http-error";
 import { getCurrentUserAndPermissions } from "@/lib/permissions";
-import { getCrmAccess, canEditLead } from "@/lib/crm-rbac";
+import { getCrmAccess, canAddNote, canEditLead } from "@/lib/crm-rbac";
 import { recordLeadActivity } from "@/lib/crm-activity";
 import { noteInclude, serializeNote } from "@/lib/crm-leads";
 
@@ -35,7 +35,7 @@ export const POST = withApiHandler(async (req: Request, { params }: { params: { 
 
   const lead = await prisma.lead.findUnique({ where: { id: params.id }, select: { id: true, assignedToId: true } });
   if (!lead) throw notFound();
-  if (!canEditLead(access, lead, userId)) throw forbidden();
+  if (!canAddNote(access, lead, userId)) throw forbidden();
 
   const { body } = CreateSchema.parse(await req.json().catch(() => null));
 
@@ -44,12 +44,16 @@ export const POST = withApiHandler(async (req: Request, { params }: { params: { 
     include: noteInclude,
   });
 
+  // A note from someone who can't edit the lead is oversight, not the lead being
+  // worked, so it leaves the staleness clocks where they were.
+  const working = canEditLead(access, lead, userId);
   await recordLeadActivity({
     leadId: params.id,
     actorId: userId,
-    type: "NOTE_ADDED",
+    type: working ? "NOTE_ADDED" : "OVERSIGHT_NOTE_ADDED",
     summary: "Added a note",
     metadata: { noteId: note.id },
+    bumpLastActivity: working,
   });
 
   return NextResponse.json({ note: serializeNote(note) }, { status: 201 });

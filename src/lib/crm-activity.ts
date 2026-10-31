@@ -21,6 +21,10 @@ export const CRM_ACTIVITY_TYPES = [
   "UNASSIGNED",
   "RE_INQUIRY",
   "NOTE_ADDED",
+  // A note from someone who can't edit the lead (CRM_NOTES_ALL_PAGE). Its own
+  // type because NOTE_ADDED is work on the lead and resets the SLA / abandoned
+  // clocks; a sales head's comment on a neglected lead must not clear its flags.
+  "OVERSIGHT_NOTE_ADDED",
   "NOTE_EDITED",
   "NOTE_DELETED",
   "EMAIL_SENT",

@@ -71,6 +71,15 @@ export const CANDIDATE_REFERRAL_SOURCE_CODE = "candidate_referral";
  */
 export const CRM_ENROLLED_TASKS_PAGE = "/crm/enrolled-tasks";
 
+/**
+ * Capability marker (NOT a real route) letting someone who oversees the team
+ * add notes to ANY lead, whoever owns it — a sales head leaving guidance on a
+ * consultant's lead — without edit rights on the lead itself. They may then
+ * edit only the notes they wrote. See {@link canAddNote} / {@link canEditNote}.
+ * Purely a permission flag; not in MODULES.
+ */
+export const CRM_NOTES_ALL_PAGE = "/crm/notes-all";
+
 /** CrmLeadStatus.code of the Enrolled stage. */
 const ENROLLED_STATUS_CODE = "enrolled";
 
@@ -152,6 +161,8 @@ export type CrmAccess = {
    * (admin, BDE, supervisor, team lead, CRM admin). See {@link visibleTasksWhere}.
    */
   ownTasksOnly: boolean;
+  /** Add notes to any lead, whoever owns it ({@link CRM_NOTES_ALL_PAGE}). */
+  canNoteAnyLead: boolean;
   canBulkImport: boolean;
   /** Send a bulk email to many leads at once (CRM-admin, like bulk import). */
   canBulkEmail: boolean;
@@ -215,13 +226,14 @@ export async function getCrmAccess(
   // Template authoring: full CRM admins, plus any role explicitly granted the
   // Message Templates page (e.g. a marketing supervisor).
   const canManageTemplates = canManageCrm || (perms ? canSeePage(perms, CRM_TEMPLATES_PAGE) : false);
-  // Referral creators and enrolled-lead task-takers: one narrow power each, for
-  // a role that supports the funnel without working it. Both also need CRM view
-  // access — neither marker is a way into the CRM by itself.
+  // Referral creators, enrolled-lead task-takers and whole-team note-takers: one
+  // narrow power each, for a role that supports the funnel without working it.
+  // All need CRM view access too — no marker is a way into the CRM by itself.
   const canViewLeads = admin || isBde || isSupervisor || isCrmTeamLead || hasPage;
   const canCreateAnyLead = canManageCrm || isBde;
   const canCreateReferrals = canViewLeads && !!perms && canSeePage(perms, CRM_REFERRAL_LEADS_PAGE);
   const canTaskEnrolledLeads = canViewLeads && !!perms && canSeePage(perms, CRM_ENROLLED_TASKS_PAGE);
+  const canNoteAnyLead = canViewLeads && !!perms && canSeePage(perms, CRM_NOTES_ALL_PAGE);
 
   return {
     userId,
@@ -238,6 +250,7 @@ export async function getCrmAccess(
     canReEnroll: canCreateAnyLead,
     canTaskEnrolledLeads,
     ownTasksOnly: canTaskEnrolledLeads && !admin && !isBde && !isSupervisor && !isCrmTeamLead && !canManageCrm,
+    canNoteAnyLead,
     canBulkImport: canManageCrm,
     canBulkEmail: canManageCrm,
     // Mirrors canEditLead's "may edit any lead" arm exactly (admin | supervisor).
@@ -281,6 +294,33 @@ export function canAddTask(
     canEditLead(access, lead, userId) ||
     (access.canTaskEnrolledLeads && lead.status?.code === ENROLLED_STATUS_CODE)
   );
+}
+
+/**
+ * Whether the current user may ADD a note to a lead: anyone who may edit it,
+ * plus a role granted {@link CRM_NOTES_ALL_PAGE}, whoever owns the lead.
+ * Enforced identically in the API and the UI.
+ */
+export function canAddNote(
+  access: CrmAccess,
+  lead: { assignedToId: string | null },
+  userId: string,
+): boolean {
+  return canEditLead(access, lead, userId) || access.canNoteAnyLead;
+}
+
+/**
+ * Whether the current user may edit an existing note: anyone who may edit the
+ * lead, plus a {@link CRM_NOTES_ALL_PAGE} holder for the notes they wrote —
+ * never a consultant's note on the same lead.
+ */
+export function canEditNote(
+  access: CrmAccess,
+  note: { authorId: string | null },
+  lead: { assignedToId: string | null },
+  userId: string,
+): boolean {
+  return canEditLead(access, lead, userId) || (access.canNoteAnyLead && note.authorId === userId);
 }
 
 /**

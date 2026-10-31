@@ -5,7 +5,7 @@ import { prisma } from "@/lib/prisma";
 import { withApiHandler } from "@/lib/api";
 import { unauthorized, forbidden, notFound, badRequest, unprocessable, conflict } from "@/lib/http-error";
 import { getCurrentUserAndPermissions } from "@/lib/permissions";
-import { getCrmAccess, canEditLead } from "@/lib/crm-rbac";
+import { getCrmAccess, canAddNote, canEditLead } from "@/lib/crm-rbac";
 import { recordLeadActivity } from "@/lib/crm-activity";
 import { recordAudit } from "@/lib/audit";
 import { normalizePhone, computeDedupeKey, emailKeyOf, LEAD_TEMPERATURE_VALUES, QUALIFICATION_OTHER_MAX } from "@/lib/crm";
@@ -40,6 +40,7 @@ export const GET = withApiHandler(async (_req: Request, { params }: Ctx) => {
   return NextResponse.json({
     lead: serializeLead(lead),
     canEdit: canEditLead(access, lead, userId),
+    canAddNote: canAddNote(access, lead, userId),
   });
 });
 

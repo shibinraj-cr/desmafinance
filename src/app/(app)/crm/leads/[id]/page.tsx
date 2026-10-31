@@ -4,7 +4,7 @@ import { notFound, redirect } from "next/navigation";
 import { TopBar } from "@/components/TopBar";
 import { prisma } from "@/lib/prisma";
 import { getCurrentUserAndPermissions } from "@/lib/permissions";
-import { getCrmAccess, canEditLead, canAddTask, visibleTasksWhere } from "@/lib/crm-rbac";
+import { getCrmAccess, canEditLead, canAddTask, canAddNote, visibleTasksWhere } from "@/lib/crm-rbac";
 import { WA_UI_ADMIN_ONLY, canSeePage, isCrmLeadsOnly } from "@/lib/rbac";
 import { AGREEMENTS_PAGE } from "@/lib/esign/requests";
 import { recordLeadOpenedOncePerDay } from "@/lib/crm-activity";
@@ -33,7 +33,7 @@ export const dynamic = "force-dynamic";
 // Activities shown directly as note cards (NOTE_*) or that are passive
 // (LEAD_OPENED) are excluded from the center Timeline; the full set lives in
 // the admin History tab.
-const TIMELINE_EXCLUDE = ["LEAD_OPENED", "NOTE_ADDED", "NOTE_EDITED", "NOTE_DELETED"];
+const TIMELINE_EXCLUDE = ["LEAD_OPENED", "NOTE_ADDED", "OVERSIGHT_NOTE_ADDED", "NOTE_EDITED", "NOTE_DELETED"];
 
 export default async function LeadDetailPage({ params }: { params: { id: string } }) {
   const { userId, perms } = await getCurrentUserAndPermissions();
@@ -264,6 +264,7 @@ export default async function LeadDetailPage({ params }: { params: { id: string 
             canSeeWhatsApp: (!WA_UI_ADMIN_ONLY || access.isAdmin) && !isCrmLeadsOnly(perms),
             canReEnroll: access.canReEnroll,
             canAddTask: canAddTask(access, lead, userId),
+            canAddNote: canAddNote(access, lead, userId),
             canUnenroll: access.canUnenroll,
             canSendAgreements: !!perms && canSeePage(perms, AGREEMENTS_PAGE),
             userId,

@@ -36,7 +36,7 @@ describe("touchActivityWhere", () => {
     const types = (touchActivityWhere().type as { in: string[] }).in;
     expect(types).toEqual(expect.arrayContaining(["CALL_LOGGED", "WHATSAPP_SENT", "NOTE_ADDED", "STATUS_CHANGED", "TASK_COMPLETED"]));
     // Bookkeeping and things that happen TO the lead never reset its clock.
-    for (const t of ["LEAD_OPENED", "TASK_UPDATED", "ASSIGNED", "REASSIGNED", "RE_INQUIRY", "QUALITY_RATED", "FIELD_UPDATED"]) {
+    for (const t of ["LEAD_OPENED", "TASK_UPDATED", "ASSIGNED", "REASSIGNED", "RE_INQUIRY", "QUALITY_RATED", "FIELD_UPDATED", "OVERSIGHT_NOTE_ADDED"]) {
       expect(types).not.toContain(t);
     }
   });

@@ -637,6 +637,7 @@ export const ROLE_PERMISSIONS: AppPage[] = [
   { href: "/crm/team-all", label: "Whole-team dashboard (view-only)", icon: "groups", permission: true },
   { href: "/crm/referral-leads", label: "Create referral leads", icon: "person_add", permission: true },
   { href: "/crm/enrolled-tasks", label: "Tasks on enrolled leads", icon: "add_task", permission: true },
+  { href: "/crm/notes-all", label: "Add notes on any lead", icon: "sticky_note_2", permission: true },
   {
     href: CRM_LEADS_ONLY_PAGE,
     label: "Leads only (hide Inbox, reports, notifications)",

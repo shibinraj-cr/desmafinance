@@ -4,7 +4,7 @@ import { prisma } from "@/lib/prisma";
 import { withApiHandler } from "@/lib/api";
 import { unauthorized, forbidden, notFound } from "@/lib/http-error";
 import { getCurrentUserAndPermissions } from "@/lib/permissions";
-import { getCrmAccess, canEditLead } from "@/lib/crm-rbac";
+import { getCrmAccess, canEditLead, canEditNote } from "@/lib/crm-rbac";
 import { recordLeadActivity } from "@/lib/crm-activity";
 import { noteInclude, serializeNote } from "@/lib/crm-leads";
 
@@ -26,7 +26,7 @@ export const PATCH = withApiHandler(async (req: Request, { params }: Ctx) => {
     include: { ...noteInclude, lead: { select: { id: true, assignedToId: true } } },
   });
   if (!note || note.leadId !== params.id) throw notFound();
-  if (!canEditLead(access, note.lead, userId)) throw forbidden();
+  if (!canEditNote(access, note, note.lead, userId)) throw forbidden();
 
   const { body } = PatchSchema.parse(await req.json().catch(() => null));
   if (body === note.body) {
@@ -45,6 +45,7 @@ export const PATCH = withApiHandler(async (req: Request, { params }: Ctx) => {
     type: "NOTE_EDITED",
     summary: "Edited a note",
     metadata: { noteId: note.id, before: note.body, after: body },
+    bumpLastActivity: canEditLead(access, note.lead, userId),
   });
 
   return NextResponse.json({ note: serializeNote(updated) });
@@ -59,7 +60,7 @@ export const DELETE = withApiHandler(async (_req: Request, { params }: Ctx) => {
 
   const note = await prisma.leadNote.findUnique({
     where: { id: params.noteId },
-    select: { id: true, leadId: true, authorId: true, body: true },
+    select: { id: true, leadId: true, authorId: true, body: true, lead: { select: { assignedToId: true } } },
   });
   if (!note || note.leadId !== params.id) throw notFound();
   if (!access.isAdmin && note.authorId !== userId) throw forbidden();
@@ -71,6 +72,7 @@ export const DELETE = withApiHandler(async (_req: Request, { params }: Ctx) => {
     type: "NOTE_DELETED",
     summary: "Deleted a note",
     metadata: { noteId: note.id, before: note.body },
+    bumpLastActivity: canEditLead(access, note.lead, userId),
   });
 
   return NextResponse.json({ ok: true });

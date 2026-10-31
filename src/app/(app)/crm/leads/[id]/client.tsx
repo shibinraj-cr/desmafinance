@@ -83,6 +83,11 @@ export type DetailAccess = {
    */
   canAddTask: boolean;
   /**
+   * May add notes here even without `canEdit` — a whole-team note-taker on
+   * someone else's lead (see canAddNote in crm-rbac). They edit only their own.
+   */
+  canAddNote: boolean;
+  /**
    * Admin / supervisor / CRM-admin — may undo an accidental enrollment. A tier
    * above `canEdit`, because un-enrolling reaches into Finance, Marketing
    * numbers and Operations. See CrmAccess.canUnenroll.
@@ -163,6 +168,7 @@ const ACTIVITY_ICON: Record<string, string> = {
   UNASSIGNED: "person_remove",
   RE_INQUIRY: "replay",
   NOTE_ADDED: "sticky_note_2",
+  OVERSIGHT_NOTE_ADDED: "sticky_note_2",
   NOTE_EDITED: "edit_note",
   NOTE_DELETED: "delete",
   EMAIL_SENT: "mail",
@@ -1105,14 +1111,20 @@ function Timeline({
   return (
     <div className={cardCls}>
       <CardHeading icon="timeline" color="#06b6d4">Timeline</CardHeading>
-      {canEdit && <NoteComposer leadId={lead.id} />}
+      {access.canAddNote && <NoteComposer leadId={lead.id} />}
       {items.length === 0 ? (
         <p className="text-on-surface-variant text-body-md">No activity yet.</p>
       ) : (
         <ul className="space-y-md">
           {items.map((it) =>
             it.kind === "note" ? (
-              <NoteCard key={`note-${it.note.id}`} leadId={lead.id} note={it.note} canEdit={canEdit} access={access} />
+              <NoteCard
+                key={`note-${it.note.id}`}
+                leadId={lead.id}
+                note={it.note}
+                canEdit={canEdit || (access.canAddNote && it.note.authorId === access.userId)}
+                access={access}
+              />
             ) : (
               <ActivityCard key={`act-${it.activity.id}`} activity={it.activity} />
             ),
@@ -3028,6 +3040,7 @@ const HISTORY_TYPES = [
   "UNASSIGNED",
   "RE_INQUIRY",
   "NOTE_ADDED",
+  "OVERSIGHT_NOTE_ADDED",
   "NOTE_EDITED",
   "NOTE_DELETED",
   "EMAIL_SENT",
