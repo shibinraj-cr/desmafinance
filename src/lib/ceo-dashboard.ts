@@ -9,6 +9,7 @@
 import { prisma } from "./prisma";
 import { FY_START, FY_END, MONTH_LABELS } from "./period";
 import { getMetricsSource } from "./lead-pulse-crm-metrics";
+import { effectiveDesignation, isOwnerDesignation } from "./hr-salary-engine";
 
 function num(d: { toString(): string } | number | null | undefined): number {
   if (d === null || d === undefined) return 0;
@@ -274,6 +275,112 @@ export async function ceoHeadline(): Promise<CeoHeadline> {
     pendingApprovalRevenue,
     pendingApprovalRevenueCount,
     pendingApprovalRevenueOtherMonths,
+  };
+}
+
+export type ProfitRow = {
+  date: Date;
+  type: string;
+  category: string;
+  subItem: string;
+  amount: number;
+  /** Designation of the employee the row pays, when it pays one. */
+  employeeDesignation?: string | null;
+};
+
+/** One period's Total Income − Expenses, with Director's Salary on its own line. */
+export type ProfitStatement = {
+  income: number;
+  /** Every expense except Director's Salary. */
+  expenses: number;
+  /** income − expenses. */
+  profit: number;
+  directorSalary: number;
+  /** profit − directorSalary: all revenue less all expense, i.e. the "Net"
+   *  charted on the dashboard. */
+  profitAfterDirectorSalary: number;
+};
+
+export type CeoProfit = {
+  /** The running calendar month, same bounds as the revenue tile. */
+  month: ProfitStatement;
+  /** The fiscal year so far. */
+  ytd: ProfitStatement;
+};
+
+/**
+ * Is this ledger row a Director's pay? It can read three ways, because
+ * Transaction stores category/subItem as strings that were never rewritten
+ * when the Expense master changed on 8 May 2026:
+ *   - Salary → Directors, today's catalog entry;
+ *   - a top-level "Directors" category, the catalog before that date;
+ *   - any other Salary sub-item paid to an MD / Director employee.
+ */
+export function isDirectorSalary(r: ProfitRow): boolean {
+  if (r.type !== "Expense") return false;
+  const category = r.category.trim().toLowerCase();
+  if (category === "directors") return true;
+  if (category !== "salary") return false;
+  return r.subItem.trim().toLowerCase() === "directors" || isOwnerDesignation(r.employeeDesignation);
+}
+
+/** Sum the ledger rows dated in [from, to) into one profit statement. */
+export function buildProfitStatement(rows: ProfitRow[], from: Date, to: Date): ProfitStatement {
+  let income = 0;
+  let expenses = 0;
+  let directorSalary = 0;
+  for (const r of rows) {
+    if (r.date < from || r.date >= to) continue;
+    if (r.type === "Revenue") income += r.amount;
+    else if (isDirectorSalary(r)) directorSalary += r.amount;
+    else if (r.type === "Expense") expenses += r.amount;
+  }
+  const profit = income - expenses;
+  return {
+    income,
+    expenses,
+    profit,
+    directorSalary,
+    profitAfterDirectorSalary: profit - directorSalary,
+  };
+}
+
+/** Profit for the running month and the fiscal year so far. Reads row by row
+ *  because telling a Director's pay apart needs the employee's designation. */
+export async function ceoProfit(): Promise<CeoProfit> {
+  const now = new Date();
+  const currentMonthStart = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1));
+  const nextMonthStart = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() + 1, 1));
+
+  const rows = await safe(
+    "transaction.findMany(profit)",
+    () =>
+      prisma.transaction.findMany({
+        where: { deletedAt: null, date: { gte: FY_START } },
+        select: {
+          date: true,
+          type: true,
+          category: true,
+          subItem: true,
+          amount: true,
+          employee: { select: { designation: true, designationRef: { select: { name: true } } } },
+        },
+      }),
+    [],
+  );
+
+  const profitRows: ProfitRow[] = rows.map((r) => ({
+    date: r.date,
+    type: r.type,
+    category: r.category,
+    subItem: r.subItem,
+    amount: num(r.amount),
+    employeeDesignation: r.employee ? effectiveDesignation(r.employee) : null,
+  }));
+
+  return {
+    month: buildProfitStatement(profitRows, currentMonthStart, nextMonthStart),
+    ytd: buildProfitStatement(profitRows, FY_START, FY_END),
   };
 }
 
