@@ -5,8 +5,10 @@
 // Why Gmail SMTP: a message sent through smtp.gmail.com is automatically filed
 // in the authenticated account's "Sent" folder — so a sales blast shows up in
 // the team mailbox exactly like a hand-typed email, with no extra IMAP step.
+import { Prisma } from "@prisma/client";
 import type { Transporter } from "nodemailer";
 import { getSetting } from "./app-settings";
+import { BULK_EMAIL_COOLDOWN_DAYS, emailKeyOf } from "./crm";
 import { prisma } from "./prisma";
 
 // AppSetting keys.
@@ -186,4 +188,29 @@ export async function getDailyQuota(cfg: EmailConfig): Promise<{ used: number; c
     },
   });
   return { used, cap: cfg.dailyCap, remaining: Math.max(0, cfg.dailyCap - used) };
+}
+
+/**
+ * Which of `emails` the team mailbox already emailed within the bulk cooldown,
+ * as email keys. Matches on the address rather than the lead, so a second lead
+ * sharing an inbox is covered too. Every send that really went out counts:
+ * bulk, one-to-one, task reminders and e-sign invites. A "mailto" log doesn't,
+ * since that only opened the consultant's mail app.
+ */
+export async function recentlyEmailedAddresses(emails: Array<string | null>): Promise<Set<string>> {
+  const wanted = Array.from(new Set(emails.flatMap((e) => emailKeyOf(e) ?? [])));
+  if (wanted.length === 0) return new Set();
+  const since = new Date(Date.now() - BULK_EMAIL_COOLDOWN_DAYS * 24 * 60 * 60 * 1000);
+  // Raw so Postgres does the matching: EMAIL_SENT rows carry the full body, and a
+  // week of them is too much to load for every 50-lead chunk. occurredAt holds UTC
+  // with no zone, so compare in UTC or the session's TimeZone shifts the window.
+  const rows = await prisma.$queryRaw<Array<{ email: string }>>(Prisma.sql`
+    SELECT DISTINCT lower(trim(metadata->>'to')) AS email
+    FROM "LeadActivity"
+    WHERE type = 'EMAIL_SENT'
+      AND "occurredAt" >= (${since}::timestamptz AT TIME ZONE 'UTC')
+      AND metadata->>'delivery' = 'gmail'
+      AND lower(trim(metadata->>'to')) IN (${Prisma.join(wanted)})
+  `);
+  return new Set(rows.map((r) => r.email));
 }

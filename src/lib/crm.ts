@@ -222,6 +222,9 @@ export function qualificationText(
   return detail && isOtherQualification(base) ? `${base} (${detail})` : base;
 }
 
+/** A bulk send skips any address the team mailbox emailed within this many days. */
+export const BULK_EMAIL_COOLDOWN_DAYS = 7;
+
 /** Merge fields supported in bulk-email subjects/bodies (shown in the composer hint). */
 export const BULK_EMAIL_MERGE_FIELDS = [
   "name",

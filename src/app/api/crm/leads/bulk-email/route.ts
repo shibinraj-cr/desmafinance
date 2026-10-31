@@ -5,8 +5,8 @@ import { withApiHandler } from "@/lib/api";
 import { unauthorized, forbidden, badRequest } from "@/lib/http-error";
 import { getCurrentUserAndPermissions } from "@/lib/permissions";
 import { getCrmAccess } from "@/lib/crm-rbac";
-import { buildLeadMergeVars, fillTemplate, qualificationText } from "@/lib/crm";
-import { getEmailConfig, getDailyQuota, sendEmail, smtpErrorInfo } from "@/lib/mailer";
+import { buildLeadMergeVars, emailKeyOf, fillTemplate, qualificationText } from "@/lib/crm";
+import { getEmailConfig, getDailyQuota, recentlyEmailedAddresses, sendEmail, smtpErrorInfo } from "@/lib/mailer";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs"; // nodemailer (SMTP)
@@ -47,7 +47,8 @@ function mergeVars(lead: {
 // POST /api/crm/leads/bulk-email — send an individual, merge-filled email to
 // each of the given leads (admin-only). One EMAIL_SENT activity is written per
 // lead so the message shows on the lead's timeline; Gmail files a copy in the
-// sender mailbox's Sent folder. Honours a soft daily cap.
+// sender mailbox's Sent folder. Honours a soft daily cap, and skips any address
+// emailed within BULK_EMAIL_COOLDOWN_DAYS, so re-running a selection is safe.
 export const POST = withApiHandler(async (req: Request) => {
   const { userId, perms } = await getCurrentUserAndPermissions();
   if (!userId || !perms) throw unauthorized();
@@ -69,6 +70,7 @@ export const POST = withApiHandler(async (req: Request) => {
       sent: 0,
       failed: 0,
       skippedNoEmail: 0,
+      skippedRecent: 0,
       skippedCap: leadIds.length,
       capReached: true,
       remaining: 0,
@@ -90,10 +92,13 @@ export const POST = withApiHandler(async (req: Request) => {
     },
   });
   const byId = new Map(leads.map((l) => [l.id, l]));
+  // Grows as this batch sends, so two leads sharing an inbox get one email.
+  const emailed = await recentlyEmailedAddresses(leads.map((l) => l.email));
 
   let sent = 0;
   let failed = 0;
   let skippedNoEmail = 0;
+  let skippedRecent = 0;
   let skippedCap = 0;
   let rateLimited = false;
   const failures: { leadId: string; error: string }[] = [];
@@ -102,8 +107,15 @@ export const POST = withApiHandler(async (req: Request) => {
   for (let i = 0; i < leadIds.length; i++) {
     const lead = byId.get(leadIds[i]);
     if (!lead) continue; // stale id — silently skip
-    if (!lead.email) {
+    const emailKey = emailKeyOf(lead.email);
+    if (!lead.email || !emailKey) {
       skippedNoEmail++;
+      continue;
+    }
+    // Before the cap check: a lead skipped here costs no quota, and must not be
+    // reported as one to "try later".
+    if (emailed.has(emailKey)) {
+      skippedRecent++;
       continue;
     }
     if (sent >= quota.remaining) {
@@ -118,6 +130,7 @@ export const POST = withApiHandler(async (req: Request) => {
       const { messageId } = await sendEmail(cfg, { to: lead.email, subject: renderedSubject, text: renderedBody });
       sent++;
       sentLeadIds.push(lead.id);
+      emailed.add(emailKey);
       // Log immediately (not batched at the end) so a timeout mid-loop can never
       // leave an email sent-but-unlogged. One create per send is fine at this scale.
       await prisma.leadActivity.create({
@@ -154,6 +167,7 @@ export const POST = withApiHandler(async (req: Request) => {
     sent,
     failed,
     skippedNoEmail,
+    skippedRecent,
     skippedCap,
     rateLimited,
     capReached: skippedCap > 0,
