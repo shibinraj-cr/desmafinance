@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { getCurrentUserAndPermissions } from "@/lib/permissions";
 import {
   ceoHeadline,
+  ceoProfit,
   fyMonthlySeries,
   forecastFromSeries,
   orgHealth,
@@ -18,9 +19,13 @@ export async function GET() {
   if (!userId || !perms) return NextResponse.json({ error: "unauthenticated" }, { status: 401 });
   if (!perms.isAdmin) return NextResponse.json({ error: "forbidden" }, { status: 403 });
 
-  const [headline, series] = await Promise.all([ceoHeadline(), fyMonthlySeries()]);
+  const [headline, series, profit] = await Promise.all([
+    ceoHeadline(),
+    fyMonthlySeries(),
+    ceoProfit(),
+  ]);
   const forecast = forecastFromSeries(series);
   const health = await orgHealth(series);
 
-  return NextResponse.json({ headline, series, forecast, health });
+  return NextResponse.json({ headline, series, forecast, health, profit });
 }

@@ -6,9 +6,11 @@ import { RevenueExpenseNetChart, EnrollmentsChart } from "@/components/CeoCharts
 import { getCurrentUserAndPermissions } from "@/lib/permissions";
 import {
   ceoHeadline,
+  ceoProfit,
   fyMonthlySeries,
   forecastFromSeries,
   orgHealth,
+  type ProfitStatement,
 } from "@/lib/ceo-dashboard";
 import { inr } from "@/lib/format";
 
@@ -32,7 +34,11 @@ export default async function ExecutiveDashboardPage() {
     );
   }
 
-  const [headline, series] = await Promise.all([ceoHeadline(), fyMonthlySeries()]);
+  const [headline, series, profit] = await Promise.all([
+    ceoHeadline(),
+    fyMonthlySeries(),
+    ceoProfit(),
+  ]);
   const pipelineHref = headline.pipelineStageId
     ? `/crm/leads?status=${encodeURIComponent(headline.pipelineStageId)}`
     : "/crm/leads";
@@ -130,7 +136,22 @@ export default async function ExecutiveDashboardPage() {
           </Link>
         </section>
 
-        {/* Row 2 — Forecast strip */}
+        {/* Row 2 — Profit: Total Income − Expenses, with Director's Salary held
+            out on its own line. "After Director's Salary" is the plain Net the
+            trend chart plots. */}
+        <Section title="Profit">
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-gutter">
+            <ProfitCard label={`${headline.currentMonthLabel} · so far`} statement={profit.month} />
+            <ProfitCard label="FY 2026-27 to date" statement={profit.ytd} />
+          </div>
+          <p className="text-caption text-on-surface-variant mt-md">
+            Approved ledger entries only. Expenses include refunds, asset purchases and loan
+            repayments, which Net Profit on Weekly P&amp;L leaves out. Director&apos;s Salary is
+            Salary → Directors plus any other Salary entry paid to an MD or Director.
+          </p>
+        </Section>
+
+        {/* Row 3 — Forecast strip */}
         <section className="bg-brand text-on-brand rounded-xl shadow-sm border-l-4 border-primary p-lg">
           <div className="flex flex-wrap items-center gap-md mb-md">
             <div className="p-sm bg-primary text-on-primary rounded-full flex items-center justify-center">
@@ -177,7 +198,7 @@ export default async function ExecutiveDashboardPage() {
           </div>
         </section>
 
-        {/* Row 3 — Trend charts */}
+        {/* Row 4 — Trend charts */}
         <section className="grid grid-cols-1 lg:grid-cols-3 gap-gutter">
           <div className="lg:col-span-2">
             <Section
@@ -211,7 +232,7 @@ export default async function ExecutiveDashboardPage() {
           </div>
         </section>
 
-        {/* Row 4 — Org Health snapshot */}
+        {/* Row 5 — Org Health snapshot */}
         <Section title="Organisational Health Snapshot">
           <div className="flex flex-col lg:flex-row gap-lg">
             <div className="flex-shrink-0 flex flex-col items-center justify-center bg-surface-container rounded-xl p-lg w-full lg:w-56">
@@ -292,7 +313,7 @@ export default async function ExecutiveDashboardPage() {
           </div>
         </Section>
 
-        {/* Row 5 — Cross-module quicklinks */}
+        {/* Row 6 — Cross-module quicklinks */}
         <section className="grid grid-cols-1 md:grid-cols-3 gap-gutter">
           <QuickLink
             href="/finance/overview"
@@ -315,6 +336,62 @@ export default async function ExecutiveDashboardPage() {
         </section>
       </div>
     </>
+  );
+}
+
+function ProfitCard({ label, statement }: { label: string; statement: ProfitStatement }) {
+  return (
+    <div className="border border-outline-variant rounded-lg p-md">
+      <p className="text-label-sm uppercase tracking-wider text-on-surface-variant">{label}</p>
+      <p
+        className={
+          "text-[40px] leading-[44px] font-semibold mt-xs " +
+          (statement.profit < 0 ? "text-error" : "text-green-700")
+        }
+      >
+        {inr(statement.profit)}
+      </p>
+      <p className="text-caption text-on-surface-variant mt-xs">
+        Profit before Director&apos;s Salary
+      </p>
+      <dl className="mt-md pt-md border-t border-outline-variant space-y-xs">
+        <ProfitLine label="Total Income" value={statement.income} />
+        <ProfitLine label="Expenses (excl. Director's Salary)" value={statement.expenses} />
+        <ProfitLine label="Director's Salary" value={statement.directorSalary} />
+        <ProfitLine
+          label="Profit after Director's Salary"
+          value={statement.profitAfterDirectorSalary}
+          strong
+        />
+      </dl>
+    </div>
+  );
+}
+
+function ProfitLine({
+  label,
+  value,
+  strong,
+}: {
+  label: string;
+  value: number;
+  strong?: boolean;
+}) {
+  return (
+    <div className="flex items-baseline justify-between gap-md">
+      <dt className={strong ? "text-body-md font-semibold" : "text-body-md text-on-surface-variant"}>
+        {label}
+      </dt>
+      <dd
+        className={
+          "text-body-md whitespace-nowrap " +
+          (strong ? "font-semibold " : "") +
+          (value < 0 ? "text-error" : "text-on-surface")
+        }
+      >
+        {inr(value)}
+      </dd>
+    </div>
   );
 }
 
