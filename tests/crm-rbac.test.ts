@@ -19,6 +19,8 @@ import {
   canEditLead,
   canAddTask,
   canEditTask,
+  canAddNote,
+  canEditNote,
   visibleTasksWhere,
   getCrmAccess,
   CRM_ASSIGN_PAGE,
@@ -26,6 +28,7 @@ import {
   CRM_TEAM_LEAD_PAGE,
   CRM_REFERRAL_LEADS_PAGE,
   CRM_ENROLLED_TASKS_PAGE,
+  CRM_NOTES_ALL_PAGE,
   type CrmAccess,
 } from "@/lib/crm-rbac";
 import { CRM_LEADS_ONLY_PAGE, type Permissions } from "@/lib/rbac";
@@ -58,6 +61,7 @@ function access(partial: Partial<CrmAccess>): CrmAccess {
     canReEnroll: false,
     canTaskEnrolledLeads: false,
     ownTasksOnly: false,
+    canNoteAnyLead: false,
     canBulkImport: false,
     canBulkEmail: false,
     canBulkStatus: false,
@@ -278,6 +282,50 @@ describe("enrolled-lead tasks (CRM_ENROLLED_TASKS_PAGE)", () => {
   });
 });
 
+describe("whole-team notes (CRM_NOTES_ALL_PAGE)", () => {
+  const head = access({ isBde: true, canNoteAnyLead: true });
+
+  it("grants only the note power — no edit rights on the lead", async () => {
+    const a = await getCrmAccess("u1", perms(["/crm/leads", CRM_NOTES_ALL_PAGE]));
+    expect(a.canNoteAnyLead).toBe(true);
+    expect(canEditLead(a, { assignedToId: "u2" }, "u1")).toBe(false);
+    expect(a.canAssign).toBe(false);
+    expect(a.canBulkStatus).toBe(false);
+  });
+
+  it("is not a way into the CRM by itself", async () => {
+    expect((await getCrmAccess("u1", perms([CRM_NOTES_ALL_PAGE]))).canNoteAnyLead).toBe(false);
+  });
+
+  it("isn't implied by the view-only team-lead marker", async () => {
+    expect((await getCrmAccess("u1", perms([CRM_TEAM_LEAD_PAGE]))).canNoteAnyLead).toBe(false);
+  });
+
+  it("lets the holder note any lead, whoever owns it", () => {
+    expect(canAddNote(head, { assignedToId: "u2" }, "u1")).toBe(true);
+    expect(canAddNote(head, { assignedToId: null }, "u1")).toBe(true);
+  });
+
+  it("keeps everyone else to the leads they may edit", () => {
+    const bde = access({ isBde: true });
+    expect(canAddNote(bde, { assignedToId: "u1" }, "u1")).toBe(true);
+    expect(canAddNote(bde, { assignedToId: "u2" }, "u1")).toBe(false);
+    expect(canAddNote(access({}), { assignedToId: "u2" }, "u1")).toBe(false);
+  });
+
+  it("lets the holder edit their own note but never a consultant's on the same lead", () => {
+    const lead = { assignedToId: "u2" };
+    expect(canEditNote(head, { authorId: "u1" }, lead, "u1")).toBe(true);
+    expect(canEditNote(head, { authorId: "u2" }, lead, "u1")).toBe(false);
+    expect(canEditNote(head, { authorId: null }, lead, "u1")).toBe(false);
+  });
+
+  it("leaves the lead's owner able to edit any note on it", () => {
+    const bde = access({ isBde: true });
+    expect(canEditNote(bde, { authorId: "u2" }, { assignedToId: "u1" }, "u1")).toBe(true);
+  });
+});
+
 describe("ROLE_PERMISSIONS (markers grantable in /roles)", () => {
   it("lists every CRM capability marker by its real href", () => {
     const hrefs = ROLE_PERMISSIONS.map((p) => p.href);
@@ -287,6 +335,7 @@ describe("ROLE_PERMISSIONS (markers grantable in /roles)", () => {
       CRM_TEAM_LEAD_PAGE,
       CRM_REFERRAL_LEADS_PAGE,
       CRM_ENROLLED_TASKS_PAGE,
+      CRM_NOTES_ALL_PAGE,
       CRM_LEADS_ONLY_PAGE,
     ]) {
       expect(hrefs).toContain(marker);

@@ -20,6 +20,7 @@ function access(over: Partial<CrmAccess> = {}): CrmAccess {
     canReEnroll: false,
     canTaskEnrolledLeads: false,
     ownTasksOnly: false,
+    canNoteAnyLead: false,
     canBulkImport: false,
     canBulkEmail: false,
     canBulkStatus: false,
