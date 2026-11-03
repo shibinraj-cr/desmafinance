@@ -174,6 +174,47 @@ export const WA_ES_CONFIG_ID_KEY = "wa_es_config_id";
 export const WA_COEXISTENCE_NUMBERS_KEY = "wa_coexistence_numbers";
 
 /**
+ * Instagram DMs → CRM leads (CRM → Settings → Instagram; src/lib/ig/).
+ *
+ * Connected through the Page the Instagram account is linked to — the
+ * "Instagram API with Facebook Login" route — because that is the one that
+ * takes a System User token, which does not expire. The Instagram Login route
+ * hands out 60-day tokens that would need a refresh job to stay alive.
+ *
+ * - PAGE_ID: the Facebook Page the Instagram professional account is linked to.
+ * - ACCESS_TOKEN: a System User token (or a Page token) with instagram_basic,
+ *   instagram_manage_messages, pages_manage_metadata and pages_show_list. The
+ *   one true secret here.
+ * - PAGE_TOKEN: the Page access token derived from it by "Check connection",
+ *   cached so every webhook does not re-derive it. Also secret.
+ * - ACCOUNT_ID / USERNAME: the Instagram account Meta reports for the Page, so
+ *   our own echoes can be told apart from a candidate's messages.
+ * - VERIFY_TOKEN: what Meta's webhook handshake must present. Deliveries
+ *   themselves are verified by `X-Hub-Signature-256` against the app secret
+ *   (WA_CLOUD_APP_SECRET_KEY — one Meta app, one secret).
+ * - CAPTURE: "1" to create/link leads from DMs. Messages are stored regardless.
+ * - AUTO_ASK: "1" to reply asking for missing details. Off by default — it
+ *   speaks to candidates as the business.
+ * - AUTO_ASK_INTRO / FOLLOWUP / THANKS: the editable wording; blank uses the
+ *   defaults in src/lib/ig/auto-ask.ts.
+ * - LAST_WEBHOOK_AT: heartbeat stamped on every signed delivery, so "is Meta
+ *   sending us anything at all" has an answer before any lead appears.
+ */
+export const IG_PAGE_ID_KEY = "ig_page_id";
+export const IG_ACCESS_TOKEN_KEY = "ig_access_token";
+export const IG_PAGE_TOKEN_KEY = "ig_page_token";
+export const IG_ACCOUNT_ID_KEY = "ig_account_id";
+export const IG_USERNAME_KEY = "ig_username";
+export const IG_VERIFY_TOKEN_KEY = "ig_webhook_verify_token";
+export const IG_API_VERSION_KEY = "ig_api_version";
+export const IG_CAPTURE_ENABLED_KEY = "ig_capture_enabled";
+export const IG_AUTO_ASK_ENABLED_KEY = "ig_auto_ask_enabled";
+export const IG_AUTO_ASK_INTRO_KEY = "ig_auto_ask_intro";
+export const IG_AUTO_ASK_FOLLOWUP_KEY = "ig_auto_ask_followup";
+export const IG_AUTO_ASK_THANKS_KEY = "ig_auto_ask_thanks";
+export const IG_LAST_WEBHOOK_AT_KEY = "ig_last_webhook_at";
+
+/**
  * Wabis developer API key (avatar menu → API Developer). Used ONLY by the
  * one-off history import (src/lib/wa/wabis-import.ts) — sending still goes
  * through the provider seam. Sent as an `apiToken` request parameter, which is

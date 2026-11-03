@@ -2969,6 +2969,7 @@ model Lead {
   remarketingCampaigns  CrmRemarketingCampaign[]
   opsProjects           OpsProject[]             @relation("OpsProjectLead")
   waConversations       WaConversation[]
+  igContacts            IgContact[]
   waBroadcastRecipients WaBroadcastRecipient[]
   taskReminders         CrmTaskReminder[]
   esignRequests         EsignRequest[]
@@ -3099,6 +3100,7 @@ model CrmQualification {
   createdAt    DateTime @default(now())
   updatedAt    DateTime @updatedAt
   leads        Lead[]
+  igContacts   IgContact[]
 
   @@index([active])
   @@index([displayOrder])
@@ -3586,6 +3588,99 @@ model WaMessage {
   @@index([occurredAt])
   /// The archiver's work queue: media not yet copied to our own storage.
   @@index([mediaStoredAt])
+}
+
+/// One Instagram user who has messaged our business account (CRM → Settings →
+/// Instagram), keyed by the Instagram-scoped id Meta gives them. See
+/// src/lib/ig/ingest.ts.
+///
+/// The details a candidate types across several DMs are gathered HERE before
+/// any lead exists, because a lead needs a phone or an email to be
+/// de-duplicated and "hi" → name → number usually arrives as three messages.
+/// The lead is created (or an existing one linked) the moment either appears.
+model IgContact {
+  id       String  @id @default(cuid())
+  /// Instagram-scoped user id — stable per (user, our account), and the only
+  /// address the Send API takes.
+  igsid    String  @unique
+  /// Profile fields from the User Profile API. Best-effort: null when Meta
+  /// refused or the lookup timed out.
+  username String?
+  name     String?
+
+  /// What the candidate typed, as extracted so far. Never cleared by a later
+  /// message — a candidate who sends their number once has given it.
+  typedName          String?
+  email              String?
+  phone              String?
+  phoneE164          String?
+  qualificationId    String?
+  qualification      CrmQualification? @relation(fields: [qualificationId], references: [id], onDelete: SetNull)
+  qualificationOther String?
+
+  leadId      String?
+  lead        Lead?     @relation(fields: [leadId], references: [id], onDelete: SetNull)
+  linkedAt    DateTime?
+  /// True when the lead was created FROM this contact; false when the contact
+  /// was matched to a lead that already existed (a re-inquiry). Auto-ask never
+  /// interviews an existing candidate.
+  leadCreated Boolean   @default(false)
+  /// The name we gave the lead, so a later, better name (one they typed) can
+  /// replace it — but only while nobody has edited it since.
+  leadNameSet String?
+
+  /// Auto-ask state (src/lib/ig/auto-ask.ts). `askCount` is claimed with a
+  /// conditional update before each send, so two webhooks racing on one
+  /// candidate cannot both send the same question.
+  askCount       Int       @default(0)
+  lastAskAt      DateTime?
+  thankedAt      DateTime?
+  /// Someone on the team answered by hand (Business Suite / the Instagram app).
+  /// From then on DesGro stays silent in this conversation for good.
+  humanRepliedAt DateTime?
+  /// Why auto-ask will never speak here: "earlier_conversation" (the chat
+  /// predates DesGro), "history_unknown" (we could not check), "standby"
+  /// (another app owns the thread). Null while auto-ask is still allowed.
+  autoAskBlocked String?
+
+  /// Null when the team wrote first (an echo with no candidate message yet).
+  firstInboundAt DateTime?
+  lastInboundAt  DateTime?
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  messages IgMessage[]
+
+  @@index([leadId])
+  @@index([lastInboundAt])
+}
+
+/// One Instagram DM, either way. Stored even when lead capture is off, so
+/// switching it on later loses nothing that was said.
+model IgMessage {
+  id                String    @id @default(cuid())
+  contactId         String
+  contact           IgContact @relation(fields: [contactId], references: [id], onDelete: Cascade)
+  /// "in" from the candidate, "out" from us.
+  direction         String
+  /// Outbound only: "auto" (DesGro's auto-ask) or "team" (a person replying in
+  /// Business Suite or the Instagram app, seen through Meta's echo).
+  sender            String?
+  body              String?
+  /// The payload of a tapped quick-reply button, e.g. `desgro_qual:<id>`.
+  quickReplyPayload String?
+  /// "image", "video", "story_mention", … when the message carried no text.
+  attachmentType    String?
+  /// Meta's message id. Unique, so a redelivered webhook collides instead of
+  /// storing the message twice.
+  providerMessageId String?   @unique
+  /// Auto sends only: "sending" → "sent" | "failed".
+  sendStatus        String?
+  sendError         String?
+  occurredAt        DateTime  @default(now())
+  createdAt         DateTime  @default(now())
+
+  @@index([contactId, occurredAt])
 }
 
 /// A marketing send to a segment of leads — the "do marketing inside the CRM"
