@@ -651,6 +651,47 @@ describe("leadFilterParamsFromQuery — task and idle params", () => {
   });
 });
 
+describe("leadFilterParamsFromQuery — created/assigned days are IST days", () => {
+  const opts = { isBde: false, userId: "u1" };
+
+  it("a one-day Created range runs 00:00–24:00 IST, not UTC", () => {
+    const p = leadFilterParamsFromQuery(new URLSearchParams("period=custom&from=2026-11-01&to=2026-11-01"), opts);
+    expect(p.from).toEqual(new Date("2026-11-01T00:00:00+05:30"));
+    expect(p.to).toEqual(new Date("2026-11-02T00:00:00+05:30"));
+    // A lead created 02 Nov 03:03 IST (still 01 Nov in UTC) is outside the range.
+    expect(new Date("2026-11-02T03:03:00+05:30") < p.to!).toBe(false);
+    // One created 01 Nov 00:30 IST (still 31 Oct in UTC) is inside it.
+    expect(new Date("2026-11-01T00:30:00+05:30") >= p.from!).toBe(true);
+  });
+
+  it("applies each side of the Created range on its own", () => {
+    const fromOnly = leadFilterParamsFromQuery(new URLSearchParams("period=custom&from=2026-11-01"), opts);
+    expect(fromOnly.from).toEqual(new Date("2026-11-01T00:00:00+05:30"));
+    expect(fromOnly.to).toBeUndefined();
+    const toOnly = leadFilterParamsFromQuery(new URLSearchParams("period=custom&to=2026-10-31"), opts);
+    expect(toOnly.from).toBeUndefined();
+    expect(toOnly.to).toEqual(new Date("2026-11-01T00:00:00+05:30"));
+  });
+
+  it("a month preset covers the IST month", () => {
+    const p = leadFilterParamsFromQuery(new URLSearchParams("period=Nov-26"), opts);
+    expect(p.from).toEqual(new Date("2026-11-01T00:00:00+05:30"));
+    expect(p.to).toEqual(new Date("2026-12-01T00:00:00+05:30"));
+  });
+
+  it("leaves the range open when no period is set", () => {
+    const p = leadFilterParamsFromQuery(new URLSearchParams(""), opts);
+    expect(p.from).toBeUndefined();
+    expect(p.to).toBeUndefined();
+  });
+
+  it("the Assigned-on day is the IST day", () => {
+    const p = leadFilterParamsFromQuery(new URLSearchParams("assignedOn=2026-10-31"), opts);
+    expect(p.assignedFrom).toEqual(new Date("2026-10-31T00:00:00+05:30"));
+    expect(p.assignedTo).toEqual(new Date("2026-11-01T00:00:00+05:30"));
+  });
+});
+
 describe("isCentralisedStatus — the stage that releases the lead's consultant", () => {
   it("matches the seeded code", () => {
     expect(isCentralisedStatus({ code: "centralised_marketing", label: "Centralised Marketing" })).toBe(true);

@@ -6,6 +6,7 @@ import { normalizeQuality, QUALITY_UNRATED_BUCKETS, LEAD_QUALITY_RATINGS, type L
 import { listParam, oneOf, oneParam } from "./filter-params";
 import { parseAgeParam } from "./age";
 import { parsePeriod, rangeFor } from "./period";
+import { istDayStart, utcMidnightToIst } from "./dates";
 
 // Kept as a literal rather than importing REMARKETING_STATUS_CODE from
 // crm-reinquiry: this module is type-imported by client components, and
@@ -240,15 +241,15 @@ export type LeadFilterParams = {
 };
 
 /**
- * Half-open `[start, nextDay)` range for the local calendar day `YYYY-MM-DD`,
+ * Half-open `[start, nextDay)` range for the IST calendar day `YYYY-MM-DD`,
  * used by the "assigned on <date>" filter. Returns null if unparseable.
- * Built with the numeric Date constructor so the boundaries are server-local
- * midnight — matching how the leads list renders assigned/created timestamps.
+ * IST, not server-local: the server runs in UTC, while the leads list renders
+ * assigned/created timestamps in the viewer's (Indian) clock.
  */
 export function assignedDayRange(day: string | undefined): { from: Date; to: Date } | null {
-  const from = localDay(day);
+  const from = istDayStart(day);
   if (!from) return null;
-  return { from, to: localDay(day, 1)! };
+  return { from, to: istDayStart(day, 1)! };
 }
 
 /**
@@ -582,6 +583,11 @@ export function leadFilterParamsFromQuery(
       to: readOne(sp, "to"),
     }),
   );
+  // `rangeFor` cuts days at UTC midnight (right for the finance pages' stored
+  // dates), but createdAt is a real timestamp shown in IST — so a "01 Nov" range
+  // would run until 02 Nov 05:29 IST. Re-anchor both ends to IST midnight.
+  const createdFrom = range.from && utcMidnightToIst(range.from);
+  const createdTo = range.to && utcMidnightToIst(range.to);
   const assigned = assignedDayRange(readOne(sp, "assignedOn"));
   return {
     status: readAll(sp, "status"),
@@ -601,8 +607,8 @@ export function leadFilterParamsFromQuery(
     ageMin: parseAgeParam(readOne(sp, "ageMin")),
     ageMax: parseAgeParam(readOne(sp, "ageMax")),
     q: readOne(sp, "q"),
-    from: range.from,
-    to: range.to,
+    from: createdFrom,
+    to: createdTo,
     assignedFrom: assigned?.from,
     assignedTo: assigned?.to,
   };
