@@ -6,6 +6,7 @@ import { prisma } from "@/lib/prisma";
 import { getCurrentUserAndPermissions } from "@/lib/permissions";
 import { getCrmAccess, canEditLead, canAddTask, canAddNote, visibleTasksWhere } from "@/lib/crm-rbac";
 import { WA_UI_ADMIN_ONLY, canSeePage, isCrmLeadsOnly } from "@/lib/rbac";
+import { canSeeLeadInstagram } from "@/lib/ig/access";
 import { AGREEMENTS_PAGE } from "@/lib/esign/requests";
 import { recordLeadOpenedOncePerDay } from "@/lib/crm-activity";
 import {
@@ -55,6 +56,12 @@ export default async function LeadDetailPage({ params }: { params: { id: string 
 
   const lead = await prisma.lead.findUnique({ where: { id: params.id }, include: leadRowInclude });
   if (!lead) notFound();
+
+  // The Instagram tab appears only on a lead that came from (or was matched by)
+  // an Instagram DM, and only for someone allowed to read that conversation.
+  const hasInstagram = canSeeLeadInstagram(access, perms, lead, userId)
+    ? (await prisma.igContact.count({ where: { leadId: lead.id } })) > 0
+    : false;
 
   const [notes, activities, tasks, statuses, sources, services, qualifications, subStatuses, bdes, parties, emailConfigured, templates, qualityReasons] = await Promise.all([
     prisma.leadNote.findMany({ where: { leadId: params.id }, orderBy: { createdAt: "desc" }, include: noteInclude }),
@@ -262,6 +269,7 @@ export default async function LeadDetailPage({ params }: { params: { id: string 
             canAssign: access.canAssign,
             canViewHistory: access.canViewHistory,
             canSeeWhatsApp: (!WA_UI_ADMIN_ONLY || access.isAdmin) && !isCrmLeadsOnly(perms),
+            canSeeInstagram: hasInstagram,
             canReEnroll: access.canReEnroll,
             canAddTask: canAddTask(access, lead, userId),
             canAddNote: canAddNote(access, lead, userId),

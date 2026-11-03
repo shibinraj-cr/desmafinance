@@ -8,6 +8,7 @@ import { WabisWebhookCard } from "./wabis-webhook";
 import { RemarketingSettingsCard } from "./remarketing";
 import { WhatsAppModuleCard } from "./whatsapp-module";
 import { EmailSenderCard } from "./email-sender";
+import { InstagramCard } from "./instagram";
 
 type StatusRow = {
   id: string;
@@ -89,7 +90,7 @@ const qualErrors: Record<string, string> = {
   in_use: "Qualification is used by leads — deactivate instead.",
 };
 
-type TabKey = "statuses" | "sub_statuses" | "qualifications" | "quality_reasons" | "capture" | "whatsapp" | "wa_module" | "remarketing" | "email";
+type TabKey = "statuses" | "sub_statuses" | "qualifications" | "quality_reasons" | "capture" | "whatsapp" | "wa_module" | "instagram" | "remarketing" | "email";
 
 // One tab per settings section. `group` is a soft caption shown above the active
 // panel so the old "Reference data / Integrations" split isn't lost.
@@ -104,6 +105,7 @@ const TABS: { key: TabKey; label: string; icon: string; group: string }[] = [
   { key: "capture", label: "Lead Capture", icon: "sync_alt", group: "Integrations" },
   { key: "whatsapp", label: "Wabis", icon: "forum", group: "Integrations" },
   { key: "wa_module", label: "WhatsApp Inbox", icon: "chat", group: "Integrations" },
+  { key: "instagram", label: "Instagram", icon: "photo_camera", group: "Integrations" },
   { key: "remarketing", label: "Re-marketing", icon: "campaign", group: "Integrations" },
   { key: "email", label: "Email Sender", icon: "forward_to_inbox", group: "Integrations" },
 ];
@@ -178,6 +180,7 @@ export function SettingsClient({
         {tab === "capture" && <IntegrationsCard />}
         {tab === "whatsapp" && <WabisWebhookCard />}
         {tab === "wa_module" && <WhatsAppModuleCard />}
+        {tab === "instagram" && <InstagramCard />}
         {tab === "remarketing" && <RemarketingSettingsCard />}
         {tab === "email" && <EmailSenderCard />}
       </div>

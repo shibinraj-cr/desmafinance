@@ -1,6 +1,6 @@
 "use client";
 
-import { Fragment, useCallback, useEffect, useMemo, useState } from "react";
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
@@ -75,6 +75,11 @@ export type DetailAccess = {
    * that opens the whole module to the team.
    */
   canSeeWhatsApp: boolean;
+  /**
+   * Show the Instagram tab: the lead came from (or was matched by) an Instagram
+   * DM, and this user may read that conversation (see canSeeLeadInstagram).
+   */
+  canSeeInstagram: boolean;
   /** BDE or CRM admin — may create leads, so may re-enroll an existing candidate. */
   canReEnroll: boolean;
   /**
@@ -348,7 +353,7 @@ export function LeadDetail({
   taskReminders: TaskReminderPreviewDTO;
 }) {
   const router = useRouter();
-  const [tab, setTab] = useState<"overview" | "tasks" | "whatsapp" | "history">("overview");
+  const [tab, setTab] = useState<"overview" | "tasks" | "whatsapp" | "instagram" | "history">("overview");
   const [comm, setComm] = useState<null | "email" | "whatsapp" | "call">(null);
   // The quality dialog: opened by the band, or forced by the rule (`required`) —
   // on arrival when the rating is overdue, or when the API refuses a stage
@@ -423,6 +428,20 @@ export function LeadDetail({
               }
             >
               WhatsApp
+            </button>
+          )}
+          {access.canSeeInstagram && (
+            <button
+              type="button"
+              onClick={() => setTab("instagram")}
+              className={
+                "px-md h-9 text-label-sm font-semibold transition " +
+                (tab === "instagram"
+                  ? "bg-primary text-on-primary"
+                  : "bg-surface-container-lowest text-on-surface-variant hover:bg-surface-container-low")
+              }
+            >
+              Instagram
             </button>
           )}
           {access.canViewHistory && (
@@ -519,6 +538,7 @@ export function LeadDetail({
         <WhatsAppThreadPanel leadId={lead.id} leadName={lead.candidateName} phoneE164={lead.phoneE164} />
       )}
 
+      {tab === "instagram" && access.canSeeInstagram && <InstagramPanel leadId={lead.id} />}
       {tab === "history" && <HistoryPanel leadId={lead.id} bdes={masters.bdes} />}
 
       {comm === "email" && (
@@ -2846,6 +2866,118 @@ type WaPanelData = {
     templates: WaTemplateOpt[];
   };
 };
+
+type IgPanelMessage = {
+  id: string;
+  direction: "in" | "out";
+  sender: string | null;
+  body: string | null;
+  attachmentType: string | null;
+  sendStatus: string | null;
+  occurredAt: string;
+};
+type IgPanelContact = { id: string; username: string | null; name: string | null; leadCreated: boolean; messages: IgPanelMessage[] };
+
+/**
+ * The Instagram DMs behind this lead — read-only. Replies happen in Business
+ * Suite, from the business account.
+ */
+function InstagramPanel({ leadId }: { leadId: string }) {
+  const [contacts, setContacts] = useState<IgPanelContact[] | null>(null);
+  const [failed, setFailed] = useState(false);
+
+  useEffect(() => {
+    let live = true;
+    void (async () => {
+      const res = await fetch(`/api/crm/leads/${leadId}/ig`).catch(() => null);
+      if (!live) return;
+      if (!res?.ok) {
+        setFailed(true);
+        return;
+      }
+      setContacts(((await res.json()) as { contacts: IgPanelContact[] }).contacts);
+    })();
+    return () => {
+      live = false;
+    };
+  }, [leadId]);
+
+  if (failed) {
+    return <div className={cardCls + " p-lg text-error text-label-sm"}>Couldn&apos;t load the Instagram messages.</div>;
+  }
+  if (!contacts) {
+    return <div className={cardCls + " p-lg text-on-surface-variant text-label-sm"}>Loading…</div>;
+  }
+  if (contacts.length === 0) {
+    return <div className={cardCls + " p-lg text-on-surface-variant text-label-sm"}>No Instagram messages for this lead.</div>;
+  }
+
+  return (
+    <div className="space-y-lg">
+      {contacts.map((c) => (
+        <section key={c.id} className={cardCls + " overflow-hidden"}>
+          <div className="flex flex-wrap items-center justify-between gap-base px-lg py-md border-b border-outline-variant">
+            <div>
+              <h3 className="text-h3 text-on-surface">{c.name ?? (c.username ? `@${c.username}` : "Instagram contact")}</h3>
+              <p className="text-label-sm text-on-surface-variant">
+                {c.username ? `@${c.username} · ` : ""}
+                {c.leadCreated ? "This lead was created from their DMs" : "Matched to this lead from their DMs"}
+              </p>
+            </div>
+            {c.username && (
+              // The profile, not a DM link: ig.me/m/… would open a chat from
+              // whatever account the BDE is signed into — usually their own.
+              // Replies go from the business account, in Business Suite.
+              <a
+                href={`https://www.instagram.com/${encodeURIComponent(c.username)}/`}
+                target="_blank"
+                rel="noreferrer"
+                className="h-9 px-md inline-flex items-center rounded-lg border border-outline-variant text-label-sm font-semibold text-on-surface-variant hover:bg-surface-container-low"
+              >
+                View profile
+              </a>
+            )}
+          </div>
+          <IgThread>
+            {c.messages.map((m) => {
+              const mine = m.direction === "out";
+              return (
+                <div key={m.id} className={"flex " + (mine ? "justify-end" : "justify-start")}>
+                  <div
+                    className={
+                      "max-w-[75%] rounded-xl px-md py-sm text-body-md whitespace-pre-wrap break-words " +
+                      (mine ? "bg-primary/10 text-on-surface" : "bg-surface-container-low text-on-surface")
+                    }
+                  >
+                    {m.body ?? <span className="italic text-on-surface-variant">[{m.attachmentType ?? "attachment"}]</span>}
+                    <div className="mt-xs text-[11px] text-on-surface-variant">
+                      {mine ? (m.sender === "auto" ? "Auto-reply · " : "Team · ") : ""}
+                      {new Date(m.occurredAt).toLocaleString()}
+                      {m.sendStatus === "failed" && <span className="text-error"> · not delivered</span>}
+                    </div>
+                  </div>
+                </div>
+              );
+            })}
+          </IgThread>
+        </section>
+      ))}
+    </div>
+  );
+}
+
+/** A scrolling thread that opens on the newest message, as a chat should. */
+function IgThread({ children }: { children: React.ReactNode }) {
+  const ref = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (ref.current) ref.current.scrollTop = ref.current.scrollHeight;
+  }, []);
+  return (
+    <div ref={ref} className="p-lg space-y-sm max-h-[520px] overflow-auto">
+      {children}
+    </div>
+  );
+}
 
 function WhatsAppThreadPanel({
   leadId,
