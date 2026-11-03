@@ -3035,6 +3035,13 @@ model CrmLeadStatus {
   // force a follow-up task when the last open task is completed. Admin-togglable
   // from /crm/settings so a new parked stage needs no code change.
   parked       Boolean  @default(false)
+  // A "task-paced" stage is a waiting stage (Long Followup — the candidate is
+  // awaiting a certificate or exam result): its leads are judged by their next
+  // task's due date, not time-in-stage. A future task, however far out, keeps
+  // the lead off the attention list; once that date passes it is Stuck, and
+  // Abandoned 30 days after. A next-step task is still mandatory. See
+  // attentionFlags in crm-team.ts.
+  pacedByTask  Boolean  @default(false)
   active       Boolean  @default(true)
   createdAt    DateTime @default(now())
   updatedAt    DateTime @updatedAt

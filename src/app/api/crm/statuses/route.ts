@@ -35,6 +35,9 @@ const CreateSchema = z.object({
   // A parked stage never nags on the Team Activity attention list and never
   // forces a next-step task — see CrmLeadStatus.parked / crm-team.ts.
   parked: z.boolean().default(false),
+  // A task-paced stage is judged by its next task's due date, not time-in-stage
+  // — see CrmLeadStatus.pacedByTask / crm-team.ts.
+  pacedByTask: z.boolean().default(false),
   active: z.boolean().default(true),
 });
 
@@ -61,6 +64,7 @@ export const POST = withApiHandler(async (req: Request) => {
         color: d.color ?? null,
         isDefault: d.isDefault,
         parked: d.parked,
+        pacedByTask: d.pacedByTask,
         active: d.active,
       },
     });

@@ -54,6 +54,7 @@ export default async function CrmSettingsPage() {
             color: s.color,
             isDefault: s.isDefault,
             parked: s.parked,
+            pacedByTask: s.pacedByTask,
             active: s.active,
             leadCount: statusCountMap.get(s.id) ?? 0,
           }))}

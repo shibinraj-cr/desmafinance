@@ -198,7 +198,8 @@ export default async function ScorecardGuidePage() {
             </Line>
             <Line tag="Flagged">
               A lead is flagged when it&apos;s untouched past its stage deadline (<strong>SLA breach</strong>), untouched 30+ days
-              (<strong>abandoned</strong>), stuck in one stage 14+ days (<strong>stuck</strong>), or has{" "}
+              (<strong>abandoned</strong>), stuck in one stage 14+ days or past its task date in a waiting stage like Long
+              Followup (<strong>stuck</strong>), or has{" "}
               <strong>no next task</strong> scheduled.
             </Line>
             <Line tag="Scored">

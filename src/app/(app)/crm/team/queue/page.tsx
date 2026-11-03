@@ -288,7 +288,7 @@ export default async function AttentionQueuePage({ searchParams }: { searchParam
             action={
               <span className="text-caption text-on-surface-variant">
                 SLA {Object.values(SLA_THRESHOLD_DAYS).filter((d, i, a) => a.indexOf(d) === i).sort((a, b) => a - b).join("/")}d by
-                stage · abandoned &gt;{ABANDONED_DAYS}d · stuck &gt;{STUCK_DAYS}d
+                stage · abandoned &gt;{ABANDONED_DAYS}d · stuck &gt;{STUCK_DAYS}d (task-paced stages: past the task date)
               </span>
             }
           >

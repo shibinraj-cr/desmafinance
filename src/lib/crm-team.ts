@@ -32,6 +32,10 @@
  *     The flag is admin-editable in `/crm/settings`, so parking the next stage is
  *     a checkbox, not a deploy; {@link PARKED_STATUS_CODES} is only the fallback
  *     for callers that don't carry the flag.
+ *   - A *task-paced* stage (`CrmLeadStatus.pacedByTask`, e.g. Long Followup —
+ *     waiting on a certificate or exam result) runs on its next task's due date
+ *     instead of time-in-stage: on track while that date is ahead however far
+ *     out, stuck once it passes. Also a checkbox in `/crm/settings`.
  */
 import { Prisma } from "@prisma/client";
 import { prisma } from "./prisma";
@@ -197,7 +201,9 @@ export type AttentionFlags = {
   /**
    * In the same status for more than {@link STUCK_DAYS} (no STATUS_CHANGED since) —
    * UNLESS the lead has an upcoming scheduled task ({@link hasUpcomingTask}); a
-   * planned next step means the consultant is still working it, not stalled.
+   * planned next step means the consultant is still working it, not stalled. In a
+   * task-paced stage it is the next task's due date that decides: stuck as soon
+   * as that date has passed.
    */
   stuck: boolean;
   /** This status's SLA in days, or null when the status isn't SLA-monitored. */
@@ -230,11 +236,22 @@ export type AttentionFlags = {
  * `slaDays` / `daysSinceTouch` / `daysInStage` are still reported for display, but
  * no bucket flag fires. Pass the lead's `CrmLeadStatus.parked` flag; when it is
  * omitted the legacy {@link PARKED_STATUS_CODES} code list decides instead.
+ *
+ * A TASK-PACED stage (`pacedByTask`, e.g. Long Followup — the candidate is
+ * waiting on a certificate or exam result) runs on the date the consultant set
+ * rather than on time-in-stage. A next task due today or later, however far
+ * out, keeps the lead clear of SLA, stuck and abandoned. Once that date has
+ * passed the lead is stuck at once, and its abandoned clock runs from the later
+ * of the last touch and that due date — the wait itself is not neglect. With no
+ * dated task it is judged like any other stage, and no-next-step still applies.
+ * `parked` wins when a stage carries both flags.
  */
 export function attentionFlags(opts: {
   statusCode: string;
   /** The status's `parked` flag. Omitted → falls back to {@link PARKED_STATUS_CODES}. */
   parked?: boolean;
+  /** The status's `pacedByTask` flag. Omitted → false. */
+  pacedByTask?: boolean;
   lastTouchAt: Date;
   stuckSince: Date;
   hasOpenTask: boolean;
@@ -248,11 +265,19 @@ export function attentionFlags(opts: {
   // resting state and never nags: clear every bucket regardless of age, stage
   // time, or task state.
   const parked = opts.parked ?? PARKED_STATUS_CODES.has(opts.statusCode);
-  const upcoming = hasUpcomingTask(opts.nextTaskDueAt, opts.now);
-  const stuck = !parked && daysInStage > STUCK_DAYS && !upcoming;
+  // A task-paced stage (e.g. Long Followup) runs on its next task's due date:
+  // any future date is the plan, and a passed one means stuck.
+  const paced = !parked && opts.pacedByTask === true;
+  const due = opts.nextTaskDueAt;
+  const upcoming = hasUpcomingTask(due, opts.now, paced ? null : UPCOMING_TASK_MAX_DAYS);
+  const lapsedPlan = paced && due !== null && !upcoming;
+  const stuck = !parked && !upcoming && (lapsedPlan || daysInStage > STUCK_DAYS);
   const slaBreached = !parked && v.breached && !upcoming;
   const noNextStep = !parked && !opts.hasOpenTask;
-  const abandoned = !parked && v.abandoned;
+  // The wait up to a task-paced due date is not neglect: abandoned counts from
+  // the later of the last touch and that date.
+  const abandonedFrom = paced && due !== null && due > opts.lastTouchAt ? due : opts.lastTouchAt;
+  const abandoned = !parked && ageInDays(opts.now, abandonedFrom) > ABANDONED_DAYS;
   return {
     slaBreached,
     abandoned,
@@ -283,13 +308,20 @@ export function startOfNextLocalDay(d: Date): Date {
  * Uses the task board's day boundary (a task is overdue only once its due day has
  * fully passed), matching the queue UI's `overdue` rule. An open task with no due
  * date (null) does not count — there is no scheduled date to be "in the future".
+ * `maxDays` caps how far ahead still counts; null lifts the cap (task-paced stages).
  */
-export function hasUpcomingTask(nextTaskDueAt: Date | null, now: Date): boolean {
+export function hasUpcomingTask(
+  nextTaskDueAt: Date | null,
+  now: Date,
+  maxDays: number | null = UPCOMING_TASK_MAX_DAYS,
+): boolean {
   if (nextTaskDueAt === null) return false;
   if (nextTaskDueAt.getTime() < startOfLocalDay(now).getTime()) return false;
   // A follow-up parked months out is not "on it" — otherwise one far-future
-  // task silences the SLA and stuck flags indefinitely.
-  return nextTaskDueAt.getTime() < startOfNextLocalDay(now).getTime() + UPCOMING_TASK_MAX_DAYS * 86_400_000;
+  // task silences the SLA and stuck flags indefinitely. A task-paced stage is
+  // the exception: there the far-out date IS the plan.
+  if (maxDays === null) return true;
+  return nextTaskDueAt.getTime() < startOfNextLocalDay(now).getTime() + maxDays * 86_400_000;
 }
 
 /**
@@ -575,7 +607,7 @@ type ActiveLeadLite = {
   candidateName: string;
   assignedToId: string | null;
   createdAt: Date;
-  status: { code: string; parked: boolean; label: string; color: string | null };
+  status: { code: string; parked: boolean; pacedByTask: boolean; label: string; color: string | null };
 };
 
 /** Assemble the full Team Activity payload for one scope + date range. */
@@ -625,7 +657,7 @@ export async function getTeamActivity(opts: {
         assignedAt: true,
         createdAt: true,
         importBatch: { select: { createdAt: true, uploadedById: true } },
-        status: { select: { code: true, parked: true, label: true, color: true } },
+        status: { select: { code: true, parked: true, pacedByTask: true, label: true, color: true } },
       },
     }),
     // Open re-inquiry follow-up tasks, per assignee (subject rule shared with the task board).
@@ -861,6 +893,7 @@ export async function getTeamActivity(opts: {
     const f = attentionFlags({
       statusCode: l.status.code,
       parked: l.status.parked,
+      pacedByTask: l.status.pacedByTask,
       lastTouchAt,
       stuckSince,
       hasOpenTask: leadsWithOpenTask.has(l.id),
@@ -1025,7 +1058,7 @@ export async function getAttentionQueue(opts: {
       assignedAt: true,
       createdAt: true,
       importBatch: { select: { createdAt: true, uploadedById: true } },
-      status: { select: { code: true, parked: true, label: true, color: true } },
+      status: { select: { code: true, parked: true, pacedByTask: true, label: true, color: true } },
     },
   });
 
@@ -1072,6 +1105,7 @@ export async function getAttentionQueue(opts: {
     const f = attentionFlags({
       statusCode: l.status.code,
       parked: l.status.parked,
+      pacedByTask: l.status.pacedByTask,
       lastTouchAt: lastTouch ?? l.createdAt,
       stuckSince,
       hasOpenTask: openTaskLeads.has(l.id),

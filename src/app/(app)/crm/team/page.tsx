@@ -853,7 +853,7 @@ export default async function TeamActivityPage({ searchParams }: { searchParams:
           />
           <AttentionList
             title="Stuck in stage"
-            hint={`Active leads in the same status for over ${STUCK_DAYS} days.`}
+            hint={`Active leads in the same status for over ${STUCK_DAYS} days — or, in a task-paced stage like Long Followup, past their next task's date.`}
             rows={data.attention.stuck}
             total={t.stuck}
             ageLabel="days in current status"
