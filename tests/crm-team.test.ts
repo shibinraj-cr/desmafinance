@@ -257,6 +257,55 @@ describe("attentionFlags — combined bucket classification", () => {
   });
 });
 
+describe("attentionFlags — task-paced stage (e.g. Long Followup)", () => {
+  const now = new Date(2026, 10, 3, 12, 0); // local noon, 3 Nov
+  const ago = (days: number) => new Date(now.getTime() - days * DAY);
+  const inDays = (days: number) => new Date(now.getTime() + days * DAY);
+  // Waiting on a certificate: untouched 72d, in stage 72d — every clock is past its limit.
+  const waiting = { statusCode: "long_followup", pacedByTask: true, lastTouchAt: ago(72), stuckSince: ago(72), hasOpenTask: true, now };
+
+  it("is on track while the next task is ahead, however far out", () => {
+    // 48 days out — past UPCOMING_TASK_MAX_DAYS, which would not count for a normal stage.
+    const f = attentionFlags({ ...waiting, nextTaskDueAt: inDays(48) });
+    expect(f).toMatchObject({ slaBreached: false, abandoned: false, noNextStep: false, stuck: false, flagged: false });
+    // Display fields still report the real clocks.
+    expect(f.daysInStage).toBeGreaterThan(STUCK_DAYS);
+    expect(f.daysSinceTouch).toBeGreaterThan(ABANDONED_DAYS);
+  });
+
+  it("the same lead in an ordinary stage is still stuck and abandoned", () => {
+    const f = attentionFlags({ ...waiting, pacedByTask: false, nextTaskDueAt: inDays(48) });
+    expect(f).toMatchObject({ stuck: true, abandoned: true, flagged: true });
+  });
+
+  it("counts a task due today as on track", () => {
+    const f = attentionFlags({ ...waiting, nextTaskDueAt: new Date(2026, 10, 3, 9, 0) });
+    expect(f.flagged).toBe(false);
+  });
+
+  it("is stuck the day after the task date, even when it entered the stage recently", () => {
+    const f = attentionFlags({ ...waiting, stuckSince: ago(3), lastTouchAt: ago(3), nextTaskDueAt: new Date(2026, 10, 2, 9, 0) });
+    expect(f).toMatchObject({ stuck: true, abandoned: false, flagged: true });
+  });
+
+  it("counts abandoned from the task date, not from the last touch before the wait", () => {
+    // Untouched 72d, but the task fell due 10d ago: not abandoned yet...
+    expect(attentionFlags({ ...waiting, nextTaskDueAt: ago(10) }).abandoned).toBe(false);
+    // ...and abandoned once the task has been overdue for over ABANDONED_DAYS.
+    expect(attentionFlags({ ...waiting, nextTaskDueAt: ago(ABANDONED_DAYS + 1) }).abandoned).toBe(true);
+  });
+
+  it("with no dated task, falls back to the stage clock and still needs a next step", () => {
+    const f = attentionFlags({ ...waiting, hasOpenTask: false, nextTaskDueAt: null });
+    expect(f).toMatchObject({ noNextStep: true, stuck: true, abandoned: true, flagged: true });
+  });
+
+  it("parked wins when a stage carries both flags", () => {
+    const f = attentionFlags({ ...waiting, parked: true, hasOpenTask: false, nextTaskDueAt: ago(40) });
+    expect(f.flagged).toBe(false);
+  });
+});
+
 describe("hasUpcomingTask", () => {
   const now = new Date(2026, 5, 24, 12, 0); // local noon
 
@@ -292,6 +341,10 @@ describe("hasUpcomingTask — far-future tasks", () => {
   });
   it("a task parked months out does not silence the SLA / stuck flags", () => {
     expect(hasUpcomingTask(new Date(2026, 9, 1, 9, 0), now)).toBe(false);
+  });
+  it("with the cap lifted (task-paced stages), any future date counts", () => {
+    expect(hasUpcomingTask(new Date(2026, 9, 1, 9, 0), now, null)).toBe(true);
+    expect(hasUpcomingTask(new Date(2026, 5, 23, 23, 0), now, null)).toBe(false);
   });
 });
 

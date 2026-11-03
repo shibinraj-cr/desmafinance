@@ -18,6 +18,7 @@ type StatusRow = {
   color: string | null;
   isDefault: boolean;
   parked: boolean;
+  pacedByTask: boolean;
   active: boolean;
   leadCount: number;
 };
@@ -195,7 +196,8 @@ function StatusEditor({ statuses }: { statuses: StatusRow[] }) {
             Pipeline stages &amp; dispositions shown on the stage bar. A <span className="font-semibold">parked</span> stage
             (centralised marketing / re-marketing) is nurtured centrally: its leads never appear on the Team Activity
             attention list — no SLA, stuck, abandoned or no-next-step flag — and completing their last task never forces a
-            follow-up.
+            follow-up. A <span className="font-semibold">task-paced</span> stage (Long Followup — waiting on a certificate or
+            result) is judged by its next task&apos;s date: on track until that date, however far out, then flagged stuck.
           </p>
         </div>
         <NewStatusButton />
@@ -211,6 +213,7 @@ function StatusEditor({ statuses }: { statuses: StatusRow[] }) {
               <Th className="text-left">Colour</Th>
               <Th className="text-left">Default</Th>
               <Th className="text-left">Parked</Th>
+              <Th className="text-left">Task-paced</Th>
               <Th className="text-left">Active</Th>
               <Th className="text-right">Actions</Th>
             </tr>
@@ -357,6 +360,23 @@ function StatusRowView({ status }: { status: StatusRow }) {
         <button
           type="button"
           disabled={busy}
+          onClick={() => patch({ pacedByTask: !status.pacedByTask })}
+          className={status.pacedByTask ? "text-accent" : "text-on-surface-variant hover:text-accent"}
+          title={
+            status.pacedByTask
+              ? "Task-paced — on track until the next task's date, then stuck. Click to use the normal stage clock."
+              : "Click to pace by task date: on track until the next task's date, however far out, then stuck."
+          }
+        >
+          <span className="material-symbols-outlined" style={{ fontSize: 20 }}>
+            {status.pacedByTask ? "event_upcoming" : "remove"}
+          </span>
+        </button>
+      </Td>
+      <Td>
+        <button
+          type="button"
+          disabled={busy}
           onClick={() => patch({ active: !status.active })}
           className="text-on-surface-variant hover:text-accent"
           title={status.active ? "Deactivate" : "Activate"}
@@ -423,7 +443,7 @@ function NewStatusButton() {
   const [mounted, setMounted] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [form, setForm] = useState({ code: "", label: "", kind: "active", displayOrder: 0, color: "", isDefault: false, parked: false });
+  const [form, setForm] = useState({ code: "", label: "", kind: "active", displayOrder: 0, color: "", isDefault: false, parked: false, pacedByTask: false });
 
   useEffect(() => setMounted(true), []);
 
@@ -442,7 +462,7 @@ function NewStatusButton() {
       setError(statusErrors[d.error ?? ""] ?? "Failed to create.");
       return;
     }
-    setForm({ code: "", label: "", kind: "active", displayOrder: 0, color: "", isDefault: false, parked: false });
+    setForm({ code: "", label: "", kind: "active", displayOrder: 0, color: "", isDefault: false, parked: false, pacedByTask: false });
     setOpen(false);
     router.refresh();
   }
@@ -519,6 +539,20 @@ function NewStatusButton() {
                   Parked stage
                   <span className="block text-label-sm text-on-surface-variant">
                     Nurtured centrally — no SLA or attention flags, and no mandatory next-step task.
+                  </span>
+                </span>
+              </label>
+              <label className="flex items-start gap-xs text-body-md">
+                <input
+                  type="checkbox"
+                  className="mt-[3px]"
+                  checked={form.pacedByTask}
+                  onChange={(e) => setForm({ ...form, pacedByTask: e.target.checked })}
+                />
+                <span>
+                  Task-paced stage
+                  <span className="block text-label-sm text-on-surface-variant">
+                    Waiting on a certificate or result — on track until the next task&apos;s date, then flagged stuck.
                   </span>
                 </span>
               </label>

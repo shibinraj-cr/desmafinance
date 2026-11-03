@@ -21,6 +21,9 @@ const PatchSchema = z.object({
   // A parked stage never nags on the Team Activity attention list and never
   // forces a next-step task — see CrmLeadStatus.parked / crm-team.ts.
   parked: z.boolean().optional(),
+  // A task-paced stage is judged by its next task's due date, not time-in-stage
+  // — see CrmLeadStatus.pacedByTask / crm-team.ts.
+  pacedByTask: z.boolean().optional(),
   active: z.boolean().optional(),
 });
 
@@ -42,6 +45,7 @@ export const PATCH = withApiHandler(async (req: Request, { params }: Ctx) => {
   if (d.color !== undefined) update.color = d.color;
   if (d.active !== undefined) update.active = d.active;
   if (d.parked !== undefined) update.parked = d.parked;
+  if (d.pacedByTask !== undefined) update.pacedByTask = d.pacedByTask;
   if (d.code !== undefined && d.code.toLowerCase() !== existing.code) {
     const code = d.code.toLowerCase();
     const clash = await prisma.crmLeadStatus.findUnique({ where: { code } });
