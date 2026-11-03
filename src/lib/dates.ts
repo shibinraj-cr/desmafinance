@@ -57,6 +57,30 @@ export function istToday(now: Date = new Date()): CalendarDay {
   };
 }
 
+/**
+ * The instant the India calendar day `YYYY-MM-DD` begins (00:00 IST, i.e. 18:30
+ * UTC the day before), optionally `offsetDays` later. `undefined` when the
+ * string is absent or unparseable. Use it to turn a picked date into a
+ * timestamp boundary — a UTC midnight would let the first 5½ hours of the
+ * next IST day leak in.
+ */
+export function istDayStart(ymd: string | undefined, offsetDays = 0): Date | undefined {
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec((ymd ?? "").trim());
+  if (!m) return undefined;
+  const utcMidnight = Date.UTC(Number(m[1]), Number(m[2]) - 1, Number(m[3]) + offsetDays);
+  const d = new Date(utcMidnight - IST_OFFSET_MINUTES * 60_000);
+  return Number.isNaN(d.getTime()) ? undefined : d;
+}
+
+/**
+ * Move a UTC-midnight day boundary (what `rangeFor` in period.ts produces) to
+ * IST midnight on the same calendar date, so filtering a real timestamp by it
+ * splits days where the office does.
+ */
+export function utcMidnightToIst(d: Date): Date {
+  return new Date(d.getTime() - IST_OFFSET_MINUTES * 60_000);
+}
+
 /** Proleptic Gregorian leap year. */
 export function isLeapYear(year: number): boolean {
   return (year % 4 === 0 && year % 100 !== 0) || year % 400 === 0;
