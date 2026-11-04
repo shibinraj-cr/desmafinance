@@ -1,3 +1,4 @@
+import Link from "next/link";
 import { notFound, redirect } from "next/navigation";
 import { prisma } from "@/lib/prisma";
 import { getCurrentUserAndPermissions } from "@/lib/permissions";
@@ -6,6 +7,8 @@ import { TopBar } from "@/components/TopBar";
 import { Section } from "@/components/Cards";
 import type { GradedQuestion } from "@/lib/sales-training";
 import { activeLearner, learnerView, toQuestion, toVideos } from "@/lib/sales-training-db";
+import { CRM_GUIDE_MODULE_ID } from "@/lib/crm-guide";
+import { loadCrmGuideFacts, syncCrmGuideQuiz } from "@/lib/crm-guide-data";
 import { ModulePlayer } from "./client";
 
 export const dynamic = "force-dynamic";
@@ -16,6 +19,9 @@ export default async function MySalesTrainingModulePage({ params }: { params: { 
   const emp = await employeeForUser(userId);
   if (!emp || !(await activeLearner(emp.id))) redirect("/me/sales-training");
 
+  // The CRM guide's quiz follows the guide: bring it up to date before showing it.
+  const guideQuiz = params.moduleId === CRM_GUIDE_MODULE_ID;
+  if (guideQuiz) await syncCrmGuideQuiz(await loadCrmGuideFacts());
   const mod = await prisma.salesTrainingModule.findUnique({
     where: { id: params.moduleId },
     include: { questions: { orderBy: { sortOrder: "asc" } } },
@@ -47,6 +53,18 @@ export default async function MySalesTrainingModulePage({ params }: { params: { 
           <Section title="">
             <p className="text-body-md text-on-surface whitespace-pre-line">{mod.description}</p>
           </Section>
+        )}
+        {guideQuiz && (
+          <Link
+            href="/me/sales-training/crm-guide"
+            className="flex items-center gap-sm bg-surface-container-lowest border border-primary rounded-xl shadow-sm p-md hover:bg-primary/5"
+          >
+            <span className="material-symbols-outlined text-primary">menu_book</span>
+            <span className="flex-1 text-body-md text-on-surface">
+              <strong className="font-semibold">Read the CRM Guide</strong> — every answer is in it.
+            </span>
+            <span className="material-symbols-outlined text-on-surface-variant">chevron_right</span>
+          </Link>
         )}
         <ModulePlayer
           moduleId={mod.id}

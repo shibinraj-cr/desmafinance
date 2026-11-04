@@ -53,12 +53,15 @@ export function ModuleEditor({
   results,
   canEdit,
   hasAttempts,
+  questionsNote,
 }: {
   module: ModuleData;
   questions: TrainingQuestion[];
   results: Result[];
   canEdit: boolean;
   hasAttempts: boolean;
+  /** Set when the question bank comes from code; shown instead of the editing controls. */
+  questionsNote?: string;
 }) {
   const router = useRouter();
   const [pending, start] = useTransition();
@@ -134,6 +137,8 @@ export function ModuleEditor({
 
   const totalPoints = qs.reduce((n, q) => n + q.points, 0);
   const ro = !canEdit;
+  // A code-managed bank (the CRM guide's quiz) is shown, never edited here.
+  const qEdit = canEdit && !questionsNote;
 
   return (
     <div className="space-y-lg">
@@ -277,7 +282,7 @@ export function ModuleEditor({
       <Section
         title={`Questions (${qs.length} · ${totalPoints} pts)`}
         action={
-          canEdit ? (
+          qEdit ? (
             <div className="flex gap-sm">
               <button className={btnGhost} onClick={() => setBulkOpen(!bulkOpen)}>
                 <span className="material-symbols-outlined text-[18px]">playlist_add</span>
@@ -290,6 +295,7 @@ export function ModuleEditor({
           ) : undefined
         }
       >
+        {questionsNote && <p className="mb-md text-label-sm text-on-surface-variant">{questionsNote}</p>}
         {bulkOpen && (
           <div className="mb-lg border border-outline-variant rounded p-md bg-surface-container-low">
             <p className="text-label-sm mb-xs">
@@ -322,7 +328,7 @@ export function ModuleEditor({
           </div>
         )}
 
-        <fieldset disabled={ro} className="space-y-md">
+        <fieldset disabled={!qEdit} className="space-y-md">
           {qs.length === 0 && <p className="py-md text-center text-on-surface-variant">No questions yet.</p>}
           {qs.map((q, i) => (
             <div key={q.id} className="border border-outline-variant rounded p-md">
@@ -335,7 +341,7 @@ export function ModuleEditor({
                   value={q.prompt}
                   onChange={(e) => setQ(i, { prompt: e.target.value })}
                 />
-                {canEdit && (
+                {qEdit && (
                   <div className="flex flex-col">
                     <button
                       aria-label="Move up"
@@ -417,7 +423,7 @@ export function ModuleEditor({
                         value={opt}
                         onChange={(e) => setQ(i, { options: q.options.map((o, j) => (j === oi ? e.target.value : o)) })}
                       />
-                      {canEdit && q.options.length > 2 && (
+                      {qEdit && q.options.length > 2 && (
                         <button
                           aria-label="Remove option"
                           className="text-on-surface-variant"
@@ -434,7 +440,7 @@ export function ModuleEditor({
                     </div>
                   );
                 })}
-                {canEdit && q.options.length < 10 && (
+                {qEdit && q.options.length < 10 && (
                   <button className="text-blue-700 underline text-label-sm" onClick={() => setQ(i, { options: [...q.options, ""] })}>
                     + Add option
                   </button>
@@ -449,7 +455,7 @@ export function ModuleEditor({
             </div>
           ))}
         </fieldset>
-        {canEdit && (
+        {qEdit && (
           <button
             className={btnGhost + " mt-md"}
             onClick={() => {

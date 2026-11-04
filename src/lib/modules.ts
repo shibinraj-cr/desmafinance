@@ -502,6 +502,7 @@ export const MODULES: AppModule[] = [
       { href: "/hr/sales-training", label: "Sales Training", icon: "model_training", group: "TRAINING & DEVELOPMENT" },
       { href: "/hr/sales-training/modules", label: "Training Modules", icon: "video_library", group: "TRAINING & DEVELOPMENT" },
       { href: "/hr/sales-training/learners", label: "Learners", icon: "school", group: "TRAINING & DEVELOPMENT" },
+      { href: "/hr/sales-training/crm-guide", label: "CRM Guide", icon: "menu_book", group: "TRAINING & DEVELOPMENT" },
       { href: "/hr/holidays", label: "Holiday Calendar", icon: "event", group: "RESOURCES" },
       { href: "/hr/policies", label: "Policies & Manuals", icon: "menu_book", group: "RESOURCES" },
       { href: "/hr/trainings", label: "Trainings", icon: "school", group: "RESOURCES" },
@@ -562,6 +563,9 @@ export const MODULES: AppModule[] = [
       { href: "/me/birthdays", label: "Celebrations", icon: "celebration", group: "RESOURCES" },
       { href: "/me/policies", label: "Policies", icon: "menu_book", group: "RESOURCES" },
       { href: "/me/sales-training", label: "Sales Training", icon: "model_training", group: "LEARNING" },
+      // How to use the CRM. Rides on the /me/sales-training visibility rule in
+      // canSeePage (every CRM user), and opens without an HR enrolment.
+      { href: "/me/sales-training/crm-guide", label: "CRM Guide", icon: "menu_book", group: "LEARNING" },
       { href: "/me/trainings", label: "Trainings", icon: "school", group: "RESOURCES" },
       { href: "/me/notifications", label: "Notifications", icon: "notifications", group: "RESOURCES" },
     ],

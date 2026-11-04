@@ -3,6 +3,7 @@ import { z } from "zod";
 import { prisma } from "@/lib/prisma";
 import { getCurrentUserAndPermissions } from "@/lib/permissions";
 import { canApproveHr } from "@/lib/hr-rbac";
+import { CRM_GUIDE_MODULE_ID } from "@/lib/crm-guide";
 
 const QuestionInput = z
   .object({
@@ -27,6 +28,9 @@ const Schema = z.object({ questions: z.array(QuestionInput).max(200) });
 export async function PUT(req: Request, { params }: { params: { id: string } }) {
   const { perms } = await getCurrentUserAndPermissions();
   if (!canApproveHr(perms)) return NextResponse.json({ error: "forbidden" }, { status: 403 });
+  if (params.id === CRM_GUIDE_MODULE_ID) {
+    return NextResponse.json({ error: "This module's questions come from the CRM Guide and update automatically." }, { status: 409 });
+  }
   const parsed = Schema.safeParse(await req.json().catch(() => null));
   if (!parsed.success) {
     const issue = parsed.error.issues[0];

@@ -10,14 +10,32 @@ import { activeLearner, loadProgress, summarise, toVideos } from "@/lib/sales-tr
 
 export const dynamic = "force-dynamic";
 
+/** The CRM guide is for every CRM user, enrolled or not — so it's offered in every state of this page. */
+function GuideLink() {
+  return (
+    <Link
+      href="/me/sales-training/crm-guide"
+      className="flex items-center gap-sm bg-surface-container-lowest border border-outline-variant rounded-xl shadow-sm p-md hover:border-primary"
+    >
+      <span className="material-symbols-outlined text-primary">menu_book</span>
+      <span className="flex-1 min-w-0">
+        <span className="block font-semibold text-on-surface">CRM Guide</span>
+        <span className="block text-label-sm text-on-surface-variant">How to use the CRM, step by step — kept up to date as the CRM changes.</span>
+      </span>
+      <span className="material-symbols-outlined text-on-surface-variant">chevron_right</span>
+    </Link>
+  );
+}
+
 function Notice({ text }: { text: string }) {
   return (
     <>
       <TopBar title="Sales Training" />
-      <div className="p-margin">
+      <div className="p-margin space-y-lg">
         <Section title="">
           <p className="py-lg text-center text-on-surface-variant">{text}</p>
         </Section>
+        <GuideLink />
       </div>
     </>
   );
@@ -77,6 +95,8 @@ export default async function MySalesTrainingPage() {
           </div>
         </Section>
 
+        <GuideLink />
+
         {modules.length === 0 ? (
           <Section title="">
             <p className="py-lg text-center text-on-surface-variant">No modules are live yet — you&apos;ll be notified when the first one is.</p>
@@ -95,7 +115,9 @@ export default async function MySalesTrainingPage() {
                     {videos[0] ? (
                       <img src={`https://i.ytimg.com/vi/${videos[0].youtubeId}/mqdefault.jpg`} alt="" className="w-32 md:w-40 aspect-video rounded object-cover bg-surface-container flex-none" />
                     ) : (
-                      <div className="w-32 md:w-40 aspect-video rounded bg-surface-container flex-none" />
+                      <div className="w-32 md:w-40 aspect-video rounded bg-surface-container flex-none flex items-center justify-center">
+                        <span className="material-symbols-outlined text-on-surface-variant">quiz</span>
+                      </div>
                     )}
                     <div className="flex-1 min-w-0">
                       <div className="flex items-center gap-sm flex-wrap">
@@ -105,7 +127,8 @@ export default async function MySalesTrainingPage() {
                       <p className="font-semibold text-on-surface mt-[2px]">{m.title}</p>
                       {m.description && <p className="text-label-sm text-on-surface-variant line-clamp-2">{m.description}</p>}
                       <p className="text-[11px] text-on-surface-variant mt-xs">
-                        {p.videosDone}/{videos.length} videos watched · {m._count.questions} questions · pass {m.passMark}%
+                        {videos.length > 0 && `${p.videosDone}/${videos.length} videos watched · `}
+                        {m._count.questions} questions · pass {m.passMark}%
                         {p.bestPercent != null && ` · best ${p.bestPercent}%`}
                         {m.maxAttempts && ` · ${Math.max(0, m.maxAttempts - p.attempts)} attempt(s) left`}
                       </p>
