@@ -16,12 +16,14 @@
  * New here: leads *created* (self-sourced, not assigned by admin), enrolled
  * ₹ value and open pipeline ₹ value (from LeadPulsePipeline), monthly target
  * (LeadPulseTarget, summed across services/groups), overdue-task counts, a
- * pipeline-by-expected-close bucketing, and per-BDE current-stage mix for the
- * detail drawer.
+ * pipeline-by-expected-close bucketing, per-BDE current-stage mix for the
+ * detail drawer, and a month-by-month comparison per BDE and per source
+ * (`crm-monthly-comparison.ts`).
  */
 import { prisma } from "./prisma";
 import { getAssignableBdes } from "./crm-leads";
-import { getCrmFunnelByBde, getCrmFunnelBySource, getMonthlyTargetByBde } from "./lead-pulse-crm-metrics";
+import { getCrmFunnelByBde, getCrmFunnelBySource, getMonthlyTargetByBde, getCrmMonthlyFacts } from "./lead-pulse-crm-metrics";
+import { buildMonthlyComparison, comparisonMonths, monthsEnding, type MonthlyComparison } from "./crm-monthly-comparison";
 import { getTeamActivity, wholeTeamScope, ABANDONED_DAYS, STUCK_DAYS, FIRST_RESPONSE_SLA_HOURS, startOfLocalDay } from "./crm-team";
 import { monthBounds } from "./lead-pulse-metrics";
 import { toPrismaDate, todayIst, fromPrismaDate } from "./lead-pulse-dates";
@@ -39,21 +41,14 @@ function currentYearMonth(): { year: number; month: number } {
 /** The last `count` calendar months (oldest→newest), ending at the current IST month. */
 export function recentMonthOptions(count = 6): MonthOption[] {
   const { year, month } = currentYearMonth();
-  const out: MonthOption[] = [];
-  for (let i = count - 1; i >= 0; i--) {
-    let y = year;
-    let m = month - i;
-    while (m <= 0) {
-      m += 12;
-      y -= 1;
-    }
-    out.push({
-      value: `${y}-${String(m).padStart(2, "0")}`,
-      label: new Date(Date.UTC(y, m - 1, 1)).toLocaleString("en-US", { month: "long", year: "numeric", timeZone: "UTC" }),
-    });
-  }
-  return out;
+  return monthsEnding(year, month, count).map((m) => ({
+    value: m.value,
+    label: new Date(Date.UTC(m.year, m.month - 1, 1)).toLocaleString("en-US", { month: "long", year: "numeric", timeZone: "UTC" }),
+  }));
 }
+
+/** Months shown in the month-by-month comparison, ending at the selected month. */
+export const COMPARISON_MONTHS = 6;
 
 /** Parse a `YYYY-MM` value; falls back to the current IST month when malformed. */
 export function parseMonthValue(v: string | undefined): { year: number; month: number; value: string } {
@@ -186,6 +181,7 @@ export type BdeEnrollmentData = {
   slaTiles: Array<{ key: string; label: string; rule: string; count: number; tone: "danger" | "warning" | "neutral"; issue: string }>;
   slaWorst: Array<{ userId: string; name: string; count: number; widthPct: number }>;
   sources: SourceRow[];
+  comparison: MonthlyComparison;
   details: Record<string, ConsultantDetail>;
 };
 
@@ -240,6 +236,8 @@ export async function getBdeEnrollmentData(opts: {
   const mb = monthBounds(year, month); // date-only YYYY-MM-DD bounds, for @db.Date columns
   const monthStartUTC = new Date(Date.UTC(year, month - 1, 1));
   const monthEndUTC = new Date(Date.UTC(year, month, 1)); // exclusive
+  const compWindow = monthsEnding(year, month, COMPARISON_MONTHS);
+  const compStartUTC = new Date(Date.UTC(compWindow[0].year, compWindow[0].month - 1, 1));
 
   const [
     funnel,
@@ -251,6 +249,8 @@ export async function getBdeEnrollmentData(opts: {
     overdueGroups,
     statuses,
     stageGroups,
+    monthlyFacts,
+    allSources,
   ] = await Promise.all([
     getCrmFunnelByBde(year, month),
     getTeamActivity({ scope: wholeTeamScope(opts.selfUserId), range: { from: monthStartUTC, to: monthEndUTC }, now }),
@@ -297,6 +297,8 @@ export async function getBdeEnrollmentData(opts: {
           _count: { _all: true },
         })
       : Promise.resolve([] as Array<{ assignedToId: string | null; statusId: string; _count: { _all: number } }>),
+    getCrmMonthlyFacts({ from: compStartUTC, to: monthEndUTC, userId: bdeFilter !== "all" ? bdeFilter : null }),
+    prisma.leadPulseSource.findMany({ select: { id: true, label: true, active: true } }),
   ]);
 
   const funnelById = new Map(funnel.map((f) => [f.userId, f]));
@@ -465,7 +467,9 @@ export async function getBdeEnrollmentData(opts: {
       where: {
         status: "closed_won",
         closedDate: { gte: toPrismaDate(mb.start), lte: toPrismaDate(mb.end) },
-        ...(bdeFilter !== "all" ? { userId: bdeFilter } : { userId: { in: ids } }),
+        // Team-wide like the Enrolled count beside it (getCrmFunnelBySource), so
+        // a source's value is never short of its enrolments.
+        ...(bdeFilter !== "all" ? { userId: bdeFilter } : {}),
       },
       _sum: { expectedFirstInstallment: true },
     }),
@@ -482,6 +486,32 @@ export async function getBdeEnrollmentData(opts: {
     }))
     .filter((s) => s.leads > 0 || s.enrolled > 0)
     .sort((a, b) => b.enrolled - a.enrolled || b.leads - a.leads);
+
+  // ── Month-by-month comparison (scoped) ──
+  const compRoster = roster.filter((b) => bdeFilter === "all" || b.userId === bdeFilter);
+  const compRosterIds = new Set(compRoster.map((b) => b.userId));
+  const otherIds = [...new Set([...monthlyFacts.leads, ...monthlyFacts.sales].map((f) => f.userId))].filter((id) => !compRosterIds.has(id));
+  const [otherRoles, otherUsers] = otherIds.length
+    ? await Promise.all([
+        prisma.leadPulseRole.findMany({ where: { userId: { in: otherIds } }, select: { userId: true, displayName: true } }),
+        prisma.user.findMany({ where: { id: { in: otherIds } }, select: { id: true, username: true } }),
+      ])
+    : [[], []];
+  const otherNames = new Map<string, string>([
+    ...otherUsers.map((u) => [u.id, u.username] as [string, string]),
+    ...otherRoles.map((r) => [r.userId, r.displayName] as [string, string]),
+  ]);
+  const comparison: MonthlyComparison = {
+    months: comparisonMonths(compWindow, todayYmd.slice(0, 7)),
+    ...buildMonthlyComparison({
+      months: compWindow.map((m) => m.value),
+      leads: monthlyFacts.leads,
+      sales: monthlyFacts.sales,
+      roster: compRoster.map((b) => ({ userId: b.userId, name: b.displayName, role: b.role })),
+      otherNames,
+      sources: allSources,
+    }),
+  };
 
   // ── Detail drawer payload, for every roster member (independent of bdeFilter) ──
   const details: Record<string, ConsultantDetail> = {};
@@ -562,6 +592,7 @@ export async function getBdeEnrollmentData(opts: {
     slaTiles,
     slaWorst,
     sources,
+    comparison,
     details,
   };
 }

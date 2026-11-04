@@ -13,7 +13,7 @@
 import { Prisma } from "@prisma/client";
 import { prisma } from "./prisma";
 import { getSetting } from "./app-settings";
-import { toPrismaDate } from "./lead-pulse-dates";
+import { toPrismaDate, fromPrismaDate } from "./lead-pulse-dates";
 import {
   monthBounds,
   pct,
@@ -421,6 +421,54 @@ export async function getCrmFunnelBySource(opts: {
     const enrolled = eMap.get(s.id) ?? 0;
     return { sourceId: s.id, sourceCode: s.code, sourceLabel: s.label, leadsAssigned, enrolled, conversionPct: pct(enrolled, leadsAssigned) };
   });
+}
+
+/**
+ * Raw month-bucketed facts for the BDE Enrollment monthly comparison, over a
+ * half-open [from, to) range of UTC-midnight month starts: deliberately-assigned
+ * leads per (assignee, source, month) and every closed_won pipeline with its
+ * close month and ₹ value. Same carryover + duplicate rules and the same UTC
+ * month bounds as {@link getCrmFunnelByBde} / {@link getCrmFunnelBySource}, so a
+ * month's column equals that month's single-month figures. Any assignee/owner,
+ * not only the current roster — a leaver's past months still count.
+ */
+export async function getCrmMonthlyFacts(opts: { from: Date; to: Date; userId?: string | null }): Promise<{
+  leads: Array<{ userId: string; sourceId: string | null; month: string; count: number }>;
+  sales: Array<{ userId: string; sourceId: string; month: string; value: number }>;
+}> {
+  const userCond = opts.userId ? Prisma.sql`AND l."assignedToId" = ${opts.userId}` : Prisma.empty;
+  const [leadRows, pipelines] = await Promise.all([
+    prisma.$queryRaw<Array<{ userId: string; sourceId: string | null; month: string; n: bigint }>>(Prisma.sql`
+      SELECT l."assignedToId" AS "userId", l."sourceId" AS "sourceId",
+             to_char(date_trunc('month', l."assignedAt"), 'YYYY-MM') AS month, COUNT(*) AS n
+      FROM "Lead" l
+      LEFT JOIN "LeadImportBatch" b ON l."importBatchId" = b.id
+      JOIN "CrmLeadStatus" st ON l."statusId" = st.id
+      WHERE l."assignedToId" IS NOT NULL
+        AND l."assignedAt" >= ${opts.from} AND l."assignedAt" < ${opts.to}
+        ${userCond} AND ${DELIBERATE} AND ${NOT_DUPLICATE}
+      GROUP BY 1, 2, 3
+    `),
+    prisma.leadPulsePipeline.findMany({
+      where: {
+        status: "closed_won",
+        closedDate: { gte: opts.from, lt: opts.to },
+        ...(opts.userId ? { userId: opts.userId } : {}),
+      },
+      select: { userId: true, sourceId: true, closedDate: true, expectedFirstInstallment: true },
+    }),
+  ]);
+  return {
+    leads: leadRows.map((r) => ({ userId: r.userId, sourceId: r.sourceId, month: r.month, count: Number(r.n) })),
+    sales: pipelines
+      .filter((p) => p.closedDate)
+      .map((p) => ({
+        userId: p.userId,
+        sourceId: p.sourceId,
+        month: fromPrismaDate(p.closedDate!).slice(0, 7),
+        value: Number(p.expectedFirstInstallment),
+      })),
+  };
 }
 
 /**
