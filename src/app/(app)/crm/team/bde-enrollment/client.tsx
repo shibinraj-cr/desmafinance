@@ -4,8 +4,9 @@ import Link from "next/link";
 import { useRouter, useSearchParams, usePathname } from "next/navigation";
 import { useEffect, useState } from "react";
 import { KpiCard, Section } from "@/components/Cards";
-import { inr } from "@/lib/format";
+import { inr, inrCompact } from "@/lib/format";
 import type { BdeEnrollmentData, BdeRow, PipelineBucket, ConsultantDetail } from "@/lib/crm-bde-enrollment";
+import { cellConversion, type ComparisonCell, type ComparisonMonth, type ComparisonTable } from "@/lib/crm-monthly-comparison";
 
 function convTone(pct: number | null): string {
   if (pct === null) return "text-on-surface-variant";
@@ -252,6 +253,175 @@ function BdeTable({ data, onSelect }: { data: BdeEnrollmentData; onSelect: (id: 
   );
 }
 
+type Measure = "enrolled" | "value" | "leads" | "conv";
+
+const MEASURES: Array<{ key: Measure; label: string }> = [
+  { key: "enrolled", label: "Enrolments" },
+  { key: "value", label: "Value" },
+  { key: "leads", label: "Leads given" },
+  { key: "conv", label: "Conv. %" },
+];
+
+// One hue, more is darker — relative to the largest month cell in the table.
+const HEAT_STEPS = ["bg-primary/10", "bg-primary/20", "bg-primary/30", "bg-primary/50"];
+
+function measureOf(c: ComparisonCell, m: Measure): number | null {
+  return m === "conv" ? cellConversion(c) : c[m];
+}
+
+function fmtMeasure(v: number | null, m: Measure): string {
+  if (v === null) return "—";
+  if (m === "value") return inrCompact(v);
+  if (m === "conv") return `${v}%`;
+  return String(v);
+}
+
+function heatClass(v: number | null, max: number): string {
+  if (!v || max <= 0) return "";
+  return HEAT_STEPS[Math.min(HEAT_STEPS.length - 1, Math.ceil((v / max) * HEAT_STEPS.length) - 1)];
+}
+
+function cellTitle(month: ComparisonMonth, c: ComparisonCell): string {
+  const conv = cellConversion(c);
+  return (
+    `${month.label}${month.partial ? " (to date)" : ""} · ${c.enrolled} enrolled · ${inr(c.value)} · ` +
+    `${c.leads} leads given · ${conv === null ? "—" : `${conv}%`} conv.`
+  );
+}
+
+const STICKY = "sticky left-0 z-[1] bg-surface-container-lowest";
+
+function ComparisonGrid({
+  label,
+  table,
+  months,
+  measure,
+  onSelect,
+}: {
+  label: string;
+  table: ComparisonTable;
+  months: ComparisonMonth[];
+  measure: Measure;
+  onSelect: (id: string) => void;
+}) {
+  const max = Math.max(0, ...table.rows.flatMap((r) => r.cells.map((c) => measureOf(c, measure) ?? 0)));
+  return (
+    <div className="overflow-x-auto">
+      {/* Fixed layout so the BDE and source tables' month columns line up; the name column stays put while months scroll. */}
+      <table className="w-full min-w-[680px] table-fixed border-collapse text-label-sm">
+        <colgroup>
+          <col className="w-[132px] sm:w-[220px]" />
+        </colgroup>
+        <thead>
+          <tr className="border-b border-outline-variant text-left text-caption uppercase tracking-wider text-on-surface-variant">
+            <th className={`${STICKY} py-sm pr-sm font-semibold`}>{label}</th>
+            {months.map((m) => (
+              <th key={m.value} className="px-sm py-sm text-right font-semibold">
+                {m.short}
+                {m.partial && <span className="block text-[10px] font-normal normal-case tracking-normal">to date</span>}
+              </th>
+            ))}
+            <th className="pl-sm py-sm text-right font-semibold">{measure === "conv" ? "Overall" : "Total"}</th>
+          </tr>
+        </thead>
+        <tbody>
+          {table.rows.length === 0 ? (
+            <tr>
+              <td colSpan={months.length + 2} className="py-lg text-center text-on-surface-variant">
+                No leads or enrolments in these months.
+              </td>
+            </tr>
+          ) : (
+            table.rows.map((r) => {
+              const values = r.cells.map((c) => measureOf(c, measure));
+              const best = Math.max(0, ...values.map((v) => v ?? 0));
+              return (
+                <tr
+                  key={r.id}
+                  onClick={r.clickable ? () => onSelect(r.id) : undefined}
+                  className={`border-b border-outline-variant/60 ${r.clickable ? "cursor-pointer hover:bg-surface-container-low" : ""}`}
+                >
+                  <td className={`${STICKY} py-sm pr-sm`}>
+                    <span className="font-medium text-on-surface">{r.name}</span>
+                    {r.note && <span className="ml-xs text-caption uppercase text-on-surface-variant">{r.note}</span>}
+                  </td>
+                  {r.cells.map((c, i) => (
+                    <td
+                      key={months[i].value}
+                      title={cellTitle(months[i], c)}
+                      className={`px-sm py-sm text-right tabular-nums ${heatClass(values[i], max)} ${
+                        values[i] && values[i] === best ? "font-semibold text-on-surface" : "text-on-surface-variant"
+                      }`}
+                    >
+                      {fmtMeasure(values[i], measure)}
+                    </td>
+                  ))}
+                  <td className="pl-sm py-sm text-right font-semibold tabular-nums">{fmtMeasure(measureOf(r.total, measure), measure)}</td>
+                </tr>
+              );
+            })
+          )}
+        </tbody>
+        {table.rows.length > 1 && (
+          <tfoot>
+            <tr className="border-t-2 border-outline-variant font-semibold">
+              <td className={`${STICKY} py-sm pr-sm`}>Team total</td>
+              {table.totals.map((c, i) => (
+                <td key={months[i].value} title={cellTitle(months[i], c)} className="px-sm py-sm text-right tabular-nums">
+                  {fmtMeasure(measureOf(c, measure), measure)}
+                </td>
+              ))}
+              <td className="pl-sm py-sm text-right tabular-nums">{fmtMeasure(measureOf(table.grandTotal, measure), measure)}</td>
+            </tr>
+          </tfoot>
+        )}
+      </table>
+    </div>
+  );
+}
+
+function MonthlyComparisonSection({ data, onSelect }: { data: BdeEnrollmentData; onSelect: (id: string) => void }) {
+  const [measure, setMeasure] = useState<Measure>("enrolled");
+  const { months, byBde, bySource } = data.comparison;
+  return (
+    <Section title="Monthly comparison">
+      {/* The measure toggle sits in the body, not the Section header, so it can wrap at phone width. */}
+      <div className="-mt-sm mb-md flex flex-wrap items-start justify-between gap-sm">
+        <p className="max-w-3xl text-caption text-on-surface-variant">
+          {months[0]?.label} – {months[months.length - 1]?.label}. Enrolments and value count by close month, leads by
+          month given — the same rules as this month&apos;s figures on the rest of the page. Bold is each row&apos;s best
+          month; darker means higher. Hover a month for all four figures.
+        </p>
+        <div className="inline-flex flex-wrap rounded-lg border border-outline-variant bg-surface-container-low p-[2px]" role="group" aria-label="Measure">
+          {MEASURES.map((m) => (
+            <button
+              key={m.key}
+              type="button"
+              aria-pressed={measure === m.key}
+              onClick={() => setMeasure(m.key)}
+              className={`rounded-md px-md py-xs text-label-sm font-semibold transition ${
+                measure === m.key ? "bg-primary text-on-primary" : "text-on-surface-variant hover:text-on-surface"
+              }`}
+            >
+              {m.label}
+            </button>
+          ))}
+        </div>
+      </div>
+      <div className="flex flex-col gap-lg">
+        <div>
+          <p className="mb-sm text-label-sm font-semibold uppercase tracking-wider text-on-surface-variant">By BDE</p>
+          <ComparisonGrid label="Consultant" table={byBde} months={months} measure={measure} onSelect={onSelect} />
+        </div>
+        <div>
+          <p className="mb-sm text-label-sm font-semibold uppercase tracking-wider text-on-surface-variant">By source</p>
+          <ComparisonGrid label="Source" table={bySource} months={months} measure={measure} onSelect={onSelect} />
+        </div>
+      </div>
+    </Section>
+  );
+}
+
 function BucketCard({ bucket }: { bucket: PipelineBucket }) {
   const tone = bucketTone(bucket.tone);
   return (
@@ -343,28 +513,30 @@ function SlaAndSources({ data, onSelect }: { data: BdeEnrollmentData; onSelect: 
         {data.sources.length === 0 ? (
           <p className="py-md text-center text-label-sm text-on-surface-variant">No source-attributed leads yet.</p>
         ) : (
-          <table className="w-full border-collapse text-label-sm">
-            <thead>
-              <tr className="border-b border-outline-variant text-left text-caption uppercase tracking-wider text-on-surface-variant">
-                <th className="py-sm pr-sm font-semibold">Source</th>
-                <th className="px-sm py-sm text-right font-semibold">Leads</th>
-                <th className="px-sm py-sm text-right font-semibold">Enrolled</th>
-                <th className="px-sm py-sm text-right font-semibold">Conv.</th>
-                <th className="pl-sm py-sm text-right font-semibold">Value</th>
-              </tr>
-            </thead>
-            <tbody>
-              {data.sources.map((s) => (
-                <tr key={s.sourceId} className="border-b border-outline-variant/60">
-                  <td className="py-sm pr-sm">{s.name}</td>
-                  <td className="px-sm py-sm text-right tabular-nums text-on-surface-variant">{s.leads}</td>
-                  <td className="px-sm py-sm text-right tabular-nums">{s.enrolled}</td>
-                  <td className="px-sm py-sm text-right tabular-nums font-semibold">{s.convPct === null ? "—" : `${s.convPct}%`}</td>
-                  <td className="pl-sm py-sm text-right tabular-nums">{inr(s.value)}</td>
+          <div className="overflow-x-auto">
+            <table className="w-full border-collapse text-label-sm">
+              <thead>
+                <tr className="border-b border-outline-variant text-left text-caption uppercase tracking-wider text-on-surface-variant">
+                  <th className="py-sm pr-sm font-semibold">Source</th>
+                  <th className="px-sm py-sm text-right font-semibold">Leads</th>
+                  <th className="px-sm py-sm text-right font-semibold">Enrolled</th>
+                  <th className="px-sm py-sm text-right font-semibold">Conv.</th>
+                  <th className="pl-sm py-sm text-right font-semibold">Value</th>
                 </tr>
-              ))}
-            </tbody>
-          </table>
+              </thead>
+              <tbody>
+                {data.sources.map((s) => (
+                  <tr key={s.sourceId} className="border-b border-outline-variant/60">
+                    <td className="py-sm pr-sm">{s.name}</td>
+                    <td className="px-sm py-sm text-right tabular-nums text-on-surface-variant">{s.leads}</td>
+                    <td className="px-sm py-sm text-right tabular-nums">{s.enrolled}</td>
+                    <td className="px-sm py-sm text-right tabular-nums font-semibold">{s.convPct === null ? "—" : `${s.convPct}%`}</td>
+                    <td className="pl-sm py-sm text-right tabular-nums">{inr(s.value)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
         )}
       </Section>
     </section>
@@ -521,6 +693,7 @@ export function BdeEnrollmentClient({ data }: { data: BdeEnrollmentData }) {
 
       <TargetVsActual data={data} />
       <BdeTable data={data} onSelect={setSelected} />
+      <MonthlyComparisonSection data={data} onSelect={setSelected} />
 
       <Section title="Pipeline by expected close" action={<span className="text-caption text-on-surface-variant">Open deals only · {data.pipelineNote}</span>}>
         <div className="grid grid-cols-1 gap-gutter sm:grid-cols-2 xl:grid-cols-4">
