@@ -11,7 +11,7 @@ import {
   LEAD_TASK_FILTERS,
   LEAD_IDLE_BUCKETS,
 } from "@/lib/crm-leads";
-import { DEFAULT_STATUS_COLOR, BULK_EMAIL_COOLDOWN_DAYS, BULK_EMAIL_MERGE_FIELDS, fillTemplate, LEAD_TEMPERATURES, leadTemperatureMeta, isOtherQualification, qualificationText, QUALIFICATION_OTHER_MAX, daysInStatus, type MessageTemplateDTO } from "@/lib/crm";
+import { DEFAULT_STATUS_COLOR, BULK_EMAIL_COOLDOWN_DAYS, BULK_EMAIL_MERGE_FIELDS, fillTemplate, LEAD_TEMPERATURES, leadTemperatureMeta, isOtherQualification, qualificationText, QUALIFICATION_OTHER_MAX, daysInStatus, STATUS_STALE_DAYS, type MessageTemplateDTO } from "@/lib/crm";
 import { ageFromDob } from "@/lib/age";
 import { COUNTRIES, countryCodeFor } from "@/lib/countries";
 import { MultiSelect } from "@/components/MultiSelect";
@@ -668,7 +668,6 @@ function groupedSubStatuses<T extends { group: string }>(rows: T[]): [string, T[
 }
 
 /** Statuses older than this read as stale — long enough that nobody is "just waiting". */
-const STATUS_STALE_DAYS = 14;
 
 /**
  * Status plus how long it has been that way. The day-count is the point of the
@@ -1317,7 +1316,7 @@ export function LeadsTable({
         {anyFilter && (
           <button
             type="button"
-            onClick={() => update({ status: null, substatus: null, source: null, service: null, assignee: null, campaign: null, country: null, studyDestination: null, task: null, idle: null, ageMin: null, ageMax: null, assignedOn: null, from: null, to: null, period: null, q: null })}
+            onClick={() => update({ status: null, substatus: null, source: null, service: null, assignee: null, campaign: null, temperature: null, quality: null, country: null, studyDestination: null, task: null, idle: null, ageMin: null, ageMax: null, assignedOn: null, from: null, to: null, period: null, q: null })}
             className="h-9 px-md rounded-lg border border-outline-variant text-label-sm text-on-surface-variant hover:text-on-surface hover:bg-surface-container-low transition"
           >
             Clear all

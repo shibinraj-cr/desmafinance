@@ -6,6 +6,8 @@ import { TopBar } from "@/components/TopBar";
 import { NoAccess } from "@/components/sales-training/ui";
 import { youTubeWatchUrl } from "@/lib/sales-training";
 import { toQuestion, toVideos } from "@/lib/sales-training-db";
+import { CRM_GUIDE_MODULE_ID } from "@/lib/crm-guide";
+import { loadCrmGuideFacts, syncCrmGuideQuiz } from "@/lib/crm-guide-data";
 import { ModuleEditor } from "./client";
 
 export const dynamic = "force-dynamic";
@@ -15,6 +17,8 @@ export default async function SalesTrainingModulePage({ params }: { params: { id
   if (!perms) redirect("/login");
   if (!isHrUser(perms)) return <NoAccess title="Training Module" />;
 
+  const guideQuiz = params.id === CRM_GUIDE_MODULE_ID;
+  if (guideQuiz) await syncCrmGuideQuiz(await loadCrmGuideFacts());
   const mod = await prisma.salesTrainingModule.findUnique({
     where: { id: params.id },
     include: { questions: { orderBy: { sortOrder: "asc" } } },
@@ -58,6 +62,11 @@ export default async function SalesTrainingModulePage({ params }: { params: { id
         <ModuleEditor
           canEdit={canApproveHr(perms)}
           hasAttempts={attempts.length > 0}
+          questionsNote={
+            guideQuiz
+              ? "These questions come from the CRM Guide (Training & Development → CRM Guide) and update automatically whenever the guide or the CRM changes. Past attempts keep the questions they were scored on."
+              : undefined
+          }
           module={{
             id: mod.id,
             title: mod.title,

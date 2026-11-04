@@ -6,7 +6,7 @@ import { useRouter } from "next/navigation";
 import Link from "next/link";
 import type { LeadRow, NoteRow, ActivityRow, TaskRow, TaskReminderRow } from "@/lib/crm-leads";
 import { isActionOnlyStatus, canUnenrollInto } from "@/lib/crm-leads";
-import { buildLeadMergeVars, DEFAULT_STATUS_COLOR, fillTemplate, LEAD_TEMPERATURES, TASK_TYPES, isOtherQualification, qualificationText, QUALIFICATION_OTHER_MAX, daysInStatus, type MessageTemplateDTO } from "@/lib/crm";
+import { buildLeadMergeVars, DEFAULT_STATUS_COLOR, fillTemplate, LEAD_TEMPERATURES, TASK_TYPES, isOtherQualification, qualificationText, QUALIFICATION_OTHER_MAX, daysInStatus, STATUS_STALE_DAYS, type MessageTemplateDTO } from "@/lib/crm";
 import { ageFromDob } from "@/lib/age";
 import { COUNTRIES, countryCodeFor } from "@/lib/countries";
 import { MultiSelect } from "@/components/MultiSelect";
@@ -1386,7 +1386,7 @@ function StatusBar({
       {/* How long they have been sitting here. The number is the point: the same
           status at 2 days and at 94 days are different problems. */}
       {days !== null && (
-        <span className={"text-label-sm " + (days >= 14 ? "text-amber-700 font-semibold" : "text-on-surface-variant")}>
+        <span className={"text-label-sm " + (days >= STATUS_STALE_DAYS ? "text-amber-700 font-semibold" : "text-on-surface-variant")}>
           · {days}d
         </span>
       )}

@@ -1,0 +1,39 @@
+name: CRM guide
+
+# A CRM feature should reach the BDEs who use it: a `feat(crm…)` PR must touch
+# the in-app CRM guide (src/lib/crm-guide.ts), or say why not with "guide: n/a"
+# in the PR description. Kept apart from CI so that editing the description
+# re-runs only this check.
+on:
+  pull_request:
+    types: [opened, edited, synchronize, reopened]
+
+jobs:
+  guide-updated:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: CRM feature PRs update the CRM guide
+        env:
+          TITLE: ${{ github.event.pull_request.title }}
+          BODY: ${{ github.event.pull_request.body }}
+          BASE: ${{ github.event.pull_request.base.sha }}
+          HEAD: ${{ github.event.pull_request.head.sha }}
+        run: |
+          if ! printf '%s' "$TITLE" | grep -qiE '^feat\(crm[^)]*\)'; then
+            echo "Not a CRM feature PR — nothing to check."
+            exit 0
+          fi
+          if printf '%s' "$BODY" | grep -qiE 'guide:[[:space:]]*n/?a'; then
+            echo "The PR description says the CRM guide needs no change."
+            exit 0
+          fi
+          if git diff --name-only "$BASE...$HEAD" | grep -qx 'src/lib/crm-guide.ts'; then
+            echo "CRM guide updated."
+            exit 0
+          fi
+          echo "::error::CRM feature PR, but src/lib/crm-guide.ts is unchanged. Teach BDEs the change in the CRM guide and add a CRM_GUIDE_CHANGES line — or, if BDEs never see it, add 'guide: n/a' to the PR description."
+          exit 1

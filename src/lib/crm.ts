@@ -160,6 +160,9 @@ export function slugifyStatusCode(label: string): string {
   return slug || `status_${Date.now().toString(36)}`;
 }
 
+/** A status unchanged this many days shows its day count in amber (leads list and lead page). */
+export const STATUS_STALE_DAYS = 14;
+
 /**
  * Whole days a lead has sat in its current status, or null when it has never
  * been moved into one (the backfill leaves `subStatusSince` null on purpose —
