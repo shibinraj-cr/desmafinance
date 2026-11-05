@@ -1,12 +1,13 @@
 import { NextResponse } from "next/server";
 import { z } from "zod";
+import { Prisma, type HrSalaryRun } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
 import { getCurrentUserAndPermissions } from "@/lib/permissions";
 import { canApproveHr, isHrUser } from "@/lib/hr-rbac";
 import { recordAudit } from "@/lib/audit";
 import { raiseSalaryDrafts } from "@/lib/hr-salary-finance";
 
-const ApproveSchema = z.object({ action: z.literal("approve") });
+const ActionSchema = z.object({ action: z.enum(["approve", "send_to_finance"]) });
 const PatchSchema = z.object({
   workingDaysBase: z.number().int().min(20).max(31).optional(),
 });
@@ -30,12 +31,13 @@ export async function GET(_req: Request, { params }: { params: { id: string } })
 export async function POST(req: Request, { params }: { params: { id: string } }) {
   const { perms, userId } = await getCurrentUserAndPermissions();
   if (!userId || !canApproveHr(perms)) return NextResponse.json({ error: "forbidden" }, { status: 403 });
-  const parsed = ApproveSchema.safeParse(await req.json());
+  const parsed = ActionSchema.safeParse(await req.json());
   if (!parsed.success) {
     return NextResponse.json({ error: "invalid", issues: parsed.error.issues }, { status: 400 });
   }
   const run = await prisma.hrSalaryRun.findUnique({ where: { id: params.id } });
   if (!run) return NextResponse.json({ error: "not found" }, { status: 404 });
+  if (parsed.data.action === "send_to_finance") return sendToFinance(run, userId);
 
   // Note: approval no longer mutates HrLeaveBalance. The canonical leave engine
   // (src/lib/hr-leave-balance.ts) is the single source of truth and already
@@ -79,6 +81,55 @@ export async function POST(req: Request, { params }: { params: { id: string } })
     run: { ...run, status: "hr_approved", approvedById: userId, approvedAt },
     financeDrafts: drafts.count,
   });
+}
+
+/**
+ * Send an approved run to Finance after the fact. A run approved before the
+ * hand-off existed raised no drafts, so HR sends it once. It must still be
+ * approved, with nothing waiting in Finance and nothing submitted from it. Two
+ * requests racing past that check both insert, and the (salaryRunId,
+ * employeeId) index fails the second, so a double click can't send it twice.
+ */
+async function sendToFinance(run: HrSalaryRun, userId: string) {
+  let drafts: { count: number; total: number } | null;
+  try {
+    drafts = await prisma.$transaction(async (tx) => {
+      const current = await tx.hrSalaryRun.findUnique({
+        where: { id: run.id },
+        select: { status: true, financeSubmittedAt: true, _count: { select: { financeDrafts: true } } },
+      });
+      if (current?.status !== "hr_approved" || current.financeSubmittedAt || current._count.financeDrafts > 0) {
+        return null;
+      }
+      return raiseSalaryDrafts(tx, run, userId);
+    });
+  } catch (e) {
+    if (!(e instanceof Prisma.PrismaClientKnownRequestError && e.code === "P2002")) throw e;
+    drafts = null;
+  }
+  if (!drafts) {
+    return NextResponse.json(
+      { error: "This run isn't approved, or its salaries are already with Finance." },
+      { status: 409 },
+    );
+  }
+  await prisma.hrAuditLog.create({
+    data: {
+      actorUserId: userId,
+      eventType: "salary_run_sent_to_finance",
+      entityType: "HrSalaryRun",
+      entityId: run.id,
+      metadata: { monthKey: run.monthKey, financeDrafts: drafts.count, total: drafts.total },
+    },
+  });
+  await recordAudit({
+    entityType: "HrSalaryRun",
+    entityId: run.id,
+    action: "DRAFT_CREATE",
+    userId,
+    changes: { monthKey: run.monthKey, drafts: drafts.count, total: drafts.total },
+  });
+  return NextResponse.json({ financeDrafts: drafts.count });
 }
 
 export async function PATCH(req: Request, { params }: { params: { id: string } }) {

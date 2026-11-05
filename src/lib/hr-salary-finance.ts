@@ -1,5 +1,6 @@
 import type { Prisma } from "@prisma/client";
 import { monthCodeFromDate, subItemsFor } from "./catalog";
+import { prisma } from "./prisma";
 import {
   effectiveDesignation,
   isOwnerDesignation,
@@ -123,5 +124,57 @@ export async function raiseSalaryDrafts(
   return {
     count: rows.length,
     total: rows.reduce((sum, r) => sum + Number(r.amount), 0),
+  };
+}
+
+/**
+ * Salary Finance already holds for these people in the run's booking month
+ * without it coming from a run: hand-entered ledger rows, entries waiting for
+ * approval and other drafts. A run approved before the hand-off existed was
+ * booked this way, so HR sees the total before sending the run on top of it.
+ */
+export async function salaryAlreadyInFinance(
+  monthKey: string,
+  employeeIds: string[],
+): Promise<{ count: number; total: number }> {
+  const [year, month] = monthKey.split("-").map(Number);
+  const from = new Date(Date.UTC(year, month - 1, 1));
+  const to = new Date(Date.UTC(year, month, 1));
+  const where = {
+    type: "Expense",
+    category: "Salary",
+    subItem: { not: INCENTIVE_SUB_ITEM },
+    employeeId: { in: employeeIds },
+    date: { gte: from, lt: to },
+  };
+  const [ledger, drafts, pending] = await Promise.all([
+    prisma.transaction.aggregate({ where: { ...where, deletedAt: null }, _count: true, _sum: { amount: true } }),
+    prisma.transactionDraft.aggregate({ where: { ...where, salaryRunId: null }, _count: true, _sum: { amount: true } }),
+    prisma.pendingApproval.findMany({
+      where: { status: "pending", kind: "create", proposed: { path: ["category"], equals: "Salary" } },
+      select: { proposed: true },
+    }),
+  ]);
+  const ids = new Set(employeeIds);
+  const waiting = pending
+    .map((p) => p.proposed as { type?: string; subItem?: string; employeeId?: string | null; date?: string; amount?: number })
+    .filter((p) => {
+      const date = p.date ? new Date(p.date) : null;
+      return (
+        p.type === "Expense" &&
+        p.subItem !== INCENTIVE_SUB_ITEM &&
+        !!p.employeeId &&
+        ids.has(p.employeeId) &&
+        !!date &&
+        date >= from &&
+        date < to
+      );
+    });
+  return {
+    count: ledger._count + drafts._count + waiting.length,
+    total:
+      Number(ledger._sum.amount ?? 0) +
+      Number(drafts._sum.amount ?? 0) +
+      waiting.reduce((sum, p) => sum + Number(p.amount ?? 0), 0),
   };
 }

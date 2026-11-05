@@ -21,6 +21,15 @@ type RunHeader = {
   axisExportedAt: string | null;
 };
 
+/** Where an approved run stands with Finance; null while the run is a draft. */
+type FinanceState = {
+  draftsWaiting: number;
+  submittedAt: string | null;
+  canSend: boolean;
+  /** Salary for this month Finance holds from elsewhere; set only when sendable. */
+  alreadyInFinance: { count: number; total: number } | null;
+};
+
 type AdjRow = {
   id: string;
   kind: string; // "deduction" | "addition"
@@ -102,12 +111,14 @@ export function SalaryRunDetail({
   canEdit,
   canApprove,
   canDownload,
+  finance,
 }: {
   run: RunHeader;
   lines: Line[];
   canEdit: boolean;
   canApprove: boolean;
   canDownload: boolean;
+  finance: FinanceState | null;
 }) {
   const router = useRouter();
   const [pending, start] = useTransition();
@@ -132,6 +143,36 @@ export function SalaryRunDetail({
       setError(j.error || "approve failed");
       return;
     }
+    start(() => router.refresh());
+  }
+
+  async function sendToFinance() {
+    const [y, m] = run.monthKey.split("-").map(Number);
+    const month = new Date(Date.UTC(y, m - 1, 1)).toLocaleString("en-IN", {
+      month: "long",
+      year: "numeric",
+      timeZone: "UTC",
+    });
+    const already = finance?.alreadyInFinance;
+    const warning =
+      already && already.count > 0
+        ? `\n\nFinance already has ${already.count} salary ${already.count === 1 ? "entry" : "entries"} for these employees dated in ${month} (₹${inr(already.total)}), entered by hand. Sending adds the run on top, so Finance must discard whichever is the duplicate.`
+        : "";
+    if (!confirm(`Send ${run.monthKey} salaries to Finance? Each employee's salary becomes a draft on Finance → Approvals → My Drafts for Finance to check and approve.${warning}`)) return;
+    setError(null);
+    setBusy(true);
+    const res = await fetch(`/api/hr/salary/${run.id}`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ action: "send_to_finance" }),
+    });
+    setBusy(false);
+    const j = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      setError(j.error || "send failed");
+      return;
+    }
+    if (j.financeDrafts === 0) setError("Nothing to send: no one in this run has pay due.");
     start(() => router.refresh());
   }
 
@@ -227,6 +268,15 @@ export function SalaryRunDetail({
               Approve &amp; lock
             </button>
           )}
+          {finance?.canSend && (
+            <button
+              onClick={sendToFinance}
+              disabled={pending || busy}
+              className="px-md py-sm rounded bg-primary text-on-primary font-bold disabled:opacity-50"
+            >
+              Send to Finance
+            </button>
+          )}
           {canDownload && (
             <a
               href={`/api/hr/salary/${run.id}/axis-export`}
@@ -246,6 +296,16 @@ export function SalaryRunDetail({
             </a>
           )}
         </div>
+        {finance && (
+          <p className="text-on-surface-variant text-label-sm mt-sm">
+            Finance:{" "}
+            {finance.draftsWaiting > 0 &&
+              `${finance.draftsWaiting} salary draft${finance.draftsWaiting === 1 ? "" : "s"} waiting on Approvals → My Drafts. `}
+            {finance.submittedAt &&
+              `First submitted ${new Date(finance.submittedAt).toLocaleDateString("en-IN")}.`}
+            {finance.draftsWaiting === 0 && !finance.submittedAt && "not sent yet."}
+          </p>
+        )}
         {error && <p className="text-red-700 text-label-sm mt-sm">{error}</p>}
       </Section>
 

@@ -6,6 +6,7 @@ import { isHrUser, canApproveHr, canDownloadAxis } from "@/lib/hr-rbac";
 import { TopBar } from "@/components/TopBar";
 import { Section } from "@/components/Cards";
 import type { PfSegmentCalc } from "@/lib/hr-pf";
+import { salaryAlreadyInFinance } from "@/lib/hr-salary-finance";
 import { SalaryRunDetail } from "./client";
 
 export const dynamic = "force-dynamic";
@@ -33,9 +34,20 @@ export default async function SalaryRunDetailPage({ params }: { params: { id: st
         orderBy: { employee: { empCode: "asc" } },
       },
       adjustments: { orderBy: { createdAt: "asc" } },
+      _count: { select: { financeDrafts: true } },
     },
   });
   if (!run) notFound();
+
+  // Where the run stands with Finance. A run approved before the hand-off
+  // existed raised nothing, so HR can send it, after seeing any salary Finance
+  // already entered by hand for that month.
+  const draftsWaiting = run._count.financeDrafts;
+  const canSendToFinance =
+    canApproveHr(perms) && run.status === "hr_approved" && !run.financeSubmittedAt && draftsWaiting === 0;
+  const alreadyInFinance = canSendToFinance
+    ? await salaryAlreadyInFinance(run.monthKey, run.lines.map((l) => l.employeeId))
+    : null;
 
   // Itemised adjustments are keyed by (run, employee); group them so each line
   // carries its own rows.
@@ -111,6 +123,16 @@ export default async function SalaryRunDetailPage({ params }: { params: { id: st
           canEdit={canApproveHr(perms) && run.status === "draft"}
           canApprove={canApproveHr(perms) && run.status === "draft"}
           canDownload={canDownloadAxis(perms) && run.status !== "draft"}
+          finance={
+            run.status === "draft"
+              ? null
+              : {
+                  draftsWaiting,
+                  submittedAt: run.financeSubmittedAt ? run.financeSubmittedAt.toISOString() : null,
+                  canSend: canSendToFinance,
+                  alreadyInFinance,
+                }
+          }
         />
       </div>
     </>
