@@ -36,6 +36,8 @@ model User {
   leadPulseAuditLogs      LeadPulseAuditLog[]   @relation("LeadPulseAudit")
   leadPulseTargets        LeadPulseTarget[]     @relation("LeadPulseTargets")
   leadPulseTargetsEdited  LeadPulseTarget[]     @relation("LeadPulseTargetEditors")
+  leadPulseIncentives     LeadPulseIncentive[]  @relation("LeadPulseIncentives")
+  leadPulseTeamMembers    LeadPulseTeamMember[] @relation("LeadPulseTeamMembers")
   // Candidates assigned to this user as their L2 BDE (the BDE who
   // closed the deal). Drives the service-conversion matrix.
   assignedCandidates      Party[]               @relation("PartyAssignedL2Bde")
@@ -830,6 +832,103 @@ model LeadPulseTarget {
   @@index([year, month])
   @@index([userId])
   @@index([groupId])
+}
+
+/// An L2 BDE's incentive setup for one month, set by Marketing Admin on the
+/// target sheet beside their LeadPulseTarget rows. `minimum` is the expected
+/// level and pays nothing by itself; it gates the BDE's team-pool share. Up to
+/// four all-units slabs: the highest slab reached pays its rate on EVERY
+/// enrolment in the month (from 10 at ₹1,000 → 10 enrolments pay ₹10,000).
+/// A slab is set when both its `From` and `Rate` are; see crm-incentive.ts.
+model LeadPulseIncentive {
+  id          String   @id @default(cuid())
+  year        Int
+  month       Int
+  userId      String
+  user        User     @relation(name: "LeadPulseIncentives", fields: [userId], references: [id], onDelete: Cascade)
+  minimum     Int?
+  slab1From   Int?
+  slab1Rate   Int?
+  slab2From   Int?
+  slab2Rate   Int?
+  slab3From   Int?
+  slab3Rate   Int?
+  slab4From   Int?
+  slab4Rate   Int?
+  /// Loose ref to whoever last saved the row (no FK, like IncentivePlan).
+  updatedById String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@unique([year, month, userId])
+  @@index([userId])
+}
+
+/// Month-wide incentive bonuses, the same for every L2 BDE: a flat bonus for
+/// reaching the month's target, and per-enrolment bonuses for a close within
+/// 48 hours of assignment and for an own candidate referral.
+model LeadPulseIncentiveMonth {
+  id             String   @id @default(cuid())
+  year           Int
+  month          Int
+  targetBonus    Int      @default(0)
+  fastCloseBonus Int      @default(0)
+  referralBonus  Int      @default(0)
+  updatedById    String?
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  @@unique([year, month])
+}
+
+/// A sales team for the team incentive. Membership and targets are per period
+/// (below), so renaming or retiring a team never rewrites history.
+model LeadPulseTeam {
+  id        String                @id @default(cuid())
+  name      String                @unique
+  active    Boolean               @default(true)
+  members   LeadPulseTeamMember[]
+  targets   LeadPulseTeamTarget[]
+  createdAt DateTime              @default(now())
+  updatedAt DateTime              @updatedAt
+}
+
+/// One L2 BDE's team for one month — at most one team per BDE per month. Kept
+/// per month so a BDE who moves team counts for the new team from that month,
+/// and a quarter's pool reads each of its months' membership.
+model LeadPulseTeamMember {
+  id        String        @id @default(cuid())
+  teamId    String
+  team      LeadPulseTeam @relation(fields: [teamId], references: [id], onDelete: Cascade)
+  userId    String
+  user      User          @relation(name: "LeadPulseTeamMembers", fields: [userId], references: [id], onDelete: Cascade)
+  year      Int
+  month     Int
+  createdAt DateTime      @default(now())
+
+  @@unique([year, month, userId])
+  @@index([teamId, year, month])
+}
+
+/// A team's enrolment target and ₹ pool for one month (`periodType` "month",
+/// `period` 1–12) or one calendar quarter ("quarter", 1–4: Jan–Mar … Oct–Dec).
+/// Hitting the target releases the pool, split by enrolments among members who
+/// reached their own minimum.
+model LeadPulseTeamTarget {
+  id          String        @id @default(cuid())
+  teamId      String
+  team        LeadPulseTeam @relation(fields: [teamId], references: [id], onDelete: Cascade)
+  year        Int
+  periodType  String
+  period      Int
+  target      Int
+  pool        Int
+  updatedById String?
+  createdAt   DateTime      @default(now())
+  updatedAt   DateTime      @updatedAt
+
+  @@unique([teamId, year, periodType, period])
+  @@index([year, periodType, period])
 }
 
 /// Manual monthly Meta ad-spend, entered by supervisors in the Growth Planner.
