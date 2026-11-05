@@ -1,4 +1,5 @@
 import { prisma } from "./prisma";
+import { recordAudit } from "./audit";
 import { cycleWindowForMonth, structureForMonth, computeLateTags, type LateTag } from "./hr-data";
 import { computeMonthlyLeaveLedger } from "./hr-leave-balance";
 import {
@@ -544,6 +545,16 @@ export function daysAfterRelieving(relievingDate: Date | null | undefined, start
   return Math.round((end.getTime() - firstUnpaid) / DAY) + 1;
 }
 
+/** A recompute refused because Finance has already submitted part of the run. */
+export class SalaryRunWithFinanceError extends Error {
+  constructor(monthKey: string) {
+    super(
+      `Finance has already submitted salary entries for ${monthKey}, so it can't be recomputed. ` +
+        "Correct the entry in Finance, or carry the difference into next month as an adjustment.",
+    );
+  }
+}
+
 export async function computeSalaryRun(monthKey: string, userId: string | null): Promise<{
   runId: string;
   lineCount: number;
@@ -566,16 +577,37 @@ export async function computeSalaryRun(monthKey: string, userId: string | null):
     end,
   );
 
-  const run = await prisma.hrSalaryRun.upsert({
+  // Recomputing is how HR reopens an approved run, which re-raises its salaries
+  // on the next approval. So it takes back what Finance hasn't submitted, and
+  // is refused once anything has moved on — that money would be booked twice.
+  const existing = await prisma.hrSalaryRun.findUnique({
     where: { monthKey },
-    update: { status: "draft", workingDaysBase, totalNet: 0 },
-    create: {
-      monthKey,
-      workingDaysBase,
-      status: "draft",
-      createdById: userId,
-    },
+    select: { financeSubmittedAt: true },
   });
+  if (existing?.financeSubmittedAt) throw new SalaryRunWithFinanceError(monthKey);
+
+  const [recalled, run] = await prisma.$transaction([
+    prisma.transactionDraft.deleteMany({ where: { salaryRun: { monthKey } } }),
+    prisma.hrSalaryRun.upsert({
+      where: { monthKey },
+      update: { status: "draft", workingDaysBase, totalNet: 0 },
+      create: {
+        monthKey,
+        workingDaysBase,
+        status: "draft",
+        createdById: userId,
+      },
+    }),
+  ]);
+  if (recalled.count > 0) {
+    await recordAudit({
+      entityType: "HrSalaryRun",
+      entityId: run.id,
+      action: "DRAFT_DISCARD",
+      userId,
+      changes: { monthKey, recalledDrafts: recalled.count },
+    });
+  }
 
   await prisma.hrSalaryRunLine.deleteMany({ where: { runId: run.id } });
 

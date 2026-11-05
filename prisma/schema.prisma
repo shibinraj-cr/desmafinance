@@ -1276,9 +1276,15 @@ model TransactionDraft {
   employee      Employee? @relation("EmployeeTransactionDrafts", fields: [employeeId], references: [id], onDelete: SetNull)
   /// Mirrors Transaction.expDom — required on Revenue drafts.
   expDom        String?
+  /// Set on a draft raised by HR approving a salary run. Such a draft belongs
+  /// to Finance as a team, not to the HR approver in submittedById, and is
+  /// unique per employee so one run can't raise anyone's salary twice.
+  salaryRunId   String?
+  salaryRun     HrSalaryRun? @relation(fields: [salaryRunId], references: [id], onDelete: SetNull)
   createdAt     DateTime  @default(now())
   updatedAt     DateTime  @updatedAt
 
+  @@unique([salaryRunId, employeeId])
   @@index([submittedById])
   @@index([createdAt])
   @@index([employeeId])
@@ -1927,10 +1933,16 @@ model HrSalaryRun {
   approvedAt      DateTime?
   axisExportName  String?
   axisExportedAt  DateTime?
+  /// When Finance first pushed one of this run's salary drafts on towards the
+  /// ledger. From then on the run can no longer be recomputed: a re-approval
+  /// would raise the same salaries again and book them twice.
+  financeSubmittedAt DateTime?
   createdAt       DateTime             @default(now())
   updatedAt       DateTime             @updatedAt
   lines           HrSalaryRunLine[]
   adjustments     HrSalaryAdjustment[]
+  /// Salary drafts raised on approval and not yet submitted by Finance.
+  financeDrafts   TransactionDraft[]
 
   @@index([status])
 }

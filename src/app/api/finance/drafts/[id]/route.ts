@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { prisma } from "@/lib/prisma";
 import { getCurrentUserAndPermissions } from "@/lib/permissions";
 import { canSeePage } from "@/lib/rbac";
 import { discardDraft, updateDraft } from "@/lib/approval";
@@ -23,10 +24,21 @@ export async function PATCH(req: NextRequest, { params }: { params: { id: string
   if (!parsed.success) {
     return NextResponse.json({ error: "validation_failed", issues: parsed.error.format() }, { status: 400 });
   }
+  // A salary draft is one person's pay from a locked run: Finance can change how
+  // it's booked, never whose it is. A leaver is inactive by now, so the employee
+  // it already names has to be let through the active-employee check.
+  const draft = await prisma.transactionDraft.findUnique({
+    where: { id: params.id },
+    select: { salaryRunId: true, employeeId: true },
+  });
+  const salaryEmployeeId = draft?.salaryRunId ? draft.employeeId : null;
   // Same server-authoritative validation as create/update/resubmit: derived
   // month, type enum, category/sub-item master, payment mode enum, positive
   // amount, flow, counterparty, EXP/DOM.
-  const built = await buildValidatedProposed(parsed.data);
+  const built = await buildValidatedProposed(
+    salaryEmployeeId ? { ...parsed.data, employeeId: salaryEmployeeId, partyId: null } : parsed.data,
+    { allowInactiveEmployeeId: salaryEmployeeId },
+  );
   if ("error" in built) {
     return NextResponse.json({ error: built.error }, { status: 400 });
   }

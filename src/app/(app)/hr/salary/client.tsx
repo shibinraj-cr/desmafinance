@@ -47,6 +47,15 @@ export function SalaryRunsClient({
   const [status, setStatus] = useState<string | null>(null);
 
   async function compute() {
+    const approved = runs.find((r) => r.monthKey === month && r.status !== "draft");
+    if (
+      approved &&
+      !confirm(
+        `${month} is already approved. Re-computing reopens it and takes back its salary drafts from Finance, including any edits they made. Continue?`,
+      )
+    ) {
+      return;
+    }
     setError(null);
     setStatus("Computing…");
     const res = await fetch("/api/hr/salary", {
@@ -94,7 +103,7 @@ export function SalaryRunsClient({
           <p className="text-caption text-on-surface-variant mt-sm">
             Compute pulls active employees&apos; attendance for the month + their salary structure and
             re-builds the line items in draft. Idempotent. You must approve the run before Finance
-            can download the Axis file.
+            can download the Axis file; approving also sends each salary to Finance as a draft.
           </p>
         </Section>
       )}

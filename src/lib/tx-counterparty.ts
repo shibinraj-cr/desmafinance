@@ -10,7 +10,9 @@ import { prisma } from "./prisma";
  *  - employees may only be the counterparty on Expense transactions
  *    (salary / incentive outflows);
  *  - a chosen party exists, is active, and its txTypes permits this type;
- *  - a chosen employee exists and is active.
+ *  - a chosen employee exists and is active. `allowInactiveEmployeeId` excuses
+ *    the employee a row already names: a leaver stays payable for their last
+ *    cycle after being deactivated.
  *
  * Returns an error code suitable for an API response, or null when valid.
  */
@@ -18,6 +20,7 @@ export async function validateCounterparty(opts: {
   type: string; // "Revenue" | "Expense"
   partyId?: string | null;
   employeeId?: string | null;
+  allowInactiveEmployeeId?: string | null;
 }): Promise<string | null> {
   const partyId = opts.partyId || null;
   const employeeId = opts.employeeId || null;
@@ -31,7 +34,9 @@ export async function validateCounterparty(opts: {
       where: { id: employeeId },
       select: { id: true, active: true },
     });
-    if (!emp || !emp.active) return "employee_not_found";
+    if (!emp || (!emp.active && emp.id !== opts.allowInactiveEmployeeId)) {
+      return "employee_not_found";
+    }
     return null;
   }
 

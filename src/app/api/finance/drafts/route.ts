@@ -1,30 +1,28 @@
 import { NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { getCurrentUserAndPermissions } from "@/lib/permissions";
-import { canSeePage } from "@/lib/rbac";
+import { canSeePage, canWorkSalaryDrafts } from "@/lib/rbac";
+import { draftScope } from "@/lib/approval";
 
 export const dynamic = "force-dynamic";
 
 const PAGE = "/finance/approvals";
 
 /**
- * GET /api/finance/drafts — list the current user's TransactionDraft rows.
- * Only the owner sees their drafts (no cross-user visibility).
+ * GET /api/finance/drafts — list the TransactionDraft rows the current user
+ * works: their own, plus salary drafts for Finance (see draftScope).
  */
 export async function GET() {
   const { perms, userId } = await getCurrentUserAndPermissions();
   if (!perms || !userId) return NextResponse.json({ error: "unauthorized" }, { status: 401 });
   if (!canSeePage(perms, PAGE)) return NextResponse.json({ error: "forbidden" }, { status: 403 });
-  if (!perms.draftFirst && !perms.isAdmin) {
-    // Anyone who isn't on the draft workflow and isn't an admin has
-    // no business listing drafts.
+  if (!perms.draftFirst && !canWorkSalaryDrafts(perms)) {
+    // Anyone who isn't on the draft workflow and doesn't work salary
+    // drafts has no business listing drafts.
     return NextResponse.json({ drafts: [] });
   }
-  // Admins see every user's drafts (oversight); draftFirst users see
-  // only their own.
-  const where = perms.isAdmin ? {} : { submittedById: userId };
   const drafts = await prisma.transactionDraft.findMany({
-    where,
+    where: draftScope(perms, userId),
     orderBy: [{ createdAt: "desc" }],
     include: {
       party: { select: { id: true, name: true, group: true } },

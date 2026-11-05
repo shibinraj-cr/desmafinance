@@ -1,6 +1,7 @@
+import type { Prisma } from "@prisma/client";
 import { prisma } from "./prisma";
 import { recordAudit } from "./audit";
-import { canApprove, needsApproval, type Permissions } from "./rbac";
+import { canApprove, canWorkSalaryDrafts, needsApproval, type Permissions } from "./rbac";
 
 export type TxProposed = {
   date: string; // ISO date
@@ -116,6 +117,34 @@ export async function submitCreate(opts: {
   return { applied: false as const, pending };
 }
 
+/** The drafts a user works on My Drafts: admins see everyone's (oversight),
+ *  everyone else their own, and Finance also the salary drafts of approved
+ *  runs, whose owner is the HR approver. */
+export function draftScope(perms: Permissions, userId: string): Prisma.TransactionDraftWhereInput {
+  if (perms.isAdmin && !perms.draftFirst) return {};
+  if (!canWorkSalaryDrafts(perms)) return { submittedById: userId };
+  return { OR: [{ submittedById: userId }, { salaryRunId: { not: null } }] };
+}
+
+/** Owner or admin; a salary draft is Finance's to work, whoever approved the run. */
+function canActOnDraft(
+  draft: { submittedById: string; salaryRunId: string | null },
+  userId: string,
+  perms: Permissions,
+) {
+  if (draft.salaryRunId) return canWorkSalaryDrafts(perms);
+  return draft.submittedById === userId || perms.isAdmin;
+}
+
+/** Stamp a salary run as having left Finance's drafts. It can't be recomputed after this. */
+async function markRunSubmitted(tx: Prisma.TransactionClient, salaryRunId: string | null) {
+  if (!salaryRunId) return;
+  await tx.hrSalaryRun.updateMany({
+    where: { id: salaryRunId, financeSubmittedAt: null },
+    data: { financeSubmittedAt: new Date() },
+  });
+}
+
 /** Edit an existing draft. The owner can always edit; admins can edit
  *  any draft (so they can support Ganga's review if needed). */
 export async function updateDraft(opts: {
@@ -127,7 +156,7 @@ export async function updateDraft(opts: {
   const { draftId, userId, perms, data } = opts;
   const draft = await prisma.transactionDraft.findUnique({ where: { id: draftId } });
   if (!draft) return { error: "not_found" as const };
-  if (draft.submittedById !== userId && !perms.isAdmin) return { error: "forbidden" as const };
+  if (!canActOnDraft(draft, userId, perms)) return { error: "forbidden" as const };
   const updated = await prisma.transactionDraft.update({
     where: { id: draftId },
     data: {
@@ -164,7 +193,7 @@ export async function discardDraft(opts: {
   const { draftId, userId, perms } = opts;
   const draft = await prisma.transactionDraft.findUnique({ where: { id: draftId } });
   if (!draft) return { error: "not_found" as const };
-  if (draft.submittedById !== userId && !perms.isAdmin) return { error: "forbidden" as const };
+  if (!canActOnDraft(draft, userId, perms)) return { error: "forbidden" as const };
   await prisma.transactionDraft.delete({ where: { id: draftId } });
   await recordAudit({
     entityType: "TransactionDraft",
@@ -190,9 +219,11 @@ export async function submitDraftToPending(opts: {
   if (!draft) return { error: "not_found" as const };
   // Owner or admin can submit. The downstream PendingApproval /
   // Transaction is always attributed to the *draft owner* — admins
-  // who push on Ganga's behalf show up only in the audit log.
-  if (draft.submittedById !== userId && !perms.isAdmin) return { error: "forbidden" as const };
-  const ownerId = draft.submittedById;
+  // who push on the preparer's behalf show up only in the audit log. A salary
+  // draft goes to whoever in Finance pushed it instead: its owner is the
+  // HR approver, who would never see a rejection to resubmit it.
+  if (!canActOnDraft(draft, userId, perms)) return { error: "forbidden" as const };
+  const ownerId = draft.salaryRunId ? userId : draft.submittedById;
 
   const proposed: TxProposed = {
     date: draft.date.toISOString(),
@@ -231,6 +262,7 @@ export async function submitDraftToPending(opts: {
         },
       });
       await tx.transactionDraft.delete({ where: { id: draftId } });
+      await markRunSubmitted(tx, draft.salaryRunId);
       return created;
     });
     await recordAudit({
@@ -253,6 +285,7 @@ export async function submitDraftToPending(opts: {
       },
     });
     await tx.transactionDraft.delete({ where: { id: draftId } });
+    await markRunSubmitted(tx, draft.salaryRunId);
     return created;
   });
   await recordAudit({

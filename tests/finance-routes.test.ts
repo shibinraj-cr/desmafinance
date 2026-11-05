@@ -23,6 +23,7 @@ vi.mock("@/lib/prisma", () => ({
     transaction: { findMany: vi.fn() },
     collectionPlan: { findMany: vi.fn() },
     pendingApproval: { findUnique: vi.fn(), update: vi.fn() },
+    transactionDraft: { findUnique: vi.fn() },
   },
 }));
 
@@ -49,6 +50,7 @@ import { getCurrentUserAndPermissions } from "@/lib/permissions";
 import { prisma } from "@/lib/prisma";
 import { submitCreate, updateDraft } from "@/lib/approval";
 import { verifyCategorySubItem } from "@/lib/master-data";
+import { validateCounterparty } from "@/lib/tx-counterparty";
 
 import { GET as txGet, POST as txPost } from "@/app/api/finance/transactions/route";
 import { GET as exportGet } from "@/app/api/finance/export/route";
@@ -62,6 +64,8 @@ const pendingUpdate = prisma.pendingApproval.update as unknown as ReturnType<typ
 const submitCreateMock = submitCreate as unknown as ReturnType<typeof vi.fn>;
 const updateDraftMock = updateDraft as unknown as ReturnType<typeof vi.fn>;
 const verifyCat = verifyCategorySubItem as unknown as ReturnType<typeof vi.fn>;
+const counterpartyMock = validateCounterparty as unknown as ReturnType<typeof vi.fn>;
+const draftFindUnique = prisma.transactionDraft.findUnique as unknown as ReturnType<typeof vi.fn>;
 
 function perms(pages: string[], extra: Partial<Permissions> = {}): Permissions {
   return {
@@ -320,5 +324,45 @@ describe("PATCH /api/finance/drafts/[id] — strict validation", () => {
     expect(res.status).toBe(200);
     expect(updateDraftMock).toHaveBeenCalledTimes(1);
     expect(updateDraftMock.mock.calls[0][0].data.month).toBe("Jul-26");
+  });
+
+  it("keeps a salary draft on its employee, whatever the request says", async () => {
+    getPerms.mockResolvedValue({ perms: perms(["/finance/approvals"], { draftFirst: true }), userId: "u1" });
+    draftFindUnique.mockResolvedValueOnce({ salaryRunId: "run-1", employeeId: "e1" });
+    updateDraftMock.mockResolvedValue({ ok: true, draft: { id: "d1" } });
+    const res = await draftPatch(
+      jsonReq(
+        "http://t/api/finance/drafts/d1",
+        validProposed({ type: "Expense", employeeId: "someone-else", partyId: "p1", expDom: null }),
+        "PATCH",
+      ) as never,
+      { params: { id: "d1" } },
+    );
+    expect(res.status).toBe(200);
+    const { data } = updateDraftMock.mock.calls[0][0];
+    expect(data.employeeId).toBe("e1");
+    expect(data.partyId).toBeNull();
+  });
+
+  it("lets a leaver's salary draft past the active-employee check", async () => {
+    getPerms.mockResolvedValue({ perms: perms(["/finance/approvals"], { draftFirst: true }), userId: "u1" });
+    draftFindUnique.mockResolvedValueOnce({ salaryRunId: "run-1", employeeId: "e1" });
+    updateDraftMock.mockResolvedValue({ ok: true, draft: { id: "d1" } });
+    await draftPatch(
+      jsonReq("http://t/api/finance/drafts/d1", validProposed({ type: "Expense", expDom: null }), "PATCH") as never,
+      { params: { id: "d1" } },
+    );
+    expect(counterpartyMock.mock.lastCall?.[0]).toMatchObject({ employeeId: "e1", allowInactiveEmployeeId: "e1" });
+  });
+
+  it("excuses nobody on an ordinary draft", async () => {
+    getPerms.mockResolvedValue({ perms: perms(["/finance/approvals"]), userId: "u1" });
+    draftFindUnique.mockResolvedValueOnce({ salaryRunId: null, employeeId: "e1" });
+    updateDraftMock.mockResolvedValue({ ok: true, draft: { id: "d1" } });
+    await draftPatch(
+      jsonReq("http://t/api/finance/drafts/d1", validProposed(), "PATCH") as never,
+      { params: { id: "d1" } },
+    );
+    expect(counterpartyMock.mock.lastCall?.[0].allowInactiveEmployeeId).toBeNull();
   });
 });

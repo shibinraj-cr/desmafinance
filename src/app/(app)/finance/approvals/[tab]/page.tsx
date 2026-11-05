@@ -4,7 +4,8 @@ import { TopBar } from "@/components/TopBar";
 import { Section } from "@/components/Cards";
 import { prisma } from "@/lib/prisma";
 import { inrFull } from "@/lib/format";
-import { canApprove, canSeePage } from "@/lib/rbac";
+import { canApprove, canSeePage, canWorkSalaryDrafts } from "@/lib/rbac";
+import { draftScope } from "@/lib/approval";
 import { PC_FINANCE_PAGE } from "@/lib/partner-commissions/constants";
 import { getCurrentUserAndPermissions } from "@/lib/permissions";
 import { ApprovalActions } from "../actions";
@@ -34,8 +35,8 @@ type ProposedTx = {
 type TabKey = "pending" | "approved" | "rejected";
 type TypeFilter = "all" | "Revenue" | "Expense";
 
-// Drafts only matter for users with the draftFirst flag (currently Ganga).
-// Reviewers never see the tab.
+// Drafts matter for users with the draftFirst flag (the Finance preparer). A
+// reviewer only sees the tab while salary drafts are waiting.
 
 /** YYYY-MM-DD (or ISO) → DD-MM-YY for display. */
 function fmtDDMMYY(s: string): string {
@@ -88,6 +89,7 @@ export default async function ApprovalsPage({
   // Visibility: reviewers (manager/admin) see everyone's items, executives
   // see only their own submissions. The status filter narrows to the tab.
   const ownershipWhere = reviewer ? {} : { submittedById: userId ?? "__none__" };
+  const worksDrafts = perms.draftFirst || canWorkSalaryDrafts(perms);
 
   // Commission payments (Partner Commissions) are approved on their own tab —
   // they need the AED/INR figures beside the invoice — but they're flagged here
@@ -154,15 +156,14 @@ export default async function ApprovalsPage({
       }),
     ]),
     // Draft tab counts:
-    //   - draftFirst users: count of their own drafts
+    //   - draftFirst users: count of their own drafts, plus salary drafts
     //   - admins (without draftFirst): count of every draft in the
     //     system, since they oversee the queue
+    //   - Finance reviewers: salary drafts waiting on them
     //   - everyone else: hidden (count of 0 doesn't matter, tab not rendered)
-    perms?.draftFirst && userId
-      ? prisma.transactionDraft.count({ where: { submittedById: userId } })
-      : perms?.isAdmin
-        ? prisma.transactionDraft.count()
-        : Promise.resolve(0),
+    worksDrafts
+      ? prisma.transactionDraft.count({ where: draftScope(perms, userId) })
+      : Promise.resolve(0),
   ]);
 
   const [pendingCount, approvedCount, rejectedCount] = counts;
@@ -356,7 +357,7 @@ export default async function ApprovalsPage({
           active={tab}
           counts={{ pending: pendingCount, approved: approvedCount, rejected: rejectedCount }}
           myDrafts={
-            perms?.draftFirst || perms?.isAdmin ? { count: draftsCount } : undefined
+            perms.draftFirst || perms.isAdmin || draftsCount > 0 ? { count: draftsCount } : undefined
           }
           preserve={{
             type: typeFilter,

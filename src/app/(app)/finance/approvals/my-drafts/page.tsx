@@ -2,18 +2,19 @@ import { redirect } from "next/navigation";
 import { TopBar } from "@/components/TopBar";
 import { prisma } from "@/lib/prisma";
 import { getCurrentUserAndPermissions } from "@/lib/permissions";
-import { canSeePage } from "@/lib/rbac";
+import { canApprove, canSeePage, canWorkSalaryDrafts } from "@/lib/rbac";
+import { draftScope } from "@/lib/approval";
 import { Tabs } from "../_tabs";
 import { MyDraftsClient } from "./client";
 
 export const dynamic = "force-dynamic";
 
 /**
- * /finance/approvals/my-drafts — visible only to users with
- * User.draftFirst=true (currently Ganga). Lists their TransactionDraft
- * rows in an editable, Excel-style table; each row can be edited,
- * submitted for approval, or discarded. Bulk submit is available
- * across selected rows.
+ * /finance/approvals/my-drafts — visible to users with User.draftFirst=true
+ * (the Finance preparer) and to Finance reviewers for the salary drafts an
+ * approved run raises. Lists TransactionDraft rows in an editable,
+ * Excel-style table; each row can be edited, submitted for approval, or
+ * discarded. Bulk submit is available across selected rows.
  */
 export default async function MyDraftsPage() {
   const { perms, userId } = await getCurrentUserAndPermissions();
@@ -21,20 +22,24 @@ export default async function MyDraftsPage() {
   if (!canSeePage(perms, "/finance/approvals")) redirect("/finance/overview");
   // Admins also see this screen for oversight — they get the full list
   // of every draft-first user's pending drafts. Anyone else without the
-  // flag has nothing to do here.
-  if (!perms.draftFirst && !perms.isAdmin) {
+  // flag or a part in salary drafts has nothing to do here.
+  if (!perms.draftFirst && !canWorkSalaryDrafts(perms)) {
     redirect("/finance/approvals/pending");
   }
   const isAdminViewer = perms.isAdmin && !perms.draftFirst;
+  // Tab counts match the queue tabs: reviewers count everyone's items.
+  const countScope = canApprove(perms) ? {} : { submittedById: userId };
 
   const [drafts, masters, counts] = await Promise.all([
     prisma.transactionDraft.findMany({
-      where: isAdminViewer ? {} : { submittedById: userId },
-      orderBy: [{ createdAt: "desc" }],
+      where: draftScope(perms, userId),
+      // One run raises many rows at the same instant; keep them in name order.
+      orderBy: [{ createdAt: "desc" }, { employee: { name: "asc" } }],
       include: {
         party: { select: { id: true, name: true, group: true } },
         employee: { select: { id: true, name: true } },
         submittedBy: { select: { id: true, username: true } },
+        salaryRun: { select: { monthKey: true } },
       },
     }),
     Promise.all([
@@ -56,15 +61,9 @@ export default async function MyDraftsPage() {
       }),
     ]),
     Promise.all([
-      prisma.pendingApproval.count({
-        where: { ...(isAdminViewer ? {} : { submittedById: userId }), status: "pending" },
-      }),
-      prisma.pendingApproval.count({
-        where: { ...(isAdminViewer ? {} : { submittedById: userId }), status: "approved" },
-      }),
-      prisma.pendingApproval.count({
-        where: { ...(isAdminViewer ? {} : { submittedById: userId }), status: "rejected" },
-      }),
+      prisma.pendingApproval.count({ where: { ...countScope, status: "pending" } }),
+      prisma.pendingApproval.count({ where: { ...countScope, status: "approved" } }),
+      prisma.pendingApproval.count({ where: { ...countScope, status: "rejected" } }),
     ]),
   ]);
 
@@ -104,7 +103,9 @@ export default async function MyDraftsPage() {
             partyId: d.partyId,
             partyName: d.party?.name ?? null,
             partyGroup: d.party?.group ?? null,
+            employeeId: d.employeeId,
             employeeName: d.employee?.name ?? null,
+            salaryMonthKey: d.salaryRun?.monthKey ?? null,
             submittedByUsername: d.submittedBy?.username ?? null,
             createdAt: d.createdAt.toISOString(),
           }))}

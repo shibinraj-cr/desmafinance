@@ -3,7 +3,7 @@ import { z } from "zod";
 import { prisma } from "@/lib/prisma";
 import { getCurrentUserAndPermissions } from "@/lib/permissions";
 import { canApproveHr, isHrUser } from "@/lib/hr-rbac";
-import { computeSalaryRun } from "@/lib/hr-salary-engine";
+import { computeSalaryRun, SalaryRunWithFinanceError } from "@/lib/hr-salary-engine";
 
 const RunSchema = z.object({
   monthKey: z.string().regex(/^\d{4}-\d{2}$/),
@@ -26,7 +26,15 @@ export async function POST(req: Request) {
   if (!parsed.success) {
     return NextResponse.json({ error: "invalid", issues: parsed.error.issues }, { status: 400 });
   }
-  const result = await computeSalaryRun(parsed.data.monthKey, userId);
+  let result: Awaited<ReturnType<typeof computeSalaryRun>>;
+  try {
+    result = await computeSalaryRun(parsed.data.monthKey, userId);
+  } catch (e) {
+    if (e instanceof SalaryRunWithFinanceError) {
+      return NextResponse.json({ error: e.message }, { status: 409 });
+    }
+    throw e;
+  }
   await prisma.hrAuditLog.create({
     data: {
       actorUserId: userId,
