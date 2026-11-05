@@ -3,6 +3,8 @@ import { z } from "zod";
 import { prisma } from "@/lib/prisma";
 import { getCurrentUserAndPermissions } from "@/lib/permissions";
 import { canApproveHr, isHrUser } from "@/lib/hr-rbac";
+import { recordAudit } from "@/lib/audit";
+import { raiseSalaryDrafts } from "@/lib/hr-salary-finance";
 
 const ApproveSchema = z.object({ action: z.literal("approve") });
 const PatchSchema = z.object({
@@ -27,16 +29,13 @@ export async function GET(_req: Request, { params }: { params: { id: string } })
 
 export async function POST(req: Request, { params }: { params: { id: string } }) {
   const { perms, userId } = await getCurrentUserAndPermissions();
-  if (!canApproveHr(perms)) return NextResponse.json({ error: "forbidden" }, { status: 403 });
+  if (!userId || !canApproveHr(perms)) return NextResponse.json({ error: "forbidden" }, { status: 403 });
   const parsed = ApproveSchema.safeParse(await req.json());
   if (!parsed.success) {
     return NextResponse.json({ error: "invalid", issues: parsed.error.issues }, { status: 400 });
   }
   const run = await prisma.hrSalaryRun.findUnique({ where: { id: params.id } });
   if (!run) return NextResponse.json({ error: "not found" }, { status: 404 });
-  if (run.status !== "draft") {
-    return NextResponse.json({ error: "already approved or paid" }, { status: 400 });
-  }
 
   // Note: approval no longer mutates HrLeaveBalance. The canonical leave engine
   // (src/lib/hr-leave-balance.ts) is the single source of truth and already
@@ -45,20 +44,41 @@ export async function POST(req: Request, { params }: { params: { id: string } })
   // deducted those same days — pushing balances negative until the next
   // canonical recompute reset them. Salary approval changes no leave facts, so
   // it must not touch balances.
-  const approved = await prisma.hrSalaryRun.update({
-    where: { id: run.id },
-    data: { status: "hr_approved", approvedById: userId, approvedAt: new Date() },
+  //
+  // Approval and the salary drafts it raises commit together, and only the
+  // request that wins the draft → hr_approved flip raises them, so a double
+  // click can't send the run to Finance twice.
+  const approvedAt = new Date();
+  const drafts = await prisma.$transaction(async (tx) => {
+    const claimed = await tx.hrSalaryRun.updateMany({
+      where: { id: run.id, status: "draft" },
+      data: { status: "hr_approved", approvedById: userId, approvedAt },
+    });
+    return claimed.count === 1 ? raiseSalaryDrafts(tx, run, userId) : null;
   });
+  if (!drafts) {
+    return NextResponse.json({ error: "already approved or paid" }, { status: 400 });
+  }
   await prisma.hrAuditLog.create({
     data: {
       actorUserId: userId,
       eventType: "salary_run_approved",
       entityType: "HrSalaryRun",
       entityId: run.id,
-      metadata: { monthKey: run.monthKey, totalNet: Number(run.totalNet) },
+      metadata: { monthKey: run.monthKey, totalNet: Number(run.totalNet), financeDrafts: drafts.count },
     },
   });
-  return NextResponse.json({ run: approved });
+  await recordAudit({
+    entityType: "HrSalaryRun",
+    entityId: run.id,
+    action: "DRAFT_CREATE",
+    userId,
+    changes: { monthKey: run.monthKey, drafts: drafts.count, total: drafts.total },
+  });
+  return NextResponse.json({
+    run: { ...run, status: "hr_approved", approvedById: userId, approvedAt },
+    financeDrafts: drafts.count,
+  });
 }
 
 export async function PATCH(req: Request, { params }: { params: { id: string } }) {

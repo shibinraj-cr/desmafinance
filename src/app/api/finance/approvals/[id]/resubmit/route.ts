@@ -79,7 +79,12 @@ export async function POST(
   // kind has no editable fields, so there's nothing to validate for it.
   let proposed: TxProposed | undefined;
   if (parsed.data.proposed) {
-    const built = await buildValidatedProposed(parsed.data.proposed);
+    // The employee already on the rejected row may have left since (a leaver's
+    // last salary, say); only newly picking an inactive one is refused.
+    const previous = existing.proposed as unknown as TxProposed | null;
+    const built = await buildValidatedProposed(parsed.data.proposed, {
+      allowInactiveEmployeeId: previous?.employeeId,
+    });
     if ("error" in built) {
       return NextResponse.json({ error: built.error }, { status: 400 });
     }

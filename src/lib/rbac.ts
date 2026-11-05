@@ -83,6 +83,17 @@ export function needsApproval(p?: Permissions | null): boolean {
   return !!p?.needsApproval;
 }
 
+/**
+ * Who works the salary drafts an approved run raises: the draft-first preparer,
+ * Finance reviewers and admins. Deliberately narrower than the page, which also
+ * lets people track their own submissions — these rows are everyone's pay.
+ */
+export function canWorkSalaryDrafts(p?: Permissions | null): boolean {
+  if (!p) return false;
+  if (p.isAdmin) return true;
+  return (p.draftFirst || p.canApprove) && canSeePage(p, "/finance/approvals");
+}
+
 // Pages every authenticated user can see, regardless of their role's page
 // list. These are self-service essentials that apply to all employees, so
 // they stay visible without having to add them to each (current or future)

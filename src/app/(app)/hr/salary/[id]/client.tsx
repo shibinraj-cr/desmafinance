@@ -120,7 +120,7 @@ export function SalaryRunDetail({
   const total = lines.reduce((s, l) => s + l.netSalary + l.adjustments, 0);
 
   async function approve() {
-    if (!confirm(`Approve salary run for ${run.monthKey}? This locks the lines and lets Finance download the Axis file.`)) return;
+    if (!confirm(`Approve salary run for ${run.monthKey}? This locks the lines, sends each employee's salary to Finance as a draft for approval, and lets Finance download the Axis file.`)) return;
     setError(null);
     const res = await fetch(`/api/hr/salary/${run.id}`, {
       method: "POST",

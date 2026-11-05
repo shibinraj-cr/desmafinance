@@ -2,6 +2,7 @@
 
 import { useMemo, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
+import { PAYMENT_MODES } from "@/lib/catalog";
 import { inrFull } from "@/lib/format";
 
 export type Draft = {
@@ -19,8 +20,11 @@ export type Draft = {
   partyId: string | null;
   partyName: string | null;
   partyGroup: string | null;
-  /** Employee counterparty name (e.g. salary payouts have an employee, not a party). */
+  /** Employee counterparty (e.g. salary payouts have an employee, not a party). */
+  employeeId: string | null;
   employeeName: string | null;
+  /** Set when an approved salary run raised this draft. */
+  salaryMonthKey: string | null;
   submittedByUsername: string | null;
   createdAt: string;
 };
@@ -37,8 +41,6 @@ type PartyMaster = {
   group: string;
   txTypes: string;
 };
-
-const PAYMENT_MODES = ["Cash", "Bank", "Axis Bank", "HDFC Bank", "RCS", "STR", "Wio Bank", "Credit Card", "Other"];
 
 export function MyDraftsClient({
   drafts: initial,
@@ -102,6 +104,7 @@ export function MyDraftsClient({
         amount: e.amount,
         flow: e.flow,
         partyId: e.partyId,
+        employeeId: e.employeeId,
         expDom: e.type === "Revenue" ? (e.expDom ?? "DOM") : null,
       }),
     });
@@ -414,7 +417,7 @@ export function MyDraftsClient({
                       )}
                     </td>
                     <td className="px-sm py-sm">
-                      {isEditing ? (
+                      {isEditing && !row.employeeId ? (
                         <select
                           value={row.partyId ?? ""}
                           onChange={(ev) =>
@@ -435,6 +438,11 @@ export function MyDraftsClient({
                         `${d.employeeName} (Employee)`
                       ) : (
                         "—"
+                      )}
+                      {d.salaryMonthKey && (
+                        <span className="block text-caption text-on-surface-variant">
+                          Salary run {d.salaryMonthKey}
+                        </span>
                       )}
                     </td>
                     <td className="px-sm py-sm max-w-[240px]">

@@ -66,6 +66,7 @@ const MAX_AMOUNT = 1_000_000_000;
  */
 export async function buildValidatedProposed(
   input: RawTxFields,
+  opts?: { allowInactiveEmployeeId?: string | null },
 ): Promise<{ error: string } | { proposed: TxProposed }> {
   // Date must parse to a real calendar date.
   const parsedDate = new Date(input.date);
@@ -120,6 +121,7 @@ export async function buildValidatedProposed(
     type,
     partyId: input.partyId,
     employeeId: input.employeeId,
+    allowInactiveEmployeeId: opts?.allowInactiveEmployeeId,
   });
   if (cerr) return { error: cerr };
 
