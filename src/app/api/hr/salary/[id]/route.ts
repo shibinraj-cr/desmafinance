@@ -3,7 +3,7 @@ import { z } from "zod";
 import { Prisma, type HrSalaryRun } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
 import { getCurrentUserAndPermissions } from "@/lib/permissions";
-import { canApproveHr, isHrUser } from "@/lib/hr-rbac";
+import { canApproveHr, canSendSalaryToFinance, isHrUser } from "@/lib/hr-rbac";
 import { recordAudit } from "@/lib/audit";
 import { raiseSalaryDrafts } from "@/lib/hr-salary-finance";
 
@@ -30,10 +30,14 @@ export async function GET(_req: Request, { params }: { params: { id: string } })
 
 export async function POST(req: Request, { params }: { params: { id: string } }) {
   const { perms, userId } = await getCurrentUserAndPermissions();
-  if (!userId || !canApproveHr(perms)) return NextResponse.json({ error: "forbidden" }, { status: 403 });
+  if (!userId || !canSendSalaryToFinance(perms)) return NextResponse.json({ error: "forbidden" }, { status: 403 });
   const parsed = ActionSchema.safeParse(await req.json());
   if (!parsed.success) {
     return NextResponse.json({ error: "invalid", issues: parsed.error.issues }, { status: 400 });
+  }
+  // Sending is open to everyone who works payroll; approving stays with approvers.
+  if (parsed.data.action === "approve" && !canApproveHr(perms)) {
+    return NextResponse.json({ error: "forbidden" }, { status: 403 });
   }
   const run = await prisma.hrSalaryRun.findUnique({ where: { id: params.id } });
   if (!run) return NextResponse.json({ error: "not found" }, { status: 404 });

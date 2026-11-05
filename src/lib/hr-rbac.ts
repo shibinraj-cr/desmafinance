@@ -1,4 +1,4 @@
-import type { Permissions } from "./rbac";
+import { canSeePage, type Permissions } from "./rbac";
 
 /**
  * HR-side capability checks. We piggyback on the existing Role.pages
@@ -19,6 +19,17 @@ export function canApproveHr(p: Permissions | null | undefined): boolean {
   if (!p) return false;
   if (p.isAdmin) return true;
   return isHrUser(p) && p.canApprove;
+}
+
+/**
+ * Send an approved salary run on to Finance as drafts. This isn't an approval:
+ * the run is already locked and Finance still approves every draft. So anyone
+ * who works payroll can do it, including an HR Manager whose role has no
+ * approval rights, as well as everyone who can approve the run.
+ */
+export function canSendSalaryToFinance(p: Permissions | null | undefined): boolean {
+  if (!p) return false;
+  return canApproveHr(p) || (isHrUser(p) && canSeePage(p, "/hr/salary"));
 }
 
 /** Finance Manager / Admin: download the Axis Bank bulk-upload file. */
