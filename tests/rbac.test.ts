@@ -19,7 +19,13 @@ import {
   CRM_LEADS_ONLY_PAGE,
   type Permissions,
 } from "@/lib/rbac";
-import { isHrUser, canApproveHr, canDownloadAxis, isEmployeePortalUser } from "@/lib/hr-rbac";
+import {
+  isHrUser,
+  canApproveHr,
+  canDownloadAxis,
+  canSendSalaryToFinance,
+  isEmployeePortalUser,
+} from "@/lib/hr-rbac";
 
 function perms(over: Partial<Permissions> = {}): Permissions {
   return {
@@ -147,6 +153,17 @@ describe("hr-rbac", () => {
     expect(canDownloadAxis(hrManager)).toBe(true);
     expect(canDownloadAxis(hrStaff)).toBe(false); // no canApprove and no /hr/salary
     expect(canDownloadAxis(financeOnly)).toBe(false); // approver but lacks /hr/salary
+  });
+
+  it("canSendSalaryToFinance: anyone who works payroll, approval rights or not", () => {
+    const payrollNoApprove = perms({ pages: ["/hr/salary", "/hr/attendance"] });
+    expect(canSendSalaryToFinance(admin)).toBe(true);
+    expect(canSendSalaryToFinance(hrManager)).toBe(true); // approvers keep it
+    expect(canSendSalaryToFinance(payrollNoApprove)).toBe(true); // HR Manager role without canApprove
+    expect(canSendSalaryToFinance(hrStaff)).toBe(false); // HR, but no Salary Runs page
+    expect(canSendSalaryToFinance(financeOnly)).toBe(false); // Finance with no HR pages
+    expect(canSendSalaryToFinance(perms({ pages: ["/hr/salary-structures"] }))).toBe(false); // sibling prefix
+    expect(canSendSalaryToFinance(null)).toBe(false);
   });
 
   it("isEmployeePortalUser: anyone with an /me/* page, or admin", () => {
