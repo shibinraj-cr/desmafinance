@@ -25,14 +25,24 @@ vi.mock("@/lib/prisma", () => ({
     hrSalaryRunLine: { deleteMany: vi.fn() },
     hrAuditLog: { create: vi.fn() },
     employee: { findUnique: vi.fn() },
-    transactionDraft: { findUnique: vi.fn(), update: vi.fn(), delete: vi.fn(), deleteMany: vi.fn() },
+    transaction: { aggregate: vi.fn() },
+    transactionDraft: {
+      findUnique: vi.fn(),
+      update: vi.fn(),
+      delete: vi.fn(),
+      deleteMany: vi.fn(),
+      aggregate: vi.fn(),
+    },
+    pendingApproval: { findMany: vi.fn() },
   },
 }));
 
 import { prisma } from "@/lib/prisma";
 import { recordAudit } from "@/lib/audit";
+import { Prisma } from "@prisma/client";
 import {
   raiseSalaryDrafts,
+  salaryAlreadyInFinance,
   salaryBookingDate,
   salaryDraftRows,
   salarySubItem,
@@ -51,12 +61,15 @@ const mock = prisma as unknown as {
   hrSalaryRunLine: { deleteMany: ReturnType<typeof vi.fn> };
   hrAuditLog: { create: ReturnType<typeof vi.fn> };
   employee: { findUnique: ReturnType<typeof vi.fn> };
+  transaction: { aggregate: ReturnType<typeof vi.fn> };
   transactionDraft: {
     findUnique: ReturnType<typeof vi.fn>;
     update: ReturnType<typeof vi.fn>;
     delete: ReturnType<typeof vi.fn>;
     deleteMany: ReturnType<typeof vi.fn>;
+    aggregate: ReturnType<typeof vi.fn>;
   };
+  pendingApproval: { findMany: ReturnType<typeof vi.fn> };
 };
 
 const role = (p: Partial<Permissions>): Permissions => ({
@@ -247,6 +260,147 @@ describe("POST /api/hr/salary/[id] (approve)", () => {
 
     expect(res.status).toBe(403);
     expect(mock.$transaction).not.toHaveBeenCalled();
+  });
+});
+
+describe("POST /api/hr/salary/[id] (send to Finance)", () => {
+  const request = () =>
+    new Request("http://x", { method: "POST", body: JSON.stringify({ action: "send_to_finance" }) });
+  const client = (current: { status: string; financeSubmittedAt: Date | null; drafts: number }) => ({
+    hrSalaryRun: {
+      findUnique: vi.fn().mockResolvedValue({
+        status: current.status,
+        financeSubmittedAt: current.financeSubmittedAt,
+        _count: { financeDrafts: current.drafts },
+      }),
+    },
+    hrSalaryRunLine: {
+      findMany: vi.fn().mockResolvedValue([
+        {
+          employeeId: "e1",
+          netSalary: 20000,
+          adjustments: 0,
+          employee: { designation: "Executive", designationRef: null },
+        },
+      ]),
+    },
+    transaction: { findMany: vi.fn().mockResolvedValue([]) },
+    transactionDraft: { createMany: vi.fn() },
+  });
+  const sendWith = async (tx: ReturnType<typeof client>) => {
+    mock.$transaction.mockImplementation((cb: (t: typeof tx) => unknown) => cb(tx));
+    return approveRun(request(), { params: { id: run.id } });
+  };
+
+  beforeEach(() => {
+    auth.perms = hrManager;
+    auth.userId = "hr-1";
+    mock.hrSalaryRun.findUnique.mockResolvedValue({ ...run, status: "hr_approved", totalNet: 20000 });
+  });
+
+  it("raises the drafts a run approved before the hand-off never raised", async () => {
+    const tx = client({ status: "hr_approved", financeSubmittedAt: null, drafts: 0 });
+
+    const res = await sendWith(tx);
+
+    expect(res.status).toBe(200);
+    expect((await res.json()).financeDrafts).toBe(1);
+    const { data } = tx.transactionDraft.createMany.mock.calls[0][0];
+    expect(data[0]).toMatchObject({ salaryRunId: run.id, employeeId: "e1", submittedById: "hr-1", amount: 20000 });
+    expect(mock.hrAuditLog.create.mock.calls[0][0].data.eventType).toBe("salary_run_sent_to_finance");
+    expect(recordAudit).toHaveBeenCalledWith(expect.objectContaining({ action: "DRAFT_CREATE" }));
+  });
+
+  it("re-checks the run inside the transaction, not from the stale read", async () => {
+    const tx = client({ status: "hr_approved", financeSubmittedAt: null, drafts: 0 });
+
+    await sendWith(tx);
+
+    expect(tx.hrSalaryRun.findUnique.mock.calls[0][0].where).toEqual({ id: run.id });
+  });
+
+  it.each([
+    ["drafts are already waiting in Finance", { status: "hr_approved", financeSubmittedAt: null, drafts: 3 }],
+    ["Finance has already submitted from it", { status: "hr_approved", financeSubmittedAt: new Date(), drafts: 0 }],
+    ["the run is still a draft", { status: "draft", financeSubmittedAt: null, drafts: 0 }],
+  ])("sends nothing when %s", async (_why, current) => {
+    const tx = client(current);
+
+    const res = await sendWith(tx);
+
+    expect(res.status).toBe(409);
+    expect(tx.transactionDraft.createMany).not.toHaveBeenCalled();
+    expect(mock.hrAuditLog.create).not.toHaveBeenCalled();
+  });
+
+  it("turns the losing half of a double click into a conflict", async () => {
+    const tx = client({ status: "hr_approved", financeSubmittedAt: null, drafts: 0 });
+    tx.transactionDraft.createMany.mockRejectedValue(
+      new Prisma.PrismaClientKnownRequestError("Unique constraint failed", { code: "P2002", clientVersion: "6" }),
+    );
+
+    const res = await sendWith(tx);
+
+    expect(res.status).toBe(409);
+    expect(mock.hrAuditLog.create).not.toHaveBeenCalled();
+  });
+
+  it("lets any other database failure surface", async () => {
+    const tx = client({ status: "hr_approved", financeSubmittedAt: null, drafts: 0 });
+    tx.transactionDraft.createMany.mockRejectedValue(new Error("connection lost"));
+
+    await expect(sendWith(tx)).rejects.toThrow("connection lost");
+  });
+
+  it("refuses someone without HR approval rights", async () => {
+    auth.perms = financeManager;
+
+    const res = await approveRun(request(), { params: { id: run.id } });
+
+    expect(res.status).toBe(403);
+    expect(mock.$transaction).not.toHaveBeenCalled();
+  });
+});
+
+describe("salaryAlreadyInFinance", () => {
+  const sum = (count: number, amount: number | null) => ({ _count: count, _sum: { amount } });
+
+  beforeEach(() => {
+    mock.transaction.aggregate.mockResolvedValue(sum(2, 50000));
+    mock.transactionDraft.aggregate.mockResolvedValue(sum(1, 20000));
+    mock.pendingApproval.findMany.mockResolvedValue([
+      { proposed: { type: "Expense", category: "Salary", subItem: "Sales Team", employeeId: "e1", date: "2026-10-31", amount: 15000 } },
+      // Not counted: someone outside the run, another month, an incentive.
+      { proposed: { type: "Expense", category: "Salary", subItem: "Sales Team", employeeId: "x9", date: "2026-10-31", amount: 1 } },
+      { proposed: { type: "Expense", category: "Salary", subItem: "Sales Team", employeeId: "e1", date: "2026-11-01T00:00:00.000Z", amount: 1 } },
+      { proposed: { type: "Expense", category: "Salary", subItem: "Incentive", employeeId: "e1", date: "2026-10-15", amount: 1 } },
+    ]);
+  });
+
+  it("adds up hand-entered salary across the ledger, drafts and the approval queue", async () => {
+    expect(await salaryAlreadyInFinance("2026-10", ["e1", "e2"])).toEqual({ count: 4, total: 85000 });
+  });
+
+  it("looks at the run's calendar month, leaving out deleted rows, incentives and the run's own drafts", async () => {
+    await salaryAlreadyInFinance("2026-10", ["e1"]);
+
+    const ledger = mock.transaction.aggregate.mock.calls[0][0].where;
+    expect(ledger).toMatchObject({
+      deletedAt: null,
+      category: "Salary",
+      subItem: { not: "Incentive" },
+      employeeId: { in: ["e1"] },
+      date: { gte: new Date("2026-10-01T00:00:00.000Z"), lt: new Date("2026-11-01T00:00:00.000Z") },
+    });
+    expect(mock.transactionDraft.aggregate.mock.calls[0][0].where.salaryRunId).toBeNull();
+  });
+
+  it("reports nothing when Finance holds nothing", async () => {
+    mock.transaction.aggregate.mockResolvedValue(sum(0, null));
+    mock.transactionDraft.aggregate.mockResolvedValue(sum(0, null));
+    mock.pendingApproval.findMany.mockResolvedValue([]);
+
+    expect(await salaryAlreadyInFinance("2026-10", ["e1"])).toEqual({ count: 0, total: 0 });
   });
 });
 
