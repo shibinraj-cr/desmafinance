@@ -3,6 +3,8 @@ import { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
 import { getCurrentUserAndPermissions } from "@/lib/permissions";
 import { getLeadPulseAccess } from "@/lib/lead-pulse-rbac";
+import { normalizePhone } from "@/lib/crm";
+import { CALL_MATCH_TOLERANCE_MS, indexExistingCalls, voxbayCallSignature } from "@/lib/voxbay-webhook";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -16,6 +18,13 @@ export const runtime = "nodejs";
  * callStartTime) as the unique key. Rows already on file are skipped;
  * rows missing from the new CSV are preserved. A partial Voxbay export
  * therefore never wipes history.
+ *
+ * Since the live webhook (/api/crm/voxbay/webhook) files calls as they end,
+ * a report row may describe a call that is already on file from it. Such a row
+ * is matched by Voxbay call id (the report's `callUniqueId`), by signature, or
+ * by the same number starting within a couple of seconds, and instead of
+ * being inserted again it fills in the columns only the report carries:
+ * `user_status`, cost, disposition and the like.
  */
 export async function POST(req: NextRequest) {
   const { userId, perms } = await getCurrentUserAndPermissions();
@@ -84,7 +93,9 @@ export async function POST(req: NextRequest) {
     const didNumber = get("didNumber") || null;
     const callStartTime = parseDateTimeOrNull(startStr);
     parsed.push({
-      signature: makeSignature(sourceNumber, didNumber, callStartTime),
+      signature: voxbayCallSignature(sourceNumber, didNumber, callStartTime),
+      voxbayCallId: get("callUniqueId") || null,
+      phoneE164: normalizePhone(sourceNumber),
       slNo: parseIntOrNull(get("Sl No.")),
       contactName: get("contact_name") || null,
       sourceNumber,
@@ -125,12 +136,35 @@ export async function POST(req: NextRequest) {
     return true;
   });
 
+  // Calls the webhook already filed. Report rows that match one enrich it
+  // below rather than being inserted (where they'd either duplicate it, or be
+  // skipped on the signature and lose the report's columns).
+  const webhookRows = await findWebhookCalls(dedupedNamed);
+  const findWebhookCall = indexExistingCalls(webhookRows);
+  const toInsert: Prisma.VoxbayCallCreateManyInput[] = [];
+  const toEnrich: { id: string; row: Prisma.VoxbayCallCreateManyInput }[] = [];
+  const claimed = new Set<string>();
+  for (const row of dedupedNamed) {
+    const hit = findWebhookCall({
+      voxbayCallId: row.voxbayCallId ?? null,
+      signature: row.signature ?? null,
+      phoneE164: row.phoneE164 ?? null,
+      callStartTime: (row.callStartTime as Date | null | undefined) ?? null,
+    });
+    if (hit && !claimed.has(hit.id)) {
+      claimed.add(hit.id);
+      toEnrich.push({ id: hit.id, row });
+    } else if (!hit) {
+      toInsert.push(row);
+    }
+  }
+
   let inserted = 0;
   await prisma.$transaction(async (tx) => {
     const chunk = 500;
-    for (let i = 0; i < dedupedNamed.length; i += chunk) {
+    for (let i = 0; i < toInsert.length; i += chunk) {
       const result = await tx.voxbayCall.createMany({
-        data: dedupedNamed.slice(i, i + chunk),
+        data: toInsert.slice(i, i + chunk),
         skipDuplicates: true,
       });
       inserted += result.count;
@@ -145,26 +179,101 @@ export async function POST(req: NextRequest) {
     });
   });
 
-  const skipped = dedupedNamed.length - inserted;
+  // Outside the transaction: a month's report can match thousands of webhook
+  // rows, more updates than an interactive transaction's timeout allows. Each
+  // update is idempotent, so a partial run is finished by uploading again.
+  const ENRICH_BATCH = 20;
+  for (let i = 0; i < toEnrich.length; i += ENRICH_BATCH) {
+    await Promise.all(
+      toEnrich.slice(i, i + ENRICH_BATCH).map(({ id, row }) =>
+        prisma.voxbayCall.update({ where: { id }, data: reportOnlyColumns(row) }),
+      ),
+    );
+  }
+
+  const skipped = dedupedNamed.length - inserted - toEnrich.length;
   return NextResponse.json({
     ok: true,
     rowCount: dedupedNamed.length,
     inserted,
     skipped,
+    enriched: toEnrich.length,
   });
 }
 
-/** Identity key for merge-on-upload. Mirrors the Postgres expression
- *  in the schema-sync DDL. Returns null only when *all* three identity
- *  parts are missing — in that case we let the row through without a
- *  unique-key claim. */
-function makeSignature(
-  sourceNumber: string | null,
-  didNumber: string | null,
-  callStartTime: Date | null,
-): string | null {
-  if (!sourceNumber && !didNumber && !callStartTime) return null;
-  return `${sourceNumber ?? ""}|${didNumber ?? ""}|${callStartTime?.toISOString() ?? ""}`;
+const WEBHOOK_CALL_SELECT = {
+  id: true,
+  voxbayCallId: true,
+  signature: true,
+  phoneE164: true,
+  callStartTime: true,
+  source: true,
+} satisfies Prisma.VoxbayCallSelect;
+type WebhookCall = Prisma.VoxbayCallGetPayload<{ select: typeof WEBHOOK_CALL_SELECT }>;
+
+/** The webhook-filed calls any of these report rows could be, by id, signature or number + time. */
+async function findWebhookCalls(rows: Prisma.VoxbayCallCreateManyInput[]): Promise<WebhookCall[]> {
+  const ids = [...new Set(rows.map((r) => r.voxbayCallId).filter((v): v is string => !!v))];
+  const sigs = [...new Set(rows.map((r) => r.signature).filter((v): v is string => !!v))];
+  const phones = [...new Set(rows.map((r) => r.phoneE164).filter((v): v is string => !!v))];
+  // A loop, not Math.min(...times): a large report would overflow the argument limit.
+  let first = Infinity;
+  let last = -Infinity;
+  for (const r of rows) {
+    const t = (r.callStartTime as Date | null | undefined)?.getTime();
+    if (t == null) continue;
+    if (t < first) first = t;
+    if (t > last) last = t;
+  }
+  const range =
+    first <= last
+      ? { gte: new Date(first - CALL_MATCH_TOLERANCE_MS), lte: new Date(last + CALL_MATCH_TOLERANCE_MS) }
+      : null;
+
+  const out = new Map<string, WebhookCall>();
+  const CHUNK = 1000;
+  const n = Math.max(ids.length, sigs.length, phones.length);
+  for (let i = 0; i < n; i += CHUNK) {
+    const idPart = ids.slice(i, i + CHUNK);
+    const sigPart = sigs.slice(i, i + CHUNK);
+    const phonePart = phones.slice(i, i + CHUNK);
+    const or: Prisma.VoxbayCallWhereInput[] = [];
+    if (idPart.length) or.push({ voxbayCallId: { in: idPart } });
+    if (sigPart.length) or.push({ signature: { in: sigPart } });
+    if (phonePart.length && range) or.push({ phoneE164: { in: phonePart }, callStartTime: range });
+    if (!or.length) continue;
+    // The report is incoming calls only.
+    const found = await prisma.voxbayCall.findMany({
+      where: { source: "webhook", direction: "incoming", OR: or },
+      select: WEBHOOK_CALL_SELECT,
+    });
+    for (const f of found) out.set(f.id, f);
+  }
+  return [...out.values()];
+}
+
+/**
+ * What a report row adds to a call the webhook already filed: the columns the
+ * webhook doesn't carry. `user_status` among them, and it overwrites, because
+ * the report's is Voxbay's own verdict where the webhook's was derived. The
+ * call's identity, times, agent and recording stay as the webhook gave them.
+ */
+function reportOnlyColumns(row: Prisma.VoxbayCallCreateManyInput): Prisma.VoxbayCallUpdateInput {
+  const pick = <T>(v: T | null | undefined) => (v == null || v === "" ? undefined : v);
+  return {
+    slNo: pick(row.slNo),
+    cost: pick(row.cost),
+    dtmfSeq: pick(row.dtmfSeq),
+    userStatus: pick(row.userStatus),
+    stickyStatus: pick(row.stickyStatus),
+    holdTime: pick(row.holdTime),
+    application: pick(row.application),
+    appName: pick(row.appName),
+    lastTriedName: pick(row.lastTriedName),
+    firstTriedName: pick(row.firstTriedName),
+    disposition: pick(row.disposition),
+    latestComment: pick(row.latestComment),
+  };
 }
 
 /** RFC-4180-ish CSV parser. Handles quoted fields with embedded commas and CRLF lines. */

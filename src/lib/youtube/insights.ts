@@ -279,10 +279,15 @@ export async function loadInsights(
       SELECT to_char(("callStartTime" AT TIME ZONE 'UTC' AT TIME ZONE 'Asia/Kolkata')::date, 'YYYY-MM-DD') AS day,
              COUNT(DISTINCT "sourceNumber")::int AS n
       FROM "VoxbayCall"
-      WHERE "callStartTime" >= ${fromUtc} AND "callStartTime" < ${toUtcExcl}
+      WHERE "direction" = 'incoming' AND "callStartTime" >= ${fromUtc} AND "callStartTime" < ${toUtcExcl}
       GROUP BY 1
     `),
-    prisma.voxbayCall.aggregate({ _min: { callStartTime: true }, _max: { callStartTime: true } }),
+    // Callers are inbound: the webhook's outgoing calls are dialled by us.
+    prisma.voxbayCall.aggregate({
+      where: { direction: "incoming" },
+      _min: { callStartTime: true },
+      _max: { callStartTime: true },
+    }),
   ]);
 
   const chByDay = new Map(channelDays.map((c) => [fromPrismaDate(c.day), c]));

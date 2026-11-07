@@ -30,6 +30,10 @@ export const CRM_ACTIVITY_TYPES = [
   "EMAIL_SENT",
   "WHATSAPP_SENT",
   "CALL_LOGGED",
+  // A call Voxbay reported through its webhook (src/lib/voxbay-webhook-ingest.ts).
+  // Its own type because CALL_LOGGED is the BDE's logged outcome and counts as
+  // work; a telephony record must not double-count it or reset any SLA clock.
+  "VOXBAY_CALL",
   "PARTY_LINKED",
   "TASK_CREATED",
   "TASK_COMPLETED",

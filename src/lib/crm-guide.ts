@@ -104,6 +104,12 @@ export type GuideChange = { date: string; section: string; title: string; detail
  */
 export const CRM_GUIDE_CHANGES: GuideChange[] = [
   {
+    date: "2026-11-07",
+    section: "log-call",
+    title: "Voxbay calls on the Timeline",
+    detail: "Calls made or taken on Voxbay now appear on the lead's **Timeline** by themselves, with **Play recording**. They don't replace **Log call**.",
+  },
+  {
     date: "2026-11-04",
     section: "basics",
     title: "CRM Guide",
@@ -600,6 +606,7 @@ export function crmGuideSections(f: GuideFacts, canSee: (href: string) => boolea
             `${outcome("connected")} on a lead in ${NEW} moves it to ${FU} for you.`,
             `Not reached? Pick ${outcome("no_answer")} or ${outcome("busy")} — the follow-up switches to **Later today**. An unanswered call still counts as contact.`,
             "Log every attempt. Your response time and Daily Report are built from them.",
+            "Calls you make or take on Voxbay appear on the lead's **Timeline** by themselves: incoming or outgoing, the result, the length, and **Play recording** when there is one. That entry is only the phone record. It doesn't count as a logged call, so still use **Log call** to record the outcome.",
           ],
         },
         {
@@ -1059,6 +1066,13 @@ export function crmGuideQuiz(f: GuideFacts): GuideQuizQuestion[] {
       ["Stage is where the lead is in the pipeline; Status is where the conversation stands"],
       ["They are the same thing with two names", "Stage is set by marketing; Status is set by Finance", "Status is only used after the lead is enrolled"],
       "A lead has both. The Status cuts across every stage — e.g. Details Sent and Not Responding can happen in Qualify or Follow-Up.",
+    ),
+    q(
+      "voxbay-call-entry",
+      "A call you made on Voxbay already shows on the lead's Timeline. What else do you need to do?",
+      ["Log the call with Log call, so the outcome and your follow-up are recorded"],
+      ["Nothing — the Voxbay entry counts as a logged call", "Delete the Voxbay entry and log it again", "Ask an admin to approve the Voxbay entry"],
+      "The Voxbay entry is the phone system's record. It doesn't count towards your response time or Daily Report — Log call does, and it books your next follow-up.",
     ),
     q(
       "uncontacted-alarm",

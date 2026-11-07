@@ -90,3 +90,59 @@ Each call upserts one user. (For multi-user management UI, ask Claude to extend
 - `/ai-insights` — auto-generated analysis from the data
 - `/api/transactions` — `GET` list, `POST` create
 - `/api/transactions/[id]` — `DELETE`
+
+## Voxbay call-record webhook
+
+Voxbay (cloud telephony) pushes every finished call, incoming and outgoing, to
+DesGro as it ends. This replaces downloading the call report and uploading it on
+**Marketing → Voxbay**. That upload still works as a fallback.
+
+- **Endpoint:** `POST https://desgro.in/api/crm/voxbay/webhook`. It needs no login;
+  each request is authenticated by its `X-Voxbay-Signature` HMAC.
+- **Env var:** `VOXBAY_SIGNING_SECRET` is the `whsec_…` signing secret Voxbay shows
+  in **API Management**. Set it in Vercel → Project → Settings → Environment
+  Variables (Production), then redeploy. Until it is set the endpoint answers
+  `503` and files nothing.
+- **What it does:** it verifies the signature, then files the call in `VoxbayCall`
+  (the table the report upload writes, with `source = 'webhook'`). It links the
+  call to the lead with that phone number and adds a Timeline entry with a
+  recording link. Calls from numbers with no lead are kept unlinked with
+  `leadUnmatched = true`. Test sends (`X-Voxbay-Test: true`) are logged and
+  nothing else.
+- **Delivery log:** every attempt is a row in `VoxbayWebhookEvent`, with status
+  `processed`, `duplicate` (the call was already on file and was refreshed),
+  `error` (with the reason) or `test`.
+- **Responses:** `200` when the call is filed, is a repeat or is a test. `400` means
+  the payload is unusable (for example, no `call_id`), `401` a bad signature,
+  `500` a database failure. Voxbay retries anything other than a 2xx at 1m, 5m,
+  15m, 1h and 6h.
+- **Report upload after the webhook:** a report row for a call the webhook already
+  filed doesn't add a second row. It fills in the columns only the report has,
+  such as `user_status`, cost and disposition.
+
+### Re-sending failed deliveries
+
+1. In Voxbay, open **API Management → Activity** and find the failed delivery (any
+   response that isn't 2xx).
+2. Use the response code to fix the cause first:
+   - `401`: `VOXBAY_SIGNING_SECRET` doesn't match Voxbay's current secret.
+   - `503`: the secret isn't set.
+   - `500`: the database was unavailable. The reason is in `VoxbayWebhookEvent.error`.
+3. Re-send the delivery from the Activity page. A re-send keeps its event id, so a
+   delivery that had already succeeded is answered `200` as a duplicate and the
+   call is never filed twice.
+
+### Local testing
+
+Run the dev server against a **local** database, never the `DATABASE_URL` in
+`.env`. Give the server and the script the same secret:
+
+```bash
+VOXBAY_SIGNING_SECRET=whsec_local npm run dev
+VOXBAY_SIGNING_SECRET=whsec_local npx tsx scripts/voxbay-test.ts http://localhost:3000
+```
+
+The script sends one signed incoming and one signed outgoing call, then re-sends
+the incoming one to show that it comes back as a duplicate. Add `--test` to send
+them as Voxbay test sends, which are logged but not filed. Add `--phone <number>`
+to use a lead's number, so the calls land on that lead's Timeline.

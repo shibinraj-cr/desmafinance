@@ -179,6 +179,7 @@ const ACTIVITY_ICON: Record<string, string> = {
   EMAIL_SENT: "mail",
   WHATSAPP_SENT: "chat",
   CALL_LOGGED: "call",
+  VOXBAY_CALL: "phone_in_talk",
   PARTY_LINKED: "link",
   TASK_CREATED: "add_task",
   TASK_COMPLETED: "task_alt",
@@ -1294,6 +1295,19 @@ function ActivityCard({ activity }: { activity: ActivityRow }) {
           <p className="mt-xs border-l-2 border-outline-variant pl-sm text-body-md text-on-surface-variant whitespace-pre-wrap">
             {activity.note}
           </p>
+        )}
+        {activity.recordingUrl && (
+          <a
+            href={activity.recordingUrl}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="mt-xs inline-flex items-center gap-xs text-label-sm font-semibold text-primary hover:underline"
+          >
+            <span className="material-symbols-outlined" style={{ fontSize: 16 }}>
+              play_circle
+            </span>
+            Play recording
+          </a>
         )}
         <p className="text-label-sm text-on-surface-variant">
           {activity.actorName ? `${activity.actorName} · ` : ""}
@@ -3178,6 +3192,7 @@ const HISTORY_TYPES = [
   "EMAIL_SENT",
   "WHATSAPP_SENT",
   "CALL_LOGGED",
+  "VOXBAY_CALL",
   "PARTY_LINKED",
   "TASK_CREATED",
   "TASK_COMPLETED",

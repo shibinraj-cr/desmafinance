@@ -849,6 +849,8 @@ export type ActivityRow = {
   summary: string | null;
   /** Task note text lifted out of `metadata`, shown as a sub-block on the Timeline. */
   note: string | null;
+  /** A Voxbay call's recording, lifted out of `metadata` like `note`; http(s) only. */
+  recordingUrl: string | null;
   actorName: string | null;
   occurredAt: string;
   metadata?: unknown;
@@ -865,11 +867,15 @@ export function serializeActivity(
   // Timeline can render it even when the raw metadata is withheld from the client.
   const meta = a.metadata && typeof a.metadata === "object" ? (a.metadata as Record<string, unknown>) : null;
   const note = meta && typeof meta.note === "string" && meta.note.trim() ? meta.note : null;
+  // Rendered as a link, so anything but a web URL (a javascript: one) is dropped.
+  const recordingUrl =
+    meta && typeof meta.recordingUrl === "string" && /^https?:\/\//i.test(meta.recordingUrl) ? meta.recordingUrl : null;
   return {
     id: a.id,
     type: a.type,
     summary: a.summary,
     note,
+    recordingUrl,
     actorName: a.actor?.leadPulseRole?.displayName ?? a.actor?.username ?? null,
     occurredAt: a.occurredAt.toISOString(),
     ...(opts.includeMetadata ? { metadata: a.metadata ?? null } : {}),
