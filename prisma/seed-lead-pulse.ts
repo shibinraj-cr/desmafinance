@@ -11,7 +11,10 @@ const prisma = new PrismaClient();
 
 const SOURCES = [
   { code: "meta", label: "Meta", displayOrder: 1 },
-  { code: "wabis", label: "Wabis", displayOrder: 2 },
+  // The WhatsApp Business API channel (once run through the Wabis partner,
+  // hence the code). The conversation mirror stamps it on the lead it creates
+  // when a number we have never seen messages us — see src/lib/wa/mirror.ts.
+  { code: "wabis", label: "WA API", displayOrder: 2 },
   { code: "voxbay", label: "Voxbay", displayOrder: 3 },
   { code: "youtube", label: "YouTube", displayOrder: 4 },
   { code: "insta_fb", label: "Insta / FB", displayOrder: 5 },
@@ -23,10 +26,6 @@ const SOURCES = [
   // (preserving the original channel in Lead.originalSource) so repeat revenue
   // shows as its own bucket in the source funnel.
   { code: "existing_candidate", label: "Existing Candidate", displayOrder: 9 },
-  // A number we have never seen messaging our WhatsApp. The conversation mirror
-  // creates the lead (see src/lib/wa/mirror.ts), so these arrive without anyone
-  // filling a form — worth its own bucket rather than being lost in "Other".
-  { code: "whatsapp_inbound", label: "WhatsApp Inbound", displayOrder: 10 },
 ];
 
 const REGIONS = [
