@@ -345,12 +345,15 @@ export function VoxbayClient({
         rowCount: number;
         inserted?: number;
         skipped?: number;
+        enriched?: number;
       };
       const inserted = data.inserted ?? data.rowCount;
       const skipped = data.skipped ?? 0;
+      const enriched = data.enriched ?? 0;
       setToast(
         `Merged ${data.rowCount.toLocaleString("en-IN")} rows — ` +
-          `${inserted.toLocaleString("en-IN")} new, ${skipped.toLocaleString("en-IN")} already on file.`,
+          `${inserted.toLocaleString("en-IN")} new, ${skipped.toLocaleString("en-IN")} already on file` +
+          (enriched ? `, ${enriched.toLocaleString("en-IN")} filled in on calls from the live feed.` : "."),
       );
       router.refresh();
     });

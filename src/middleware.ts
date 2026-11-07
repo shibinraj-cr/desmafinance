@@ -45,6 +45,9 @@ export const config = {
     // the Instagram DM hook (api/crm/ig/webhook — Meta POSTs with no session
     // and the route accepts only a valid X-Hub-Signature-256; every OTHER
     // route under api/crm/ig stays gated),
+    // the Voxbay call-record hook (api/crm/voxbay/webhook — Voxbay POSTs each
+    // finished call with no session; the route accepts only a valid
+    // X-Voxbay-Signature HMAC keyed with VOXBAY_SIGNING_SECRET),
     // the public privacy policy and terms pages (required to be reachable
     // without login for Meta app review, and linked from the careers site),
     // the public careers site and its apply endpoint
@@ -77,6 +80,6 @@ export const config = {
     // revocable, and nothing under it can write),
     // Next.js internal asset routes, and any file with
     // an extension (/desfin.png, /favicon.ico, fonts).
-    "/((?!login|api/auth|api/health|api/whoami|api/integrations|api/crm/integrations/wabis/inbound|api/crm/integrations/wabis/delivery-status|api/crm/wa/webhook|api/crm/ig/webhook|psych/test|api/psych/test|privacy-policy|terms|careers|api/careers|offer|api/offer|partners|api/partners|api/hiring/calendar|api/wa-media|api/cron|share/|api/share/|sign/|api/sign/|verify/|api/verify/|_next/static|_next/image|.*\\..*).*)",
+    "/((?!login|api/auth|api/health|api/whoami|api/integrations|api/crm/integrations/wabis/inbound|api/crm/integrations/wabis/delivery-status|api/crm/wa/webhook|api/crm/ig/webhook|api/crm/voxbay/webhook|psych/test|api/psych/test|privacy-policy|terms|careers|api/careers|offer|api/offer|partners|api/partners|api/hiring/calendar|api/wa-media|api/cron|share/|api/share/|sign/|api/sign/|verify/|api/verify/|_next/static|_next/image|.*\\..*).*)",
   ],
 };

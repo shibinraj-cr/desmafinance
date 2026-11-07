@@ -58,8 +58,11 @@ export default async function VoxbayPage({
       orderBy: { uploadedAt: "desc" },
       include: { uploadedBy: { select: { username: true } } },
     }),
+    // Incoming only: the live webhook also files outgoing calls in VoxbayCall,
+    // and this page is the incoming-call report.
     prisma.voxbayCall.findMany({
       where: {
+        direction: "incoming",
         callStartTime: { gte: istDayStartUtc(from), lte: istDayEndUtc(to) },
       },
       orderBy: { callStartTime: "desc" },
@@ -67,6 +70,7 @@ export default async function VoxbayPage({
     }),
     prisma.voxbayCall.findMany({
       where: {
+        direction: "incoming",
         callStartTime: { gte: istDayStartUtc(priorFrom), lte: istDayEndUtc(priorTo) },
       },
       select: {

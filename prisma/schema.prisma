@@ -53,6 +53,7 @@ model User {
   mktDeliverablesOwned    MktDeliverable[]      @relation("MktDeliverableOwner")
   // Voxbay CSV uploads
   voxbayUploads           VoxbayUpload[]        @relation("VoxbayUploads")
+  voxbayCallsHandled      VoxbayCall[]          @relation("VoxbayCallAgent")
   financeDocFolders       FinanceDocFolder[]    @relation("FinanceDocFolderCreatedBy")
   financeDocuments        FinanceDocument[]     @relation("FinanceDocumentUploadedBy")
   financeDocShares        FinanceDocShare[]     @relation("FinanceDocShareCreatedBy")
@@ -1404,11 +1405,25 @@ model VoxbayUpload {
   @@index([uploadedAt])
 }
 
-/// One parsed row from the Voxbay incoming-call report. Durations
-/// are normalised to seconds for analytics; the original HH:MM:SS
-/// string is preserved on `*Display` for the table.
+/// One Voxbay call. Rows come from two places: the incoming-call report CSV
+/// uploaded on /marketing/voxbay (`source = 'upload'`), and the live CDR
+/// webhook at /api/crm/voxbay/webhook (`source = 'webhook'`), which also
+/// delivers OUTGOING calls. Durations are normalised to seconds for analytics;
+/// the HH:MM:SS string is kept on `*Display` for the table.
 model VoxbayCall {
   id                      String    @id @default(cuid())
+  /// Voxbay's own `call_id` from the webhook (or the report's `callUniqueId`).
+  /// The webhook upserts on it, so a redelivery never adds a second row.
+  voxbayCallId            String?   @unique
+  /// 'incoming' | 'outgoing'. Every uploaded report row is incoming, which is
+  /// what the default gives legacy rows; the incoming-call dashboards filter on it.
+  direction               String    @default("incoming")
+  /// 'upload' | 'webhook' — which path created the row.
+  source                  String    @default("upload")
+  /// The customer's number (caller, or the number we dialled), normalised with
+  /// normalizePhone. Links the call to a lead and matches a webhook row to the
+  /// same call in a later report upload.
+  phoneE164               String?
   /// Deterministic identity key for merge-on-upload semantics:
   /// `${sourceNumber}|${didNumber}|${callStartTime.toISOString()}`.
   /// Nullable for legacy rows; populated by the upload route + a
@@ -1440,6 +1455,19 @@ model VoxbayCall {
   deptName                String?
   disposition             String?
   latestComment           String?
+  callEndTime             DateTime?
+  agentEmail              String?
+  agentPhone              String?
+  /// The DesGro user Voxbay's agent resolved to (by email, then phone, then name).
+  agentUserId             String?
+  agentUser               User?     @relation("VoxbayCallAgent", fields: [agentUserId], references: [id], onDelete: SetNull)
+  /// The lead this call was filed under (set by the webhook; see
+  /// src/lib/voxbay-webhook-ingest.ts). Null on uploaded rows.
+  leadId                  String?
+  lead                    Lead?     @relation(fields: [leadId], references: [id], onDelete: SetNull)
+  /// A webhook call whose number matched no lead. Kept unlinked and flagged
+  /// rather than auto-creating a lead, as the report upload never creates one.
+  leadUnmatched           Boolean   @default(false)
   createdAt               DateTime  @default(now())
 
   @@index([callStartTime])
@@ -1447,6 +1475,40 @@ model VoxbayCall {
   @@index([userStatus])
   @@index([agentName])
   @@index([lastTriedName])
+  @@index([phoneE164, callStartTime])
+  @@index([leadId])
+  @@index([agentUserId])
+  @@index([leadUnmatched])
+}
+
+/// Every POST to the Voxbay CDR webhook, verified or not — the audit trail
+/// behind "did Voxbay send it, and what did we do with it". `eventId` is
+/// Voxbay's X-Voxbay-Event-Id, identical across retries, so it is the dedupe
+/// key. It is set ONLY once the signature has been verified (the HMAC covers
+/// it); a refused attempt is stored with `eventId` null so an unsigned request
+/// can never claim, or overwrite, a real delivery's row.
+model VoxbayWebhookEvent {
+  id          String   @id @default(cuid())
+  eventId     String?  @unique
+  /// X-Voxbay-Event as sent, e.g. "cdr.incoming".
+  eventType   String?
+  attempt     Int?
+  isTest      Boolean  @default(false)
+  signatureOk Boolean  @default(false)
+  /// The payload's call_id, for finding a call's deliveries.
+  callId      String?
+  /// The parsed body. Null when it was not JSON.
+  rawBody     Json?
+  /// 'processed' | 'duplicate' (the call was already on file, from an earlier
+  /// event or a report upload, and was refreshed) | 'error' | 'test'
+  status      String
+  error       String?
+  receivedAt  DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@index([receivedAt])
+  @@index([status])
+  @@index([callId])
 }
 
 /// One per (BDE, year, month) row holding the AI-style coaching loop
@@ -3081,6 +3143,7 @@ model Lead {
   opsProjects           OpsProject[]             @relation("OpsProjectLead")
   waConversations       WaConversation[]
   igContacts            IgContact[]
+  voxbayCalls           VoxbayCall[]
   waBroadcastRecipients WaBroadcastRecipient[]
   taskReminders         CrmTaskReminder[]
   esignRequests         EsignRequest[]
