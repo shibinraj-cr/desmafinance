@@ -379,6 +379,27 @@ function assignedToFilter(
   where.assignedToId = unassigned ? null : oneOf(userIds);
 }
 
+/** Source-filter sentinel for leads with no source mapped (`sourceId IS NULL`). */
+export const NO_SOURCE = "none";
+
+/**
+ * Apply the source filter. Picked source ids collapse to `=` / `IN`;
+ * {@link NO_SOURCE} matches leads with no source, and alongside picked ids it
+ * ORs that pile in ("Blank + Meta" = both). Like the consultant filter, the OR
+ * joins the shared `and` list because `where.OR` belongs to the `q` search.
+ */
+function sourceFilter(where: Prisma.LeadWhereInput, and: Prisma.LeadWhereInput[], raw: MultiFilterValue): void {
+  const values = listParam(raw);
+  if (values.length === 0) return;
+  const blank = values.includes(NO_SOURCE);
+  const ids = values.filter((v) => v !== NO_SOURCE);
+  if (blank && ids.length > 0) {
+    and.push({ OR: [{ sourceId: null }, { sourceId: oneOf(ids) }] });
+    return;
+  }
+  where.sourceId = blank ? null : oneOf(ids);
+}
+
 /**
  * Open-task predicate for the `task` filter, or null when nothing (or both
  * options, which is the same thing) is picked.
@@ -495,8 +516,7 @@ export function buildLeadWhere(p: LeadFilterParams): Prisma.LeadWhereInput {
   // Each of these is `=` for one pick, `IN (...)` for several, absent for none.
   const statusId = oneOf(listParam(p.status));
   if (statusId !== undefined) where.statusId = statusId;
-  const sourceId = oneOf(listParam(p.source));
-  if (sourceId !== undefined) where.sourceId = sourceId;
+  sourceFilter(where, and, p.source);
   const serviceId = oneOf(listParam(p.service));
   if (serviceId !== undefined) where.serviceId = serviceId;
   assignedToFilter(where, and, p.assignee);

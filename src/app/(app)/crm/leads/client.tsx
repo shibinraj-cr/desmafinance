@@ -10,6 +10,7 @@ import {
   isCentralisedStatus,
   LEAD_TASK_FILTERS,
   LEAD_IDLE_BUCKETS,
+  NO_SOURCE,
 } from "@/lib/crm-leads";
 import { DEFAULT_STATUS_COLOR, BULK_EMAIL_COOLDOWN_DAYS, BULK_EMAIL_MERGE_FIELDS, fillTemplate, LEAD_TEMPERATURES, leadTemperatureMeta, isOtherQualification, qualificationText, QUALIFICATION_OTHER_MAX, daysInStatus, STATUS_STALE_DAYS, type MessageTemplateDTO } from "@/lib/crm";
 import { ageFromDob } from "@/lib/age";
@@ -1131,7 +1132,10 @@ export function LeadsTable({
 
         <MultiSelect
           placeholder="All sources"
-          options={masters.sources.map((s) => ({ value: s.id, label: s.label }))}
+          options={[
+            { value: NO_SOURCE, label: "(Blank) — no source" },
+            ...masters.sources.map((s) => ({ value: s.id, label: s.label })),
+          ]}
           selected={picked("source")}
           onChange={(next) => update({ source: next })}
         />
