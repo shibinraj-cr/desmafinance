@@ -472,6 +472,51 @@ export async function getCrmMonthlyFacts(opts: { from: Date; to: Date; userId?: 
 }
 
 /**
+ * Per-(IST day, source) lead counts since `from`, for the source trend charts
+ * (`buildSourceTrends`). Days are Asia/Kolkata calendar days.
+ *  - received: leads created that day. Duplicates are excluded, and so are
+ *    leads from a file a person uploaded — those are stamped with the upload
+ *    time, not the enquiry date, so a backfill would land as one false spike.
+ *    Sheet-sync leads keep their original (back-dated) enquiry date and count.
+ *  - assigned: leads deliberately assigned that day — the same carryover and
+ *    duplicate rules as {@link getCrmFunnelBySource}.
+ * Bounds are compared as UTC wall time so the DB session's TimeZone can't
+ * shift them (the columns are zone-less timestamps holding UTC).
+ */
+export async function getCrmSourceDayFacts(from: Date): Promise<{
+  received: Array<{ day: string; sourceId: string | null; count: number }>;
+  assigned: Array<{ day: string; sourceId: string | null; count: number }>;
+}> {
+  const fromUtc = Prisma.sql`(${from}::timestamptz AT TIME ZONE 'UTC')`;
+  const [received, assigned] = await Promise.all([
+    prisma.$queryRaw<Array<{ day: string; sourceId: string | null; n: number }>>(Prisma.sql`
+      SELECT to_char((l."createdAt" AT TIME ZONE 'UTC' AT TIME ZONE 'Asia/Kolkata')::date, 'YYYY-MM-DD') AS day,
+             l."sourceId" AS "sourceId", COUNT(*)::int AS n
+      FROM "Lead" l
+      LEFT JOIN "LeadImportBatch" b ON l."importBatchId" = b.id
+      JOIN "CrmLeadStatus" st ON l."statusId" = st.id
+      WHERE l."createdAt" >= ${fromUtc}
+        AND b."uploadedById" IS NULL AND ${NOT_DUPLICATE}
+      GROUP BY 1, 2
+    `),
+    prisma.$queryRaw<Array<{ day: string; sourceId: string | null; n: number }>>(Prisma.sql`
+      SELECT to_char((l."assignedAt" AT TIME ZONE 'UTC' AT TIME ZONE 'Asia/Kolkata')::date, 'YYYY-MM-DD') AS day,
+             l."sourceId" AS "sourceId", COUNT(*)::int AS n
+      FROM "Lead" l
+      LEFT JOIN "LeadImportBatch" b ON l."importBatchId" = b.id
+      JOIN "CrmLeadStatus" st ON l."statusId" = st.id
+      WHERE l."assignedToId" IS NOT NULL
+        AND l."assignedAt" >= ${fromUtc}
+        AND ${DELIBERATE} AND ${NOT_DUPLICATE}
+      GROUP BY 1, 2
+    `),
+  ]);
+  const toFacts = (rows: Array<{ day: string; sourceId: string | null; n: number }>) =>
+    rows.map((r) => ({ day: r.day, sourceId: r.sourceId, count: Number(r.n) }));
+  return { received: toFacts(received), assigned: toFacts(assigned) };
+}
+
+/**
  * CRM twin of `getMonthlyMatrix` — returns the identical `Matrix` shape so the
  * monthly-report `PerformanceMatrix` renders unchanged. `cell.leads` = leads
  * assigned, `cell.won` = enrollments. (L1 BDEs have won = 0 — enrollments only
