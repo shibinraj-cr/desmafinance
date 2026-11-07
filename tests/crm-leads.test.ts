@@ -18,6 +18,7 @@ import {
   isCentralisedStatus,
   leadFilterParamsFromQuery,
   LEAD_IDLE_BUCKETS,
+  NO_SOURCE,
 } from "@/lib/crm-leads";
 
 describe("requiresNextStepOnComplete — mandatory next step on an active lead", () => {
@@ -133,6 +134,30 @@ describe("buildLeadWhere — assignee", () => {
 
   it("applies no assignee filter when omitted", () => {
     expect(buildLeadWhere({}).assignedToId).toBeUndefined();
+  });
+});
+
+describe("buildLeadWhere — source", () => {
+  it("restricts to one source, or several", () => {
+    expect(buildLeadWhere({ source: "meta" }).sourceId).toBe("meta");
+    expect(buildLeadWhere({ source: ["meta", "web"] }).sourceId).toEqual({ in: ["meta", "web"] });
+  });
+
+  it("matches leads with no source for the blank option", () => {
+    const where = buildLeadWhere({ source: NO_SOURCE });
+    expect(where.sourceId).toBeNull();
+    expect(where.AND).toBeUndefined();
+  });
+
+  it("ORs the no-source pile in alongside picked sources, outside the search OR", () => {
+    const where = buildLeadWhere({ source: [NO_SOURCE, "meta"], q: "asha" });
+    expect(where.sourceId).toBeUndefined();
+    expect(where.AND).toEqual([{ OR: [{ sourceId: null }, { sourceId: "meta" }] }]);
+    expect(where.OR).toBeDefined();
+  });
+
+  it("applies no source filter when omitted", () => {
+    expect(buildLeadWhere({}).sourceId).toBeUndefined();
   });
 });
 
