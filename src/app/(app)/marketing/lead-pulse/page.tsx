@@ -19,8 +19,17 @@ import {
   getPipelineForecast,
   monthBounds,
 } from "@/lib/lead-pulse-metrics";
-import { resolveServiceMatrix, getMetricsSource, getCrmFunnel, getCrmFunnelBySource, getCrmEnrollmentsByService } from "@/lib/lead-pulse-crm-metrics";
+import {
+  resolveServiceMatrix,
+  getMetricsSource,
+  getCrmFunnel,
+  getCrmFunnelBySource,
+  getCrmEnrollmentsByService,
+  getCrmSourceDayFacts,
+} from "@/lib/lead-pulse-crm-metrics";
 import { todayIst } from "@/lib/lead-pulse-dates";
+import { buildSourceTrends } from "@/lib/lead-source-trends";
+import { monthsEnding } from "@/lib/crm-monthly-comparison";
 import {
   LeadVolumeChart,
   GroupedConversionBySourceChart,
@@ -29,6 +38,7 @@ import {
 } from "./_charts";
 import { Kpi, TripletKpi, pctChange } from "./_kpi";
 import { TargetAchievementCard } from "./_target-achievement";
+import { SourceTrendsCard } from "./_source-trends";
 
 export const dynamic = "force-dynamic";
 
@@ -102,6 +112,11 @@ export default async function LeadPulseHomePage() {
   }
   const lastWorkingDay = findLastWorkingDay(today);
 
+  // Source trend charts: 12 IST months of per-day facts — the daily view's 30
+  // days sit inside that window, so one fetch feeds both views.
+  const TREND_MONTHS = 12;
+  const trendFrom = new Date(`${monthsEnding(year, month, TREND_MONTHS)[0].value}-01T00:00:00+05:30`);
+
   const [
     thisMonth,
     lastMonth,
@@ -123,6 +138,8 @@ export default async function LeadPulseHomePage() {
     metaDisqAnalysis,
     serviceMatrix,
     pipelineForecast,
+    sourceDayFacts,
+    allSources,
   ] = await Promise.all([
     getFunnelTotals({ start: monthStart, end: monthEnd }),
     getFunnelTotals({ start: prev.start, end: prev.end }),
@@ -146,6 +163,8 @@ export default async function LeadPulseHomePage() {
     getSourceDisqualifiedAnalysis("meta", year, month, 6),
     resolveServiceMatrix(year, month),
     getPipelineForecast(year, month),
+    getCrmSourceDayFacts(trendFrom),
+    prisma.leadPulseSource.findMany({ select: { id: true, label: true, displayOrder: true } }),
   ]);
   void convCompare;
 
@@ -156,6 +175,14 @@ export default async function LeadPulseHomePage() {
   const crmBySource = metricsSource === "crm" ? await getCrmFunnelBySource({ start: monthStart, end: monthEnd }) : null;
   const crmByService = metricsSource === "crm" ? await getCrmEnrollmentsByService({ start: monthStart, end: monthEnd }) : null;
   const closedWonValue = crmTotals ? crmTotals.enrolled : thisMonth.l2Won;
+  const sourceTrends = buildSourceTrends({
+    today,
+    received: sourceDayFacts.received,
+    assigned: sourceDayFacts.assigned,
+    sources: allSources,
+    days: 30,
+    months: TREND_MONTHS,
+  });
 
   // Auto-insight for the 30-day vs prior-30-day chart. Deterministic
   // narrative built from the same `daily` series the chart reads —
@@ -327,6 +354,10 @@ export default async function LeadPulseHomePage() {
           </>
         )}
       </div>
+      <Card title="Lead Trends by Source (CRM)">
+        <SourceTrendsCard data={sourceTrends} />
+      </Card>
+
       {metricsSource !== "crm" ? (
       <>
       {/* keep the pace numbers reachable for future tiles */}
