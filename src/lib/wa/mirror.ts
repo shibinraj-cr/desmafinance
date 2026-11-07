@@ -41,8 +41,33 @@ import { pickThreadLead } from "./thread-lead";
 import { renderTemplatePreview } from "./cloud-provider";
 import type { WaProviderKey } from "./provider";
 
-/** Source master an auto-created lead is attributed to (see prisma/seed-lead-pulse.ts). */
-export const WA_INBOUND_SOURCE_CODE = "whatsapp_inbound";
+/**
+ * Source master an auto-created lead is attributed to: the WhatsApp Business
+ * API channel, code `wabis`, labelled "WA API" (renamed from "Wabis" and
+ * created where missing by the 20261107130000 migration).
+ */
+export const WA_INBOUND_SOURCE_CODE = "wabis";
+export const WA_INBOUND_SOURCE_LABEL = "WA API";
+
+/**
+ * The "WA API" source row. By code first; by label second (either name), for a
+ * deployment where an admin had already made the source by hand under another
+ * code, so the migration skipped its own insert rather than duplicate it.
+ */
+export async function resolveWaInboundSourceId(): Promise<string | null> {
+  const byCode = await prisma.leadPulseSource.findUnique({ where: { code: WA_INBOUND_SOURCE_CODE }, select: { id: true } });
+  if (byCode) return byCode.id;
+  const byLabel = await prisma.leadPulseSource.findFirst({
+    where: {
+      OR: [
+        { label: { equals: WA_INBOUND_SOURCE_LABEL, mode: "insensitive" } },
+        { label: { equals: "Wabis", mode: "insensitive" } },
+      ],
+    },
+    select: { id: true },
+  });
+  return byLabel?.id ?? null;
+}
 
 /**
  * WhatsApp's free-text window. A business may only reply in plain text within 24
@@ -187,10 +212,7 @@ export function waInboundExternalKey(phoneE164: string): string {
 async function createInboundLead(
   phoneE164: string,
 ): Promise<{ lead: { id: string; assignedToId: string | null }; created: boolean } | null> {
-  const [defStatus, source] = await Promise.all([
-    resolveDefaultStatus(),
-    prisma.leadPulseSource.findUnique({ where: { code: WA_INBOUND_SOURCE_CODE }, select: { id: true } }),
-  ]);
+  const [defStatus, sourceId] = await Promise.all([resolveDefaultStatus(), resolveWaInboundSourceId()]);
   if (!defStatus) return null;
 
   const externalKey = waInboundExternalKey(phoneE164);
@@ -203,7 +225,7 @@ async function createInboundLead(
         dedupeKey: computeDedupeKey(null, phoneE164),
         externalKey,
         statusId: defStatus.id,
-        sourceId: source?.id ?? null,
+        sourceId,
       },
     ],
     skipDuplicates: true,

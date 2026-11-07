@@ -105,6 +105,12 @@ export type GuideChange = { date: string; section: string; title: string; detail
 export const CRM_GUIDE_CHANGES: GuideChange[] = [
   {
     date: "2026-11-07",
+    section: "inbox",
+    title: "WhatsApp leads get source WA API",
+    detail: "A lead created by a new number messaging the company WhatsApp now has source **WA API** (the source once called Wabis), so it no longer shows up with a blank source.",
+  },
+  {
+    date: "2026-11-07",
     section: "leads-list",
     title: "Find leads with no source",
     detail: "The source filter on **Leads** has a **(Blank) — no source** option. Tick it to list leads that have no source set.",
@@ -396,6 +402,7 @@ export function crmGuideSections(f: GuideFacts, canSee: (href: string) => boolea
           items: [
             "Every reply you send is logged on the lead's timeline as a WhatsApp contact by you, so it counts for your response time and stops the uncontacted alarm.",
             "**Close conversation** clears a finished chat from your list. It doesn't change the lead's stage, and the chat reopens by itself if the candidate writes again.",
+            "When a number the CRM has never seen messages the company WhatsApp, a new lead is created by itself, named with the phone number and with source **WA API**. Add the candidate's name once you know it.",
           ],
         },
         {
