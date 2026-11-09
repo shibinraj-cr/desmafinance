@@ -115,6 +115,11 @@ DesGro as it ends. This replaces downloading the call report and uploading it on
   lead stays unassigned until someone answers that number or a manager assigns
   it. An outgoing call to an unknown number creates nothing; it is kept with
   `leadUnmatched = true` and filed under the number's lead once there is one.
+- **Existing leads calling in:** an incoming call from a number that already
+  has a lead is a re-inquiry, whatever its stage: owner and supervisor tasks,
+  a lost lead re-opened to Re-marketing, and a notification to the owner and
+  the Marketing Admin, as for every re-inquiry. At most once per lead per 24
+  hours since its last enquiry, so redialling a busy line raises one.
 - **Backfill:** calls filed before this rule existed get their leads from
   `npx tsx prisma/backfill-voxbay-leads.ts`, a dry run until you add `--apply`.
 - **Delivery log:** every attempt is a row in `VoxbayWebhookEvent`, with status

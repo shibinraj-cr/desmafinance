@@ -105,6 +105,12 @@ export type GuideChange = { date: string; section: string; title: string; detail
 export const CRM_GUIDE_CHANGES: GuideChange[] = [
   {
     date: "2026-11-09",
+    section: "tasks",
+    title: "Re-inquiries ring the bell",
+    detail: "When a candidate enquires again — a form, an import, Instagram, or a call to the Voxbay line — the lead's owner and the Marketing Admin get a notification, on top of the **Re-inquiry** task.",
+  },
+  {
+    date: "2026-11-09",
     section: "log-call",
     title: "New callers become Voxbay leads",
     detail: "A number the CRM has never seen that phones the Voxbay line now becomes a lead with source **Voxbay**. If you answered, it's assigned to you; a missed call waits unassigned.",
@@ -449,7 +455,8 @@ export function crmGuideSections(f: GuideFacts, canSee: (href: string) => boolea
           items: [
             `Open ${where("/crm/tasks")}. You land on your open tasks; the chips **Overdue**, **Due today** and **Re-inquiry** narrow it.`,
             "Click **Done** when a task is finished, or **Edit** to change its subject, due date, priority or assignee.",
-            "A **Re-inquiry** task means the candidate enquired again — call them first.",
+            "A **Re-inquiry** task means the candidate enquired again — call them first. You also get a notification for it, whatever stage the lead is in.",
+            "A call from your lead to the Voxbay line counts as a re-inquiry too, once a day at most, so several calls in a row raise one task.",
           ],
         },
         {

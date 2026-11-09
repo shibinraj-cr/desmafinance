@@ -6,21 +6,33 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const db = vi.hoisted(() => ({
-  lead: { createMany: vi.fn(), findUnique: vi.fn() },
+  lead: { createMany: vi.fn(), findUnique: vi.fn(), updateMany: vi.fn() },
   leadActivity: { create: vi.fn(), count: vi.fn() },
   leadPulseSource: { upsert: vi.fn() },
 }));
 const assignLeadTo = vi.hoisted(() => vi.fn());
+const reinquiry = vi.hoisted(() => ({
+  recordReInquiry: vi.fn(),
+  resolveReInquiryContext: vi.fn(async () => ({ reMarketingStatusId: null, supervisorUserId: null, marketingAdminIds: [] })),
+  notifySupervisorOfReInquiries: vi.fn(),
+}));
 const roster = vi.hoisted(() => [{ userId: "bde1", displayName: "BDE One", username: "bde1", role: "l2" }]);
 
 vi.mock("@/lib/prisma", () => ({ prisma: db }));
 vi.mock("@/lib/crm-assign", () => ({ assignLeadTo }));
+vi.mock("@/lib/crm-reinquiry", () => reinquiry);
 vi.mock("@/lib/crm-leads", () => ({
   getAssignableBdes: vi.fn(async () => roster),
   resolveDefaultStatus: vi.fn(async () => ({ id: "st_new" })),
 }));
 
-import { assignVoxbayLead, createVoxbayLead, voxbayLeadExternalKey } from "@/lib/voxbay-webhook-ingest";
+import {
+  assignVoxbayLead,
+  createVoxbayLead,
+  foldVoxbayReInquiry,
+  VOXBAY_REINQUIRY_GAP_MS,
+  voxbayLeadExternalKey,
+} from "@/lib/voxbay-webhook-ingest";
 import { callRowToCdr, cdrToCallFields, parseVoxbayCdr, storedCallOutcome, voxbayCallActivity } from "@/lib/voxbay-webhook";
 
 beforeEach(() => {
@@ -141,5 +153,34 @@ describe("callRowToCdr", () => {
     expect(storedCallOutcome(reportRow)).toBe("failed");
     expect(storedCallOutcome({ ...reportRow, userStatus: "NOANSWER" })).toBe("missed");
     expect(storedCallOutcome({ ...reportRow, userStatus: null })).toBe("answered");
+  });
+});
+
+describe("foldVoxbayReInquiry", () => {
+  const now = new Date("2026-11-09T10:00:00Z");
+
+  it("claims the lead's last enquiry 24h back, then folds the call as a Voxbay re-inquiry", async () => {
+    db.lead.updateMany.mockResolvedValue({ count: 1 });
+    reinquiry.recordReInquiry.mockResolvedValue({ leadId: "lead1" });
+    expect(await foldVoxbayReInquiry("lead1", now)).toBe(true);
+
+    const cutoff = new Date(now.getTime() - VOXBAY_REINQUIRY_GAP_MS);
+    expect(db.lead.updateMany.mock.calls[0][0]).toEqual({
+      where: { id: "lead1", createdAt: { lt: cutoff }, OR: [{ lastInquiryAt: null }, { lastInquiryAt: { lt: cutoff } }] },
+      data: { lastInquiryAt: now },
+    });
+    expect(reinquiry.recordReInquiry.mock.calls[0][0]).toEqual({ leadId: "lead1", source: "Voxbay call", occurredAt: now });
+    expect(reinquiry.notifySupervisorOfReInquiries).toHaveBeenCalledOnce();
+  });
+
+  it("does nothing within 24h of the lead's last enquiry or its creation", async () => {
+    db.lead.updateMany.mockResolvedValue({ count: 0 });
+    expect(await foldVoxbayReInquiry("lead1", now)).toBe(false);
+    expect(reinquiry.recordReInquiry).not.toHaveBeenCalled();
+  });
+
+  it("never throws", async () => {
+    db.lead.updateMany.mockRejectedValue(new Error("db down"));
+    expect(await foldVoxbayReInquiry("lead1", now)).toBe(false);
   });
 });
