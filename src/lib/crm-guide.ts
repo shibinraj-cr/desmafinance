@@ -104,6 +104,12 @@ export type GuideChange = { date: string; section: string; title: string; detail
  */
 export const CRM_GUIDE_CHANGES: GuideChange[] = [
   {
+    date: "2026-11-09",
+    section: "leads-list",
+    title: "Filter leads by qualification",
+    detail: "**Leads** has a qualification filter. Tick one or more qualifications, or **(Blank) — no qualification** to find leads with none set.",
+  },
+  {
     date: "2026-11-07",
     section: "inbox",
     title: "WhatsApp leads get source WA API",
@@ -518,8 +524,9 @@ export function crmGuideSections(f: GuideFacts, canSee: (href: string) => boolea
           items: [
             `The chips **My leads**, **My new leads** and **All leads** switch the view. **My new leads** counts your leads still in ${NEW}.`,
             "Type a name, email or phone in **Search name, email, phone…** and press Enter. Phone search ignores spaces and dashes.",
-            "Narrow it with the filters — each lets you tick several values: stage, source, service, consultant, **Any task**, **Any last update**, **Assigned**, **Created**, temperature, quality, status, country and age.",
+            "Narrow it with the filters — each lets you tick several values: stage, source, service, qualification, consultant, **Any task**, **Any last update**, **Assigned**, **Created**, temperature, quality, status, country and age.",
             "In the source filter, **(Blank) — no source** finds leads that have no source set. Open one and set its source so it counts for the right channel.",
+            "In the qualification filter, **(Blank) — no qualification** finds leads with no qualification set. Ask the candidate and fill it in.",
             "Click a candidate's name to open the lead. The icons at the end of a row email, WhatsApp, call or open it.",
           ],
         },
