@@ -19,6 +19,7 @@ import {
   leadFilterParamsFromQuery,
   LEAD_IDLE_BUCKETS,
   NO_SOURCE,
+  NO_QUALIFICATION,
 } from "@/lib/crm-leads";
 
 describe("requiresNextStepOnComplete — mandatory next step on an active lead", () => {
@@ -158,6 +159,46 @@ describe("buildLeadWhere — source", () => {
 
   it("applies no source filter when omitted", () => {
     expect(buildLeadWhere({}).sourceId).toBeUndefined();
+  });
+});
+
+describe("buildLeadWhere — qualification", () => {
+  it("restricts to one qualification, or several", () => {
+    expect(buildLeadWhere({ qualification: "bsn" }).qualificationId).toBe("bsn");
+    expect(buildLeadWhere({ qualification: ["bsn", "gnm"] }).qualificationId).toEqual({ in: ["bsn", "gnm"] });
+  });
+
+  it("matches leads with no qualification for the blank option", () => {
+    const where = buildLeadWhere({ qualification: NO_QUALIFICATION });
+    expect(where.qualificationId).toBeNull();
+    expect(where.AND).toBeUndefined();
+  });
+
+  it("ORs the no-qualification pile in alongside picked ones, outside the search OR", () => {
+    const where = buildLeadWhere({ qualification: [NO_QUALIFICATION, "bsn"], q: "asha" });
+    expect(where.qualificationId).toBeUndefined();
+    expect(where.AND).toEqual([{ OR: [{ qualificationId: null }, { qualificationId: "bsn" }] }]);
+    expect(where.OR).toBeDefined();
+  });
+
+  it("keeps both blank piles as separate ANDed clauses when source and qualification are both blank-plus-picks", () => {
+    const where = buildLeadWhere({ source: [NO_SOURCE, "meta"], qualification: [NO_QUALIFICATION, "bsn"] });
+    expect(where.AND).toEqual([
+      { OR: [{ sourceId: null }, { sourceId: "meta" }] },
+      { OR: [{ qualificationId: null }, { qualificationId: "bsn" }] },
+    ]);
+  });
+
+  it("reads repeated qualification keys from the query string", () => {
+    const p = leadFilterParamsFromQuery(new URLSearchParams("qualification=bsn&qualification=none"), {
+      isBde: false,
+      userId: "u1",
+    });
+    expect(p.qualification).toEqual(["bsn", "none"]);
+  });
+
+  it("applies no qualification filter when omitted", () => {
+    expect(buildLeadWhere({}).qualificationId).toBeUndefined();
   });
 });
 

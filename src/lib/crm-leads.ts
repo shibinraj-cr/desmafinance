@@ -188,6 +188,8 @@ export type LeadFilterParams = {
   status?: MultiFilterValue;
   source?: MultiFilterValue;
   service?: MultiFilterValue;
+  /** Qualification master ids; {@link NO_QUALIFICATION} matches leads with none set. */
+  qualification?: MultiFilterValue;
   /**
    * Consultant filter. UserIds restrict to those BDEs; `"unassigned"` matches
    * leads with no consultant (and combines with userIds as an OR); `"all"` (or
@@ -382,22 +384,32 @@ function assignedToFilter(
 /** Source-filter sentinel for leads with no source mapped (`sourceId IS NULL`). */
 export const NO_SOURCE = "none";
 
+/** Qualification-filter sentinel for leads with no qualification set (`qualificationId IS NULL`). */
+export const NO_QUALIFICATION = "none";
+
 /**
- * Apply the source filter. Picked source ids collapse to `=` / `IN`;
- * {@link NO_SOURCE} matches leads with no source, and alongside picked ids it
- * ORs that pile in ("Blank + Meta" = both). Like the consultant filter, the OR
- * joins the shared `and` list because `where.OR` belongs to the `q` search.
+ * Apply a filter on a nullable master-id column (source, qualification).
+ * Picked ids collapse to `=` / `IN`; the `blank` sentinel matches leads with
+ * the column unset, and alongside picked ids it ORs that pile in ("Blank +
+ * Meta" = both). Like the consultant filter, the OR joins the shared `and`
+ * list because `where.OR` belongs to the `q` search.
  */
-function sourceFilter(where: Prisma.LeadWhereInput, and: Prisma.LeadWhereInput[], raw: MultiFilterValue): void {
+function blankableIdFilter(
+  where: Prisma.LeadWhereInput,
+  and: Prisma.LeadWhereInput[],
+  field: "sourceId" | "qualificationId",
+  blankValue: string,
+  raw: MultiFilterValue,
+): void {
   const values = listParam(raw);
   if (values.length === 0) return;
-  const blank = values.includes(NO_SOURCE);
-  const ids = values.filter((v) => v !== NO_SOURCE);
+  const blank = values.includes(blankValue);
+  const ids = values.filter((v) => v !== blankValue);
   if (blank && ids.length > 0) {
-    and.push({ OR: [{ sourceId: null }, { sourceId: oneOf(ids) }] });
+    and.push({ OR: [{ [field]: null }, { [field]: oneOf(ids) }] });
     return;
   }
-  where.sourceId = blank ? null : oneOf(ids);
+  where[field] = blank ? null : oneOf(ids);
 }
 
 /**
@@ -516,9 +528,10 @@ export function buildLeadWhere(p: LeadFilterParams): Prisma.LeadWhereInput {
   // Each of these is `=` for one pick, `IN (...)` for several, absent for none.
   const statusId = oneOf(listParam(p.status));
   if (statusId !== undefined) where.statusId = statusId;
-  sourceFilter(where, and, p.source);
+  blankableIdFilter(where, and, "sourceId", NO_SOURCE, p.source);
   const serviceId = oneOf(listParam(p.service));
   if (serviceId !== undefined) where.serviceId = serviceId;
+  blankableIdFilter(where, and, "qualificationId", NO_QUALIFICATION, p.qualification);
   assignedToFilter(where, and, p.assignee);
   const campaign = oneOf(listParam(p.campaign));
   if (campaign !== undefined) where.campaign = campaign;
@@ -613,6 +626,7 @@ export function leadFilterParamsFromQuery(
     status: readAll(sp, "status"),
     source: readAll(sp, "source"),
     service: readAll(sp, "service"),
+    qualification: readAll(sp, "qualification"),
     // BDEs default to their own queue ("my leads") until they pick a consultant
     // or explicitly choose "All leads"; everyone else sees all leads.
     assignee: resolveAssigneeFilter(readAll(sp, "assignee"), opts),
