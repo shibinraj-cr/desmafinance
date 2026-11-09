@@ -7,6 +7,7 @@ import { unauthorized, forbidden, badRequest } from "@/lib/http-error";
 import { getCurrentUserAndPermissions } from "@/lib/permissions";
 import { canSeePage } from "@/lib/rbac";
 import { normalizePhone, computeDedupeKey, phoneMatchKeys } from "@/lib/crm";
+import { resolveVoxbaySourceId } from "@/lib/voxbay-webhook-ingest";
 import { resolveDefaultStatus, getAssignableBdes } from "@/lib/crm-leads";
 import {
   voxbayLeadName,
@@ -47,13 +48,9 @@ export const POST = withApiHandler(async (req: Request) => {
 
   const body = BodySchema.parse(await req.json().catch(() => null));
 
-  const [defStatus, voxbaySource, roster] = await Promise.all([
+  const [defStatus, voxbaySourceId, roster] = await Promise.all([
     resolveDefaultStatus(),
-    prisma.leadPulseSource.upsert({
-      where: { code: "voxbay" },
-      create: { code: "voxbay", label: "Voxbay", displayOrder: 6, active: true },
-      update: {},
-    }),
+    resolveVoxbaySourceId(),
     // Roster of assignable consultants — a Voxbay answering agent (first name)
     // maps to the BDE whose display name is the full name.
     getAssignableBdes(),
@@ -145,7 +142,7 @@ export const POST = withApiHandler(async (req: Request) => {
       phone: p.phone,
       phoneE164: p.phoneE164,
       dedupeKey: p.dedupeKey,
-      sourceId: voxbaySource.id,
+      sourceId: voxbaySourceId,
       campaign: "Voxbay call",
       statusId: defStatus.id,
       extra: p.extra ?? Prisma.JsonNull,

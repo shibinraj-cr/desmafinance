@@ -105,6 +105,12 @@ export type GuideChange = { date: string; section: string; title: string; detail
 export const CRM_GUIDE_CHANGES: GuideChange[] = [
   {
     date: "2026-11-09",
+    section: "log-call",
+    title: "New callers become Voxbay leads",
+    detail: "A number the CRM has never seen that phones the Voxbay line now becomes a lead with source **Voxbay**. If you answered, it's assigned to you; a missed call waits unassigned.",
+  },
+  {
+    date: "2026-11-09",
     section: "leads-list",
     title: "Filter leads by qualification",
     detail: "**Leads** has a qualification filter. Tick one or more qualifications, or **(Blank) — no qualification** to find leads with none set.",
@@ -628,6 +634,7 @@ export function crmGuideSections(f: GuideFacts, canSee: (href: string) => boolea
             `Not reached? Pick ${outcome("no_answer")} or ${outcome("busy")} — the follow-up switches to **Later today**. An unanswered call still counts as contact.`,
             "Log every attempt. Your response time and Daily Report are built from them.",
             "Calls you make or take on Voxbay appear on the lead's **Timeline** by themselves: incoming or outgoing, the result, the length, and **Play recording** when there is one. That entry is only the phone record. It doesn't count as a logged call, so still use **Log call** to record the outcome.",
+            "When a number the CRM has never seen phones the Voxbay line, a new lead is created by itself, with source **Voxbay** and named with the caller's name or number. If you answered, it's assigned to you: add the candidate's name and log the call. A missed call's lead stays unassigned until someone answers that number or a manager assigns it.",
           ],
         },
         {

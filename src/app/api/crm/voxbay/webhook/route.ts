@@ -105,7 +105,7 @@ export async function POST(req: Request) {
     }
 
     const result = await ingestVoxbayCdr(parsed.cdr, event);
-    return NextResponse.json({ ok: true, status: result.status, linked: !!result.leadId });
+    return NextResponse.json({ ok: true, status: result.status, linked: !!result.leadId, leadCreated: result.leadCreated });
   } catch (e) {
     const message = e instanceof Error ? e.message : String(e);
     logger.error("voxbay_webhook_failed", { eventId, attempt, error: message });
