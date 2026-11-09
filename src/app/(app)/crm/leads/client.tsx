@@ -11,6 +11,7 @@ import {
   LEAD_TASK_FILTERS,
   LEAD_IDLE_BUCKETS,
   NO_SOURCE,
+  NO_QUALIFICATION,
 } from "@/lib/crm-leads";
 import { DEFAULT_STATUS_COLOR, BULK_EMAIL_COOLDOWN_DAYS, BULK_EMAIL_MERGE_FIELDS, fillTemplate, LEAD_TEMPERATURES, leadTemperatureMeta, isOtherQualification, qualificationText, QUALIFICATION_OTHER_MAX, daysInStatus, STATUS_STALE_DAYS, type MessageTemplateDTO } from "@/lib/crm";
 import { ageFromDob } from "@/lib/age";
@@ -860,6 +861,7 @@ export function LeadsTable({
     picked("status").length > 0 ||
     picked("source").length > 0 ||
     picked("service").length > 0 ||
+    picked("qualification").length > 0 ||
     assigneeIsFilter ||
     picked("campaign").length > 0 ||
     picked("temperature").length > 0 ||
@@ -1147,6 +1149,16 @@ export function LeadsTable({
           onChange={(next) => update({ service: next })}
         />
 
+        <MultiSelect
+          placeholder="All qualifications"
+          options={[
+            { value: NO_QUALIFICATION, label: "(Blank) — no qualification" },
+            ...masters.qualifications.map((q) => ({ value: q.id, label: q.label })),
+          ]}
+          selected={picked("qualification")}
+          onChange={(next) => update({ qualification: next })}
+        />
+
         {/* "All consultants" is a real option rather than the empty state: a BDE
             with nothing picked defaults to their own queue, so clearing the
             selection would bounce them back to "my leads" instead of everyone. */}
@@ -1320,7 +1332,7 @@ export function LeadsTable({
         {anyFilter && (
           <button
             type="button"
-            onClick={() => update({ status: null, substatus: null, source: null, service: null, assignee: null, campaign: null, temperature: null, quality: null, country: null, studyDestination: null, task: null, idle: null, ageMin: null, ageMax: null, assignedOn: null, from: null, to: null, period: null, q: null })}
+            onClick={() => update({ status: null, substatus: null, source: null, service: null, qualification: null, assignee: null, campaign: null, temperature: null, quality: null, country: null, studyDestination: null, task: null, idle: null, ageMin: null, ageMax: null, assignedOn: null, from: null, to: null, period: null, q: null })}
             className="h-9 px-md rounded-lg border border-outline-variant text-label-sm text-on-surface-variant hover:text-on-surface hover:bg-surface-container-low transition"
           >
             Clear all
