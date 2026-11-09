@@ -216,7 +216,7 @@ describe("POST /api/crm/voxbay/webhook", () => {
     db.voxbayWebhookEvent.findUnique.mockResolvedValue(null);
     db.voxbayWebhookEvent.create.mockResolvedValue({});
     db.voxbayWebhookEvent.upsert.mockResolvedValue({});
-    ingest.mockResolvedValue({ status: "processed", callRowId: "row1", leadId: "lead1" });
+    ingest.mockResolvedValue({ status: "processed", callRowId: "row1", leadId: "lead1", leadCreated: false });
   });
 
   it("is closed without a secret", async () => {
@@ -275,7 +275,7 @@ describe("POST /api/crm/voxbay/webhook", () => {
   it("files a valid call", async () => {
     const res = await POST(request());
     expect(res.status).toBe(200);
-    expect(await res.json()).toEqual({ ok: true, status: "processed", linked: true });
+    expect(await res.json()).toEqual({ ok: true, status: "processed", linked: true, leadCreated: false });
     const [parsed, event] = ingest.mock.calls[0];
     expect(parsed).toMatchObject({ callId: "c1", direction: "incoming", phone: "9876543210" });
     expect(event).toMatchObject({ eventId: "evt_1", eventType: "cdr.incoming", attempt: 2 });

@@ -324,12 +324,91 @@ export function shortDuration(sec: number): string {
  * agent name is appended only when `withAgent` — i.e. it matched no DesGro
  * user, since a matched one is already the entry's actor.
  */
-export function voxbayCallSummary(cdr: VoxbayCdr, withAgent = true): string {
-  const outcome = normalizeVoxbayOutcome(cdr);
+export function voxbayCallSummary(cdr: VoxbayCdr, withAgent = true, outcome = normalizeVoxbayOutcome(cdr)): string {
   const parts = [`${cdr.direction === "incoming" ? "Incoming" : "Outgoing"} Voxbay call`, OUTCOME_LABEL[outcome]];
   if (outcome === "answered" && (cdr.conversationDurationSec ?? 0) > 0) parts.push(shortDuration(cdr.conversationDurationSec!));
   if (withAgent && cdr.agentName) parts.push(cdr.agentName);
   return parts.join(" · ");
+}
+
+/** A call's Timeline entry: its line, and the metadata the lead page reads the recording from. */
+export function voxbayCallActivity(cdr: VoxbayCdr, agentUserId: string | null, outcome = normalizeVoxbayOutcome(cdr)) {
+  return {
+    summary: voxbayCallSummary(cdr, !agentUserId, outcome),
+    metadata: {
+      voxbayCallId: cdr.callId,
+      direction: cdr.direction,
+      outcome,
+      callStatus: cdr.callStatus,
+      durationSec: cdr.conversationDurationSec ?? 0,
+      agentName: cdr.agentName,
+      recordingUrl: cdr.recordingUrl,
+    },
+  };
+}
+
+/** The VoxbayCall columns {@link callRowToCdr} reads. */
+export type StoredCallRow = {
+  id: string;
+  voxbayCallId: string | null;
+  direction: string;
+  sourceNumber: string | null;
+  contactName: string | null;
+  callStatus: string | null;
+  didNumber: string | null;
+  totalDurationSec: number;
+  answeredDurationSec: number;
+  callRecordFile: string | null;
+  callStartTime: Date | null;
+  callConnectedTime: Date | null;
+  callEndTime: Date | null;
+  agentName: string | null;
+  agentEmail: string | null;
+  extNumber: string | null;
+  agentPhone: string | null;
+  deptName: string | null;
+  userStatus: string | null;
+};
+
+/**
+ * A stored call's outcome, read from its `user_status`: a webhook row stores
+ * its derived outcome there, and a report row Voxbay's own verdict, which beats
+ * re-deriving one (a report row's call_status says ANSWERED when only the IVR
+ * picked up). Re-derived only for a row with none.
+ */
+export function storedCallOutcome(row: StoredCallRow): VoxbayCallOutcome {
+  const u = (row.userStatus ?? "").trim().toUpperCase();
+  if (!u) return normalizeVoxbayOutcome(callRowToCdr(row));
+  if (u === "ANSWERED") return "answered";
+  if (u === "BUSY") return "busy";
+  if (u === "FAILED") return "failed";
+  return "missed";
+}
+
+/**
+ * A stored webhook call back into the CDR shape, so a call filed before its
+ * number had a lead gets the same Timeline entry once it does.
+ */
+export function callRowToCdr(row: StoredCallRow): VoxbayCdr {
+  return {
+    direction: row.direction === "outgoing" ? "outgoing" : "incoming",
+    callId: row.voxbayCallId ?? row.id,
+    phone: row.sourceNumber,
+    name: row.contactName,
+    callStatus: row.callStatus,
+    didNumber: row.didNumber,
+    totalDurationSec: row.totalDurationSec,
+    conversationDurationSec: row.answeredDurationSec,
+    recordingUrl: row.callRecordFile,
+    callStartTime: row.callStartTime,
+    callAnsweredTime: row.callConnectedTime,
+    callEndTime: row.callEndTime,
+    agentName: row.agentName,
+    agentEmail: row.agentEmail,
+    agentExtension: row.extNumber,
+    agentPhone: row.agentPhone,
+    departmentName: row.deptName,
+  };
 }
 
 // ── Matching the same call across the webhook and the report upload ──────────

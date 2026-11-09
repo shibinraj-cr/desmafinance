@@ -97,8 +97,9 @@ Voxbay (cloud telephony) pushes every finished call, incoming and outgoing, to
 DesGro as it ends. This replaces downloading the call report and uploading it on
 **Marketing → Voxbay**. That upload still works as a fallback.
 
-- **Endpoint:** `POST https://desgro.in/api/crm/voxbay/webhook`. It needs no login;
-  each request is authenticated by its `X-Voxbay-Signature` HMAC.
+- **Endpoint:** `POST https://www.desgro.in/api/crm/voxbay/webhook`. Use the
+  `www` host: `desgro.in` redirects to it, and Voxbay doesn't follow redirects.
+  It needs no login; each request is authenticated by its `X-Voxbay-Signature` HMAC.
 - **Env var:** `VOXBAY_SIGNING_SECRET` is the `whsec_…` signing secret Voxbay shows
   in **API Management**. Set it in Vercel → Project → Settings → Environment
   Variables (Production), then redeploy. Until it is set the endpoint answers
@@ -106,9 +107,16 @@ DesGro as it ends. This replaces downloading the call report and uploading it on
 - **What it does:** it verifies the signature, then files the call in `VoxbayCall`
   (the table the report upload writes, with `source = 'webhook'`). It links the
   call to the lead with that phone number and adds a Timeline entry with a
-  recording link. Calls from numbers with no lead are kept unlinked with
-  `leadUnmatched = true`. Test sends (`X-Voxbay-Test: true`) are logged and
-  nothing else.
+  recording link. Test sends (`X-Voxbay-Test: true`) are logged and nothing else.
+- **New callers become leads:** an incoming call from a number no lead has
+  creates one, with source **Voxbay** and named after the caller (or the
+  number). It is assigned to the BDE who answered, through the normal
+  assignment, so the notification and WhatsApp intro follow. A missed call's
+  lead stays unassigned until someone answers that number or a manager assigns
+  it. An outgoing call to an unknown number creates nothing; it is kept with
+  `leadUnmatched = true` and filed under the number's lead once there is one.
+- **Backfill:** calls filed before this rule existed get their leads from
+  `npx tsx prisma/backfill-voxbay-leads.ts`, a dry run until you add `--apply`.
 - **Delivery log:** every attempt is a row in `VoxbayWebhookEvent`, with status
   `processed`, `duplicate` (the call was already on file and was refreshed),
   `error` (with the reason) or `test`.

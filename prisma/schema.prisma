@@ -1465,8 +1465,10 @@ model VoxbayCall {
   /// src/lib/voxbay-webhook-ingest.ts). Null on uploaded rows.
   leadId                  String?
   lead                    Lead?     @relation(fields: [leadId], references: [id], onDelete: SetNull)
-  /// A webhook call whose number matched no lead. Kept unlinked and flagged
-  /// rather than auto-creating a lead, as the report upload never creates one.
+  /// A webhook call whose number has no lead and didn't create one: an
+  /// outgoing call to an unknown number (an incoming one creates its lead), or
+  /// a call from before incoming calls did. Filed under the number's lead as
+  /// soon as it has one.
   leadUnmatched           Boolean   @default(false)
   createdAt               DateTime  @default(now())
 
