@@ -49,6 +49,79 @@ export async function notifyLeadAssigned(opts: {
 }
 
 /**
+ * The people who hand out leads: anyone with the Marketing Admin role, or any
+ * active Lead Pulse supervisor — the population the uncontacted-lead alarm
+ * nags. Active users only.
+ */
+export async function marketingAdminUserIds(): Promise<string[]> {
+  const users = await prisma.user.findMany({
+    where: {
+      isActive: true,
+      OR: [{ roleRef: { name: MARKETING_ADMIN_ROLE_NAME } }, { leadPulseRole: { role: "supervisor", active: true } }],
+    },
+    select: { id: true },
+  });
+  return users.map((u) => u.id);
+}
+
+/** The bell text for a re-inquiry, worded for the lead's owner or for the Marketing Admin. */
+export function buildReInquiryNotification(
+  p: { candidateName: string; source?: string | null; campaign?: string | null; revived: boolean; owned: boolean },
+  forOwner: boolean,
+): { title: string; body: string } {
+  const name = p.candidateName.trim() || "A lead";
+  const via = p.campaign ? ` via ${p.campaign}` : p.source ? ` via ${p.source}` : "";
+  const parts = [`${name} enquired again${via}.`];
+  if (p.revived) parts.push("Re-opened to Re-marketing.");
+  if (!p.owned) parts.push("Nobody owns this lead — assign a consultant.");
+  return { title: forOwner ? "Your lead enquired again" : "Re-inquiry", body: parts.join(" ") };
+}
+
+/**
+ * Best-effort: a bell notification for every re-inquiry, from any source (form
+ * webhook, import, manual entry, Instagram, a Voxbay call…), to the lead's
+ * owner and the Marketing Admin. Never throws. The person who triggered it (an
+ * importing user re-entering a lead) isn't told about their own action, and an
+ * inactive owner is skipped.
+ */
+export async function notifyReInquiry(opts: {
+  leadId: string;
+  candidateName: string;
+  ownerId: string | null;
+  actorId?: string | null;
+  source?: string | null;
+  campaign?: string | null;
+  revived: boolean;
+  /** The Marketing Admin ids, when the caller resolved them once for a batch. */
+  marketingAdminIds?: string[];
+}): Promise<void> {
+  try {
+    const [admins, owner] = await Promise.all([
+      opts.marketingAdminIds ?? marketingAdminUserIds(),
+      opts.ownerId
+        ? prisma.user.findFirst({ where: { id: opts.ownerId, isActive: true }, select: { id: true } })
+        : Promise.resolve(null),
+    ]);
+    const recipients = new Set([...(owner ? [owner.id] : []), ...admins]);
+    if (opts.actorId) recipients.delete(opts.actorId);
+    if (recipients.size === 0) return;
+
+    const text = { ...opts, owned: !!opts.ownerId };
+    await prisma.crmNotification.createMany({
+      data: [...recipients].map((userId) => ({
+        userId,
+        kind: "re_inquiry",
+        ...buildReInquiryNotification(text, userId === owner?.id),
+        linkUrl: `/crm/leads/${opts.leadId}`,
+        leadId: opts.leadId,
+      })),
+    });
+  } catch (e) {
+    console.error("[crm-notify] failed to write re-inquiry notifications:", e);
+  }
+}
+
+/**
  * Best-effort: tell the Marketing Admin that someone replied to a broadcast and
  * nobody owns them. Never throws.
  *
@@ -74,13 +147,7 @@ export async function notifyUnownedBroadcastReply(opts: {
     const owners = await leadOwnersForPhone(opts.phoneE164);
     if (owners.length > 0) return;
 
-    const recipients = await prisma.user.findMany({
-      where: {
-        isActive: true,
-        OR: [{ roleRef: { name: MARKETING_ADMIN_ROLE_NAME } }, { leadPulseRole: { role: "supervisor", active: true } }],
-      },
-      select: { id: true },
-    });
+    const recipients = await marketingAdminUserIds();
     if (recipients.length === 0) return;
 
     const conversation = await prisma.waConversation.findUnique({
@@ -89,8 +156,8 @@ export async function notifyUnownedBroadcastReply(opts: {
     });
     const name = conversation?.lead?.candidateName?.trim() || "A candidate";
     await prisma.crmNotification.createMany({
-      data: recipients.map((u) => ({
-        userId: u.id,
+      data: recipients.map((userId) => ({
+        userId,
         kind: "broadcast_reply",
         title: "Broadcast reply with no owner",
         body: `${name} replied to "${opts.campaignName}" and has no owner. Assign them so someone answers.`,

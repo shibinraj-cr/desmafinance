@@ -3,11 +3,13 @@
 // submission onto the canonical lead: bump inquiryCount, stamp lastInquiryAt,
 // log a RE_INQUIRY activity, revive the lead if it was in a lost status, and
 // raise follow-up tasks (the consultant who owns it, plus a supervisor oversight
-// task so nothing slips). Used by all three entry points (webhook ingest,
-// file-upload import, manual create).
+// task so nothing slips), and ring the bell for the owner and the Marketing
+// Admin. Used by every entry point (sheet webhook, file-upload import, manual
+// create, the Meta / Voxbay reconcile imports, Instagram, Voxbay calls).
 import { prisma } from "./prisma";
 import { getSetting, REINQUIRY_SUPERVISOR_KEY } from "./app-settings";
 import { getEmailConfig, sendEmail } from "./mailer";
+import { marketingAdminUserIds, notifyReInquiry } from "./crm-notify";
 
 // Lost / terminal dispositions. A re-inquiry on one of these is the strongest
 // re-engagement signal — the candidate said no, then came back.
@@ -27,6 +29,8 @@ export type ReInquiryContext = {
   reMarketingStatusId: string | null;
   /** Supervisor user id for oversight tasks + digest, or null when unconfigured. */
   supervisorUserId: string | null;
+  /** Who gets a bell notification for every re-inquiry besides the owner. */
+  marketingAdminIds: string[];
 };
 
 /** Resolve the configured supervisor user id (AppSetting → env), validating it exists. */
@@ -37,13 +41,15 @@ export async function getReInquirySupervisorId(): Promise<string | null> {
   return u?.id ?? null;
 }
 
-/** Resolve the shared context once per batch (status id + supervisor). */
+/** Resolve the shared context once per batch (status id, supervisor, Marketing Admin). */
 export async function resolveReInquiryContext(): Promise<ReInquiryContext> {
-  const [remkt, supervisorUserId] = await Promise.all([
+  const [remkt, supervisorUserId, marketingAdminIds] = await Promise.all([
     prisma.crmLeadStatus.findUnique({ where: { code: REMARKETING_STATUS_CODE }, select: { id: true, active: true } }),
     getReInquirySupervisorId(),
+    // An empty list on failure: the bell is best-effort, the re-inquiry isn't.
+    marketingAdminUserIds().catch(() => [] as string[]),
   ]);
-  return { reMarketingStatusId: remkt?.active ? remkt.id : null, supervisorUserId };
+  return { reMarketingStatusId: remkt?.active ? remkt.id : null, supervisorUserId, marketingAdminIds };
 }
 
 export type ReInquiryEvent = {
@@ -171,6 +177,17 @@ export async function recordReInquiry(ev: ReInquiryEvent, ctx: ReInquiryContext)
         },
       });
     }
+  });
+
+  await notifyReInquiry({
+    leadId: lead.id,
+    candidateName: lead.candidateName,
+    ownerId: lead.assignedToId,
+    actorId: ev.actorId,
+    source: ev.source,
+    campaign: ev.campaign,
+    revived,
+    marketingAdminIds: ctx.marketingAdminIds,
   });
 
   return {

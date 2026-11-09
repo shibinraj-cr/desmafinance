@@ -11,6 +11,7 @@ import { assignLeadTo } from "./crm-assign";
 import { MISSED_CALL_LABEL, resolveVoxbayAssignee } from "./crm-voxbay-reconcile";
 import { pickThreadLead } from "./wa/thread-lead";
 import { logger } from "./logger";
+import { notifySupervisorOfReInquiries, recordReInquiry, resolveReInquiryContext } from "./crm-reinquiry";
 import {
   CALL_MATCH_TOLERANCE_MS,
   callRowToCdr,
@@ -285,11 +286,45 @@ async function linkUnmatchedCalls(db: Db, leadId: string, phoneE164: string, exc
   return rows.length;
 }
 
+/** A call from a lead counts as a re-inquiry at most once per this long since its last enquiry. */
+export const VOXBAY_REINQUIRY_GAP_MS = 24 * 60 * 60 * 1000;
+
+/**
+ * An incoming call from a lead the CRM already has is a re-inquiry, whatever
+ * its stage: the owner and supervisor tasks, the bell for the owner and the
+ * Marketing Admin, a lost lead re-opened (src/lib/crm-reinquiry.ts).
+ *
+ * At most once per {@link VOXBAY_REINQUIRY_GAP_MS} since the lead's last
+ * enquiry or its creation, so a candidate redialling a busy line raises one,
+ * and the call that created a lead doesn't count again. Claimed on
+ * `lastInquiryAt` in one conditional update, so two deliveries racing can't
+ * both fold. Best-effort: the call is already filed.
+ */
+export async function foldVoxbayReInquiry(leadId: string, now = new Date()): Promise<boolean> {
+  try {
+    const cutoff = new Date(now.getTime() - VOXBAY_REINQUIRY_GAP_MS);
+    const claimed = await prisma.lead.updateMany({
+      where: { id: leadId, createdAt: { lt: cutoff }, OR: [{ lastInquiryAt: null }, { lastInquiryAt: { lt: cutoff } }] },
+      data: { lastInquiryAt: now },
+    });
+    if (claimed.count === 0) return false;
+    const ctx = await resolveReInquiryContext();
+    const outcome = await recordReInquiry({ leadId, source: "Voxbay call", occurredAt: now }, ctx);
+    if (outcome) await notifySupervisorOfReInquiries([outcome], ctx, process.env.NEXTAUTH_URL);
+    return !!outcome;
+  } catch (e) {
+    logger.warn("voxbay_reinquiry_failed", { leadId, error: e instanceof Error ? e.message : String(e) });
+    return false;
+  }
+}
+
 export type IngestResult = {
   status: "processed" | "duplicate";
   callRowId: string;
   leadId: string | null;
   leadCreated: boolean;
+  /** This call was folded onto its existing lead as a re-inquiry. */
+  reInquiry: boolean;
 };
 
 /**
@@ -309,6 +344,9 @@ export type IngestResult = {
  * dialled them, they didn't enquire — and stays flagged `leadUnmatched` until
  * the number gets a lead, when it's filed under it with the number's other
  * earlier calls.
+ *
+ * An incoming call from a lead that already existed is a re-inquiry
+ * (foldVoxbayReInquiry), at most once a day per lead.
  *
  * A lead link, once made, is kept, so a call never hops between two leads. The
  * Timeline entry is written when the call first links to a lead and refreshed
@@ -450,7 +488,7 @@ export async function ingestVoxbayCdr(
         callId: cdr.callId,
         status,
       });
-      return { status, callRowId: rowId, leadId, leadCreated } as IngestResult;
+      return { status, callRowId: rowId, leadId, leadCreated, reInquiry: false } as IngestResult;
     });
 
   let result: IngestResult;
@@ -463,6 +501,12 @@ export async function ingestVoxbayCdr(
     result = await run();
   }
   if (answered && agentUserId && result.leadId) await assignVoxbayLead(result.leadId, agentUserId);
+  // After the assignment, so a lead just handed to the BDE who answered gets
+  // its re-inquiry task in their name. A report row's call (status
+  // "duplicate") already happened before the webhook saw it: not a new enquiry.
+  if (cdr.direction === "incoming" && result.status === "processed" && result.leadId && !result.leadCreated) {
+    result.reInquiry = await foldVoxbayReInquiry(result.leadId);
+  }
   return result;
 }
 
