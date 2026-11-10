@@ -92,13 +92,20 @@ export async function PATCH(req: NextRequest, { params }: { params: { id: string
     }
   }
 
+  // Emails are unique: answer a clash in words instead of a unique-constraint 500.
+  const newEmail = data.email === undefined ? undefined : data.email ? data.email.trim().toLowerCase() : null;
+  if (newEmail && newEmail !== target.email) {
+    const clash = await prisma.user.findUnique({ where: { email: newEmail }, select: { id: true } });
+    if (clash && clash.id !== target.id) return NextResponse.json({ error: "email_taken" }, { status: 409 });
+  }
+
   const update: Record<string, unknown> = {};
   if (data.isActive !== undefined) update.isActive = data.isActive;
   if (newRoleRecord) {
     update.roleId = newRoleRecord.id;
     update.role = legacyForRole(newRoleRecord.name);
   }
-  if (data.email !== undefined) update.email = data.email ? data.email.trim().toLowerCase() : null;
+  if (newEmail !== undefined) update.email = newEmail;
   if (data.password) update.passwordHash = await bcrypt.hash(data.password, 12);
   if (newUsername !== null) update.username = newUsername;
 
