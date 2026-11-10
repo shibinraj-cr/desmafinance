@@ -1,8 +1,9 @@
 "use client";
 
+import { useState } from "react";
 import Link from "next/link";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
-import { CartesianGrid, Legend, Line, LineChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
+import { Bar, BarChart, CartesianGrid, Cell, Legend, Line, LineChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
 import { MultiSelect } from "@/components/MultiSelect";
 import { AnalysisPeriodBar, rangeText, type AnalysisRange } from "@/components/AnalysisPeriodBar";
 import { QualityDot } from "@/components/crm/LeadQualityPicker";
@@ -16,15 +17,23 @@ import {
   type QualityCounts,
 } from "@/lib/lead-quality-report";
 import {
+  QUAL_MORE_KEY,
   REVIEW_SPEND_JUNK_PCT,
   REVIEW_SPEND_MIN_RATED,
   type LqCampaignRow,
   type LqFilters,
+  type LqMetaQualDaily,
+  type LqQualSeries,
   type LqReport,
 } from "@/lib/crm-lead-quality-report";
 
 /** Line colours for the trend's sources, by slot (validated categorical set). */
 const SOURCE_COLORS = ["#2a78d6", "#eda100", "#008300", "#e87ba4"];
+/** Qualification slots, in the validated categorical order (adjacent pairs pass, for stacks). */
+const QUAL_COLORS = ["#2a78d6", "#eb6834", "#1baf7a", "#eda100", "#e87ba4", "#008300", "#6250d6", "#e34948"];
+/** Neutrals, so the folded tail and "Not set" never read as a qualification. */
+const QUAL_MORE_COLOR = "#736e60";
+const QUAL_NOT_SET_COLOR = "#b5b4ab";
 
 const n = (v: number) => v.toLocaleString("en-IN");
 const pct = (v: number | null, digits = 0) => (v === null ? "—" : `${v.toFixed(digits)}%`);
@@ -70,13 +79,14 @@ export function CrmLeadQualityView({ report, range, filters }: { report: LqRepor
   const anyFilter = FILTERS.some((f) => filters[f.key].length > 0);
 
   /** The CRM leads list for this period + filters, narrowed further by `extra`. */
-  const leadsHref = (extra: Partial<Record<"source" | "campaign" | "service" | "assignee", string>> = {}, quality?: string) => {
+  const leadsHref = (extra: Partial<Record<LeadsKey, string>> = {}, quality?: string) => {
     const p = new URLSearchParams({ period: "custom", from: range.from, to: range.to });
     const base: Record<string, string[]> = {
       source: filters.source,
       campaign: filters.campaign,
       service: filters.service,
       assignee: filters.bde,
+      qualification: [],
     };
     for (const [k, v] of Object.entries(extra)) if (v) base[k] = [v];
     for (const [k, vs] of Object.entries(base)) for (const v of vs) p.append(k, v);
@@ -184,6 +194,8 @@ export function CrmLeadQualityView({ report, range, filters }: { report: LqRepor
       <Panel title="Quality mix" subtitle={`${n(rated)} rated leads · shares are of rated leads only`}>
         <MixBar counts={cur} height={34} labels />
       </Panel>
+
+      <MetaQualificationPanel data={report.metaQualDaily} leadsHref={leadsHref} />
 
       <Panel
         title="Campaign quality"
@@ -367,7 +379,8 @@ function MixBar({ counts, height, labels = false }: { counts: QualityCounts; hei
   );
 }
 
-type HrefFn = (extra?: Partial<Record<"source" | "campaign" | "service" | "assignee", string>>, quality?: string) => string;
+type LeadsKey = "source" | "campaign" | "service" | "assignee" | "qualification";
+type HrefFn = (extra?: Partial<Record<LeadsKey, string>>, quality?: string) => string;
 
 function Th({ children, right, title }: { children: React.ReactNode; right?: boolean; title?: string }) {
   return (
@@ -544,6 +557,204 @@ function TrendChart({ trend }: { trend: LqReport["trend"] }) {
         </LineChart>
       </ResponsiveContainer>
       <p className="text-caption text-on-surface-variant mt-xs">Gaps are weeks with too few rated leads from that source to read.</p>
+    </div>
+  );
+}
+
+const qualColor = (s: LqQualSeries) =>
+  s.slot !== null ? QUAL_COLORS[s.slot % QUAL_COLORS.length] : s.key === QUAL_MORE_KEY ? QUAL_MORE_COLOR : QUAL_NOT_SET_COLOR;
+
+/** Meta leads per day, stacked by qualification; "Share" stretches each day to 100%. */
+function MetaQualificationPanel({ data, leadsHref }: { data: LqMetaQualDaily; leadsHref: HrefFn }) {
+  const [share, setShare] = useState(false);
+  const shown = data.series.map((s, i) => ({ s, i })).filter(({ s }) => s.total > 0);
+  const topIdx = shown.length ? shown[shown.length - 1].i : -1;
+  const rows = data.days.map((d) => {
+    const total = d.counts.reduce((a, c) => a + c, 0);
+    const row: Record<string, string | number | boolean> = { day: d.day, short: d.short, label: d.label, partial: d.partial, total };
+    d.counts.forEach((c, i) => {
+      row[`c${i}`] = c;
+      row[`p${i}`] = total ? (c / total) * 100 : 0;
+    });
+    return row;
+  });
+  const href = (s: LqQualSeries) =>
+    data.sourceId && s.key !== QUAL_MORE_KEY ? leadsHref({ source: data.sourceId, qualification: s.key }) : null;
+
+  return (
+    <Panel
+      title="Meta leads by qualification"
+      subtitle="Meta leads created each day (IST), by the Qualification on the lead · duplicates excluded · the Source filter doesn’t apply here"
+      action={
+        <div className="inline-flex rounded-lg border border-outline-variant p-[2px]" role="group" aria-label="Measure">
+          {[
+            { on: false, label: "Leads" },
+            { on: true, label: "Share" },
+          ].map((o) => (
+            <button
+              key={o.label}
+              type="button"
+              onClick={() => setShare(o.on)}
+              aria-pressed={share === o.on}
+              className={
+                "h-8 px-md rounded-md text-label-sm font-semibold " +
+                (share === o.on ? "bg-primary text-on-primary" : "text-on-surface-variant hover:text-on-surface")
+              }
+            >
+              {o.label}
+            </button>
+          ))}
+        </div>
+      }
+    >
+      {data.total === 0 ? (
+        <p className="text-body-md text-on-surface-variant">No Meta leads for this period and filter.</p>
+      ) : (
+        <>
+          <div className="flex flex-wrap gap-sm text-caption text-on-surface">
+            {shown.map(({ s }) => {
+              const body = (
+                <>
+                  <span aria-hidden className="inline-block w-2.5 h-2.5 rounded-sm" style={{ backgroundColor: qualColor(s) }} />
+                  {s.label}
+                  <span className="font-mono font-semibold">{n(s.total)}</span>
+                  <span className="text-on-surface-variant">{pct((s.total / data.total) * 100)}</span>
+                </>
+              );
+              const cls = "inline-flex items-center gap-xs h-7 px-sm rounded-full border border-outline-variant";
+              const to = href(s);
+              return to ? (
+                <Link key={s.key} href={to} className={cls + " hover:border-primary"} title={`Open these ${s.label} leads in the CRM`}>
+                  {body}
+                </Link>
+              ) : (
+                <span key={s.key} className={cls}>
+                  {body}
+                </span>
+              );
+            })}
+            <span className="inline-flex items-center h-7 px-xs text-on-surface-variant">
+              <span className="font-mono font-semibold text-on-surface mr-xs">{n(data.total)}</span> Meta leads
+            </span>
+          </div>
+          <ResponsiveContainer width="100%" height={280}>
+            <BarChart data={rows} margin={{ top: 8, right: 8, left: 0, bottom: 4 }} barCategoryGap="18%">
+              <CartesianGrid strokeDasharray="3 3" stroke="#e1e2e9" vertical={false} />
+              <XAxis dataKey="short" tick={{ fontSize: 11 }} tickLine={false} interval="preserveStartEnd" minTickGap={12} />
+              <YAxis
+                tick={{ fontSize: 11 }}
+                axisLine={false}
+                tickLine={false}
+                width={44}
+                allowDecimals={false}
+                domain={share ? [0, 100] : [0, "auto"]}
+                ticks={share ? [0, 25, 50, 75, 100] : undefined}
+                tickFormatter={(v: number) => (share ? `${v}%` : n(v))}
+              />
+              <Tooltip
+                cursor={{ fill: "rgba(42, 120, 214, 0.06)" }}
+                content={(props) => (
+                  <MetaQualTooltip
+                    active={props.active}
+                    row={props.payload?.[0]?.payload as Record<string, string | number | boolean> | undefined}
+                    series={shown}
+                  />
+                )}
+              />
+              {shown.map(({ s, i }) => (
+                <Bar
+                  key={s.key}
+                  dataKey={share ? `p${i}` : `c${i}`}
+                  name={s.label}
+                  stackId="qual"
+                  fill={qualColor(s)}
+                  stroke="#ffffff"
+                  strokeWidth={shown.length > 1 ? 1 : 0}
+                  radius={i === topIdx ? [3, 3, 0, 0] : 0}
+                  isAnimationActive={false}
+                >
+                  {rows.map((r) => (
+                    <Cell key={String(r.day)} fillOpacity={r.partial ? 0.5 : 1} />
+                  ))}
+                </Bar>
+              ))}
+            </BarChart>
+          </ResponsiveContainer>
+          <p className="text-caption text-on-surface-variant">
+            {share ? "Each day’s leads stretched to 100%, so days with different volumes compare. " : ""}
+            Not set = no Qualification on the lead yet; Meta form leads arrive without one until a BDE sets it. The faded bar
+            is today, still filling.
+          </p>
+          <details>
+            <summary className="text-label-sm text-accent font-semibold cursor-pointer select-none">Show the numbers</summary>
+            <div className="overflow-x-auto mt-sm">
+              <table className="w-full text-body-md">
+                <thead className="text-on-surface-variant">
+                  <tr>
+                    <Th>Day</Th>
+                    {shown.map(({ s }) => (
+                      <Th key={s.key} right>
+                        {s.label}
+                      </Th>
+                    ))}
+                    <Th right>Total</Th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {data.days.map((d) => (
+                    <tr key={d.day} className="border-t border-outline-variant/60">
+                      <td className="py-sm pr-md whitespace-nowrap">
+                        {d.label}
+                        {d.partial ? " · so far" : ""}
+                      </td>
+                      {shown.map(({ s, i }) => (
+                        <NumCell key={s.key} value={d.counts[i]} />
+                      ))}
+                      <NumCell value={d.counts.reduce((a, c) => a + c, 0)} strong />
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </details>
+        </>
+      )}
+    </Panel>
+  );
+}
+
+function MetaQualTooltip({
+  active,
+  row,
+  series,
+}: {
+  active?: boolean;
+  row?: Record<string, string | number | boolean>;
+  series: Array<{ s: LqQualSeries; i: number }>;
+}) {
+  if (!active || !row) return null;
+  const total = Number(row.total);
+  return (
+    <div className="rounded-lg border border-outline-variant bg-surface-container-lowest shadow-md px-md py-sm text-caption min-w-[180px]">
+      <p className="text-on-surface-variant">
+        {String(row.label)}
+        {row.partial ? " · so far" : ""}
+      </p>
+      <p className="mb-xs text-on-surface">
+        <span className="font-mono font-semibold">{n(total)}</span> Meta leads
+      </p>
+      {[...series].reverse().map(({ s, i }) => {
+        const c = Number(row[`c${i}`] ?? 0);
+        if (!c) return null;
+        return (
+          <p key={s.key} className="flex items-center gap-xs leading-5 text-on-surface">
+            <span aria-hidden className="inline-block w-2.5 h-2.5 rounded-sm" style={{ backgroundColor: qualColor(s) }} />
+            <span className="font-mono font-semibold min-w-[28px]">{n(c)}</span>
+            <span>{s.label}</span>
+            <span className="ml-auto pl-sm font-mono text-on-surface-variant">{pct((c / total) * 100)}</span>
+          </p>
+        );
+      })}
     </div>
   );
 }

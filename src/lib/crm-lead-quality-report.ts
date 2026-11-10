@@ -6,7 +6,8 @@
  *
  * Pure: the page loads plain rows (crm-lead-quality-report-data.ts) and this
  * builds every number, so the rules are testable with literal rows. All rating
- * shares are out of RATED leads, as everywhere else.
+ * shares are out of RATED leads, as everywhere else. One panel steps outside
+ * quality: Meta leads per day by the Qualification on the lead.
  */
 import { normalizeQuality, qualityBucket } from "./crm-lead-quality";
 import {
@@ -36,15 +37,33 @@ export const CAMPAIGN_ROWS = 25;
 
 export const NO_CAMPAIGN = "No campaign";
 
+/** `LeadPulseSource.code` of the Meta lead-form source. */
+export const META_SOURCE_CODE = "meta";
+/** Colour slots in the qualification chart; past this, the smallest fold together. */
+export const QUAL_DAILY_MAX_SERIES = 8;
+/** Series key for the folded tail of qualifications. */
+export const QUAL_MORE_KEY = "__more__";
+/**
+ * Series key for leads with no Qualification. It doubles as the leads list's
+ * blank-qualification filter value (NO_QUALIFICATION in crm-leads.ts), kept
+ * as a literal because that module loads Prisma.
+ */
+export const QUAL_NOT_SET_KEY = "none";
+
 export type LqRow = {
   id: string;
   candidateName: string;
   createdAt: Date;
   sourceId: string | null;
   source: string | null;
+  sourceCode: string | null;
   campaign: string | null;
   serviceId: string | null;
   service: string | null;
+  qualificationId: string | null;
+  qualification: string | null;
+  /** The qualification master's display order, for series order. */
+  qualificationOrder: number | null;
   assigneeId: string | null;
   assigneeName: string | null;
   qualityRating: string | null;
@@ -104,6 +123,25 @@ export type LqTrend = {
   series: Array<{ source: string; values: Array<number | null>; colorIndex: number }>;
 };
 
+export type LqQualSeries = {
+  /** Qualification id, QUAL_MORE_KEY or QUAL_NOT_SET_KEY. */
+  key: string;
+  label: string;
+  /** Categorical colour slot (0-based); null for the two neutral series. */
+  slot: number | null;
+  /** Leads in the period, after filters. */
+  total: number;
+};
+
+export type LqMetaQualDaily = {
+  /** The Meta source's id, for links into Leads; null when no Meta lead is in the period. */
+  sourceId: string | null;
+  series: LqQualSeries[];
+  /** Every IST day of the period up to today, oldest first; counts align to `series`. */
+  days: Array<{ day: string; label: string; short: string; partial: boolean; counts: number[] }>;
+  total: number;
+};
+
 export type LqReport = {
   options: {
     source: Array<{ value: string; label: string }>;
@@ -121,10 +159,12 @@ export type LqReport = {
   bdes: LqBdeRow[];
   overdueList: LqOverdueRow[];
   trend: LqTrend;
+  metaQualDaily: LqMetaQualDaily;
 };
 
 const DAY_MS = 86_400_000;
 const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+const WEEKDAYS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
 
 function matchesFilters(r: LqRow, f: LqFilters): boolean {
   if (f.source.length && !f.source.includes(r.sourceId ?? "")) return false;
@@ -323,6 +363,7 @@ export function buildCrmLeadQualityReport(
     bdes: bdeRows,
     overdueList,
     trend: junkTrend(rows, { now, filters }),
+    metaQualDaily: metaQualificationDaily(rows, { from, to, now, filters }),
   };
 }
 
@@ -379,3 +420,61 @@ function junkTrend(rows: LqRow[], opts: { now: Date; filters: LqFilters }): LqTr
   return { weeks: starts.map((d) => ({ start: ymdFromDay(d), label: weekLabel(d) })), series };
 }
 
+
+/**
+ * Meta leads created each IST day of the period, split by the lead's
+ * Qualification. The chart is Meta's by definition, so the Source filter is
+ * ignored; the others apply. Series are picked from the period BEFORE filters,
+ * so a filter never repaints a qualification: master display order, the
+ * smallest folded into "More qualifications" past QUAL_DAILY_MAX_SERIES, and
+ * "Not set" last (top of the stack) in grey.
+ */
+function metaQualificationDaily(rows: LqRow[], opts: { from: Date; to: Date; now: Date; filters: LqFilters }): LqMetaQualDaily {
+  const { from, to, now } = opts;
+  const filters = { ...opts.filters, source: [] };
+  const meta = rows.filter((r) => r.sourceCode === META_SOURCE_CODE && r.createdAt >= from && r.createdAt < to);
+
+  const quals = new Map<string, { label: string; order: number; count: number }>();
+  let notSet = 0;
+  for (const r of meta) {
+    if (!r.qualificationId) {
+      notSet += 1;
+      continue;
+    }
+    const q = quals.get(r.qualificationId);
+    if (q) q.count += 1;
+    else quals.set(r.qualificationId, { label: r.qualification ?? "Unknown", order: r.qualificationOrder ?? 0, count: 1 });
+  }
+  const fits = quals.size <= QUAL_DAILY_MAX_SERIES;
+  const named = [...quals.entries()]
+    .sort((a, b) => b[1].count - a[1].count || a[1].label.localeCompare(b[1].label))
+    .slice(0, fits ? quals.size : QUAL_DAILY_MAX_SERIES - 1)
+    .sort((a, b) => a[1].order - b[1].order || a[1].label.localeCompare(b[1].label));
+  const series: LqQualSeries[] = named.map(([key, q], slot) => ({ key, label: q.label, slot, total: 0 }));
+  if (!fits) series.push({ key: QUAL_MORE_KEY, label: "More qualifications", slot: null, total: 0 });
+  if (notSet) series.push({ key: QUAL_NOT_SET_KEY, label: "Not set", slot: null, total: 0 });
+  const indexOf = new Map(series.map((s, i) => [s.key, i]));
+
+  const first = istDay(from);
+  const last = Math.min(istDay(new Date(to.getTime() - 1)), istDay(now));
+  const today = istDay(now);
+  const days: LqMetaQualDaily["days"] = [];
+  for (let d = first; d <= last; d++) {
+    const date = new Date(d * DAY_MS);
+    const short = `${date.getUTCDate()} ${MONTHS[date.getUTCMonth()]}`;
+    days.push({ day: ymdFromDay(d), label: `${WEEKDAYS[date.getUTCDay()]} ${short}`, short, partial: d === today, counts: series.map(() => 0) });
+  }
+
+  let total = 0;
+  for (const r of meta) {
+    if (!matchesFilters(r, filters)) continue;
+    const di = istDay(r.createdAt) - first;
+    if (di < 0 || di >= days.length) continue;
+    const si = indexOf.get(r.qualificationId ?? QUAL_NOT_SET_KEY) ?? indexOf.get(QUAL_MORE_KEY)!;
+    days[di].counts[si] += 1;
+    series[si].total += 1;
+    total += 1;
+  }
+
+  return { sourceId: meta[0]?.sourceId ?? null, series, days, total };
+}
