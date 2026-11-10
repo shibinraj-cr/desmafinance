@@ -5,7 +5,9 @@ import {
   NO_BONUSES,
   computeBdePay,
   computeTeamPool,
+  doubleBookedMember,
   isFastClose,
+  isIncentiveMonthClosed,
   isTeamEligible,
   milestones,
   nextPayingMilestone,
@@ -13,6 +15,7 @@ import {
   quarterMonths,
   quarterOf,
   slabColumns,
+  slabLadder,
   slabReached,
   slabsFromRow,
   splitByWeight,
@@ -192,5 +195,28 @@ describe("quarters", () => {
       { userId: "m", enrolled: 9, minimum: 8 },
     ]);
     expect(quarterMembers(facts, "beta")).toEqual([{ userId: "m", enrolled: 7, minimum: 8 }]);
+  });
+});
+
+describe("setup helpers", () => {
+  it("lays slabs out as pay bands from zero", () => {
+    expect(slabLadder(SLABS)).toEqual([
+      { from: 0, to: 9, rate: 0, payFrom: 0, payTo: 0 },
+      { from: 10, to: 15, rate: 1000, payFrom: 10_000, payTo: 15_000 },
+      { from: 16, to: null, rate: 1500, payFrom: 24_000, payTo: null },
+    ]);
+    expect(slabLadder([])).toEqual([]);
+  });
+
+  it("closes every month before the current IST month", () => {
+    expect(isIncentiveMonthClosed(2026, 10, "2026-11-10")).toBe(true);
+    expect(isIncentiveMonthClosed(2025, 12, "2026-01-01")).toBe(true);
+    expect(isIncentiveMonthClosed(2026, 11, "2026-11-30")).toBe(false);
+    expect(isIncentiveMonthClosed(2026, 12, "2026-11-10")).toBe(false);
+  });
+
+  it("finds a BDE placed in two teams", () => {
+    expect(doubleBookedMember([{ teamId: "a", userIds: ["x", "y"] }, { teamId: "b", userIds: ["z"] }])).toBeNull();
+    expect(doubleBookedMember([{ teamId: "a", userIds: ["x", "y"] }, { teamId: "b", userIds: ["y"] }])).toBe("y");
   });
 });
