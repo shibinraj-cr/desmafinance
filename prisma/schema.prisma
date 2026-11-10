@@ -105,6 +105,11 @@ model User {
   crmNotifications        CrmNotification[]      @relation("CrmNotifications")
   crmDailyReports         CrmDailyReport[]       @relation("CrmDailyReportUser")
   crmDailyReportsReviewed CrmDailyReport[]       @relation("CrmDailyReportReviewer")
+  crmDailyReportsUnlocked CrmDailyReport[]       @relation("CrmDailyReportUnlocker")
+  crmLeadAssignments      CrmLeadAssignment[]    @relation("CrmLeadAssignmentUser")
+  crmHandoversAssigned    CrmLeadHandover[]      @relation("CrmLeadHandoverBde")
+  crmHandoversCreated     CrmLeadHandover[]      @relation("CrmLeadHandoverCreatedBy")
+  crmHandoversActioned    CrmLeadHandover[]      @relation("CrmLeadHandoverActionedBy")
   appSettings             AppSetting[]           @relation("AppSettingEditor")
   wabisEndpoints          WabisWebhookEndpoint[] @relation("WabisEndpointConsultant")
   waConversations         WaConversation[]       @relation("WaConversationAssignee")
@@ -3149,6 +3154,10 @@ model Lead {
   waBroadcastRecipients WaBroadcastRecipient[]
   taskReminders         CrmTaskReminder[]
   esignRequests         EsignRequest[]
+  // One row per time the lead was given to a BDE (the daily lead report's unit).
+  contactAssignments    CrmLeadAssignment[]
+  // Handovers this lead was created from ('created') or matched to ('duplicate').
+  handovers             CrmLeadHandover[]
 
   /// When the candidate asked to stop receiving marketing WhatsApp ("STOP",
   /// "unsubscribe"). Set by the conversation mirror on an opt-out keyword and
@@ -3454,9 +3463,10 @@ model CrmTaskReminder {
 /// LeadActivity ledger + related tables — the BDE never re-enters activity — and
 /// are shown live until they submit. On submit, the computed `metrics`/`details`
 /// are frozen into this row (an immutable point-in-time snapshot), alongside the
-/// BDE's own narrative (summary / blockers / plan). A report is editable and
-/// re-submittable while `status = 'submitted'`; once a manager marks it
-/// 'reviewed' it is locked. Managers never submit on a BDE's behalf.
+/// BDE's own narrative (summary / blockers / plan) and the day's lead report.
+/// Submitting locks the day: the BDE cannot change it until an admin unlocks it
+/// (and never once a manager has marked it 'reviewed'). Managers never submit on
+/// a BDE's behalf.
 model CrmDailyReport {
   id     String   @id @default(cuid())
   // The BDE the report is ABOUT and authored by (never a manager).
@@ -3486,12 +3496,114 @@ model CrmDailyReport {
   reviewedAt   DateTime?
   reviewerNote String?
 
+  // The day's lead numbers (received / contacted / missed per source, plus the
+  // handover block), frozen at submit. See LeadReport in src/lib/crm-lead-report.ts.
+  // Null on reports submitted before the lead report existed.
+  leadReport   Json?
+  // Submitted days are read-only for the BDE until an admin unlocks them; the
+  // next submit locks the day again. Existing rows were submitted, so start locked.
+  locked       Boolean   @default(true)
+  unlockedById String?
+  unlockedBy   User?     @relation("CrmDailyReportUnlocker", fields: [unlockedById], references: [id], onDelete: SetNull)
+  unlockedAt   DateTime?
+
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
   @@unique([userId, day]) // one report per BDE per day
   @@index([day, status]) // team roll-up: all reports for a day, submitted vs reviewed
   @@index([reviewedById])
+  @@index([unlockedById])
+}
+
+/// One time a lead was given to a BDE — the unit the daily lead report counts.
+///
+/// A row opens whenever a lead gets an owner (created with one, assigned,
+/// reassigned) and closes (`endedAt`) when the lead leaves that owner. Keeping a
+/// row per assignment, rather than columns on Lead, means a lead the first BDE
+/// missed stays missed on THEIR report after it is reassigned, while the new
+/// owner gets a fresh deadline of their own.
+///
+/// Contacted (rule R1) = by THIS user, after `assignedAt`: a call and a note, or
+/// an outbound WhatsApp and a stage/Status change. `firstContactedAt` is when
+/// the second half of the first such pair happened. The rules are pure TS in
+/// src/lib/crm-contact.ts; the lead-cutoff cron and the report readers apply them.
+model CrmLeadAssignment {
+  id               String    @id @default(cuid())
+  leadId           String
+  lead             Lead      @relation(fields: [leadId], references: [id], onDelete: Cascade)
+  userId           String
+  user             User      @relation("CrmLeadAssignmentUser", fields: [userId], references: [id], onDelete: Cascade)
+  // Same instant as Lead.assignedAt at the time of assignment.
+  assignedAt       DateTime
+  // The cutoff this assignment must be contacted by (nextCutoff(assignedAt)).
+  contactDueAt     DateTime
+  firstContactedAt DateTime?
+  // 'pending' | 'contacted' | 'missed' | 'contacted_late' | 'reassigned'
+  // ('reassigned' = left this BDE before its deadline while still uncontacted,
+  // so it counts against nobody's day.)
+  contactStatus    String    @default("pending")
+  // When the lead left this BDE (reassigned / released). Null while they own it.
+  endedAt          DateTime?
+  createdAt        DateTime  @default(now())
+  updatedAt        DateTime  @updatedAt
+
+  // One row per assignment; makes opening a row idempotent across the inline
+  // hook and the cron's safety-net pass.
+  @@unique([leadId, userId, assignedAt])
+  @@index([userId, assignedAt]) // Received on a day
+  @@index([userId, contactDueAt]) // due today / carried in
+  @@index([contactStatus, contactDueAt]) // the cron: pending past due
+  @@index([leadId, endedAt]) // the open row for a lead
+}
+
+/// A lead the Marketing Admin gave a BDE outside DesGro (YouTube comment,
+/// personal WhatsApp, a phone call, a walk-in, a referral). The BDE must create
+/// it in the CRM by the cutoff; creating a lead with the same phone links it.
+///
+/// Phone matching uses the same E.164 normalisation as every lead dedupe
+/// (normalizePhone: spaces/dashes stripped, leading 0 dropped, +91 assumed).
+model CrmLeadHandover {
+  id            String    @id @default(cuid())
+  // IST calendar day of the handover, at UTC midnight (same as CrmDailyReport.day).
+  handoverDate  DateTime  @db.Date
+  // Where the lead came from: 'youtube' | 'whatsapp_outside' | 'phone' |
+  // 'walk_in' | 'referral' | 'other'. Mapped to a lead source on create
+  // (HANDOVER_CHANNELS in src/lib/crm-handover.ts).
+  channel       String
+  leadName      String?
+  phone         String
+  phoneE164     String
+  assignedBdeId String
+  assignedBde   User      @relation("CrmLeadHandoverBde", fields: [assignedBdeId], references: [id], onDelete: Cascade)
+  note          String?
+  // 'pending' | 'created' | 'duplicate' | 'rejected' | 'overdue'
+  status        String    @default("pending")
+  // Still pending at `dueAt` — kept after it is created or rejected late.
+  isLate        Boolean   @default(false)
+  // The lead it was created as, or the existing lead it duplicates.
+  linkedLeadId  String?
+  linkedLead    Lead?     @relation(fields: [linkedLeadId], references: [id], onDelete: SetNull)
+  // 'invalid_number' | 'not_nurse_lead' | 'other'
+  rejectReason  String?
+  rejectNote    String?
+  dueAt         DateTime
+  createdById   String
+  createdBy     User      @relation("CrmLeadHandoverCreatedBy", fields: [createdById], references: [id], onDelete: Cascade)
+  createdAt     DateTime  @default(now())
+  // When it was created as a lead, matched, rejected or reopened, and by whom.
+  actionedAt    DateTime?
+  actionedById  String?
+  actionedBy    User?     @relation("CrmLeadHandoverActionedBy", fields: [actionedById], references: [id], onDelete: SetNull)
+  updatedAt     DateTime  @updatedAt
+
+  @@index([assignedBdeId, handoverDate])
+  @@index([phoneE164, status]) // auto-link: open handovers for a number
+  @@index([status, dueAt]) // the cron: pending past due
+  @@index([handoverDate])
+  @@index([linkedLeadId])
+  @@index([createdById])
+  @@index([actionedById])
 }
 
 /// One Re-marketing nurturing campaign for a lead.
