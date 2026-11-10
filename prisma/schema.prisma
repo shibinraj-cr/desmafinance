@@ -6210,7 +6210,9 @@ enum EsignReviewStatus {
 model EsignTemplate {
   id                   String                 @id @default(cuid())
   name                 String
-  /// One of TEMPLATE_CATEGORIES in src/lib/esign/templates.ts.
+  /// The name of an EsignTemplateCategory. Stored by name rather than as a
+  /// foreign key, so renaming a category rewrites it here (see the categories
+  /// API); sent agreements keep their own copy on EsignRequest.category.
   category             String
   description          String?
   defaultExpiryDays    Int                    @default(14)
@@ -6235,6 +6237,21 @@ model EsignTemplate {
 
   @@index([category])
   @@index([active])
+}
+
+/// A template category ("AHPRA Agreement", "NZ Agreement", …), managed on
+/// Agreement Templates → Categories. Archiving one stops it being offered for
+/// new templates; templates already in it keep it.
+model EsignTemplateCategory {
+  id        String   @id @default(cuid())
+  /// Also unique ignoring case, enforced by the API.
+  name      String   @unique
+  sortOrder Int      @default(0)
+  active    Boolean  @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([sortOrder])
 }
 
 /// One PDF + field layout of a template. Immutable once an agreement has been

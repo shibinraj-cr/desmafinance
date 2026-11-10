@@ -5,6 +5,7 @@ import { canSeePage } from "@/lib/rbac";
 import { TopBar } from "@/components/TopBar";
 import { isBlobConfigured } from "@/lib/finance-docs-store";
 import { AGREEMENT_TEMPLATES_PAGE } from "@/lib/esign/templates";
+import { listTemplateCategories } from "@/lib/esign/categories-store";
 import { TemplatesClient, type TemplateRow } from "./client";
 
 export const dynamic = "force-dynamic";
@@ -23,19 +24,22 @@ export default async function AgreementTemplatesPage() {
     );
   }
 
-  const templates = await prisma.esignTemplate.findMany({
-    orderBy: [{ active: "desc" }, { name: "asc" }],
-    select: {
-      id: true,
-      name: true,
-      category: true,
-      description: true,
-      active: true,
-      updatedAt: true,
-      currentVersion: { select: { version: true, numPages: true, _count: { select: { fields: true } } } },
-      versions: { select: { _count: { select: { requests: true } } } },
-    },
-  });
+  const [templates, categories] = await Promise.all([
+    prisma.esignTemplate.findMany({
+      orderBy: [{ active: "desc" }, { name: "asc" }],
+      select: {
+        id: true,
+        name: true,
+        category: true,
+        description: true,
+        active: true,
+        updatedAt: true,
+        currentVersion: { select: { version: true, numPages: true, _count: { select: { fields: true } } } },
+        versions: { select: { _count: { select: { requests: true } } } },
+      },
+    }),
+    listTemplateCategories(),
+  ]);
 
   const rows: TemplateRow[] = templates.map((t) => ({
     id: t.id,
@@ -54,7 +58,11 @@ export default async function AgreementTemplatesPage() {
     <>
       <TopBar title="Agreement Templates" subtitle="Master agreements, filled from the CRM and sent for e-signature" />
       <div className="p-margin">
-        <TemplatesClient templates={rows} blobReady={isBlobConfigured()} />
+        <TemplatesClient
+          templates={rows}
+          categories={categories.map(({ name, active }) => ({ name, active }))}
+          blobReady={isBlobConfigured()}
+        />
       </div>
     </>
   );

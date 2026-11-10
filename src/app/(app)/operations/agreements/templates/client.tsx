@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
-import { TEMPLATE_CATEGORIES } from "@/lib/esign/templates";
+import { AGREEMENT_CATEGORIES_PAGE, type CategoryOption } from "@/lib/esign/categories";
 import {
   Field,
   Icon,
@@ -31,7 +31,15 @@ export type TemplateRow = {
   sentCount: number;
 };
 
-export function TemplatesClient({ templates, blobReady }: { templates: TemplateRow[]; blobReady: boolean }) {
+export function TemplatesClient({
+  templates,
+  categories,
+  blobReady,
+}: {
+  templates: TemplateRow[];
+  categories: CategoryOption[];
+  blobReady: boolean;
+}) {
   const router = useRouter();
   const [q, setQ] = useState("");
   const [category, setCategory] = useState("");
@@ -41,6 +49,13 @@ export function TemplatesClient({ templates, blobReady }: { templates: TemplateR
   const [error, setError] = useState<string | null>(null);
 
   const archivedCount = templates.filter((t) => !t.active).length;
+  // Every category, archived ones too, plus any a template carries that has no
+  // row — so the filter can always find a template by what its row shows.
+  const filterOptions = useMemo(() => {
+    const names = categories.map((c) => c.name);
+    const extra = Array.from(new Set(templates.map((t) => t.category))).filter((c) => !names.includes(c));
+    return [...categories, ...extra.sort().map((name) => ({ name, active: false }))];
+  }, [categories, templates]);
   const visible = useMemo(() => {
     const needle = q.trim().toLowerCase();
     return templates.filter(
@@ -107,9 +122,9 @@ export function TemplatesClient({ templates, blobReady }: { templates: TemplateR
           aria-label="Filter by category"
         >
           <option value="">All categories</option>
-          {TEMPLATE_CATEGORIES.map((c) => (
-            <option key={c} value={c}>
-              {c}
+          {filterOptions.map((c) => (
+            <option key={c.name} value={c.name}>
+              {c.active ? c.name : `${c.name} (archived)`}
             </option>
           ))}
         </select>
@@ -120,6 +135,9 @@ export function TemplatesClient({ templates, blobReady }: { templates: TemplateR
           </label>
         )}
         <div className="flex-1" />
+        <Link href={AGREEMENT_CATEGORIES_PAGE} className={secondaryBtn}>
+          <Icon name="category" /> Categories
+        </Link>
         <button type="button" className={primaryBtn} onClick={() => setCreating(true)} disabled={!blobReady}>
           <Icon name="add" /> New template
         </button>
@@ -222,15 +240,17 @@ export function TemplatesClient({ templates, blobReady }: { templates: TemplateR
         </div>
       )}
 
-      {creating && <NewTemplateModal onClose={() => setCreating(false)} />}
+      {creating && (
+        <NewTemplateModal categories={categories.filter((c) => c.active).map((c) => c.name)} onClose={() => setCreating(false)} />
+      )}
     </div>
   );
 }
 
-function NewTemplateModal({ onClose }: { onClose: () => void }) {
+function NewTemplateModal({ categories, onClose }: { categories: string[]; onClose: () => void }) {
   const router = useRouter();
   const [name, setName] = useState("");
-  const [category, setCategory] = useState<string>(TEMPLATE_CATEGORIES[0]);
+  const [category, setCategory] = useState<string>(categories[0] ?? "");
   const [description, setDescription] = useState("");
   const [file, setFile] = useState<File | null>(null);
   const [progress, setProgress] = useState<number | null>(null);
@@ -240,6 +260,7 @@ function NewTemplateModal({ onClose }: { onClose: () => void }) {
   async function submit(e: React.FormEvent) {
     e.preventDefault();
     if (!name.trim()) return setError("Give the template a name.");
+    if (!category) return setError("Choose a category.");
     const fileError = checkPdfFile(file);
     if (fileError || !file) return setError(fileError);
     setError(null);
@@ -267,13 +288,23 @@ function NewTemplateModal({ onClose }: { onClose: () => void }) {
           <input className={inputCls} value={name} onChange={(e) => setName(e.target.value)} placeholder="AHPRA Agreement" autoFocus />
         </Field>
         <Field label="Category">
-          <select className={inputCls} value={category} onChange={(e) => setCategory(e.target.value)}>
-            {TEMPLATE_CATEGORIES.map((c) => (
-              <option key={c} value={c}>
-                {c}
-              </option>
-            ))}
-          </select>
+          {categories.length ? (
+            <select className={inputCls} value={category} onChange={(e) => setCategory(e.target.value)}>
+              {categories.map((c) => (
+                <option key={c} value={c}>
+                  {c}
+                </option>
+              ))}
+            </select>
+          ) : (
+            <p className="text-body-md text-on-surface-variant">
+              There are no categories to choose from.{" "}
+              <Link href={AGREEMENT_CATEGORIES_PAGE} className="text-primary hover:underline">
+                Add one first
+              </Link>
+              .
+            </p>
+          )}
         </Field>
         <Field label="Description (optional)">
           <textarea className={taCls} rows={2} value={description} onChange={(e) => setDescription(e.target.value)} />

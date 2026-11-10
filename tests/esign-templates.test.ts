@@ -108,7 +108,10 @@ describe("settings schema", () => {
   });
 
   it("validates categories, day ranges and Meta template names", () => {
-    expect(() => TemplateSettingsSchema.parse({ category: "Mortgage" })).toThrow();
+    // Whether the category exists is the API's check (categories-store.ts); the schema checks the shape.
+    expect(TemplateSettingsSchema.parse({ category: " NZ Agreement " }).category).toBe("NZ Agreement");
+    expect(() => TemplateSettingsSchema.parse({ category: "  " })).toThrow();
+    expect(() => TemplateSettingsSchema.parse({ category: "x".repeat(81) })).toThrow();
     expect(() => TemplateSettingsSchema.parse({ defaultExpiryDays: 0 })).toThrow();
     expect(TemplateSettingsSchema.parse({ defaultReminderDays: 0 }).defaultReminderDays).toBe(0);
     expect(() => TemplateSettingsSchema.parse({ whatsappTemplateName: "Agreement Link" })).toThrow();

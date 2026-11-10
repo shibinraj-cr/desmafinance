@@ -4,6 +4,7 @@ import { TopBar } from "@/components/TopBar";
 import { prisma } from "@/lib/prisma";
 import { getCurrentUserAndPermissions } from "@/lib/permissions";
 import { getOpsAccess } from "@/lib/ops-rbac";
+import { AGREEMENT_CATEGORIES_PAGE } from "@/lib/esign/categories";
 
 export const dynamic = "force-dynamic";
 
@@ -71,6 +72,16 @@ export default async function OperationsSettingsPage() {
               <div className="text-body-sm text-on-surface">{untemplated.map((s) => s.name).join(", ")}</div>
             </div>
           )}
+        </section>
+
+        <section className="rounded-xl border border-outline-variant bg-surface-container-lowest p-lg">
+          <h3 className="text-h3 text-on-surface mb-xs">Agreement categories</h3>
+          <p className="text-body-sm text-on-surface-variant mb-sm">
+            The categories agreement templates are grouped under, such as AHPRA Agreement or NZ Agreement.
+          </p>
+          <Link href={AGREEMENT_CATEGORIES_PAGE} className="text-primary hover:underline text-body-sm font-semibold">
+            Manage categories →
+          </Link>
         </section>
 
         <section className="rounded-xl border border-outline-variant bg-surface-container-lowest p-lg">
