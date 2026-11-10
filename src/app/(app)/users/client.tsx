@@ -178,6 +178,7 @@ function suggestUsername(employeeName: string | null): string {
 export function UserActions({
   userId,
   username,
+  email,
   employeeName,
   currentRoleId,
   isSelf,
@@ -186,6 +187,7 @@ export function UserActions({
 }: {
   userId: string;
   username: string;
+  email: string | null;
   employeeName: string | null;
   currentRoleId: string | null;
   isSelf: boolean;
@@ -215,6 +217,33 @@ export function UserActions({
       return;
     }
     alert(`Username changed to "${next.trim().toLowerCase()}". They'll need to use it (not the old one) next time they sign in.`);
+    router.refresh();
+  }
+
+  async function changeEmail() {
+    const next = prompt(
+      `Email for ${username}${employeeName ? ` (${employeeName})` : ""}. Leave blank to remove it.`,
+      email ?? "",
+    );
+    if (next === null) return;
+    const value = next.trim().toLowerCase();
+    if (value === (email ?? "")) return;
+    if (value && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value)) {
+      alert("That doesn't look like an email address.");
+      return;
+    }
+    setBusy(true);
+    const res = await fetch(`/api/users/${userId}`, {
+      method: "PATCH",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ email: value }),
+    });
+    setBusy(false);
+    if (!res.ok) {
+      const data = await res.json().catch(() => ({}));
+      alert(errorLabels[data?.error as string] ?? "Failed to change email.");
+      return;
+    }
     router.refresh();
   }
 
@@ -320,6 +349,17 @@ export function UserActions({
       >
         <span className="material-symbols-outlined" style={{ fontSize: 18 }}>
           edit
+        </span>
+      </button>
+      <button
+        type="button"
+        onClick={changeEmail}
+        disabled={busy}
+        title={email ? "Change email" : "Add email"}
+        className="p-xs text-on-surface-variant hover:text-accent transition disabled:opacity-40"
+      >
+        <span className="material-symbols-outlined" style={{ fontSize: 18 }}>
+          {email ? "alternate_email" : "mail"}
         </span>
       </button>
       <button
@@ -469,6 +509,7 @@ export function UsersTable({
                     <UserActions
                       userId={u.id}
                       username={u.username}
+                      email={u.email}
                       employeeName={u.employeeName}
                       currentRoleId={u.roleId}
                       isSelf={u.id === currentUserId}

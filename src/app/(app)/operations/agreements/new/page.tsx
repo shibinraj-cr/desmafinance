@@ -110,7 +110,11 @@ export default async function NewAgreementPage({ searchParams }: { searchParams:
       }
     : null;
 
-  const staff: StaffOption[] = staffUsers.map((u) => ({ id: u.id, name: personName(u), email: u.email! }));
+  // Sorted by the name shown, not the login: a username like an employee code
+  // would otherwise put a person somewhere unexpected in the list.
+  const staff: StaffOption[] = staffUsers
+    .map((u) => ({ id: u.id, name: personName(u), email: u.email! }))
+    .sort((a, b) => a.name.localeCompare(b.name, "en", { sensitivity: "base" }));
 
   return (
     <>

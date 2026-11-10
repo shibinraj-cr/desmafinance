@@ -357,6 +357,10 @@ export function NewAgreementWizard(props: {
                         </option>
                       ))}
                     </select>
+                    <span className="block text-caption text-on-surface-variant mt-xs">
+                      Someone missing? Staff are listed once their DesGro login is active and has an email address. An
+                      admin can add the email on the Users page.
+                    </span>
                   </label>
                   <SignerFields
                     title="DESMA"
