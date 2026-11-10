@@ -1,8 +1,6 @@
 import { describe, it, expect } from "vitest";
 import {
   buildLeadReport,
-  canCloseDay,
-  closeBlockedMessage,
   leadReportShareText,
   reportSource,
   shortDay,
@@ -110,39 +108,6 @@ describe("sumReports", () => {
     const sum = sumReports([r1, r2]);
     expect(sum.totals).toEqual({ received: 3, carriedIn: 0, dueLater: 0, contacted: 1, missed: 2, late: 1, pending: 0 });
     expect(sum.handovers).toMatchObject({ given: 2, created: 1, overdue: 1, late: 1 });
-  });
-});
-
-describe("canCloseDay", () => {
-  const report = (pending: number) => ({
-    day: "2026-11-16",
-    totals: { received: 1, carriedIn: 0, dueLater: 0, contacted: 0, missed: 0, late: 0, pending },
-  });
-  const cutoff = ist("2026-11-16 17:00");
-
-  it("blocks today while leads or handovers are due before the cutoff", () => {
-    expect(canCloseDay(report(2), 0, "2026-11-16", cutoff, ist("2026-11-16 16:30"))).toEqual({
-      ok: false,
-      leads: 2,
-      handovers: 0,
-    });
-    expect(canCloseDay(report(0), 1, "2026-11-16", cutoff, ist("2026-11-16 16:30")).ok).toBe(false);
-  });
-
-  it("allows it when nothing is pending, after the cutoff, on a past day, or with no cutoff", () => {
-    expect(canCloseDay(report(0), 0, "2026-11-16", cutoff, ist("2026-11-16 16:30")).ok).toBe(true);
-    expect(canCloseDay(report(2), 1, "2026-11-16", cutoff, ist("2026-11-16 17:00")).ok).toBe(true);
-    expect(canCloseDay(report(2), 0, "2026-11-17", cutoff, ist("2026-11-17 10:00")).ok).toBe(true);
-    expect(canCloseDay(report(2), 0, "2026-11-16", null, ist("2026-11-16 10:00")).ok).toBe(true);
-  });
-
-  it("says what is left and when the cutoff is", () => {
-    expect(closeBlockedMessage({ leads: 2, handovers: 1 }, cutoff)).toBe(
-      "Contact the 2 leads and 1 handover still due today first, or close the day after the 5:00 pm cutoff.",
-    );
-    expect(closeBlockedMessage({ leads: 1, handovers: 0 }, ist("2026-11-14 15:30"))).toBe(
-      "Contact the 1 lead still due today first, or close the day after the 3:30 pm cutoff.",
-    );
   });
 });
 

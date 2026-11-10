@@ -13,10 +13,13 @@ const steps = vi.hoisted(() => ({
   evaluateAssignments: vi.fn(async () => 3),
   markOverdueHandovers: vi.fn(async () => 2),
   linkArrivedLeads: vi.fn(async () => 0),
+  generateDayReports: vi.fn(async (_day: string, _now?: Date) => 0),
 }));
+const start = vi.hoisted(() => ({ at: null as Date | null }));
 vi.mock("@/lib/crm-contact-data", () => ({
   syncAssignments: steps.syncAssignments,
   evaluateAssignments: steps.evaluateAssignments,
+  leadReportStart: vi.fn(async () => start.at),
 }));
 vi.mock("@/lib/crm-handover-data", () => ({
   markOverdueHandovers: steps.markOverdueHandovers,
@@ -24,6 +27,7 @@ vi.mock("@/lib/crm-handover-data", () => ({
 }));
 const admins = vi.hoisted(() => ({ ids: ["ma1", "ma2"] }));
 vi.mock("@/lib/crm-notify", () => ({ marketingAdminUserIds: vi.fn(async () => admins.ids) }));
+vi.mock("@/lib/crm-lead-report-data", () => ({ generateDayReports: steps.generateDayReports }));
 
 import {
   notifyHandoverRejected,
@@ -61,6 +65,31 @@ describe("runLeadCutoffTick", () => {
     expect(out.errors).toEqual(["sync: boom"]);
     expect(steps.evaluateAssignments).toHaveBeenCalled();
     expect(steps.markOverdueHandovers).toHaveBeenCalled();
+  });
+
+  it("generates today's reports once the cutoff passes — BDEs submit nothing", async () => {
+    steps.generateDayReports.mockResolvedValue(3);
+    await runLeadCutoffTick(ist("2026-11-16 16:55")); // Monday, before the cutoff; Sunday had none
+    expect(steps.generateDayReports).not.toHaveBeenCalled();
+    const out = await runLeadCutoffTick(ist("2026-11-16 17:00"));
+    expect(steps.generateDayReports).toHaveBeenCalledWith("2026-11-16", ist("2026-11-16 17:00"));
+    expect(out.reports).toBe(3);
+  });
+
+  it("catches up the day before, if it had a cutoff", async () => {
+    await runLeadCutoffTick(ist("2026-11-17 09:00")); // Tuesday morning → Monday
+    expect(steps.generateDayReports.mock.calls.map((c) => c[0])).toEqual(["2026-11-16"]);
+    steps.generateDayReports.mockClear();
+    db.holiday.findMany.mockResolvedValue([{ date: new Date("2026-11-16T00:00:00Z") }]); // Monday a holiday
+    await runLeadCutoffTick(ist("2026-11-17 09:00"));
+    expect(steps.generateDayReports).not.toHaveBeenCalled();
+  });
+
+  it("never catches up a day before tracking began", async () => {
+    start.at = ist("2026-11-17 08:00"); // went live Tuesday morning
+    await runLeadCutoffTick(ist("2026-11-17 09:00"));
+    expect(steps.generateDayReports).not.toHaveBeenCalled();
+    start.at = null;
   });
 
   it("reminds only in the hour before the cutoff, and not on Sunday", async () => {

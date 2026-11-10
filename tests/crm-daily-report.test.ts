@@ -110,13 +110,11 @@ describe("state predicates", () => {
     expect(isReviewed({ status: "reviewed" })).toBe(true);
   });
 
-  it("canEditNarrative: owner edits until submitting locks the day; unlocked reopens it; never once reviewed", () => {
-    expect(canEditNarrative(null, true)).toBe(true); // owner, not yet submitted
-    expect(canEditNarrative({ status: "submitted", locked: true }, true)).toBe(false);
-    expect(canEditNarrative({ status: "submitted" }, true)).toBe(false); // locked unless said otherwise
-    expect(canEditNarrative({ status: "submitted", locked: false }, true)).toBe(true); // admin unlocked
-    expect(canEditNarrative({ status: "reviewed", locked: false }, true)).toBe(false);
-    expect(canEditNarrative({ status: "submitted", locked: false }, false)).toBe(false);
+  it("canEditNarrative: the owner's remarks stay editable until the report is reviewed; non-owner never", () => {
+    expect(canEditNarrative(null, true)).toBe(true); // nothing generated yet
+    expect(canEditNarrative({ status: "submitted" }, true)).toBe(true); // generated at the cutoff
+    expect(canEditNarrative({ status: "reviewed" }, true)).toBe(false);
+    expect(canEditNarrative({ status: "submitted" }, false)).toBe(false);
   });
 
   it("canReviewReports: managers only", () => {

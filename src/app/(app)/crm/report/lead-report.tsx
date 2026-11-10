@@ -14,7 +14,7 @@ function Warn({ n }: { n: number }) {
 }
 
 export function TeamLeadReportView({ team, isToday }: { team: TeamLeadReport; isToday: boolean }) {
-  const submitted = team.rows.filter((r) => r.submission).length;
+  const submitted = team.rows.filter((r) => r.submission?.locked).length;
   const cutoffPassed = !!team.cutoff && (!isToday || Date.now() >= new Date(team.cutoff).getTime());
   const needAction = team.handovers.filter(
     (h) => h.status === "overdue" || h.status === "rejected" || h.status === "duplicate",
@@ -63,7 +63,7 @@ export function TeamLeadReportView({ team, isToday }: { team: TeamLeadReport; is
                 <th className={`${tableTh} text-right`}>Handovers</th>
                 <th className={`${tableTh} text-right`}>Created</th>
                 <th className={`${tableTh} text-right`}>Overdue</th>
-                <th className={tableTh}>Day</th>
+                <th className={tableTh}>Report</th>
               </tr>
             </thead>
             <tbody>
@@ -89,12 +89,10 @@ export function TeamLeadReportView({ team, isToday }: { team: TeamLeadReport; is
                     <Warn n={r.handovers.overdue} />
                   </td>
                   <td className={tableTd}>
-                    {r.submission ? (
-                      <Chip tone={r.submission.locked || r.submission.status === "reviewed" ? "green" : "grey"}>
-                        {r.submission.status === "reviewed" ? "Reviewed" : r.submission.locked ? "Submitted" : "Unlocked"}
-                      </Chip>
+                    {r.submission?.locked ? (
+                      <Chip tone="green">{r.submission.status === "reviewed" ? "Reviewed" : "Generated"}</Chip>
                     ) : (
-                      <Chip tone="orange">Not submitted</Chip>
+                      <Chip tone="grey">Not generated yet</Chip>
                     )}
                   </td>
                 </tr>

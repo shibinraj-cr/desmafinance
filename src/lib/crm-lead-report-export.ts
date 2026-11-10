@@ -45,7 +45,7 @@ export function teamReportSheets(r: TeamLeadReport): { name: string; rows: Sheet
     "Handovers duplicate": b.handovers.duplicate,
     "Handovers rejected": b.handovers.rejected,
     "Handovers overdue": b.handovers.overdue,
-    Submitted: b.submission ? (b.submission.status === "reviewed" ? "Reviewed" : "Submitted") : "Not submitted",
+    Report: b.submission?.locked ? (b.submission.status === "reviewed" ? "Reviewed" : "Generated") : "Not generated yet",
   }));
   byBde.push({
     BDE: "Team",
@@ -61,7 +61,7 @@ export function teamReportSheets(r: TeamLeadReport): { name: string; rows: Sheet
     "Handovers duplicate": r.handoverTotals.duplicate,
     "Handovers rejected": r.handoverTotals.rejected,
     "Handovers overdue": r.handoverTotals.overdue,
-    Submitted: `${r.rows.filter((b) => b.submission).length} / ${r.rows.length}`,
+    Report: `${r.rows.filter((b) => b.submission?.locked).length} / ${r.rows.length} generated`,
   });
 
   const bySource: SheetRows = r.rows.flatMap((b) =>

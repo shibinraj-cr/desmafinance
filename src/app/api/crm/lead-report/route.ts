@@ -31,6 +31,5 @@ export const GET = withApiHandler(async (req: Request) => {
     // only to BDEs, the team view and BDE picker only to managers.
     isBde: access.crm.isBde,
     canViewOthers: access.canViewOthers,
-    canUnlock: access.canUnlock,
   });
 });

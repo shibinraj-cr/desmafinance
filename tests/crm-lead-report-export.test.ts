@@ -65,8 +65,9 @@ describe("teamReportSheets", () => {
   it("By BDE ends with the team row, which matches the sum", () => {
     const rows = sheets[0].rows;
     expect(rows.map((r) => r.BDE)).toEqual(["BDE A", "BDE B", "Team"]);
-    expect(rows[2]).toMatchObject({ Received: 4, Contacted: 2, Missed: 1, Pending: 1, Submitted: "1 / 2" });
-    expect(rows[1].Submitted).toBe("Not submitted");
+    expect(rows[2]).toMatchObject({ Received: 4, Contacted: 2, Missed: 1, Pending: 1, Report: "1 / 2 generated" });
+    expect(rows[0].Report).toBe("Generated");
+    expect(rows[1].Report).toBe("Not generated yet");
   });
 
   it("By source has one line per BDE per source", () => {

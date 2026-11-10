@@ -8,18 +8,21 @@
  *   3. pending handovers past their deadline become overdue
  *   4. settle handovers whose number reached the BDE by another route
  *   5. in the hour before today's cutoff, remind each BDE with work left
- *   6. from the cutoff, send the Marketing Admin the day's misses
+ *   6. from the cutoff, generate every BDE's report for the day (they submit
+ *      nothing), catching up the day before if a tick was missed
+ *   7. from the cutoff, send the Marketing Admin the day's misses
  * Every step is idempotent and each runs even if an earlier one failed.
  * Notifications go once per person per IST day.
  */
 import { prisma } from "./prisma";
 import { logger } from "./logger";
 import { loadHolidaySet } from "./ops-dates";
-import { istDateString } from "./lead-pulse-dates";
+import { addDays, istDateString } from "./lead-pulse-dates";
 import { istDayWindow } from "./crm-daily-report";
 import { cutoffOn } from "./crm-cutoff";
-import { evaluateAssignments, syncAssignments } from "./crm-contact-data";
+import { evaluateAssignments, leadReportStart, syncAssignments } from "./crm-contact-data";
 import { linkArrivedLeads, markOverdueHandovers, type SavedHandover } from "./crm-handover-data";
+import { generateDayReports } from "./crm-lead-report-data";
 import { HANDOVER_REJECT_REASONS, handoverChannel } from "./crm-handover";
 import { marketingAdminUserIds } from "./crm-notify";
 import {
@@ -74,12 +77,14 @@ export type TickSummary = {
   overdue: number;
   linked: number;
   reminders: number;
+  /** Day reports generated this tick (today's and any caught-up from the day before). */
+  reports: number;
   summaries: number;
   errors: string[];
 };
 
 export async function runLeadCutoffTick(now: Date = new Date()): Promise<TickSummary> {
-  const out: TickSummary = { opened: 0, closed: 0, judged: 0, overdue: 0, linked: 0, reminders: 0, summaries: 0, errors: [] };
+  const out: TickSummary = { opened: 0, closed: 0, judged: 0, overdue: 0, linked: 0, reminders: 0, reports: 0, summaries: 0, errors: [] };
   const step = async (name: string, fn: () => Promise<void>) => {
     try {
       await fn();
@@ -96,9 +101,19 @@ export async function runLeadCutoffTick(now: Date = new Date()): Promise<TickSum
   await step("link", async () => void (out.linked = await linkArrivedLeads(now)));
 
   const today = istDateString(now);
-  const cutoff = cutoffOn(today, await loadHolidaySet(prisma));
+  const yesterday = addDays(today, -1);
+  const holidays = await loadHolidaySet(prisma);
+  const cutoff = cutoffOn(today, holidays);
   const phase = cutoffPhase(cutoff, now);
   if (cutoff && phase.reminder) await step("reminders", async () => void (out.reminders = await sendCutoffReminders(today, cutoff)));
+  // A generated day is skipped, so once everyone's report exists these are one query each.
+  // The catch-up never reaches back before tracking began (go-live day).
+  await step("reports", async () => {
+    const start = await leadReportStart();
+    const tracked = !start || yesterday >= istDateString(start);
+    if (tracked && cutoffOn(yesterday, holidays)) out.reports += await generateDayReports(yesterday, now);
+    if (cutoff && now.getTime() >= cutoff.getTime()) out.reports += await generateDayReports(today, now);
+  });
   if (cutoff && phase.summary) await step("summary", async () => void (out.summaries = await sendCutoffSummary(today, cutoff)));
   return out;
 }
