@@ -24,6 +24,7 @@ import {
   resolveQualificationOther,
 } from "@/lib/crm-leads";
 import { recordReInquiry, resolveReInquiryContext, notifySupervisorOfReInquiries } from "@/lib/crm-reinquiry";
+import { recordAssignmentChange } from "@/lib/crm-contact-data";
 
 export const dynamic = "force-dynamic";
 
@@ -252,6 +253,7 @@ export const POST = withApiHandler(async (req: Request) => {
     summary: "Lead created",
   });
   if (assignedToId) {
+    await recordAssignmentChange(created.assignedAt!, [{ leadId: created.id, userId: assignedToId }]);
     await recordLeadActivity({
       leadId: created.id,
       actorId: userId,
