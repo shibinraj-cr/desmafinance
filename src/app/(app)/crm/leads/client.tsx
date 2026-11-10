@@ -173,12 +173,30 @@ function logQuickComm(leadId: string, channel: "email" | "whatsapp") {
   }).catch(() => {});
 }
 
+/** A Lead Handover the New lead form opens pre-filled from (`/crm/leads?handover=<id>`). */
+export type HandoverPrefill = {
+  handoverId: string;
+  candidateName: string;
+  phone: string;
+  sourceId: string | null;
+  channelLabel: string;
+  note: string | null;
+};
+
 // ── Toolbar: New lead + Import (lives in the TopBar action) ─────────────────
-export function LeadsToolbar({ masters, access }: { masters: Masters; access: LeadsAccess }) {
+export function LeadsToolbar({
+  masters,
+  access,
+  prefill,
+}: {
+  masters: Masters;
+  access: LeadsAccess;
+  prefill?: HandoverPrefill | null;
+}) {
   return (
     <div className="flex items-center gap-base">
       {access.canBulkImport && <ImportControl />}
-      {access.canCreate && <NewLeadButton masters={masters} access={access} />}
+      {access.canCreate && <NewLeadButton masters={masters} access={access} prefill={prefill ?? null} />}
     </div>
   );
 }
@@ -272,18 +290,27 @@ function ImportControl() {
   );
 }
 
-function NewLeadButton({ masters, access }: { masters: Masters; access: LeadsAccess }) {
+function NewLeadButton({
+  masters,
+  access,
+  prefill,
+}: {
+  masters: Masters;
+  access: LeadsAccess;
+  prefill: HandoverPrefill | null;
+}) {
   const router = useRouter();
-  const [open, setOpen] = useState(false);
+  // Opened straight away when the BDE came from a handover's "Create lead".
+  const [open, setOpen] = useState(!!prefill);
   const [mounted, setMounted] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [form, setForm] = useState({
-    candidateName: "",
+    candidateName: prefill?.candidateName ?? "",
     email: "",
-    phone: "",
+    phone: prefill?.phone ?? "",
     altPhone: "",
-    sourceId: "",
+    sourceId: prefill?.sourceId ?? "",
     serviceId: "",
     qualificationId: "",
     qualificationOther: "",
@@ -345,6 +372,7 @@ function NewLeadButton({ masters, access }: { masters: Masters; access: LeadsAcc
         temperature: form.temperature || undefined,
         statusId: form.statusId || undefined,
         assignedToId: access.canAssign ? form.assignedToId || undefined : undefined,
+        handoverId: prefill?.handoverId,
       }),
     });
     setBusy(false);
@@ -352,6 +380,15 @@ function NewLeadButton({ masters, access }: { masters: Masters; access: LeadsAcc
       const d = (await res.json().catch(() => ({}))) as { error?: string; message?: string };
       setError(d.message || (d.error === "validation_error" ? "Please check the fields." : "Failed to create lead."));
       return;
+    }
+    // From a handover: go to the lead (new, or the existing one the number
+    // belongs to) so the BDE can contact them straight away.
+    if (prefill) {
+      const d = (await res.json().catch(() => ({}))) as { lead?: { id: string } };
+      if (d.lead?.id) {
+        router.push(`/crm/leads/${d.lead.id}`);
+        return;
+      }
     }
     setForm({
       candidateName: "",
@@ -399,6 +436,12 @@ function NewLeadButton({ masters, access }: { masters: Masters; access: LeadsAcc
               className="w-full max-w-md max-h-[90vh] overflow-y-auto bg-surface-container-lowest border border-outline-variant rounded-xl shadow-lg p-lg space-y-md"
             >
               <h3 className="text-h3 text-on-surface">{access.referralLeadsOnly ? "New referral lead" : "New lead"}</h3>
+              {prefill && (
+                <div className="rounded-lg bg-surface-container-low px-md py-sm text-label-sm text-on-surface-variant">
+                  From a handover · <span className="font-semibold text-on-surface">{prefill.channelLabel}</span>
+                  {prefill.note ? ` · ${prefill.note}` : ""}
+                </div>
+              )}
               {error && <div className="rounded-lg bg-error-container text-on-error-container px-md py-sm">{error}</div>}
               <Field label="Candidate name *">
                 <input
@@ -621,7 +664,15 @@ function NewLeadButton({ masters, access }: { masters: Masters; access: LeadsAcc
                 </Field>
               )}
               <div className="flex justify-end gap-base pt-xs">
-                <button type="button" className={secondaryBtn} onClick={() => setOpen(false)} disabled={busy}>
+                <button
+                  type="button"
+                  className={secondaryBtn}
+                  onClick={() => {
+                    setOpen(false);
+                    if (prefill) router.replace("/crm/leads");
+                  }}
+                  disabled={busy}
+                >
                   Cancel
                 </button>
                 <button type="submit" className={primaryBtn} disabled={busy}>

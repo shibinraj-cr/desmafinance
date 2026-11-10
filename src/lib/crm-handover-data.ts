@@ -22,6 +22,7 @@ import {
   canRejectHandover,
   handoverAccess,
   handoverChannel,
+  isOpenHandover,
   linkStatusFor,
   planHandoverRows,
   type HandoverAccess,
@@ -194,6 +195,26 @@ export async function linkHandovers(
     data: { status, linkedLeadId: leadId, actionedAt: now, actionedById: actorId },
   });
   return res.count;
+}
+
+/**
+ * What the New lead form opens with when a BDE clicks a handover's "Create
+ * lead" — only for their own handover, and only while it is still open.
+ */
+export async function handoverPrefill(id: string, userId: string) {
+  const h = await prisma.crmLeadHandover.findUnique({
+    where: { id },
+    select: { id: true, leadName: true, phone: true, channel: true, note: true, status: true, assignedBdeId: true },
+  });
+  if (!h || h.assignedBdeId !== userId || !isOpenHandover(h.status)) return null;
+  return {
+    handoverId: h.id,
+    candidateName: h.leadName ?? "",
+    phone: h.phone,
+    sourceId: await resolveHandoverSourceId(h.channel),
+    channelLabel: handoverChannel(h.channel)?.label ?? h.channel,
+    note: h.note,
+  };
 }
 
 async function loadHandover(id: string) {

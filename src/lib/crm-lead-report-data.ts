@@ -29,6 +29,7 @@ import {
   type HandoverCounts,
   type LeadCounts,
   type LeadReport,
+  type LeadReportSource,
   type ReportAssignment,
 } from "./crm-lead-report";
 
@@ -284,6 +285,7 @@ export type TeamLeadReportRow = {
   name: string;
   role: string;
   totals: LeadCounts;
+  sources: LeadReportSource[];
   handovers: HandoverCounts;
   live: boolean;
   submission: { reportId: string; status: string; locked: boolean; submittedAt: string } | null;
@@ -304,6 +306,8 @@ export type MissedLead = {
 
 export type TeamLeadReport = {
   day: string;
+  /** The day's cutoff (null on a Sunday or holiday). */
+  cutoff: string | null;
   rows: TeamLeadReportRow[];
   totals: LeadCounts;
   handoverTotals: HandoverCounts;
@@ -314,7 +318,7 @@ export type TeamLeadReport = {
 
 export async function getTeamLeadReport(day: string, now: Date = new Date()): Promise<TeamLeadReport> {
   await evaluateAssignments({ now });
-  const [roster, assignments, given, stored, handovers] = await Promise.all([
+  const [roster, assignments, given, stored, handovers, holidays] = await Promise.all([
     getAssignableBdes(),
     loadDayAssignments(day),
     handoversGiven(day),
@@ -323,6 +327,7 @@ export async function getTeamLeadReport(day: string, now: Date = new Date()): Pr
       select: { id: true, userId: true, status: true, locked: true, submittedAt: true, leadReport: true },
     }),
     listHandovers({ OR: [{ handoverDate: toPrismaDate(day) }, { status: "overdue" }] }),
+    loadHolidaySet(prisma),
   ]);
   const storedBy = new Map(stored.map((s) => [s.userId, s]));
 
@@ -341,6 +346,7 @@ export async function getTeamLeadReport(day: string, now: Date = new Date()): Pr
       name: b.displayName,
       role: b.role,
       totals: report.totals,
+      sources: report.sources,
       handovers: report.handovers,
       live: !snapshot,
       submission: s
@@ -373,7 +379,15 @@ export async function getTeamLeadReport(day: string, now: Date = new Date()): Pr
       contactedLateAt: a.contactStatus === "contacted_late" ? (a.firstContactedAt?.toISOString() ?? null) : null,
     }));
 
-  return { day, rows, totals: sum.totals, handoverTotals: sum.handovers, missed, handovers };
+  return {
+    day,
+    cutoff: cutoffOn(day, holidays)?.toISOString() ?? null,
+    rows,
+    totals: sum.totals,
+    handoverTotals: sum.handovers,
+    missed,
+    handovers,
+  };
 }
 
 /** Freeze `report` into the BDE's CrmDailyReport for submit. */

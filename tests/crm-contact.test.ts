@@ -1,6 +1,7 @@
 import { describe, it, expect } from "vitest";
 import {
   activityToContactEvent,
+  contactHint,
   evaluateContact,
   planAssignmentSync,
   type AssignmentWindow,
@@ -259,5 +260,26 @@ describe("planAssignmentSync", () => {
     );
     expect(plan.close).toEqual([{ id: "r1", endedAt: now }]);
     expect(plan.open).toEqual([]);
+  });
+});
+
+describe("contactHint", () => {
+  const h = (o: Partial<{ call: boolean; note: boolean; whatsapp: boolean; stage: boolean }>) => ({
+    call: false,
+    note: false,
+    whatsapp: false,
+    stage: false,
+    ...o,
+  });
+
+  it("says what a half-done pair still needs", () => {
+    expect(contactHint(h({ call: true }))).toBe("called, note missing");
+    expect(contactHint(h({ whatsapp: true }))).toBe("WhatsApp sent, stage or Status change missing");
+    expect(contactHint(h({ note: true }))).toBe("note added, call missing");
+    expect(contactHint(h({ stage: true }))).toBe("stage changed, WhatsApp missing");
+  });
+
+  it("says nothing before anything is done", () => {
+    expect(contactHint(h({}))).toBeNull();
   });
 });

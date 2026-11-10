@@ -16,6 +16,7 @@ import {
 } from "@/lib/crm-leads";
 import { isEmailConfigured } from "@/lib/mailer";
 import { listMessageTemplates } from "@/lib/crm-message-templates";
+import { handoverPrefill } from "@/lib/crm-handover-data";
 import { LeadsToolbar, LeadsTable } from "./client";
 
 export const dynamic = "force-dynamic";
@@ -114,6 +115,9 @@ export default async function LeadsPage({ searchParams }: { searchParams: SP }) 
   // Fresh leads assigned to the signed-in BDE — drives the "My new leads" chip
   // count (only the BDE's own queue matters; 0 for non-assignees).
   const newLeadsCount = access.isBde ? await countNewLeadsAssignedTo(userId) : 0;
+  // A handover's "Create lead" lands here with ?handover=<id>: open New lead pre-filled.
+  const handoverId = str(searchParams, "handover");
+  const prefill = handoverId && access.canCreateLeads ? await handoverPrefill(handoverId, userId) : null;
 
   const masters = {
     statuses,
@@ -152,7 +156,7 @@ export default async function LeadsPage({ searchParams }: { searchParams: SP }) 
         action={
           <div className="flex items-center gap-base">
             <DateFilter />
-            <LeadsToolbar masters={masters} access={accessProps} />
+            <LeadsToolbar masters={masters} access={accessProps} prefill={prefill} />
           </div>
         }
       />

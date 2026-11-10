@@ -19,6 +19,8 @@ import {
   type ReportTaskItem,
 } from "@/lib/crm-daily-report";
 import { DayNav, ReportForm, ReviewPanel } from "./client";
+import { TeamLeadReportView } from "./lead-report";
+import { getTeamLeadReport } from "@/lib/crm-lead-report-data";
 
 export const dynamic = "force-dynamic";
 
@@ -141,7 +143,7 @@ export default async function DailyReportPage({ searchParams }: { searchParams: 
 
   // ── Manager team roll-up ───────────────────────────────────────────────────
   if (scope.rollup) {
-    const rows = await getTeamRollup({ dayStr });
+    const [rows, team] = await Promise.all([getTeamRollup({ dayStr }), getTeamLeadReport(dayStr)]);
     const submitted = rows.filter((r) => r.status !== "none").length;
     return (
       <>
@@ -154,6 +156,7 @@ export default async function DailyReportPage({ searchParams }: { searchParams: 
               {formatIstShort(dayStr)}
             </p>
           </div>
+          <TeamLeadReportView team={team} isToday={isToday} />
           <Section title="Who has reported">
             <div className="overflow-x-auto">
               <table className="w-full min-w-[720px] border-collapse text-label-sm">

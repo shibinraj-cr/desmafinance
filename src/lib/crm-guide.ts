@@ -25,6 +25,16 @@ import { CALL_OUTCOME_LABEL } from "./crm-outcome";
 import { UNCONTACTED_AFTER_MINUTES, UNCONTACTED_REMIND_EVERY_MINUTES } from "./crm-uncontacted-alarm";
 import { CONVERSION_TARGET_PCT, FIRST_RESPONSE_FAST_HOURS, RESPONSE_SLA_HOURS, SCORE_BANDS, SCORE_WEIGHTS } from "./crm-score";
 import { BACKDATE_DAYS } from "./lead-pulse-dates";
+import { SATURDAY_CUTOFF_MINUTES, WEEKDAY_CUTOFF_MINUTES } from "./crm-cutoff";
+import { HANDOVER_REJECT_REASONS } from "./crm-handover";
+
+/** "5:00 pm" for minutes after midnight. */
+function clock(minutes: number): string {
+  const h = Math.floor(minutes / 60);
+  return `${h % 12 || 12}:${String(minutes % 60).padStart(2, "0")} ${h < 12 ? "am" : "pm"}`;
+}
+const WEEKDAY_CUTOFF = clock(WEEKDAY_CUTOFF_MINUTES);
+const SATURDAY_CUTOFF = clock(SATURDAY_CUTOFF_MINUTES);
 
 /**
  * Fixed id of the guide's knowledge-check SalesTrainingModule (created by HR).
@@ -103,6 +113,24 @@ export type GuideChange = { date: string; section: string; title: string; detail
  * is the GuideSection id it updates (drives the "Updated" pill).
  */
 export const CRM_GUIDE_CHANGES: GuideChange[] = [
+  {
+    date: "2026-11-10",
+    section: "my-day",
+    title: "My Day: your leads against the cutoff",
+    detail: `My Day now opens with today's leads by source, a **Contact before** list with what each lead still needs, and **Close the day**. A lead counts as contacted only with a call and a note, or a WhatsApp and a stage or Status change, by ${WEEKDAY_CUTOFF} (${SATURDAY_CUTOFF} on Saturdays).`,
+  },
+  {
+    date: "2026-11-10",
+    section: "handovers",
+    title: "Lead Handovers",
+    detail: "Leads marketing gives you outside DesGro (YouTube, your WhatsApp, a call, a walk-in, a referral) now show on My Day. Click **Create lead** to add each one before the cutoff, or **Reject** it with a reason.",
+  },
+  {
+    date: "2026-11-10",
+    section: "daily-report",
+    title: "Submitting locks the day",
+    detail: "Once you submit your day it can't be changed — ask an admin to unlock it if something is wrong. Today can only be closed once your leads due today are contacted, or after the cutoff.",
+  },
   {
     date: "2026-11-09",
     section: "tasks",
@@ -372,28 +400,36 @@ export function crmGuideSections(f: GuideFacts, canSee: (href: string) => boolea
       title: "Start every day on My Day",
       group: "Your day",
       pages: ["/crm/my-day"],
-      summary: `${where("/crm/my-day")} is your to-do list, already in the right order. Work it top to bottom.`,
+      summary: `${where("/crm/my-day")} shows today's leads against the cutoff, then the rest of your work in order, then **Close the day**. Work it top to bottom.`,
       blocks: [
+        {
+          kind: "text",
+          text: `Every lead assigned to you must be **contacted** by the day's cutoff: ${WEEKDAY_CUTOFF} Monday to Friday, ${SATURDAY_CUTOFF} on Saturday. Contacted means you did **a call and a note** (the note you type in the call sheet counts), or **a WhatsApp and a stage or Status change** — on that lead, after it was assigned to you. One of these alone is not enough.`,
+        },
         {
           kind: "steps",
           items: [
-            "**1 · Waiting for your reply on WhatsApp** — candidates who wrote last, longest wait first. Each row shows how long they've waited and how much of the 24-hour reply window is left. Click **Reply** to answer in the Inbox.",
-            `**2 · New leads not contacted yet** — your ${NEW} leads assigned more than ${alarmAfter} ago with no call, WhatsApp or email logged. Click **Call**, then log what happened on the lead.`,
-            "**3 · Tasks** — your tasks that are overdue or due today, soonest first.",
-            `**4 · Quality ratings due** — leads past the ${days(QUALITY_DUE_AFTER_DAYS)} rating deadline. Rate these first: their stage and tasks are locked until you do.`,
+            "The pill at the top counts down to the cutoff. The tiles show what you **Received**, **Contacted on time**, what's **Pending** and what you **Missed**, plus your handovers.",
+            "**Assigned leads by source** — the same numbers per source. A lead given to you after the cutoff, on a Sunday or a holiday, is due at the next working day's cutoff and shows there as **carried in**.",
+            "**Contact before …** — every lead still waiting, soonest deadline first, with what it still needs (for example **called, note missing**). **Call**, **Add note**, **WhatsApp** and **Open lead** are right there. A lead you missed stays on the list in orange — still contact it.",
+            "**My handovers from marketing** — see the Lead Handovers section.",
+            "Then **Waiting for your reply on WhatsApp**, **Tasks** and **Quality ratings due**, as before.",
+            "**Close the day** — write your summary and click **Submit day**. **Copy for WhatsApp** copies the day in the team's usual format.",
           ],
         },
         {
           kind: "tips",
           items: [
             "Click **Start with the first** to open the top item.",
-            "My Day itself changes nothing — every action happens on the lead or chat it opens. Refresh it to watch the list shrink.",
+            "The list updates as you work — refresh it to watch it shrink.",
+            `${nav("/crm/inbox")} counts chats where you are the chat owner; check **Needs reply** there too.`,
           ],
         },
         {
           kind: "warn",
           items: [
-            `My Day's WhatsApp list counts chats where you are the chat owner. The ${nav("/crm/inbox")} also shows chats on leads you own, so check **Needs reply** there too.`,
+            "A lead not contacted by the cutoff counts as **missed** for that day, even if you contact it later.",
+            "If a lead is reassigned to someone else before the cutoff, it leaves your day. Contact by anyone other than the assigned BDE doesn't count.",
           ],
         },
       ],
@@ -484,17 +520,54 @@ export function crmGuideSections(f: GuideFacts, canSee: (href: string) => boolea
           items: [
             "The tiles show today's numbers: leads touched, contacts logged, notes, tasks, new leads, enrolments, open tasks due and active CRM time. **Live preview — not yet submitted** means they're still updating.",
             "Write **Summary of the day** (required). Add **Blockers / help needed** and **Plan for next day** if you have any.",
-            "Click **Submit report**. You can **Update report** until your manager reviews it.",
+            `Click **Submit report** (or **Submit day** on ${nav("/crm/my-day")} — it's the same report). Submitting **locks the day**: the numbers are frozen as they were and you can't change it.`,
           ],
         },
         {
           kind: "tips",
           items: [
             `Missed a day? Use the date arrows — you can still submit for today and the ${days(BACKDATE_DAYS)} before it.`,
-            "Once your manager clicks **Mark reviewed** the report is locked, and their note shows on it.",
+            "Something wrong after submitting? Ask an admin to **unlock** the day, then submit it again.",
+            "You can close today only once your leads due today are contacted, or after the cutoff.",
+            "When your manager clicks **Mark reviewed**, their note shows on the report.",
           ],
         },
         { kind: "warn", items: ["Only what you logged in the CRM is counted. A call you didn't log isn't in your report."] },
+      ],
+    },
+    {
+      id: "handovers",
+      title: "Create your handovers from marketing",
+      group: "Your day",
+      pages: ["/crm/handovers"],
+      summary: `Leads marketing gives you outside DesGro — a YouTube comment, your WhatsApp, a call, a walk-in, a referral — are **handovers**. They show on ${nav("/crm/my-day")} and in ${where("/crm/handovers")}, and each must be created in the CRM by the cutoff.`,
+      blocks: [
+        {
+          kind: "steps",
+          items: [
+            "You get a notification when one is given to you.",
+            "Click **Create lead**. The New lead form opens with the name, phone and source filled in; complete it and save. You land on the new lead — contact it like any other.",
+            `Can't use it? Click **Reject** and pick a reason: ${HANDOVER_REJECT_REASONS.map((r) => `**${r.label}**`).join(", ")} (Other needs a note). Marketing is told and can send it back.`,
+          ],
+        },
+        {
+          kind: "table",
+          head: ["Status", "Means"],
+          rows: [
+            ["Pending", "Waiting for you to create it."],
+            ["Created", "You created the lead — the handover is linked to it."],
+            ["Duplicate", "The number is already a lead in the CRM; it's linked to that lead."],
+            ["Overdue", "Not created by the cutoff. You can still create or reject it, but it stays marked late."],
+            ["Rejected", "You rejected it; marketing may reopen it."],
+          ],
+        },
+        {
+          kind: "tips",
+          items: [
+            "Created the lead from the Leads page instead? A lead with the same number links itself to the handover.",
+            "A handover lead also counts on your day like any assigned lead — contact it by the cutoff too.",
+          ],
+        },
       ],
     },
     {
@@ -1217,6 +1290,20 @@ export function crmGuideQuiz(f: GuideFacts): GuideQuizQuestion[] {
       [`${top.name} (${top.pts} points)`],
       scoreParts.filter((p) => p !== top).map((p) => `${p.name} (${p.pts} points)`),
       `The scorecard is ${scoreParts.map((p) => `${p.name} ${p.pts}`).join(", ")} — out of 100.`,
+    ),
+    q(
+      "contacted-rule",
+      "For the daily lead report, which of these count as contacting a lead assigned to you? (Tick all that apply.)",
+      ["A call you log with a note", "A WhatsApp plus a stage or Status change"],
+      ["A call with no note", "A stage change on its own", "A note your team lead adds"],
+      "It takes one full pair, done by you after the lead was assigned: a call and a note, or a WhatsApp and a stage or Status change.",
+    ),
+    q(
+      "cutoff",
+      `A lead is assigned to you on Saturday at 4:00 pm (after the ${SATURDAY_CUTOFF} cutoff). When must it be contacted?`,
+      [`By ${WEEKDAY_CUTOFF} on Monday — the next working day's cutoff`],
+      [`By ${SATURDAY_CUTOFF} the same Saturday`, "By midnight on Sunday", "There is no deadline for late leads"],
+      "Leads arriving after a cutoff, on a Sunday or a holiday are due at the next working day's cutoff.",
     ),
     q(
       "daily-report",

@@ -205,3 +205,16 @@ export function planAssignmentSync(
   }
   return { open, close };
 }
+
+/**
+ * What is still missing on a half-done lead, in the BDE's words — or null when
+ * nothing has been started (then any pair will do). Each pair is judged on its
+ * own: a call without a note says "note missing" even if WhatsApp was also sent.
+ */
+export function contactHint(h: ContactHalves): string | null {
+  if (h.call && !h.note) return "called, note missing";
+  if (h.whatsapp && !h.stage) return "WhatsApp sent, stage or Status change missing";
+  if (h.note && !h.call) return "note added, call missing";
+  if (h.stage && !h.whatsapp) return "stage changed, WhatsApp missing";
+  return null;
+}
