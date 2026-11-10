@@ -20,11 +20,14 @@ export function DayNav({
   bde,
   bdes,
   showBde,
+  allLabel = "Team roll-up",
 }: {
   day: string;
   bde: string | null;
   bdes: Bde[];
   showBde: boolean;
+  /** The BDE picker's no-selection option ("Me" on My Day). */
+  allLabel?: string;
 }) {
   const router = useRouter();
   const pathname = usePathname();
@@ -87,7 +90,7 @@ export function DayNav({
           onChange={(e) => go({ bde: e.target.value === "team" ? null : e.target.value })}
           aria-label="Select BDE"
         >
-          <option value="team">Team roll-up</option>
+          <option value="team">{allLabel}</option>
           {bdes.map((b) => (
             <option key={b.userId} value={b.userId}>
               {b.displayName}
@@ -100,18 +103,23 @@ export function DayNav({
 }
 
 /**
- * The BDE's narrative + submit. Editable while the report is unsubmitted or
- * submitted-not-yet-reviewed; locked once reviewed. The KPI/detail snapshot is
+ * The BDE's narrative + submit. Editable while the day is unsubmitted, or after
+ * an admin unlocks it; submitting locks it again. The KPI/detail snapshot is
  * recomputed server-side on submit, so this form only carries the narrative.
  */
 export function ReportForm({
   day,
   initial,
   submitted,
+  submitLabel = "Submit report",
+  blocked = null,
 }: {
   day: string;
   initial: { summary: string; blockers: string; planNext: string };
   submitted: boolean;
+  submitLabel?: string;
+  /** Why the day can't be closed yet (leads still due before the cutoff), or null. */
+  blocked?: string | null;
 }) {
   const router = useRouter();
   const [summary, setSummary] = useState(initial.summary);
@@ -135,7 +143,7 @@ export function ReportForm({
       });
       if (!res.ok) {
         const data = await res.json().catch(() => ({}));
-        setError(errorText(data?.error) ?? "Could not submit — please try again.");
+        setError(errorText(data?.error) ?? data?.message ?? "Could not submit — please try again.");
         return;
       }
       router.refresh();
@@ -170,13 +178,14 @@ export function ReportForm({
         <button
           type="button"
           onClick={submit}
-          disabled={busy}
+          disabled={busy || !!blocked}
           className="h-10 rounded-lg bg-primary px-lg text-label-sm font-bold text-on-primary hover:opacity-90 disabled:opacity-50"
         >
-          {busy ? "Saving…" : submitted ? "Update report" : "Submit report"}
+          {busy ? "Saving…" : submitted ? "Submit again" : submitLabel}
         </button>
-        {submitted && <span className="text-caption text-on-surface-variant">Submitted — you can update it until it&apos;s reviewed.</span>}
+        {submitted && <span className="text-caption text-on-surface-variant">Unlocked by an admin — submit again to lock the day.</span>}
       </div>
+      {blocked && <p className="text-label-sm text-on-surface-variant">{blocked}</p>}
     </div>
   );
 }
@@ -246,6 +255,8 @@ function errorText(code: unknown): string | null {
   switch (code) {
     case "already_reviewed":
       return "This report was already reviewed and can no longer be changed.";
+    case "day_locked":
+      return "This day is already submitted. Ask an admin to unlock it to change it.";
     case "day_out_of_window":
       return "That day is outside the window you can still report on.";
     case "invalid_day":

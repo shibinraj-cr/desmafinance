@@ -3,10 +3,23 @@ import { redirect } from "next/navigation";
 import { TopBar } from "@/components/TopBar";
 import { Section } from "@/components/Cards";
 import { getCurrentUserAndPermissions } from "@/lib/permissions";
-import { getCrmAccess } from "@/lib/crm-rbac";
+import { getAssignableBdes } from "@/lib/crm-leads";
+import { resolveReportDay } from "@/lib/crm-daily-report";
 import { firstLeadId, formatWait, getMyDay, type MyDayLead } from "@/lib/crm-my-day";
+import { bdeName, getLeadReportAccess, getLeadReportView } from "@/lib/crm-lead-report-data";
+import { closeBlockedMessage } from "@/lib/crm-lead-report";
+import { ReportTiles, SourceTable, istDayTime, istTime } from "@/components/crm/LeadReportParts";
+import { ContactQueue, CutoffPill, HandoverTable, ShareBox, UnlockButton } from "@/components/crm/LeadReportActions";
+import { DayNav, ReportForm } from "../report/client";
 
 export const dynamic = "force-dynamic";
+
+type SP = { [k: string]: string | string[] | undefined };
+
+function str(sp: SP, k: string): string | undefined {
+  const v = sp[k];
+  return typeof v === "string" && v.length > 0 ? v : undefined;
+}
 
 const rowCls = "flex flex-wrap items-center justify-between gap-sm border-b border-outline-variant/60 py-sm last:border-0";
 const btnCls =
@@ -65,106 +78,212 @@ function LeadRows({ rows, label, now }: { rows: MyDayLead[]; label: string; now:
   );
 }
 
-export default async function MyDayPage() {
+/**
+ * My Day — a BDE's leads for the day against the cutoff (the daily lead
+ * report), the rest of their work in the order to do it, and Close the day.
+ * Managers and the Marketing Admin open any BDE's day read-only with ?bde=.
+ */
+export default async function MyDayPage({ searchParams }: { searchParams: SP }) {
   const { userId, perms } = await getCurrentUserAndPermissions();
   if (!userId || !perms) redirect("/login");
-  const access = await getCrmAccess(userId, perms);
-  if (!access.canViewLeads) redirect("/");
+  const access = await getLeadReportAccess(userId, perms);
+  if (!access.crm.canViewLeads) redirect("/");
 
   const now = new Date();
-  const day = await getMyDay(userId, now);
-  const first = firstLeadId(day);
-  const total = day.waitingTotal + day.uncontactedTotal + day.tasksOverdue + day.tasksToday + day.qualityTotal;
+  const day = resolveReportDay(str(searchParams, "date"));
+  const requested = str(searchParams, "bde");
+  const viewingOther = !!requested && requested !== userId && access.canViewOthers;
+  const target = viewingOther ? requested! : access.crm.isBde ? userId : null;
+  const targetName = target
+    ? target === userId
+      ? (access.crm.bdeDisplayName ?? (await bdeName(userId)))
+      : await bdeName(target)
+    : null;
+
+  const [view, work, bdes] = await Promise.all([
+    target && targetName ? getLeadReportView({ userId: target, name: targetName, day, now }) : Promise.resolve(null),
+    viewingOther ? Promise.resolve(null) : getMyDay(userId, now),
+    access.canViewOthers ? getAssignableBdes() : Promise.resolve([]),
+  ]);
+  const isToday = view ? view.day === view.today : true;
+  const cutoffLabel = view?.cutoff ? istTime(view.cutoff) : null;
+  const first = view?.queue?.[0]?.leadId ?? (work ? firstLeadId(work) : null);
+  const submission = view?.submission ?? null;
+  const locked = !!submission && submission.locked;
 
   return (
     <>
-      <TopBar title="My Day" subtitle="Who to contact next, in order" />
+      <TopBar
+        title={viewingOther && targetName ? `My Day — ${targetName}` : "My Day"}
+        subtitle={viewingOther ? "Read-only view of a BDE's day" : "Your leads against today's cutoff, then the rest of your work"}
+      />
       <div className="p-margin space-y-lg">
         <div className="flex flex-wrap items-center justify-between gap-base">
-          <p className="text-body-md text-on-surface-variant">
-            {total === 0
-              ? "Nothing waiting on you right now."
-              : `${total} thing${total === 1 ? "" : "s"} waiting on you — top to bottom is the order to do them.`}
-          </p>
-          {first && (
-            <Link
-              href={`/crm/leads/${first}`}
-              className="inline-flex h-10 items-center gap-xs rounded-lg bg-primary px-lg text-label-sm font-bold text-on-primary hover:opacity-90"
-            >
-              Start with the first <Icon name="arrow_forward" />
-            </Link>
-          )}
+          <DayNav day={day} bde={viewingOther ? requested! : null} bdes={bdes} showBde={access.canViewOthers} allLabel="Me" />
+          <div className="flex flex-wrap items-center gap-base">
+            {view && isToday && <CutoffPill cutoff={view.cutoff} />}
+            {!viewingOther && isToday && first && (
+              <Link
+                href={`/crm/leads/${first}`}
+                className="inline-flex h-10 items-center gap-xs rounded-lg bg-primary px-lg text-label-sm font-bold text-on-primary hover:opacity-90"
+              >
+                Start with the first <Icon name="arrow_forward" />
+              </Link>
+            )}
+          </div>
         </div>
 
-        <Section title={`1 · Waiting for your reply on WhatsApp (${day.waitingTotal})`}>
-          {day.waiting.length === 0 ? (
-            <Empty text="No candidate is waiting for a reply." />
-          ) : (
-            day.waiting.map((w) => (
-              <div key={w.conversationId} className={rowCls}>
-                <div className="min-w-0">
-                  <LeadName id={w.leadId} name={w.candidateName} />
-                  <div className="text-caption text-on-surface-variant">
-                    {w.waitingSince ? `waiting ${formatWait(new Date(w.waitingSince), now)}` : "waiting"}
-                    {" · "}
-                    {w.windowHoursLeft === null ? (
-                      <span className="font-semibold text-error">reply window closed — send a template</span>
-                    ) : (
-                      <span className={w.windowHoursLeft < 4 ? "font-semibold text-amber-700" : ""}>
-                        {w.windowHoursLeft}h left to reply freely
-                      </span>
-                    )}
+        {view && (
+          <>
+            <ReportTiles totals={view.report.totals} handovers={view.report.handovers} cutoffLabel={cutoffLabel} />
+            {!view.live && (
+              <p className="text-caption text-on-surface-variant">
+                Showing the numbers as they were when the day was submitted.
+              </p>
+            )}
+
+            <div className="grid grid-cols-1 gap-gutter xl:grid-cols-5">
+              <Section title="Assigned leads by source" className="xl:col-span-3">
+                <p className="-mt-sm mb-sm text-caption text-on-surface-variant">
+                  Filled in from the CRM. Contacted = a call and a note, or a WhatsApp and a stage or Status change.
+                </p>
+                <SourceTable sources={view.report.sources} totals={view.report.totals} />
+              </Section>
+              {view.queue && (
+                <Section
+                  title={cutoffLabel ? `Contact before ${cutoffLabel} (${view.queue.length})` : `Leads to contact (${view.queue.length})`}
+                  className="xl:col-span-2"
+                >
+                  <ContactQueue rows={view.queue} readOnly={viewingOther} />
+                </Section>
+              )}
+            </div>
+
+            <Section title={viewingOther ? "Handovers from marketing" : "My handovers from marketing"}>
+              <p className="-mt-sm mb-sm text-caption text-on-surface-variant">
+                Leads given outside DesGro. Create each one in the CRM before the cutoff — a lead you create with the same number links
+                itself.
+              </p>
+              <HandoverTable rows={view.handovers} viewerId={userId} canManage={false} readOnly={viewingOther} showBde={false} />
+            </Section>
+          </>
+        )}
+
+        {work && isToday && (
+          <>
+            <Section title={`Waiting for your reply on WhatsApp (${work.waitingTotal})`}>
+              {work.waiting.length === 0 ? (
+                <Empty text="No candidate is waiting for a reply." />
+              ) : (
+                work.waiting.map((w) => (
+                  <div key={w.conversationId} className={rowCls}>
+                    <div className="min-w-0">
+                      <LeadName id={w.leadId} name={w.candidateName} />
+                      <div className="text-caption text-on-surface-variant">
+                        {w.waitingSince ? `waiting ${formatWait(new Date(w.waitingSince), now)}` : "waiting"}
+                        {" · "}
+                        {w.windowHoursLeft === null ? (
+                          <span className="font-semibold text-error">reply window closed — send a template</span>
+                        ) : (
+                          <span className={w.windowHoursLeft < 4 ? "font-semibold text-amber-700" : ""}>
+                            {w.windowHoursLeft}h left to reply freely
+                          </span>
+                        )}
+                      </div>
+                    </div>
+                    <Link href={`/crm/inbox?conversation=${w.conversationId}`} className={btnCls}>
+                      <Icon name="chat" /> Reply
+                    </Link>
                   </div>
-                </div>
-                <Link href={`/crm/inbox?conversation=${w.conversationId}`} className={btnCls}>
-                  <Icon name="chat" /> Reply
-                </Link>
-              </div>
-            ))
-          )}
-        </Section>
+                ))
+              )}
+            </Section>
 
-        <Section title={`2 · New leads not contacted yet (${day.uncontactedTotal})`}>
-          {day.uncontacted.length === 0 ? (
-            <Empty text="Every new lead has been contacted." />
-          ) : (
-            <LeadRows rows={day.uncontacted} label="assigned" now={now} />
-          )}
-        </Section>
+            {/* Without the lead report (not a BDE), the old uncontacted list still has a place. */}
+            {!view && (
+              <Section title={`New leads not contacted yet (${work.uncontactedTotal})`}>
+                {work.uncontacted.length === 0 ? (
+                  <Empty text="Every new lead has been contacted." />
+                ) : (
+                  <LeadRows rows={work.uncontacted} label="assigned" now={now} />
+                )}
+              </Section>
+            )}
 
-        <Section title={`3 · Tasks — ${day.tasksOverdue} overdue, ${day.tasksToday} due today`}>
-          {day.tasks.length === 0 ? (
-            <Empty text="No tasks overdue or due today." />
-          ) : (
-            day.tasks.map((t) => (
-              <div key={t.taskId} className={rowCls}>
-                <div className="min-w-0">
-                  <LeadName id={t.leadId} name={t.candidateName} />
-                  <div className="text-caption text-on-surface-variant">
-                    {t.subject} ·{" "}
-                    <span className={t.overdue ? "font-semibold text-error" : ""}>
-                      {t.overdue ? `overdue ${formatWait(new Date(t.dueAt), now)}` : "due today"}
-                    </span>
+            <Section title={`Tasks — ${work.tasksOverdue} overdue, ${work.tasksToday} due today`}>
+              {work.tasks.length === 0 ? (
+                <Empty text="No tasks overdue or due today." />
+              ) : (
+                work.tasks.map((t) => (
+                  <div key={t.taskId} className={rowCls}>
+                    <div className="min-w-0">
+                      <LeadName id={t.leadId} name={t.candidateName} />
+                      <div className="text-caption text-on-surface-variant">
+                        {t.subject} ·{" "}
+                        <span className={t.overdue ? "font-semibold text-error" : ""}>
+                          {t.overdue ? `overdue ${formatWait(new Date(t.dueAt), now)}` : "due today"}
+                        </span>
+                      </div>
+                    </div>
+                    <div className="flex gap-xs">
+                      <CallButton phone={t.phone} />
+                      <Link href={`/crm/leads/${t.leadId}`} className={btnCls}>
+                        <Icon name="open_in_new" /> Open
+                      </Link>
+                    </div>
                   </div>
-                </div>
-                <div className="flex gap-xs">
-                  <CallButton phone={t.phone} />
-                  <Link href={`/crm/leads/${t.leadId}`} className={btnCls}>
-                    <Icon name="open_in_new" /> Open
-                  </Link>
-                </div>
-              </div>
-            ))
-          )}
-        </Section>
+                ))
+              )}
+            </Section>
 
-        <Section title={`4 · Quality ratings due (${day.qualityTotal})`}>
-          {day.quality.length === 0 ? (
-            <Empty text="No ratings due." />
-          ) : (
-            <LeadRows rows={day.quality} label="due" now={now} />
-          )}
-        </Section>
+            <Section title={`Quality ratings due (${work.qualityTotal})`}>
+              {work.quality.length === 0 ? <Empty text="No ratings due." /> : <LeadRows rows={work.quality} label="due" now={now} />}
+            </Section>
+          </>
+        )}
+
+        {view && (
+          <Section title="Close the day">
+            <div className="grid grid-cols-1 gap-gutter lg:grid-cols-5">
+              <div className="space-y-md lg:col-span-3">
+                {locked ? (
+                  <div className="space-y-sm">
+                    <p className="text-body-md text-on-surface">
+                      <span className="font-semibold">Submitted</span> {istDayTime(submission!.submittedAt)} — the day is locked.
+                      {submission!.status === "reviewed" && submission!.reviewedByName ? ` Reviewed by ${submission!.reviewedByName}.` : ""}
+                    </p>
+                    <p className="whitespace-pre-wrap text-label-sm text-on-surface-variant">{submission!.summary}</p>
+                    {access.canUnlock && submission!.status !== "reviewed" && <UnlockButton reportId={submission!.id} />}
+                  </div>
+                ) : viewingOther ? (
+                  <p className="text-body-md text-on-surface-variant">
+                    {submission ? "Unlocked by an admin — waiting for the BDE to submit again." : "Not submitted yet."}
+                  </p>
+                ) : (
+                  <>
+                    <ReportForm
+                      day={view.day}
+                      initial={{
+                        summary: submission?.summary ?? "",
+                        blockers: submission?.blockers ?? "",
+                        planNext: submission?.planNext ?? "",
+                      }}
+                      submitted={!!submission}
+                      submitLabel="Submit day"
+                      blocked={view.close.ok ? null : closeBlockedMessage(view.close, new Date(view.close.cutoff))}
+                    />
+                    <p className="text-caption text-on-surface-variant">
+                      Submitting locks the day&apos;s numbers and your report. Only an admin can unlock it.
+                    </p>
+                  </>
+                )}
+              </div>
+              <div className="lg:col-span-2">
+                <ShareBox text={view.shareText} />
+              </div>
+            </div>
+          </Section>
+        )}
       </div>
     </>
   );

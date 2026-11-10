@@ -137,13 +137,17 @@ export function isReviewed(report: { status: string } | null | undefined): boole
 }
 
 /**
- * Whether the narrative form is editable: only the owner, and only until a
- * manager has reviewed it. A missing report (not yet submitted) is editable by
- * its owner.
+ * Whether the narrative form is editable: only the owner, and only while the
+ * day is not submitted — submitting locks it until an admin unlocks it, and a
+ * reviewed report never reopens. A missing report is editable by its owner.
  */
-export function canEditNarrative(report: { status: string } | null | undefined, isOwner: boolean): boolean {
+export function canEditNarrative(
+  report: { status: string; locked?: boolean } | null | undefined,
+  isOwner: boolean,
+): boolean {
   if (!isOwner) return false;
-  return !isReviewed(report);
+  if (!report) return true;
+  return !isReviewed(report) && report.locked === false;
 }
 
 /**
@@ -230,6 +234,10 @@ export type StoredReportRow = {
   reviewedByName: string | null;
   reviewedAt: string | null;
   reviewerNote: string | null;
+  /** Submitted days are read-only for the BDE until an admin unlocks them. */
+  locked: boolean;
+  unlockedAt: string | null;
+  unlockedByName: string | null;
 };
 
 export type DailyReportView = {
@@ -456,6 +464,7 @@ export async function getStoredReport(userId: string, dayStr: string): Promise<S
     where: { userId_day: { userId, day: toPrismaDate(dayStr) } },
     include: {
       reviewedBy: { select: { username: true, leadPulseRole: { select: { displayName: true } } } },
+      unlockedBy: { select: { username: true, leadPulseRole: { select: { displayName: true } } } },
     },
   });
   if (!r) return null;
@@ -472,6 +481,9 @@ export async function getStoredReport(userId: string, dayStr: string): Promise<S
       : null,
     reviewedAt: r.reviewedAt ? r.reviewedAt.toISOString() : null,
     reviewerNote: r.reviewerNote,
+    locked: r.locked,
+    unlockedAt: r.unlockedAt ? r.unlockedAt.toISOString() : null,
+    unlockedByName: r.unlockedBy ? r.unlockedBy.leadPulseRole?.displayName ?? r.unlockedBy.username : null,
   };
 }
 

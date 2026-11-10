@@ -9,6 +9,7 @@ import { canSeePage } from "@/lib/rbac";
 import { normalizePhone, computeDedupeKey, phoneMatchKeys } from "@/lib/crm";
 import { resolveVoxbaySourceId } from "@/lib/voxbay-webhook-ingest";
 import { resolveDefaultStatus, getAssignableBdes } from "@/lib/crm-leads";
+import { recordAssignmentChange } from "@/lib/crm-contact-data";
 import {
   voxbayLeadName,
   callerHandledByLabel,
@@ -208,6 +209,10 @@ export const POST = withApiHandler(async (req: Request) => {
         metadata: { fromUserId: null, toUserId: l.assignedToId } as Prisma.InputJsonValue,
       }));
     if (assignActivities.length) await prisma.leadActivity.createMany({ data: assignActivities });
+    await recordAssignmentChange(
+      importedAt,
+      created.filter((l) => l.assignedToId).map((l) => ({ leadId: l.id, userId: l.assignedToId })),
+    );
   }
 
   const reInquiryOutcomes: ReInquiryOutcome[] = [];

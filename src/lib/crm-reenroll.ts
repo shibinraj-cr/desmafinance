@@ -28,6 +28,7 @@ import { badRequest, notFound } from "./http-error";
 import { recordLeadActivity } from "./crm-activity";
 import { resolveDefaultStatus, isActiveBde } from "./crm-leads";
 import { LOST_STATUS_CODES } from "./crm-reinquiry";
+import { recordAssignmentChange } from "./crm-contact-data";
 
 // The lead is reopened into this stage (an active follow-up the consultant works).
 const FOLLOW_UP_STATUS_CODE = "follow_up";
@@ -179,8 +180,11 @@ export async function reopenForAnotherService(p: ReopenServiceParams): Promise<R
       qualityDueAt: null,
       extra: { reEnrollment: "true", reEnrolledFromLeadId: src.id },
     },
-    select: { id: true },
+    select: { id: true, assignedAt: true },
   });
+  if (assignedToId && created.assignedAt) {
+    await recordAssignmentChange(created.assignedAt, [{ leadId: created.id, userId: assignedToId }]);
+  }
 
   await recordLeadActivity({
     leadId: created.id,

@@ -191,6 +191,7 @@ export function canSeePage(p: Permissions, href: string): boolean {
     href === "/crm/report" ||
     href.startsWith("/crm/report/") ||
     href === "/crm/my-day" ||
+    href === "/crm/handovers" ||
     href === "/crm/deliveries" ||
     href.startsWith("/crm/deliveries/") ||
     href === "/crm/inbox" ||

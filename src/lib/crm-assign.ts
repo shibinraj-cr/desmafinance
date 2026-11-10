@@ -14,6 +14,7 @@ import { notifyLeadAssigned } from "./crm-notify";
 import { enqueueLeadAssignedWebhook } from "./crm-webhook";
 import { syncConversationAssignee } from "./wa/mirror";
 import { qualityDueAtOnAssign } from "./crm-lead-quality";
+import { recordAssignmentChange } from "./crm-contact-data";
 import { leadRowInclude, crmTaskFollowAssignmentWhere, type LeadWithRels } from "./crm-leads";
 
 /**
@@ -123,6 +124,9 @@ export async function assignLeadTo(
     });
     return lead;
   });
+
+  // The daily lead report's record of who held the lead when (best-effort).
+  await recordAssignmentChange(assignedAt, [{ leadId, userId: targetUserId }]);
 
   const wasAssigned = !!existing.assignedToId;
   // Type is chosen by the resulting state, not just the prior one, so an
@@ -256,6 +260,12 @@ export async function releaseLeads(
       })),
     }),
   ]);
+
+  // Close each consultant's assignment row for the daily lead report (best-effort).
+  await recordAssignmentChange(
+    new Date(),
+    owned.map((l) => ({ leadId: l.id, userId: null })),
+  );
 
   // The WhatsApp mirror, set-based: the same rows syncConversationAssignee would
   // touch one lead at a time — threads linked to these leads, plus threads still

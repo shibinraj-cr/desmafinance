@@ -9,6 +9,7 @@ import { getCrmAccess } from "@/lib/crm-rbac";
 import { normalizePhone, computeDedupeKey, emailKeyOf, phoneMatchKeys } from "@/lib/crm";
 import { parseDobCell } from "@/lib/age";
 import { resolveDefaultStatus, getAssignableBdes } from "@/lib/crm-leads";
+import { recordAssignmentChange } from "@/lib/crm-contact-data";
 import {
   recordReInquiry,
   resolveReInquiryContext,
@@ -332,6 +333,10 @@ export const POST = withApiHandler(async (req: Request) => {
       }
     }
     await prisma.leadActivity.createMany({ data: acts });
+    await recordAssignmentChange(
+      importedAt,
+      created.filter((l) => l.assignedToId).map((l) => ({ leadId: l.id, userId: l.assignedToId })),
+    );
   }
 
   // Fold re-inquiries onto their canonical leads (existing-DB matches + later

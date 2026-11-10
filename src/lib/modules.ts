@@ -304,6 +304,14 @@ export const MODULES: AppModule[] = [
         group: "ACTIVITY",
       },
       {
+        // Leads the Marketing Admin hands a BDE outside DesGro. Every CRM user
+        // can open it (a BDE sees their own); visibility is in canSeePage.
+        href: "/crm/handovers",
+        label: "Lead Handovers",
+        icon: "move_to_inbox",
+        group: "ACTIVITY",
+      },
+      {
         // Personal in-app notifications (e.g. a lead was assigned to you). Its own
         // group so it gets a dedicated, unread-badged item in the CRM left-nav.
         // Visibility is handled in canSeePage (any CRM user), not Role.pages.
