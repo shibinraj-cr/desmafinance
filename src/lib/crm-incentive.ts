@@ -299,3 +299,51 @@ export function quarterMembers(facts: QuarterMonthFact[], teamId: string): TeamM
   }
   return [...byUser.values()];
 }
+
+// ── Setup (the Marketing target sheet) ───────────────────────────────────────
+
+export type LadderBand = {
+  from: number;
+  /** Last enrolment count in the band, or null for the top band. */
+  to: number | null;
+  rate: number;
+  /** Slab pay at the band's first and last count (null: open-ended). */
+  payFrom: number;
+  payTo: number | null;
+};
+
+/**
+ * A BDE's slabs as pay bands from zero — "0–9 pay nothing, 10–15 pay ₹1,000 on
+ * every enrolment …" — for the sheet's preview. Empty when no slab is set.
+ */
+export function slabLadder(slabs: Slab[]): LadderBand[] {
+  if (!slabs.length) return [];
+  const bands: LadderBand[] = [{ from: 0, to: slabs[0].from - 1, rate: 0, payFrom: 0, payTo: 0 }];
+  slabs.forEach((s, i) => {
+    const to = i + 1 < slabs.length ? slabs[i + 1].from - 1 : null;
+    bands.push({ from: s.from, to, rate: s.rate, payFrom: s.from * s.rate, payTo: to === null ? null : to * s.rate });
+  });
+  return bands;
+}
+
+/**
+ * Whether a month's incentive setup is closed: any month before the current
+ * one (`today` is an IST YYYY-MM-DD). A closed month's pay is settled, so only
+ * an admin may still change its slabs, bonuses or teams.
+ */
+export function isIncentiveMonthClosed(year: number, month: number, today: string): boolean {
+  const [ty, tm] = today.split("-").map(Number);
+  return year * 12 + month < ty * 12 + tm;
+}
+
+/** The first BDE placed in two teams in one month's membership, or null. */
+export function doubleBookedMember(teams: Array<{ teamId: string; userIds: string[] }>): string | null {
+  const seen = new Set<string>();
+  for (const t of teams) {
+    for (const id of t.userIds) {
+      if (seen.has(id)) return id;
+      seen.add(id);
+    }
+  }
+  return null;
+}
