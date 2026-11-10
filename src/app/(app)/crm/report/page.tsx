@@ -13,6 +13,7 @@ import {
   getDailyReportView,
   getTeamRollup,
   canReviewReports,
+  canEditNarrative,
   isReviewed,
   type ReportStatus,
   type ReportTaskItem,
@@ -211,7 +212,7 @@ export default async function DailyReportPage({ searchParams }: { searchParams: 
   const d = view.details;
   const report = view.report;
   const reviewed = isReviewed(report);
-  const canEdit = isOwner && access.isBde && !reviewed;
+  const canEdit = access.isBde && canEditNarrative(report, isOwner);
   const canReview = canReviewReports(access) && !isOwner && !!report;
 
   return (

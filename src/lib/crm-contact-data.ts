@@ -33,7 +33,7 @@ const DAY_MS = 86_400_000;
 /** How far back the safety net looks for assignments it may have missed. */
 const SYNC_WINDOW_DAYS = 3;
 /** How long a miss is re-checked so a late contact turns it into contacted_late. */
-const MISSED_RECHECK_DAYS = 14;
+export const MISSED_RECHECK_DAYS = 14;
 const CHUNK = 500;
 
 function chunks<T>(list: T[], size = CHUNK): T[][] {
@@ -144,6 +144,35 @@ export async function syncAssignments(now: Date = new Date()): Promise<{ opened:
 }
 
 /**
+ * The contact events on these assignments' leads, by the assigned BDEs, since
+ * the earliest assignment — keyed by lead. evaluateContact does the per-row
+ * windowing. Callers pass at most {@link CHUNK} rows.
+ */
+export async function loadContactEvents(
+  rows: { leadId: string; userId: string; assignedAt: Date }[],
+): Promise<Map<string, ContactEvent[]>> {
+  const byLead = new Map<string, ContactEvent[]>();
+  if (rows.length === 0) return byLead;
+  const activities = await prisma.leadActivity.findMany({
+    where: {
+      leadId: { in: [...new Set(rows.map((r) => r.leadId))] },
+      actorId: { in: [...new Set(rows.map((r) => r.userId))] },
+      type: { in: [...CONTACT_ACTIVITY_TYPES] },
+      occurredAt: { gte: new Date(Math.min(...rows.map((r) => r.assignedAt.getTime()))) },
+    },
+    select: { leadId: true, type: true, actorId: true, occurredAt: true, metadata: true },
+  });
+  for (const a of activities) {
+    const event = activityToContactEvent(a);
+    if (!event) continue;
+    const list = byLead.get(a.leadId);
+    if (list) list.push(event);
+    else byLead.set(a.leadId, [event]);
+  }
+  return byLead;
+}
+
+/**
  * Re-judge every assignment that can still change — pending ones, and misses
  * from the last {@link MISSED_RECHECK_DAYS} days — and store any new verdict.
  * Scope to one BDE with `userId` (My Day refreshes its own rows on open).
@@ -173,25 +202,7 @@ export async function evaluateAssignments(opts: { userId?: string; now?: Date } 
 
   let changed = 0;
   for (const part of chunks(rows)) {
-    const since = new Date(Math.min(...part.map((r) => r.assignedAt.getTime())));
-    const activities = await prisma.leadActivity.findMany({
-      where: {
-        leadId: { in: [...new Set(part.map((r) => r.leadId))] },
-        actorId: { in: [...new Set(part.map((r) => r.userId))] },
-        type: { in: [...CONTACT_ACTIVITY_TYPES] },
-        occurredAt: { gte: since },
-      },
-      select: { leadId: true, type: true, actorId: true, occurredAt: true, metadata: true },
-    });
-    const byLead = new Map<string, ContactEvent[]>();
-    for (const a of activities) {
-      const event = activityToContactEvent(a);
-      if (!event) continue;
-      const list = byLead.get(a.leadId);
-      if (list) list.push(event);
-      else byLead.set(a.leadId, [event]);
-    }
-
+    const byLead = await loadContactEvents(part);
     const updates = [];
     for (const r of part) {
       const v = evaluateContact(r, byLead.get(r.leadId) ?? [], now);

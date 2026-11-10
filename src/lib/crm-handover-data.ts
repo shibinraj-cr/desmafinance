@@ -10,7 +10,7 @@
 import type { Prisma } from "@prisma/client";
 import { prisma } from "./prisma";
 import type { Permissions } from "./rbac";
-import { getCrmAccess } from "./crm-rbac";
+import { getCrmAccess, type CrmAccess } from "./crm-rbac";
 import { isActiveBde } from "./crm-leads";
 import { loadHolidaySet } from "./ops-dates";
 import { nextCutoff } from "./crm-cutoff";
@@ -29,9 +29,14 @@ import {
   type HandoverRejectReason,
 } from "./crm-handover";
 
-export async function getHandoverAccess(userId: string, perms: Permissions | null): Promise<HandoverAccess> {
+export async function getHandoverAccess(
+  userId: string,
+  perms: Permissions | null,
+  /** Pass when the caller already loaded it. */
+  crmAccess?: CrmAccess,
+): Promise<HandoverAccess> {
   const [crm, lpRole] = await Promise.all([
-    getCrmAccess(userId, perms),
+    crmAccess ?? getCrmAccess(userId, perms),
     prisma.leadPulseRole.findUnique({ where: { userId }, select: { role: true, active: true } }),
   ]);
   return handoverAccess({

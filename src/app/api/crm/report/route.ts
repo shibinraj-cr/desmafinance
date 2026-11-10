@@ -8,13 +8,16 @@ import { getCurrentUserAndPermissions } from "@/lib/permissions";
 import { getCrmAccess } from "@/lib/crm-rbac";
 import { toPrismaDate } from "@/lib/lead-pulse-dates";
 import { computeDailyReport, resolveReportDay, canSubmitOn } from "@/lib/crm-daily-report";
+import { closeDayCheck, computeLeadReport, leadReportJson } from "@/lib/crm-lead-report-data";
+import { closeBlockedMessage } from "@/lib/crm-lead-report";
 
 export const dynamic = "force-dynamic";
 
-// POST /api/crm/report — submit or re-submit the signed-in BDE's daily report.
+// POST /api/crm/report — submit the signed-in BDE's day ("Close the day").
 // The report is always for the session user (managers never submit on a BDE's
-// behalf); the KPI/detail snapshot is recomputed server-side and never trusted
-// from the client. Editable/re-submittable until a manager reviews it.
+// behalf); the KPI/detail snapshot and the lead report are recomputed
+// server-side and never trusted from the client. Submitting locks the day; it
+// can be submitted again only after an admin unlocks it, and never once reviewed.
 const SubmitSchema = z.object({
   day: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
   summary: z.string().trim().min(1).max(5000),
@@ -39,15 +42,28 @@ export const POST = withApiHandler(async (req: Request) => {
   // A reviewed report is frozen — no silent overwrite.
   const existing = await prisma.crmDailyReport.findUnique({
     where: { userId_day: { userId, day: toPrismaDate(day) } },
-    select: { status: true },
+    select: { status: true, locked: true },
   });
   if (existing?.status === "reviewed") throw conflict("already_reviewed", "already_reviewed");
+  if (existing?.locked) {
+    throw conflict("This day is already submitted. Ask an admin to unlock it to change it.", "day_locked");
+  }
 
   // Recompute the snapshot server-side — the client never supplies metrics.
-  const { metrics, details } = await computeDailyReport({ userId, dayStr: day });
+  const now = new Date();
+  const [{ metrics, details }, leadReport] = await Promise.all([
+    computeDailyReport({ userId, dayStr: day }),
+    computeLeadReport(userId, day, now),
+  ]);
+  // Closing today with leads still due before the cutoff would freeze them as
+  // "pending" in a report that is meant to show the misses.
+  const close = await closeDayCheck(userId, leadReport, now);
+  if (!close.ok) throw conflict(closeBlockedMessage(close, new Date(close.cutoff)), "leads_pending");
   const snapshot = {
     metrics: metrics as unknown as Prisma.InputJsonValue,
     details: details as unknown as Prisma.InputJsonValue,
+    leadReport: leadReportJson(leadReport),
+    locked: true,
   };
   const narrative = {
     summary: input.summary,

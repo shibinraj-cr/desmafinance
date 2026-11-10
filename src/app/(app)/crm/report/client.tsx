@@ -100,8 +100,8 @@ export function DayNav({
 }
 
 /**
- * The BDE's narrative + submit. Editable while the report is unsubmitted or
- * submitted-not-yet-reviewed; locked once reviewed. The KPI/detail snapshot is
+ * The BDE's narrative + submit. Editable while the day is unsubmitted, or after
+ * an admin unlocks it; submitting locks it again. The KPI/detail snapshot is
  * recomputed server-side on submit, so this form only carries the narrative.
  */
 export function ReportForm({
@@ -175,7 +175,7 @@ export function ReportForm({
         >
           {busy ? "Saving…" : submitted ? "Update report" : "Submit report"}
         </button>
-        {submitted && <span className="text-caption text-on-surface-variant">Submitted — you can update it until it&apos;s reviewed.</span>}
+        {submitted && <span className="text-caption text-on-surface-variant">Unlocked by an admin — submit again to lock the day.</span>}
       </div>
     </div>
   );
