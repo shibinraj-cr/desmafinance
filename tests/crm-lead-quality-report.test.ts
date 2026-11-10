@@ -3,12 +3,16 @@ import {
   CAMPAIGN_ROWS,
   NO_CAMPAIGN,
   OVERDUE_LIST_LIMIT,
+  QUAL_DAILY_MAX_SERIES,
+  QUAL_MORE_KEY,
+  QUAL_NOT_SET_KEY,
   buildCrmLeadQualityReport,
   trendWeekStarts,
   type LqFilters,
   type LqRow,
 } from "@/lib/crm-lead-quality-report";
 import { badShare, ratedCount, ratingShare } from "@/lib/lead-quality-report";
+import { NO_QUALIFICATION } from "@/lib/crm-leads";
 import { ymdFromDay } from "@/lib/sales-analysis";
 
 // Saturday 24 Oct 2026, 15:30 IST.
@@ -34,9 +38,13 @@ function lead(p: Partial<LqRow> = {}): LqRow {
     createdAt: at("2026-10-05"),
     sourceId: "src_meta",
     source: "Meta",
+    sourceCode: "meta",
     campaign: "Meta – NCLEX Oct",
     serviceId: "svc_1",
     service: "AHPRA",
+    qualificationId: null,
+    qualification: null,
+    qualificationOrder: null,
     assigneeId: "bde_a",
     assigneeName: "BDE A",
     qualityRating: null,
@@ -211,5 +219,71 @@ describe("junk trend", () => {
     const filtered = build(rows, { ...NO_FILTERS, source: ["src_web"] }).trend.series;
     expect(filtered).toHaveLength(1);
     expect(filtered[0].colorIndex).toBe(all.find((s) => s.source === "Website")!.colorIndex);
+  });
+});
+
+describe("Meta leads by qualification, daily", () => {
+  const GNM = { qualificationId: "q_gnm", qualification: "GNM", qualificationOrder: 1 };
+  const BSN = { qualificationId: "q_bsn", qualification: "BSN", qualificationOrder: 2 };
+  const WEB = { sourceId: "src_web", source: "Website", sourceCode: "website" };
+
+  it("has one day per IST day of the period up to today, today still filling", () => {
+    const { days } = build([]).metaQualDaily;
+    expect(days).toHaveLength(24);
+    expect(days[0]).toMatchObject({ day: "2026-10-01", label: "Thu 1 Oct", short: "1 Oct", partial: false });
+    expect(days[23]).toMatchObject({ day: "2026-10-24", partial: true });
+  });
+
+  it("counts Meta leads on their IST day, by qualification", () => {
+    const rows = [
+      lead({ ...GNM, createdAt: new Date("2026-09-30T18:40:00Z") }), // 1 Oct 00:10 IST
+      lead({ ...GNM, createdAt: new Date("2026-09-30T18:20:00Z") }), // 30 Sep 23:50 IST — before the period
+      lead({ ...BSN, createdAt: at("2026-10-01") }),
+      lead({ createdAt: at("2026-10-02") }),
+      lead({ ...GNM, ...WEB, createdAt: at("2026-10-02") }),
+    ];
+    const m = build(rows).metaQualDaily;
+    expect(m.series.map((s) => [s.key, s.label, s.slot, s.total])).toEqual([
+      ["q_gnm", "GNM", 0, 1],
+      ["q_bsn", "BSN", 1, 1],
+      [QUAL_NOT_SET_KEY, "Not set", null, 1],
+    ]);
+    expect(m.days[0].counts).toEqual([1, 1, 0]);
+    expect(m.days[1].counts).toEqual([0, 0, 1]);
+    expect(m.total).toBe(3);
+    expect(m.sourceId).toBe("src_meta");
+  });
+
+  it("orders qualifications by the master, not by size", () => {
+    const rows = [...many(5, { ...BSN, qualificationOrder: 9 }), lead({ ...GNM, qualificationOrder: 3 })];
+    expect(build(rows).metaQualDaily.series.map((s) => s.label)).toEqual(["GNM", "BSN"]);
+  });
+
+  it("ignores the Source filter but applies the others", () => {
+    const rows = [lead({ ...GNM, assigneeId: "bde_a" }), lead({ ...GNM, assigneeId: "bde_b" })];
+    expect(build(rows, { ...NO_FILTERS, source: ["src_web"] }).metaQualDaily.total).toBe(2);
+    expect(build(rows, { ...NO_FILTERS, bde: ["bde_b"] }).metaQualDaily.total).toBe(1);
+  });
+
+  it("keeps each qualification's colour when a filter hides others", () => {
+    const rows = [lead({ ...GNM, campaign: "A" }), lead({ ...BSN, campaign: "B" })];
+    const filtered = build(rows, { ...NO_FILTERS, campaign: ["B"] }).metaQualDaily.series;
+    expect(filtered.find((s) => s.key === "q_bsn")).toMatchObject({ slot: 1, total: 1 });
+    expect(filtered.find((s) => s.key === "q_gnm")).toMatchObject({ slot: 0, total: 0 });
+  });
+
+  it("folds the smallest qualifications together past the colour slots", () => {
+    const count = QUAL_DAILY_MAX_SERIES + 2;
+    const rows = Array.from({ length: count }, (_, i) =>
+      many(count - i, { qualificationId: `q${i}`, qualification: `Q${i}`, qualificationOrder: i }),
+    ).flat();
+    const { series } = build(rows).metaQualDaily;
+    expect(series).toHaveLength(QUAL_DAILY_MAX_SERIES);
+    expect(series.at(-1)).toMatchObject({ key: QUAL_MORE_KEY, slot: null, total: 2 + 1 + 3 });
+    expect(series.slice(0, -1).map((s) => s.slot)).toEqual([0, 1, 2, 3, 4, 5, 6]);
+  });
+
+  it("uses the leads list's blank-qualification value for Not set", () => {
+    expect(QUAL_NOT_SET_KEY).toBe(NO_QUALIFICATION);
   });
 });
