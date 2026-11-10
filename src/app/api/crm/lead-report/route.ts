@@ -27,6 +27,10 @@ export const GET = withApiHandler(async (req: Request) => {
   return NextResponse.json({
     ...view,
     isOwner: requested === userId,
+    // For the app, which has no role flags of its own: show My Day's report
+    // only to BDEs, the team view and BDE picker only to managers.
+    isBde: access.crm.isBde,
+    canViewOthers: access.canViewOthers,
     canUnlock: access.canUnlock,
   });
 });
