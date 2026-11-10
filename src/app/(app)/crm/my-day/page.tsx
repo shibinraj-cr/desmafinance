@@ -147,7 +147,7 @@ export default async function MyDayPage({ searchParams }: { searchParams: SP }) 
             <ReportTiles totals={view.report.totals} handovers={view.report.handovers} cutoffLabel={cutoffLabel} />
             {!view.live && (
               <p className="text-caption text-on-surface-variant">
-                Showing the numbers as they were when the day was submitted.
+                Showing the numbers as they were when the report was generated at the cutoff.
               </p>
             )}
 
