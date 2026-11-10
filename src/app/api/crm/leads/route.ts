@@ -25,6 +25,7 @@ import {
 } from "@/lib/crm-leads";
 import { recordReInquiry, resolveReInquiryContext, notifySupervisorOfReInquiries } from "@/lib/crm-reinquiry";
 import { recordAssignmentChange } from "@/lib/crm-contact-data";
+import { findOpenHandoversFor, linkHandovers, resolveHandoverSourceId } from "@/lib/crm-handover-data";
 
 export const dynamic = "force-dynamic";
 
@@ -87,6 +88,9 @@ const CreateSchema = z.object({
     z.enum(LEAD_TEMPERATURE_VALUES as [string, ...string[]]).optional(),
   ),
   extra: z.record(z.string()).optional(),
+  // The Lead Handover this lead is being created from (its "Create lead" button).
+  // Matching on phone settles it anyway; the id also catches a number typed differently.
+  handoverId: z.string().optional(),
 });
 
 export const POST = withApiHandler(async (req: Request) => {
@@ -177,6 +181,12 @@ export const POST = withApiHandler(async (req: Request) => {
         : null;
       const outcome = await recordReInquiry({ leadId: dup.id, source: "Manual entry", campaign, actorId: userId }, ctx);
       if (outcome) await notifySupervisorOfReInquiries([outcome], ctx, new URL(req.url).origin);
+      // A handover the BDE was creating turns out to be someone already in the CRM.
+      const handoverBde = access.isBde ? userId : data.assignedToId || null;
+      if (handoverBde) {
+        const open = await findOpenHandoversFor(handoverBde, phoneKeys, data.handoverId);
+        await linkHandovers(open.map((h) => h.id), dup.id, "duplicate", userId);
+      }
       const existing = await prisma.lead.findUnique({ where: { id: dup.id }, include: leadRowInclude });
       return NextResponse.json({ lead: serializeLead(existing!), reInquiry: true, duplicateOf: dup.id }, { status: 200 });
     }
@@ -198,6 +208,11 @@ export const POST = withApiHandler(async (req: Request) => {
   // change exists to prevent — and the assignment would fire the candidate's
   // WhatsApp introduction from a consultant who is not going to work them.
   if (isCentralisedStatus(startingStatus)) assignedToId = null;
+
+  // Open Lead Handovers this lead settles (H2): the lead takes the handover's
+  // channel as its source, and the handovers are marked created below.
+  const handovers = assignedToId ? await findOpenHandoversFor(assignedToId, phoneKeys, data.handoverId) : [];
+  const handoverSourceId = handovers.length ? await resolveHandoverSourceId(handovers[0].channel) : null;
 
   const qualificationOther = await resolveQualificationOther(
     data.qualificationId || null,
@@ -227,7 +242,7 @@ export const POST = withApiHandler(async (req: Request) => {
       altPhoneE164,
       emailKey,
       dedupeKey,
-      sourceId: data.sourceId || null,
+      sourceId: handoverSourceId ?? (data.sourceId || null),
       serviceId: data.serviceId || null,
       qualificationId: data.qualificationId || null,
       qualificationOther,
@@ -252,6 +267,7 @@ export const POST = withApiHandler(async (req: Request) => {
     type: "LEAD_CREATED",
     summary: "Lead created",
   });
+  await linkHandovers(handovers.map((h) => h.id), created.id, "created", userId);
   if (assignedToId) {
     await recordAssignmentChange(created.assignedAt!, [{ leadId: created.id, userId: assignedToId }]);
     await recordLeadActivity({
