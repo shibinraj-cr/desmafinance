@@ -7,9 +7,9 @@ import { getAssignableBdes } from "@/lib/crm-leads";
 import { resolveReportDay } from "@/lib/crm-daily-report";
 import { firstLeadId, formatWait, getMyDay, type MyDayLead } from "@/lib/crm-my-day";
 import { bdeName, getLeadReportAccess, getLeadReportView } from "@/lib/crm-lead-report-data";
-import { closeBlockedMessage } from "@/lib/crm-lead-report";
+import { canEditNarrative } from "@/lib/crm-daily-report";
 import { ReportTiles, SourceTable, istDayTime, istTime } from "@/components/crm/LeadReportParts";
-import { ContactQueue, CutoffPill, HandoverTable, ShareBox, UnlockButton } from "@/components/crm/LeadReportActions";
+import { ContactQueue, CutoffPill, HandoverTable, ShareBox } from "@/components/crm/LeadReportActions";
 import { DayNav, ReportForm } from "../report/client";
 
 export const dynamic = "force-dynamic";
@@ -80,7 +80,8 @@ function LeadRows({ rows, label, now }: { rows: MyDayLead[]; label: string; now:
 
 /**
  * My Day — a BDE's leads for the day against the cutoff (the daily lead
- * report), the rest of their work in the order to do it, and Close the day.
+ * report), the rest of their work in the order to do it, and the day's report
+ * — generated automatically at the cutoff, with optional remarks.
  * Managers and the Marketing Admin open any BDE's day read-only with ?bde=.
  */
 export default async function MyDayPage({ searchParams }: { searchParams: SP }) {
@@ -109,7 +110,15 @@ export default async function MyDayPage({ searchParams }: { searchParams: SP }) 
   const cutoffLabel = view?.cutoff ? istTime(view.cutoff) : null;
   const first = view?.queue?.[0]?.leadId ?? (work ? firstLeadId(work) : null);
   const submission = view?.submission ?? null;
-  const locked = !!submission && submission.locked;
+  const generated = !!submission && submission.locked;
+  const reportStatus = generated
+    ? `Generated automatically ${istDayTime(submission!.submittedAt)}.` +
+      (submission!.status === "reviewed" && submission!.reviewedByName ? ` Reviewed by ${submission!.reviewedByName}.` : "")
+    : isToday && cutoffLabel
+      ? `Generated automatically at ${cutoffLabel} — there's nothing to submit.`
+      : isToday
+        ? "No cutoff today, so no report is generated — today's leads count on the next working day."
+        : "No report was generated for this day.";
 
   return (
     <>
@@ -243,40 +252,26 @@ export default async function MyDayPage({ searchParams }: { searchParams: SP }) 
         )}
 
         {view && (
-          <Section title="Close the day">
+          <Section title="Day report">
             <div className="grid grid-cols-1 gap-gutter lg:grid-cols-5">
               <div className="space-y-md lg:col-span-3">
-                {locked ? (
-                  <div className="space-y-sm">
-                    <p className="text-body-md text-on-surface">
-                      <span className="font-semibold">Submitted</span> {istDayTime(submission!.submittedAt)} — the day is locked.
-                      {submission!.status === "reviewed" && submission!.reviewedByName ? ` Reviewed by ${submission!.reviewedByName}.` : ""}
-                    </p>
-                    <p className="whitespace-pre-wrap text-label-sm text-on-surface-variant">{submission!.summary}</p>
-                    {access.canUnlock && submission!.status !== "reviewed" && <UnlockButton reportId={submission!.id} />}
+                <p className="text-body-md text-on-surface">{reportStatus}</p>
+                {!viewingOther && canEditNarrative(submission, true) ? (
+                  <ReportForm
+                    day={view.day}
+                    initial={{
+                      summary: submission?.summary ?? "",
+                      blockers: submission?.blockers ?? "",
+                      planNext: submission?.planNext ?? "",
+                    }}
+                  />
+                ) : submission && (submission.summary || submission.blockers || submission.planNext) ? (
+                  <div className="space-y-xs text-label-sm text-on-surface-variant">
+                    {submission.summary && <p className="whitespace-pre-wrap">{submission.summary}</p>}
+                    {submission.blockers && <p className="whitespace-pre-wrap">Blockers: {submission.blockers}</p>}
+                    {submission.planNext && <p className="whitespace-pre-wrap">Next: {submission.planNext}</p>}
                   </div>
-                ) : viewingOther ? (
-                  <p className="text-body-md text-on-surface-variant">
-                    {submission ? "Unlocked by an admin — waiting for the BDE to submit again." : "Not submitted yet."}
-                  </p>
-                ) : (
-                  <>
-                    <ReportForm
-                      day={view.day}
-                      initial={{
-                        summary: submission?.summary ?? "",
-                        blockers: submission?.blockers ?? "",
-                        planNext: submission?.planNext ?? "",
-                      }}
-                      submitted={!!submission}
-                      submitLabel="Submit day"
-                      blocked={view.close.ok ? null : closeBlockedMessage(view.close, new Date(view.close.cutoff))}
-                    />
-                    <p className="text-caption text-on-surface-variant">
-                      Submitting locks the day&apos;s numbers and your report. Only an admin can unlock it.
-                    </p>
-                  </>
-                )}
+                ) : null}
               </div>
               <div className="lg:col-span-2">
                 <ShareBox text={view.shareText} />

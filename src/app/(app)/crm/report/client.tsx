@@ -103,23 +103,16 @@ export function DayNav({
 }
 
 /**
- * The BDE's narrative + submit. Editable while the day is unsubmitted, or after
- * an admin unlocks it; submitting locks it again. The KPI/detail snapshot is
- * recomputed server-side on submit, so this form only carries the narrative.
+ * The BDE's optional remarks on their day. The report itself is generated
+ * automatically at the cutoff — nothing to submit — and remarks never change
+ * its numbers. Editable until a manager reviews the report.
  */
 export function ReportForm({
   day,
   initial,
-  submitted,
-  submitLabel = "Submit report",
-  blocked = null,
 }: {
   day: string;
   initial: { summary: string; blockers: string; planNext: string };
-  submitted: boolean;
-  submitLabel?: string;
-  /** Why the day can't be closed yet (leads still due before the cutoff), or null. */
-  blocked?: string | null;
 }) {
   const router = useRouter();
   const [summary, setSummary] = useState(initial.summary);
@@ -127,14 +120,13 @@ export function ReportForm({
   const [planNext, setPlanNext] = useState(initial.planNext);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [saved, setSaved] = useState(false);
+  const changed = summary !== initial.summary || blockers !== initial.blockers || planNext !== initial.planNext;
 
   async function submit() {
-    if (!summary.trim()) {
-      setError("Add a short summary of your day before submitting.");
-      return;
-    }
     setBusy(true);
     setError(null);
+    setSaved(false);
     try {
       const res = await fetch("/api/crm/report", {
         method: "POST",
@@ -143,9 +135,10 @@ export function ReportForm({
       });
       if (!res.ok) {
         const data = await res.json().catch(() => ({}));
-        setError(errorText(data?.error) ?? data?.message ?? "Could not submit — please try again.");
+        setError(errorText(data?.error) ?? data?.message ?? "Could not save — please try again.");
         return;
       }
+      setSaved(true);
       router.refresh();
     } catch {
       setError("Network error — please try again.");
@@ -156,7 +149,7 @@ export function ReportForm({
 
   return (
     <div className="space-y-md">
-      <Field label="Summary of the day" hint="The numbers above are filled in for you — add what they don't show.">
+      <Field label="Remarks" hint="Optional — anything the numbers don't show.">
         <textarea
           className={textareaClass}
           rows={4}
@@ -178,14 +171,13 @@ export function ReportForm({
         <button
           type="button"
           onClick={submit}
-          disabled={busy || !!blocked}
+          disabled={busy || !changed}
           className="h-10 rounded-lg bg-primary px-lg text-label-sm font-bold text-on-primary hover:opacity-90 disabled:opacity-50"
         >
-          {busy ? "Saving…" : submitted ? "Submit again" : submitLabel}
+          {busy ? "Saving…" : "Save remarks"}
         </button>
-        {submitted && <span className="text-caption text-on-surface-variant">Unlocked by an admin — submit again to lock the day.</span>}
+        {saved && !changed && <span className="text-caption text-green-800">Saved</span>}
       </div>
-      {blocked && <p className="text-label-sm text-on-surface-variant">{blocked}</p>}
     </div>
   );
 }
@@ -255,8 +247,6 @@ function errorText(code: unknown): string | null {
   switch (code) {
     case "already_reviewed":
       return "This report was already reviewed and can no longer be changed.";
-    case "day_locked":
-      return "This day is already submitted. Ask an admin to unlock it to change it.";
     case "day_out_of_window":
       return "That day is outside the window you can still report on.";
     case "invalid_day":

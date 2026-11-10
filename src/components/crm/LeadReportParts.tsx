@@ -104,7 +104,7 @@ export function ReportTiles({
   handovers: HandoverCounts;
   /** "5:00 pm", or null on a day without a cutoff. */
   cutoffLabel: string | null;
-  /** Team view: "2 / 3" days submitted, shown instead of the Pending tile when the day is over. */
+  /** Team view: "2 / 3" reports generated, shown instead of the Pending tile when the day is over. */
   submitted?: string;
 }) {
   const due = dueToday(t);
@@ -126,7 +126,7 @@ export function ReportTiles({
           hint={cutoffLabel ? `due by ${cutoffLabel}` : "no cutoff today"}
         />
       ) : (
-        <Tile label="Days submitted" value={submitted} />
+        <Tile label="Reports generated" value={submitted} />
       )}
       <Tile
         label="Missed"

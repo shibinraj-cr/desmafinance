@@ -3,7 +3,7 @@
 /**
  * The interactive pieces of the daily lead report: the cutoff countdown, the
  * "contact before the cutoff" list, the handover table and its Reject /
- * Reopen, the WhatsApp share box and the admin's Unlock. Display-only pieces
+ * Reopen, and the WhatsApp share box. Display-only pieces
  * are in LeadReportParts.tsx.
  */
 import Link from "next/link";
@@ -399,7 +399,7 @@ export function HandoverTable({
   );
 }
 
-// ── Share text + unlock ──────────────────────────────────────────────────────
+// ── Share text ──────────────────────────────────────────────────────────────
 
 /** "Copy for WhatsApp" with the preview the team already posts. */
 export function ShareBox({ text }: { text: string }) {
@@ -425,32 +425,5 @@ export function ShareBox({ text }: { text: string }) {
         {text}
       </pre>
     </div>
-  );
-}
-
-/** An admin reopens a submitted day so the BDE can correct and submit it again. */
-export function UnlockButton({ reportId }: { reportId: string }) {
-  const router = useRouter();
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  return (
-    <span className="inline-flex items-center gap-sm">
-      <button
-        type="button"
-        className={btn}
-        disabled={busy}
-        onClick={async () => {
-          setBusy(true);
-          setError(null);
-          const res = await fetch(`/api/crm/report/${reportId}/unlock`, { method: "POST" });
-          setBusy(false);
-          if (!res.ok) return setError(await errorOf(res, "Could not unlock."));
-          router.refresh();
-        }}
-      >
-        <Icon name="lock_open" /> {busy ? "Unlocking…" : "Unlock day"}
-      </button>
-      {error && <span className="text-label-sm font-semibold text-error">{error}</span>}
-    </span>
   );
 }

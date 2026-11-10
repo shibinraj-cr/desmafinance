@@ -57,8 +57,8 @@ function istDate(iso: string): string {
 
 function StatusBadge({ status }: { status: ReportStatus }) {
   const map: Record<ReportStatus, { label: string; cls: string }> = {
-    none: { label: "Not submitted", cls: "bg-surface-container-high text-on-surface-variant" },
-    submitted: { label: "Submitted", cls: "bg-amber-50 text-amber-900" },
+    none: { label: "Not generated yet", cls: "bg-surface-container-high text-on-surface-variant" },
+    submitted: { label: "Generated", cls: "bg-amber-50 text-amber-900" },
     reviewed: { label: "Reviewed", cls: "bg-green-50 text-green-700" },
   };
   const s = map[status];
@@ -152,12 +152,12 @@ export default async function DailyReportPage({ searchParams }: { searchParams: 
           <div className="flex flex-wrap items-center justify-between gap-base">
             {nav}
             <p className="text-label-sm text-on-surface-variant">
-              <span className="font-semibold text-on-surface">{submitted}</span> of {rows.length} reported ·{" "}
+              <span className="font-semibold text-on-surface">{submitted}</span> of {rows.length} reports generated ·{" "}
               {formatIstShort(dayStr)}
             </p>
           </div>
           <TeamLeadReportView team={team} isToday={isToday} />
-          <Section title="Who has reported">
+          <Section title="Activity and remarks">
             <div className="overflow-x-auto">
               <table className="w-full min-w-[720px] border-collapse text-label-sm">
                 <thead>
@@ -168,7 +168,7 @@ export default async function DailyReportPage({ searchParams }: { searchParams: 
                     <th className="px-sm py-sm text-right font-semibold">Contacts</th>
                     <th className="px-sm py-sm text-right font-semibold">Tasks ✓</th>
                     <th className="px-sm py-sm text-right font-semibold">Notes</th>
-                    <th className="px-sm py-sm font-semibold">Submitted</th>
+                    <th className="px-sm py-sm font-semibold">Generated</th>
                     <th className="pl-sm py-sm text-right font-semibold"></th>
                   </tr>
                 </thead>
@@ -235,8 +235,8 @@ export default async function DailyReportPage({ searchParams }: { searchParams: 
             {nav}
           </div>
           <div className="flex items-center gap-base">
-            {report ? <StatusBadge status={report.status} /> : <StatusBadge status="none" />}
-            {view.live && <span className="text-caption text-on-surface-variant">Live preview — not yet submitted</span>}
+            {report?.locked ? <StatusBadge status={report.status} /> : <StatusBadge status="none" />}
+            {view.live && <span className="text-caption text-on-surface-variant">Live — generated automatically at the cutoff</span>}
           </div>
         </div>
 
@@ -267,15 +267,14 @@ export default async function DailyReportPage({ searchParams }: { searchParams: 
                   blockers: report?.blockers ?? "",
                   planNext: report?.planNext ?? "",
                 }}
-                submitted={!!report}
               />
             ) : report ? (
               <div className="space-y-md">
-                <Narrative label="Summary" body={report.summary} />
+                {report.summary && <Narrative label="Remarks" body={report.summary} />}
                 {report.blockers && <Narrative label="Blockers / help needed" body={report.blockers} />}
                 {report.planNext && <Narrative label="Plan for next day" body={report.planNext} />}
                 <p className="text-caption text-on-surface-variant">
-                  Submitted {istDate(report.submittedAt)} at {istTime(report.submittedAt)}.
+                  {report.locked ? `Generated ${istDate(report.submittedAt)} at ${istTime(report.submittedAt)}.` : "Not generated yet."}
                   {report.reviewedByName && report.reviewedAt && (
                     <>
                       {" "}Reviewed by <span className="font-semibold">{report.reviewedByName}</span> on {istDate(report.reviewedAt)}.
@@ -290,7 +289,7 @@ export default async function DailyReportPage({ searchParams }: { searchParams: 
                 )}
               </div>
             ) : (
-              <EmptyRow text={isOwner ? "You haven't submitted a report for this day yet." : "No report submitted for this day."} />
+              <EmptyRow text="Generated automatically at the cutoff — nothing to submit." />
             )}
           </Section>
 

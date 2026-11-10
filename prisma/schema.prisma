@@ -3463,10 +3463,10 @@ model CrmTaskReminder {
 /// LeadActivity ledger + related tables — the BDE never re-enters activity — and
 /// are shown live until they submit. On submit, the computed `metrics`/`details`
 /// are frozen into this row (an immutable point-in-time snapshot), alongside the
-/// BDE's own narrative (summary / blockers / plan) and the day's lead report.
-/// Submitting locks the day: the BDE cannot change it until an admin unlocks it
-/// (and never once a manager has marked it 'reviewed'). Managers never submit on
-/// a BDE's behalf.
+/// BDE's optional remarks (summary / blockers / plan) and the day's lead report.
+/// BDEs submit nothing: at the day's cutoff the lead-cutoff cron generates every
+/// active BDE's report and locks its numbers (generateDayReports). Remarks stay
+/// editable until a manager marks the report 'reviewed'.
 model CrmDailyReport {
   id     String   @id @default(cuid())
   // The BDE the report is ABOUT and authored by (never a manager).
@@ -3497,12 +3497,14 @@ model CrmDailyReport {
   reviewerNote String?
 
   // The day's lead numbers (received / contacted / missed per source, plus the
-  // handover block), frozen at submit. See LeadReport in src/lib/crm-lead-report.ts.
-  // Null on reports submitted before the lead report existed.
+  // handover block), frozen when the report is generated at the cutoff. See
+  // LeadReport in src/lib/crm-lead-report.ts. Null on reports from before it existed.
   leadReport   Json?
-  // Submitted days are read-only for the BDE until an admin unlocks them; the
-  // next submit locks the day again. Existing rows were submitted, so start locked.
+  // Generated: metrics/details/leadReport are frozen at the cutoff. False only on
+  // a row a BDE's remarks created before then. Existing rows were submitted, so true.
   locked       Boolean   @default(true)
+  // Unused since reports generate themselves (there is no unlock any more); kept
+  // so no migration has to drop them.
   unlockedById String?
   unlockedBy   User?     @relation("CrmDailyReportUnlocker", fields: [unlockedById], references: [id], onDelete: SetNull)
   unlockedAt   DateTime?

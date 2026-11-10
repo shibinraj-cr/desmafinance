@@ -142,24 +142,6 @@ export function sumReports(reports: Pick<LeadReport, "totals" | "handovers">[]):
   return { totals, handovers };
 }
 
-/**
- * Whether the BDE may close (submit) `day` now. A past day always; today only
- * once nothing due today is still pending, or the cutoff has passed — a day
- * closed with leads still pending would freeze "pending" where a miss belongs.
- */
-export function canCloseDay(
-  report: Pick<LeadReport, "day" | "totals">,
-  pendingHandoversDueToday: number,
-  today: string,
-  cutoff: Date | null,
-  now: Date,
-): { ok: true } | { ok: false; leads: number; handovers: number } {
-  if (report.day !== today || !cutoff || now.getTime() >= cutoff.getTime()) return { ok: true };
-  const leads = report.totals.pending;
-  if (leads === 0 && pendingHandoversDueToday === 0) return { ok: true };
-  return { ok: false, leads, handovers: pendingHandoversDueToday };
-}
-
 export const plural = (n: number, word: string) => `${n} ${word}${n === 1 ? "" : "s"}`;
 
 /** "5:00 pm" — a cutoff in IST. */
@@ -167,14 +149,6 @@ export function istClock(at: Date): string {
   return new Intl.DateTimeFormat("en-IN", { hour: "numeric", minute: "2-digit", hour12: true, timeZone: "Asia/Kolkata" })
     .format(at)
     .toLowerCase();
-}
-
-/** Why the day can't be closed yet, in the BDE's words. */
-export function closeBlockedMessage(c: { leads: number; handovers: number }, cutoff: Date): string {
-  const what = [c.leads ? plural(c.leads, "lead") : null, c.handovers ? plural(c.handovers, "handover") : null]
-    .filter(Boolean)
-    .join(" and ");
-  return `Contact the ${what} still due today first, or close the day after the ${istClock(cutoff)} cutoff.`;
 }
 
 const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];

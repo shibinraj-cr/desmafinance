@@ -117,7 +117,7 @@ export const CRM_GUIDE_CHANGES: GuideChange[] = [
     date: "2026-11-10",
     section: "my-day",
     title: "My Day: your leads against the cutoff",
-    detail: `My Day now opens with today's leads by source, a **Contact before** list with what each lead still needs, and **Close the day**. A lead counts as contacted only with a call and a note, or a WhatsApp and a stage or Status change, by ${WEEKDAY_CUTOFF} (${SATURDAY_CUTOFF} on Saturdays).`,
+    detail: `My Day now opens with today's leads by source and a **Contact before** list with what each lead still needs. A lead counts as contacted only with a call and a note, or a WhatsApp and a stage or Status change, by ${WEEKDAY_CUTOFF} (${SATURDAY_CUTOFF} on Saturdays).`,
   },
   {
     date: "2026-11-10",
@@ -128,8 +128,8 @@ export const CRM_GUIDE_CHANGES: GuideChange[] = [
   {
     date: "2026-11-10",
     section: "daily-report",
-    title: "Submitting locks the day",
-    detail: "Once you submit your day it can't be changed — ask an admin to unlock it if something is wrong. Today can only be closed once your leads due today are contacted, or after the cutoff.",
+    title: "Your daily report makes itself",
+    detail: `There's nothing to submit any more: your Daily Report is generated automatically at the cutoff (${WEEKDAY_CUTOFF}, ${SATURDAY_CUTOFF} on Saturdays) from what you logged. Add remarks if you want — they never change the numbers.`,
   },
   {
     date: "2026-11-09",
@@ -400,7 +400,7 @@ export function crmGuideSections(f: GuideFacts, canSee: (href: string) => boolea
       title: "Start every day on My Day",
       group: "Your day",
       pages: ["/crm/my-day"],
-      summary: `${where("/crm/my-day")} shows today's leads against the cutoff, then the rest of your work in order, then **Close the day**. Work it top to bottom.`,
+      summary: `${where("/crm/my-day")} shows today's leads against the cutoff, then the rest of your work in order, then your day's report. Work it top to bottom.`,
       blocks: [
         {
           kind: "text",
@@ -414,7 +414,7 @@ export function crmGuideSections(f: GuideFacts, canSee: (href: string) => boolea
             "**Contact before …** — every lead still waiting, soonest deadline first, with what it still needs (for example **called, note missing**). **Call**, **Add note**, **WhatsApp** and **Open lead** are right there. A lead you missed stays on the list in orange — still contact it.",
             "**My handovers from marketing** — see the Lead Handovers section.",
             "Then **Waiting for your reply on WhatsApp**, **Tasks** and **Quality ratings due**, as before.",
-            "**Close the day** — write your summary and click **Submit day**. **Copy for WhatsApp** copies the day in the team's usual format.",
+            `**Day report** — generated automatically at the cutoff; there's nothing to submit. Add remarks if you want, and **Copy for WhatsApp** copies the day in the team's usual format.`,
           ],
         },
         {
@@ -510,26 +510,24 @@ export function crmGuideSections(f: GuideFacts, canSee: (href: string) => boolea
     },
     {
       id: "daily-report",
-      title: "Submit your Daily Report",
+      title: "Your Daily Report",
       group: "Your day",
       pages: ["/crm/report"],
-      summary: `${where("/crm/report")} is your end-of-day report. The numbers fill themselves in from what you logged; you add the story.`,
+      summary: `${where("/crm/report")} is your end-of-day report. It makes itself: at the cutoff (${WEEKDAY_CUTOFF}, ${SATURDAY_CUTOFF} on Saturdays) the CRM generates it from what you logged. There's nothing to submit.`,
       blocks: [
         {
           kind: "steps",
           items: [
-            "The tiles show today's numbers: leads touched, contacts logged, notes, tasks, new leads, enrolments, open tasks due and active CRM time. **Live preview — not yet submitted** means they're still updating.",
-            "Write **Summary of the day** (required). Add **Blockers / help needed** and **Plan for next day** if you have any.",
-            `Click **Submit report** (or **Submit day** on ${nav("/crm/my-day")} — it's the same report). Submitting **locks the day**: the numbers are frozen as they were and you can't change it.`,
+            "The tiles show the day's numbers: leads touched, contacts logged, notes, tasks, new leads, enrolments, open tasks due and active CRM time. Until the cutoff they say **Live** and keep updating; at the cutoff they're frozen and the report shows **Generated**.",
+            "Want to add context? Write **Remarks**, **Blockers / help needed** or **Plan for next day** and click **Save remarks**. All optional — they never change the numbers.",
           ],
         },
         {
           kind: "tips",
           items: [
-            `Missed a day? Use the date arrows — you can still submit for today and the ${days(BACKDATE_DAYS)} before it.`,
-            "Something wrong after submitting? Ask an admin to **unlock** the day, then submit it again.",
-            "You can close today only once your leads due today are contacted, or after the cutoff.",
+            `You can add remarks for today and the ${days(BACKDATE_DAYS)} before it, until your manager reviews the report.`,
             "When your manager clicks **Mark reviewed**, their note shows on the report.",
+            "No cutoff on Sundays and holidays, so no report is generated — those leads count on the next working day.",
           ],
         },
         { kind: "warn", items: ["Only what you logged in the CRM is counted. A call you didn't log isn't in your report."] },
@@ -1307,10 +1305,10 @@ export function crmGuideQuiz(f: GuideFacts): GuideQuizQuestion[] {
     ),
     q(
       "daily-report",
-      "How far back can you still submit a missed Daily Report?",
-      [`Today and the ${days(BACKDATE_DAYS)} before it`],
-      ["Only today", "Any day this month", "Never — a missed day stays missed"],
-      "Older days can't be reported, so submit every evening.",
+      "When is your Daily Report made?",
+      [`Automatically at the cutoff (${WEEKDAY_CUTOFF}, ${SATURDAY_CUTOFF} on Saturdays) — there's nothing to submit`],
+      ["When you click Submit report", "At midnight, if you remembered to fill it in", "Only when your manager asks for it"],
+      "The CRM generates it from what you logged. Remarks are optional and don't change the numbers.",
     ),
   ];
 }

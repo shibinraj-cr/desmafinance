@@ -18,5 +18,5 @@ export const GET = withApiHandler(async (req: Request) => {
   const access = await getLeadReportAccess(userId, perms);
   if (!access.canViewOthers) throw forbidden();
   const day = resolveReportDay(new URL(req.url).searchParams.get("date") ?? undefined);
-  return NextResponse.json({ ...(await getTeamLeadReport(day)), canUnlock: access.canUnlock });
+  return NextResponse.json(await getTeamLeadReport(day));
 });

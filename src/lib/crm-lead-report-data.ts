@@ -1,11 +1,12 @@
 /**
  * The DB side of the daily lead report (rules: crm-lead-report.ts).
  *
- * Every reader first re-judges the assignments it is about to count
- * (evaluateAssignments), so a lead contacted a minute ago shows as contacted
- * without waiting for the lead-cutoff cron. A day the BDE has submitted is read
- * from the frozen `CrmDailyReport.leadReport` while it stays locked; any other
- * day is computed live.
+ * BDEs submit nothing: at each day's cutoff the lead-cutoff cron generates
+ * every active BDE's report (generateDayReports) and freezes it into
+ * `CrmDailyReport` (`locked`). A generated day is read from that snapshot; any
+ * other day is computed live, and every live reader first re-judges the
+ * assignments it is about to count (evaluateAssignments), so a lead contacted
+ * a minute ago shows as contacted without waiting for the cron.
  */
 import type { Prisma } from "@prisma/client";
 import { prisma } from "./prisma";
@@ -14,7 +15,8 @@ import { getCrmAccess, type CrmAccess } from "./crm-rbac";
 import { getAssignableBdes } from "./crm-leads";
 import { loadHolidaySet } from "./ops-dates";
 import { todayIst, toPrismaDate } from "./lead-pulse-dates";
-import { istDayWindow, getStoredReport, type StoredReportRow } from "./crm-daily-report";
+import { computeDailyReport, istDayWindow, getStoredReport, type StoredReportRow } from "./crm-daily-report";
+import { logger } from "./logger";
 import { cutoffOn } from "./crm-cutoff";
 import { evaluateContact, type ContactHalves } from "./crm-contact";
 import { MISSED_RECHECK_DAYS, evaluateAssignments, loadContactEvents } from "./crm-contact-data";
@@ -22,7 +24,6 @@ import { getHandoverAccess, listHandovers, type HandoverRow } from "./crm-handov
 import { OPEN_HANDOVER_STATUSES } from "./crm-handover";
 import {
   buildLeadReport,
-  canCloseDay,
   leadReportShareText,
   reportSource,
   sumReports,
@@ -42,8 +43,6 @@ export type LeadReportAccess = {
   crm: CrmAccess;
   /** May open any BDE's report and the team view: CRM managers and the Marketing Admin. */
   canViewOthers: boolean;
-  /** May unlock a submitted day: system admins only. */
-  canUnlock: boolean;
 };
 
 export async function getLeadReportAccess(userId: string, perms: Permissions | null): Promise<LeadReportAccess> {
@@ -52,7 +51,6 @@ export async function getLeadReportAccess(userId: string, perms: Permissions | n
   return {
     crm,
     canViewOthers: crm.isAdmin || crm.isSupervisor || crm.canManageCrm || crm.isCrmTeamLead || handover.canManage,
-    canUnlock: crm.isAdmin,
   };
 }
 
@@ -120,14 +118,18 @@ async function handoversGiven(day: string, userId?: string) {
   });
 }
 
-/** The BDE's report for `day`, computed now. */
-export async function computeLeadReport(userId: string, day: string, now: Date = new Date()): Promise<LeadReport> {
-  await evaluateAssignments({ userId, now });
+async function buildFor(userId: string, day: string): Promise<LeadReport> {
   const [rows, handovers] = await Promise.all([loadDayAssignments(day, userId), handoversGiven(day, userId)]);
   return buildLeadReport(day, rows, handovers);
 }
 
-/** The frozen lead report of a submitted, still-locked day, or null. */
+/** The BDE's report for `day`, computed now. */
+export async function computeLeadReport(userId: string, day: string, now: Date = new Date()): Promise<LeadReport> {
+  await evaluateAssignments({ userId, now });
+  return buildFor(userId, day);
+}
+
+/** The frozen lead report of a generated day, or null. */
 async function lockedSnapshot(userId: string, day: string): Promise<LeadReport | null> {
   const r = await prisma.crmDailyReport.findUnique({
     where: { userId_day: { userId, day: toPrismaDate(day) } },
@@ -136,22 +138,56 @@ async function lockedSnapshot(userId: string, day: string): Promise<LeadReport |
   return r?.locked && r.leadReport ? (r.leadReport as unknown as LeadReport) : null;
 }
 
-// ── Close the day ────────────────────────────────────────────────────────────
+// ── Generated at the cutoff ──────────────────────────────────────────────────
 
-export type CloseCheck = { ok: true } | { ok: false; leads: number; handovers: number; cutoff: string };
-
-/** Whether `report`'s day may be submitted now — see canCloseDay. */
-export async function closeDayCheck(userId: string, report: LeadReport, now: Date = new Date()): Promise<CloseCheck> {
-  const today = todayIst();
-  if (report.day !== today) return { ok: true };
-  const cutoff = cutoffOn(today, await loadHolidaySet(prisma));
-  if (!cutoff) return { ok: true };
-  const { fromUtc, toUtc } = istDayWindow(today);
-  const pendingHandovers = await prisma.crmLeadHandover.count({
-    where: { assignedBdeId: userId, status: "pending", dueAt: { gte: fromUtc, lt: toUtc } },
+/**
+ * Generate `day`'s report for every active BDE: the lead report and the
+ * activity snapshot, frozen into their CrmDailyReport and locked. The
+ * lead-cutoff cron calls it once the day's cutoff has passed (after re-judging
+ * the assignments), and again for the day before in case a tick was missed. A
+ * BDE whose day is already locked is skipped; remarks they added are kept.
+ * Returns how many reports were generated.
+ */
+export async function generateDayReports(day: string, now: Date = new Date()): Promise<number> {
+  const roster = await getAssignableBdes();
+  if (roster.length === 0) return 0;
+  const dayDate = toPrismaDate(day);
+  const existing = await prisma.crmDailyReport.findMany({
+    where: { day: dayDate, userId: { in: roster.map((b) => b.userId) } },
+    select: { userId: true, locked: true },
   });
-  const check = canCloseDay(report, pendingHandovers, today, cutoff, now);
-  return check.ok ? check : { ...check, cutoff: cutoff.toISOString() };
+  const done = new Set(existing.filter((r) => r.locked).map((r) => r.userId));
+
+  let generated = 0;
+  for (const b of roster) {
+    if (done.has(b.userId)) continue;
+    try {
+      const [{ metrics, details }, leadReport] = await Promise.all([
+        computeDailyReport({ userId: b.userId, dayStr: day }),
+        buildFor(b.userId, day),
+      ]);
+      const snapshot = {
+        metrics: metrics as unknown as Prisma.InputJsonValue,
+        details: details as unknown as Prisma.InputJsonValue,
+        leadReport: leadReportJson(leadReport),
+        locked: true,
+        submittedAt: now,
+      };
+      await prisma.crmDailyReport.upsert({
+        where: { userId_day: { userId: b.userId, day: dayDate } },
+        create: { userId: b.userId, day: dayDate, status: "submitted", summary: "", ...snapshot },
+        update: snapshot,
+      });
+      generated++;
+    } catch (err) {
+      logger.error("lead_report_generate_failed", {
+        userId: b.userId,
+        day,
+        error: err instanceof Error ? err.message : String(err),
+      });
+    }
+  }
+  return generated;
 }
 
 // ── "Contact before the cutoff" ──────────────────────────────────────────────
@@ -218,7 +254,7 @@ export type LeadReportView = {
   today: string;
   bde: { id: string; name: string };
   report: LeadReport;
-  /** False when read from the submitted (locked) snapshot. */
+  /** False when read from the report generated at the cutoff. */
   live: boolean;
   submission: StoredReportRow | null;
   /** Leads to contact — today only. */
@@ -228,7 +264,6 @@ export type LeadReportView = {
   shareText: string;
   /** Today's cutoff (null on Sundays, holidays and past days). */
   cutoff: string | null;
-  close: CloseCheck;
 };
 
 export async function bdeName(userId: string): Promise<string | null> {
@@ -274,7 +309,6 @@ export async function getLeadReportView(opts: {
     handovers,
     shareText: leadReportShareText(report, opts.name),
     cutoff: cutoff?.toISOString() ?? null,
-    close: snapshot ? { ok: true } : await closeDayCheck(opts.userId, report, now),
   };
 }
 
