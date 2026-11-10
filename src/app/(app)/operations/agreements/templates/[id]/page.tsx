@@ -6,6 +6,8 @@ import { canSeePage } from "@/lib/rbac";
 import { TopBar } from "@/components/TopBar";
 import { isBlobConfigured } from "@/lib/finance-docs-store";
 import { AGREEMENT_TEMPLATES_PAGE } from "@/lib/esign/templates";
+import { categoryChoices } from "@/lib/esign/categories";
+import { listTemplateCategories } from "@/lib/esign/categories-store";
 import { TemplateDetailClient, type TemplateDetail } from "./client";
 
 export const dynamic = "force-dynamic";
@@ -29,6 +31,7 @@ export default async function AgreementTemplatePage({ params }: { params: { id: 
     },
   });
   if (!t) notFound();
+  const categories = categoryChoices(await listTemplateCategories(), t.category);
 
   const detail: TemplateDetail = {
     id: t.id,
@@ -71,7 +74,7 @@ export default async function AgreementTemplatePage({ params }: { params: { id: 
         }
       />
       <div className="p-margin">
-        <TemplateDetailClient template={detail} blobReady={isBlobConfigured()} />
+        <TemplateDetailClient template={detail} categories={categories} blobReady={isBlobConfigured()} />
       </div>
     </>
   );

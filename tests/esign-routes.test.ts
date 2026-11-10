@@ -9,6 +9,8 @@
  *   4. LAYOUT CHECKS — an invalid layout is refused before any write.
  *   5. FILE SERVING — versions are found through their template, and an
  *      unsatisfiable range is answered 416 without touching storage.
+ *   6. CATEGORIES — a template goes into an active category, under its stored
+ *      spelling; re-sending a template's own archived category is no change.
  */
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { Permissions } from "@/lib/rbac";
@@ -23,6 +25,7 @@ vi.mock("@/lib/prisma", () => ({
     $transaction: vi.fn(),
     esignTemplate: { findUnique: vi.fn(), update: vi.fn() },
     esignTemplateVersion: { findFirst: vi.fn() },
+    esignTemplateCategory: { findFirst: vi.fn() },
   },
 }));
 
@@ -139,6 +142,34 @@ describe("PATCH settings", () => {
     expect(res.status).toBe(400);
     expect(m(prisma.esignTemplate.update)).not.toHaveBeenCalled();
   });
+
+  it("re-sending the template's own category is no change, even once it is archived", async () => {
+    granted();
+    m(prisma.esignTemplate.findUnique).mockResolvedValue({ active: true, category: "Agent" });
+    m(prisma.esignTemplate.update).mockResolvedValue({ id: "t1", active: true, updatedAt: new Date() });
+    const res = await templatePatch(
+      json("/api/esign/templates/t1", "PATCH", { category: "Agent", defaultExpiryDays: 10 }),
+      { params: { id: "t1" } },
+    );
+    expect(res.status).toBe(200);
+    expect(m(prisma.esignTemplateCategory.findFirst)).not.toHaveBeenCalled();
+    expect(m(prisma.esignTemplate.update).mock.calls[0][0].data).toEqual({ defaultExpiryDays: 10 });
+  });
+
+  it("moves a template only into an active category, under its stored spelling", async () => {
+    granted();
+    m(prisma.esignTemplate.findUnique).mockResolvedValue({ active: true, category: "Agent" });
+    m(prisma.esignTemplateCategory.findFirst).mockResolvedValue({ id: "c2", name: "Promotional", active: false });
+    const refused = await templatePatch(json("/api/esign/templates/t1", "PATCH", { category: "Promotional" }), { params: { id: "t1" } });
+    expect(refused.status).toBe(400);
+    expect(m(prisma.esignTemplate.update)).not.toHaveBeenCalled();
+
+    m(prisma.esignTemplateCategory.findFirst).mockResolvedValue({ id: "c3", name: "Sales", active: true });
+    m(prisma.esignTemplate.update).mockResolvedValue({ id: "t1", active: true, updatedAt: new Date() });
+    const moved = await templatePatch(json("/api/esign/templates/t1", "PATCH", { category: "sales" }), { params: { id: "t1" } });
+    expect(moved.status).toBe(200);
+    expect(m(prisma.esignTemplate.update).mock.calls[0][0].data).toEqual({ category: "Sales" });
+  });
 });
 
 describe("PUT fields", () => {
@@ -212,6 +243,7 @@ describe("GET file", () => {
 describe("create", () => {
   it("refuses an upload path outside the template prefix without reading storage", async () => {
     granted();
+    m(prisma.esignTemplateCategory.findFirst).mockResolvedValue({ id: "c1", name: "Sales", active: true });
     m(prisma.esignTemplateVersion.findFirst).mockResolvedValue(null);
     const res = await createPost(
       json("/api/esign/templates", "POST", { name: "A", category: "Sales", pathname: "finance-docs/x.pdf", fileName: "x.pdf" }),
@@ -222,10 +254,24 @@ describe("create", () => {
 
   it("refuses an unknown category", async () => {
     granted();
+    m(prisma.esignTemplateCategory.findFirst).mockResolvedValue(null);
     const res = await createPost(
       json("/api/esign/templates", "POST", { name: "A", category: "Loans", pathname: "esign/templates/a.pdf", fileName: "a.pdf" }),
     );
     expect(res.status).toBe(400);
+    expect((await res.json()).error).toBe("unknown_category");
+    expect(m(prisma.esignTemplateCategory.findFirst).mock.calls[0][0].where.name).toEqual({ equals: "Loans", mode: "insensitive" });
+    expect(m(head)).not.toHaveBeenCalled();
+  });
+
+  it("refuses an archived category", async () => {
+    granted();
+    m(prisma.esignTemplateCategory.findFirst).mockResolvedValue({ id: "c1", name: "Agent", active: false });
+    const res = await createPost(
+      json("/api/esign/templates", "POST", { name: "A", category: "Agent", pathname: "esign/templates/a.pdf", fileName: "a.pdf" }),
+    );
+    expect(res.status).toBe(400);
+    expect(m(head)).not.toHaveBeenCalled();
   });
 });
 

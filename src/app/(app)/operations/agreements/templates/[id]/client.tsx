@@ -4,7 +4,7 @@ import Link from "next/link";
 import { useState } from "react";
 import { useRouter } from "next/navigation";
 import { formatBytes } from "@/lib/finance-docs";
-import { TEMPLATE_CATEGORIES } from "@/lib/esign/templates";
+import type { CategoryOption } from "@/lib/esign/categories";
 import {
   Field,
   Icon,
@@ -50,7 +50,16 @@ export type TemplateDetail = {
   versions: VersionRow[];
 };
 
-export function TemplateDetailClient({ template, blobReady }: { template: TemplateDetail; blobReady: boolean }) {
+export function TemplateDetailClient({
+  template,
+  categories,
+  blobReady,
+}: {
+  template: TemplateDetail;
+  /** What the category picker offers: the active categories, plus this template's own if archived. */
+  categories: CategoryOption[];
+  blobReady: boolean;
+}) {
   const router = useRouter();
   const [uploading, setUploading] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -121,7 +130,7 @@ export function TemplateDetailClient({ template, blobReady }: { template: Templa
         </p>
       )}
 
-      <SettingsForm template={template} />
+      <SettingsForm template={template} categories={categories} />
 
       <section className="space-y-sm">
         <h3 className="text-h3 font-bold">Versions</h3>
@@ -202,7 +211,7 @@ export function TemplateDetailClient({ template, blobReady }: { template: Templa
   );
 }
 
-function SettingsForm({ template }: { template: TemplateDetail }) {
+function SettingsForm({ template, categories }: { template: TemplateDetail; categories: CategoryOption[] }) {
   const router = useRouter();
   const [form, setForm] = useState({
     name: template.name,
@@ -259,9 +268,9 @@ function SettingsForm({ template }: { template: TemplateDetail }) {
           </Field>
           <Field label="Category">
             <select className={inputCls} value={form.category} onChange={set("category")}>
-              {TEMPLATE_CATEGORIES.map((c) => (
-                <option key={c} value={c}>
-                  {c}
+              {categories.map((c) => (
+                <option key={c.name} value={c.name}>
+                  {c.active ? c.name : `${c.name} (archived)`}
                 </option>
               ))}
             </select>

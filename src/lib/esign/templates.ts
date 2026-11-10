@@ -38,18 +38,12 @@ export const MAX_TEMPLATE_PAGES = 100;
 export const STREAM_LIMIT_BYTES = 4 * 1024 * 1024;
 export const RANGE_CHUNK_BYTES = 2 * 1024 * 1024;
 
-/** Agreement families, taken from the tags used in Odoo Sign. */
-export const TEMPLATE_CATEGORIES = [
-  "AHPRA Agreement",
-  "AHPRA Pathway",
-  "Visa Agreement (AUS)",
-  "NZ Agreement",
-  "NCLEX RN Booking",
-  "Sales",
-  "Agent",
-  "Promotional",
-] as const;
-export type TemplateCategory = (typeof TEMPLATE_CATEGORIES)[number];
+/**
+ * Categories ("AHPRA Agreement", "NZ Agreement", …) are rows in
+ * EsignTemplateCategory, managed on their own page (categories.ts). The schema
+ * below only checks the shape; the API checks the category exists.
+ */
+export const MAX_CATEGORY_NAME_LENGTH = 80;
 
 /**
  * Optional free text: absent stays absent (a partial update must not clear
@@ -69,7 +63,7 @@ const optionalText = (max: number) =>
  */
 export const TemplateSettingsSchema = z.object({
   name: z.string().trim().min(1, "Give the template a name").max(200).optional(),
-  category: z.enum(TEMPLATE_CATEGORIES).optional(),
+  category: z.string().trim().min(1, "Choose a category").max(MAX_CATEGORY_NAME_LENGTH).optional(),
   description: optionalText(1000),
   defaultExpiryDays: z.number().int().min(1).max(90).optional(),
   /** 0 = no automatic reminders. */
