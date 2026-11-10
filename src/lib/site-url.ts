@@ -14,17 +14,22 @@
  *   4. Host header           — last resort; raw upstream host in dev.
  */
 export function siteBaseUrl(req: Request): string {
+  return siteBaseUrlFromHeaders(req.headers);
+}
+
+/** The same, from bare request headers — for a server component (`headers()`). */
+export function siteBaseUrlFromHeaders(headers: Pick<Headers, "get">): string {
   const configured = process.env.APP_BASE_URL;
   if (configured) return configured.replace(/\/$/, "");
 
-  const proto = (req.headers.get("x-forwarded-proto") ?? "https").split(",")[0].trim();
+  const proto = (headers.get("x-forwarded-proto") ?? "https").split(",")[0].trim();
 
-  const forwardedHost = req.headers.get("x-forwarded-host");
+  const forwardedHost = headers.get("x-forwarded-host");
   if (forwardedHost) return `${proto}://${forwardedHost.split(",")[0].trim()}`;
 
   const env = process.env.NEXTAUTH_URL;
   if (env) return env.replace(/\/$/, "");
 
-  const host = req.headers.get("host") ?? "localhost:3000";
+  const host = headers.get("host") ?? "localhost:3000";
   return `${proto}://${host}`;
 }

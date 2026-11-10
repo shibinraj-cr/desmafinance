@@ -20,6 +20,9 @@ const SOURCES = [
   { code: "insta_fb", label: "Insta / FB", displayOrder: 5 },
   { code: "website", label: "Website", displayOrder: 6 },
   { code: "candidate_referral", label: "Candidate Referral", displayOrder: 7 },
+  // Leads from a candidate's shareable referral link (/r/<code>) — see
+  // src/lib/crm-referral.ts. The 20261110160000 migration creates it on deploy.
+  { code: "referral_link", label: "Referral Link", displayOrder: 7 },
   { code: "agency_referral", label: "Agency Referral", displayOrder: 8 },
   // Repeat business: an already-enrolled candidate enrolling in a further
   // service. The re-enrollment flow stamps a new lead's primary source with this

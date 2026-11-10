@@ -157,6 +157,7 @@ model User {
   hiringOffersApproved     HiringOffer[]             @relation("HiringOfferApprover")
   hiringOffersCreated      HiringOffer[]             @relation("HiringOfferCreatedBy")
   hiringReferrals          HiringReferral[]          @relation("HiringReferrer")
+  crmReferralLinksCreated  CrmReferralLink[]         @relation("ReferralLinkCreatedBy")
   hiringTalentPoolOwned    HiringTalentPool[]        @relation("HiringTalentPoolOwner")
   hiringTalentPoolEvents   HiringTalentPoolEvent[]   @relation("HiringTalentPoolEventActor")
   hiringPartnersInvited    HiringPartner[]           @relation("HiringPartnerInvitedBy")
@@ -3168,10 +3169,23 @@ model Lead {
   // Partner Commissions enrollments (NCLEX / OSCE / GCAN) linked to this lead.
   commissionEnrollments CommissionEnrollment[]
 
+  // ── Referrals (src/lib/crm-referral.ts) ───────────────────────────────────
+  /// The candidate (lead) whose referral link brought this lead in. Set only
+  /// when the form created a NEW lead through an active link: someone already
+  /// in the CRM is never re-credited to a referrer.
+  referredByLeadId    String?
+  referredByLead      Lead?                   @relation("LeadReferredBy", fields: [referredByLeadId], references: [id], onDelete: SetNull)
+  referredLeads       Lead[]                  @relation("LeadReferredBy")
+  /// This lead's own shareable link (/r/<code>), once someone has made it.
+  referralLink        CrmReferralLink?        @relation("ReferralLinkOwner")
+  /// Referral-form submissions that landed on this lead (new or re-inquiry).
+  referralSubmissions CrmReferralSubmission[] @relation("ReferralSubmissionLead")
+
   @@index([assignedToId])
   @@index([assignedAt])
   @@index([statusId])
   @@index([sourceId])
+  @@index([referredByLeadId])
   @@index([serviceId])
   @@index([qualificationId])
   @@index([subStatusId])
@@ -3557,6 +3571,60 @@ model CrmLeadAssignment {
   @@index([userId, contactDueAt]) // due today / carried in
   @@index([contactStatus, contactDueAt]) // the cron: pending past due
   @@index([leadId, endedAt]) // the open row for a lead
+}
+
+/// A candidate's personal referral link: https://<domain>/r/<code>. One per
+/// lead, made on demand from the lead page and shared by the candidate (often
+/// into WhatsApp groups). Anyone who fills the form behind it becomes a new
+/// lead with source "Referral Link" and `referredByLeadId` = this lead.
+model CrmReferralLink {
+  id             String                  @id @default(cuid())
+  /// What goes in the URL: 7 characters from an alphabet without 0/O/1/I/L,
+  /// random rather than sequential so links can't be guessed or enumerated.
+  code           String                  @unique
+  referrerLeadId String                  @unique
+  referrerLead   Lead                    @relation("ReferralLinkOwner", fields: [referrerLeadId], references: [id], onDelete: Cascade)
+  /// Switched off by a Marketing Admin: the page still takes the enquiry (a
+  /// lead is never lost), but nobody is credited for it.
+  active         Boolean                 @default(true)
+  createdById    String?
+  createdBy      User?                   @relation("ReferralLinkCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
+  createdAt      DateTime                @default(now())
+  updatedAt      DateTime                @updatedAt
+  submissions    CrmReferralSubmission[]
+  visitDays      CrmReferralVisitDay[]
+}
+
+/// Every form sent through a referral link, whatever became of it — so the
+/// candidate's tally shows the people who were already in the CRM, not only
+/// the new leads they were credited with.
+model CrmReferralSubmission {
+  id        String          @id @default(cuid())
+  linkId    String
+  link      CrmReferralLink @relation(fields: [linkId], references: [id], onDelete: Cascade)
+  /// The lead it created, or the existing lead it was folded onto.
+  leadId    String?
+  lead      Lead?           @relation("ReferralSubmissionLead", fields: [leadId], references: [id], onDelete: SetNull)
+  /// 'created' (new lead, credited) | 'existing' (already in the CRM, no
+  /// credit) | 'self' (the candidate's own number or email) | 'inactive' (new
+  /// lead through a switched-off link, no credit).
+  outcome   String
+  createdAt DateTime        @default(now())
+
+  @@index([linkId, createdAt])
+  @@index([leadId])
+}
+
+/// Page opens of a referral link, one row per link per IST day. Counted by a
+/// beacon from the page itself, so WhatsApp's link-preview fetch — which loads
+/// the HTML but runs no script — never inflates the number.
+model CrmReferralVisitDay {
+  linkId String
+  link   CrmReferralLink @relation(fields: [linkId], references: [id], onDelete: Cascade)
+  day    DateTime        @db.Date
+  visits Int             @default(0)
+
+  @@id([linkId, day])
 }
 
 /// A lead the Marketing Admin gave a BDE outside DesGro (YouTube comment,
