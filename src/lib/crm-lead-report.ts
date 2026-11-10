@@ -160,7 +160,7 @@ export function canCloseDay(
   return { ok: false, leads, handovers: pendingHandoversDueToday };
 }
 
-const plural = (n: number, word: string) => `${n} ${word}${n === 1 ? "" : "s"}`;
+export const plural = (n: number, word: string) => `${n} ${word}${n === 1 ? "" : "s"}`;
 
 /** "5:00 pm" — a cutoff in IST. */
 export function istClock(at: Date): string {

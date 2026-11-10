@@ -10,6 +10,7 @@ import {
   handoverListWhere,
 } from "@/lib/crm-handover";
 import { getHandoverAccess, listHandovers, saveHandovers } from "@/lib/crm-handover-data";
+import { notifyHandoversSaved } from "@/lib/crm-lead-cutoff-data";
 
 export const dynamic = "force-dynamic";
 
@@ -64,5 +65,6 @@ export const POST = withApiHandler(async (req: Request) => {
   if (!access.canManage) throw forbidden();
   const input = SaveSchema.parse(await req.json().catch(() => null));
   const result = await saveHandovers({ ...input, actorId: userId });
+  await notifyHandoversSaved({ saved: result.saved, channel: input.channel, assignedBdeId: input.assignedBdeId, actorId: userId });
   return NextResponse.json(result, { status: result.saved.length ? 201 : 200 });
 });

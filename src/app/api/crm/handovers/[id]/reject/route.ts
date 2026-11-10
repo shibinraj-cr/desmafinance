@@ -5,6 +5,7 @@ import { unauthorized } from "@/lib/http-error";
 import { getCurrentUserAndPermissions } from "@/lib/permissions";
 import { HANDOVER_REJECT_REASON_CODES } from "@/lib/crm-handover";
 import { getHandoverAccess, rejectHandover } from "@/lib/crm-handover-data";
+import { notifyHandoverRejected } from "@/lib/crm-lead-cutoff-data";
 
 export const dynamic = "force-dynamic";
 
@@ -20,5 +21,6 @@ export const POST = withApiHandler(async (req: Request, ctx: { params: { id: str
   const access = await getHandoverAccess(userId, perms);
   const input = RejectSchema.parse(await req.json().catch(() => null));
   await rejectHandover({ id: ctx.params.id, access, actorId: userId, ...input });
+  await notifyHandoverRejected(ctx.params.id, userId);
   return NextResponse.json({ ok: true });
 });
