@@ -99,7 +99,7 @@ async function loadDayAssignments(day: string, userId?: string): Promise<DayAssi
 }
 
 /** The handover channel of each lead created from a handover. */
-async function handoverChannels(leadIds: string[]): Promise<Map<string, string>> {
+export async function handoverChannels(leadIds: string[]): Promise<Map<string, string>> {
   if (leadIds.length === 0) return new Map();
   const rows = await prisma.crmLeadHandover.findMany({
     where: { linkedLeadId: { in: [...new Set(leadIds)] }, status: "created" },
