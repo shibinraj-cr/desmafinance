@@ -120,7 +120,7 @@ export const CRM_GUIDE_CHANGES: GuideChange[] = [
     date: "2026-11-11",
     section: "referral-links",
     title: "Referral rewards",
-    detail: `A candidate now earns ${rupees(REFERRAL_REWARD_AMOUNT)} when someone they referred enrols — through their link or picked under **Referred by** on a Candidate Referral lead. Finance pays it; the lead shows it as due, then paid.`,
+    detail: `A candidate now earns ${rupees(REFERRAL_REWARD_AMOUNT)} when someone they referred enrols — through their link or picked under **Referred by** when you create a Candidate Referral lead. Someone already in the CRM never counts. Finance pays it; the lead shows it as due, then paid.`,
   },
   {
     date: "2026-11-11",
@@ -669,7 +669,7 @@ export function crmGuideSections(f: GuideFacts, canSee: (href: string) => boolea
           items: [
             "On Leads, click **New lead**.",
             `Fill **Candidate name** (the only required field), phone and/or email, **Source**, **Service** and **Qualification**. If you pick **Others**, type the qualification (up to ${QUALIFICATION_OTHER_MAX} characters, e.g. MBA).`,
-            `If the source is **Candidate Referral**, search for the candidate who sent them under **Referred by**. That candidate earns the ${rupees(REFERRAL_REWARD_AMOUNT)} referral reward if this lead enrols.`,
+            `If the source is **Candidate Referral**, search for the candidate who sent them under **Referred by**. That candidate earns the ${rupees(REFERRAL_REWARD_AMOUNT)} referral reward if this lead enrols. Pick it now: it can't be added later.`,
             "Leave **Stage** and **Status** on **Default** unless you already know more. Set **Temperature** if you can judge it.",
             "Click **Create lead**. It is assigned to you.",
           ],
@@ -772,7 +772,8 @@ export function crmGuideSections(f: GuideFacts, canSee: (href: string) => boolea
           items: [
             `**${REFERRAL_LINK_SOURCE_LABEL}** is not **Candidate Referral**. Candidate Referral is a referral someone types in by hand.`,
             "Whoever assigns leads can **Switch off this link**. The form still takes enquiries, but new leads from it aren't credited to the candidate.",
-            "Only whoever assigns leads can change **Referred by** after the lead is created, and never once its reward is paid.",
+            "**Referred by** is set only when a lead is created. A lead that was already in the CRM is never counted as a referral and can't be given one later.",
+            "Whoever assigns leads can **Change** or remove a wrong **Referred by**, never once its reward is paid.",
           ],
         },
       ],

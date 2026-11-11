@@ -222,11 +222,20 @@ export async function cancelReferralReward(rewardId: string, reason: string, act
 export async function restoreReferralReward(rewardId: string, actorId: string): Promise<void> {
   const reward = await prisma.crmReferralReward.findUnique({
     where: { id: rewardId },
-    select: { id: true, status: true, referrerLeadId: true, referredName: true, referredLead: { select: { status: { select: { code: true } } } } },
+    select: {
+      id: true,
+      status: true,
+      referrerLeadId: true,
+      referredName: true,
+      referredLead: { select: { referredByLeadId: true, status: { select: { code: true } } } },
+    },
   });
   if (!reward) throw notFound("That reward doesn't exist.");
   if (reward.referredLead?.status.code !== "enrolled") {
     throw badRequest("The referred candidate isn't enrolled any more, so the reward can't be due.", "referred_not_enrolled");
+  }
+  if (!reward.referredLead.referredByLeadId) {
+    throw badRequest("Referred by was removed from this lead, so nobody is owed a reward for it.", "referrer_removed");
   }
   const claimed = await prisma.crmReferralReward.updateMany({
     where: { id: rewardId, status: "cancelled" },
@@ -258,17 +267,23 @@ export async function validateReferrer(
 }
 
 /**
- * Set or clear who referred a lead, after it was created. A paid reward pins
- * the referrer; an unpaid one follows the change (or is cancelled when the
- * referrer is cleared); an enrolled lead that gains a referrer earns one now.
+ * Correct who referred a lead: change the referrer, or remove it. Only for a
+ * lead that was referred when it was created (through a link, or with Referred
+ * by on the New lead form). A lead that was already in the CRM is never counted
+ * as a referral (owner's rule, 11 Nov 2026), so a referrer can't be added to one
+ * afterwards. A paid reward pins the referrer; an unpaid one follows the change,
+ * and a due one is cancelled when the referrer is removed.
  */
 export async function setReferredBy(leadId: string, referrerLeadId: string | null, actorId: string): Promise<void> {
-  const lead = await prisma.lead.findUnique({
-    where: { id: leadId },
-    select: { ...IDENTITY, referredByLeadId: true, status: { select: { code: true } } },
-  });
+  const lead = await prisma.lead.findUnique({ where: { id: leadId }, select: { ...IDENTITY, referredByLeadId: true } });
   if (!lead) throw notFound();
   if ((lead.referredByLeadId ?? null) === referrerLeadId) return;
+  if (!lead.referredByLeadId) {
+    throw badRequest(
+      "Referred by is set only when a lead is created. A lead that was already in the CRM isn't counted as a referral.",
+      "referrer_only_at_creation",
+    );
+  }
 
   const referrer = referrerLeadId ? await validateReferrer(referrerLeadId, lead) : null;
   const reward = await prisma.crmReferralReward.findUnique({ where: { referredLeadId: leadId }, select: { id: true, status: true } });
@@ -276,38 +291,31 @@ export async function setReferredBy(leadId: string, referrerLeadId: string | nul
     throw conflict("The reward for this referral is already paid, so who referred them can't change.", "reward_paid");
   }
 
-  const raised = await prisma.$transaction(async (tx) => {
+  await prisma.$transaction(async (tx) => {
     await tx.lead.update({ where: { id: leadId }, data: { referredByLeadId: referrer?.id ?? null } });
-    if (reward?.status === "due") {
-      if (referrer) {
-        await tx.crmReferralReward.update({
-          where: { id: reward.id },
-          data: { referrerLeadId: referrer.id, referrerName: referrer.candidateName },
-        });
-      } else {
-        await tx.crmReferralReward.update({
-          where: { id: reward.id },
-          data: { status: "cancelled", cancelledAt: new Date(), cancelReason: "Referred by was cleared" },
-        });
-      }
-      return null;
+    if (!reward) return;
+    if (referrer) {
+      // Due or cancelled: either way it now belongs to the new referrer, so a
+      // later restore pays the right person.
+      await tx.crmReferralReward.update({
+        where: { id: reward.id },
+        data: { referrerLeadId: referrer.id, referrerName: referrer.candidateName },
+      });
+    } else if (reward.status === "due") {
+      await tx.crmReferralReward.update({
+        where: { id: reward.id },
+        data: { status: "cancelled", cancelledAt: new Date(), cancelReason: "Referred by was removed" },
+      });
     }
-    if (referrer && lead.status.code === "enrolled") {
-      return raiseReferralReward(tx, { referredLeadId: leadId, referredName: lead.candidateName, referrerLeadId: referrer.id });
-    }
-    return null;
   });
 
   await recordLeadActivity({
     leadId,
     actorId,
     type: "FIELD_UPDATED",
-    summary: referrer ? `Referred by set to ${referrer.candidateName}` : "Referred by cleared",
+    summary: referrer ? `Referred by changed to ${referrer.candidateName}` : "Referred by removed",
     metadata: { field: "referredByLeadId", from: lead.referredByLeadId, to: referrer?.id ?? null },
   });
-  if (raised && referrer) {
-    await noteRewardRaised(raised, { referredLeadId: leadId, referredName: lead.candidateName, referrerLeadId: referrer.id, actorId });
-  }
 }
 
 // ── The Finance page ────────────────────────────────────────────────────────

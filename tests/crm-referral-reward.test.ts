@@ -247,7 +247,10 @@ describe("undo / cancel / restore", () => {
     db.crmReferralReward.findUnique.mockResolvedValue({ ...dueReward({ status: "cancelled" }), referredLead: { status: { code: "follow_up" } } });
     await expect(restoreReferralReward("rw1", "fin1")).rejects.toMatchObject({ status: 400, code: "referred_not_enrolled" });
 
-    db.crmReferralReward.findUnique.mockResolvedValue({ ...dueReward({ status: "cancelled" }), referredLead: { status: { code: "enrolled" } } });
+    db.crmReferralReward.findUnique.mockResolvedValue({ ...dueReward({ status: "cancelled" }), referredLead: { referredByLeadId: null, status: { code: "enrolled" } } });
+    await expect(restoreReferralReward("rw1", "fin1")).rejects.toMatchObject({ status: 400, code: "referrer_removed" });
+
+    db.crmReferralReward.findUnique.mockResolvedValue({ ...dueReward({ status: "cancelled" }), referredLead: { referredByLeadId: "asha", status: { code: "enrolled" } } });
     await restoreReferralReward("rw1", "fin1");
     expect(db.crmReferralReward.updateMany.mock.calls[0][0]).toMatchObject({ where: { id: "rw1", status: "cancelled" }, data: { status: "due" } });
   });
@@ -292,27 +295,29 @@ describe("setReferredBy", () => {
     expect(db.crmReferralReward.update).toHaveBeenCalledWith({ where: { id: "rw1" }, data: { referrerLeadId: "meera", referrerName: "Meera Nair" } });
   });
 
-  it("cancels an unpaid reward when Referred by is cleared", async () => {
+  it("cancels a due reward when Referred by is removed", async () => {
     leads({ kiran: kiran({ referredByLeadId: "asha", status: { code: "enrolled" } }) });
     db.crmReferralReward.findUnique.mockResolvedValue({ id: "rw1", status: "due" });
     await setReferredBy("kiran", null, "madmin");
-    expect(db.crmReferralReward.update.mock.calls[0][0].data).toMatchObject({ status: "cancelled", cancelReason: "Referred by was cleared" });
+    expect(db.lead.update).toHaveBeenCalledWith({ where: { id: "kiran" }, data: { referredByLeadId: null } });
+    expect(db.crmReferralReward.update.mock.calls[0][0].data).toMatchObject({ status: "cancelled", cancelReason: "Referred by was removed" });
   });
 
-  it("raises the reward at once for an already-enrolled lead that gains a referrer", async () => {
-    leads({ kiran: kiran({ status: { code: "enrolled" } }), asha: ASHA });
-    db.crmReferralReward.findUnique.mockResolvedValue(null);
-    db.crmReferralReward.create.mockResolvedValue({ id: "rw-new" });
-    await setReferredBy("kiran", "asha", "madmin");
-    expect(db.crmReferralReward.create).toHaveBeenCalledOnce();
-    expect(activity.mock.calls.some((c) => c[0].leadId === "asha" && c[0].type === "REFERRAL_REWARD")).toBe(true);
+  it("moves a cancelled reward to the new referrer too, so a restore pays the right person", async () => {
+    leads({ kiran: kiran({ referredByLeadId: "asha" }), meera: MEERA });
+    db.crmReferralReward.findUnique.mockResolvedValue({ id: "rw1", status: "cancelled" });
+    await setReferredBy("kiran", "meera", "madmin");
+    expect(db.crmReferralReward.update).toHaveBeenCalledWith({ where: { id: "rw1" }, data: { referrerLeadId: "meera", referrerName: "Meera Nair" } });
   });
 
-  it("raises nothing for a lead that hasn't enrolled yet", async () => {
-    leads({ kiran: kiran(), asha: ASHA });
-    db.crmReferralReward.findUnique.mockResolvedValue(null);
-    await setReferredBy("kiran", "asha", "madmin");
-    expect(db.lead.update).toHaveBeenCalledWith({ where: { id: "kiran" }, data: { referredByLeadId: "asha" } });
+  // Owner's rule: a lead already in the CRM is never counted as a referral.
+  it("never adds a referrer to a lead that didn't have one — enrolled or not", async () => {
+    for (const status of ["enrolled", "follow_up"]) {
+      leads({ kiran: kiran({ status: { code: status } }), asha: ASHA });
+      db.crmReferralReward.findUnique.mockResolvedValue(null);
+      await expect(setReferredBy("kiran", "asha", "madmin")).rejects.toMatchObject({ status: 400, code: "referrer_only_at_creation" });
+    }
+    expect(db.lead.update).not.toHaveBeenCalled();
     expect(db.crmReferralReward.create).not.toHaveBeenCalled();
   });
 });
@@ -361,11 +366,18 @@ describe("PATCH /api/crm/leads/[id]/referred-by", () => {
     expect((await referredByRoute(patch({ referredByLeadId: "asha" }), { params: { id: "kiran" } })).status).toBe(403);
   });
 
-  it("sets the referrer", async () => {
-    leads({ kiran: kiran(), asha: ASHA });
+  it("changes the referrer of a referred lead", async () => {
+    leads({ kiran: kiran({ referredByLeadId: "asha" }), meera: MEERA });
     db.crmReferralReward.findUnique.mockResolvedValue(null);
-    const res = await referredByRoute(patch({ referredByLeadId: "asha" }), { params: { id: "kiran" } });
+    const res = await referredByRoute(patch({ referredByLeadId: "meera" }), { params: { id: "kiran" } });
     expect(res.status).toBe(200);
-    expect(db.lead.update).toHaveBeenCalledWith({ where: { id: "kiran" }, data: { referredByLeadId: "asha" } });
+    expect(db.lead.update).toHaveBeenCalledWith({ where: { id: "kiran" }, data: { referredByLeadId: "meera" } });
+  });
+
+  it("refuses to make an existing lead a referral", async () => {
+    leads({ kiran: kiran(), asha: ASHA });
+    const res = await referredByRoute(patch({ referredByLeadId: "asha" }), { params: { id: "kiran" } });
+    expect(res.status).toBe(400);
+    expect((await res.json()).error).toBe("referrer_only_at_creation");
   });
 });

@@ -10,9 +10,11 @@ export const dynamic = "force-dynamic";
 
 const Schema = z.object({ referredByLeadId: z.string().min(1).nullable() });
 
-// PATCH /api/crm/leads/[id]/referred-by — set, change or clear who referred a
-// lead after it was created. Money hangs off it (the referral reward), so only
-// whoever hands out leads may do it, and never once the reward is paid.
+// PATCH /api/crm/leads/[id]/referred-by — correct who referred a lead: change
+// the referrer or remove it. Only on a lead referred when it was created; a lead
+// already in the CRM can't be given a referrer (see setReferredBy). Money hangs
+// off it (the referral reward), so only whoever hands out leads may do it, and
+// never once the reward is paid.
 export const PATCH = withApiHandler(async (req: Request, { params }: { params: { id: string } }) => {
   const { userId, perms } = await getCurrentUserAndPermissions();
   if (!userId || !perms) throw unauthorized();
