@@ -46,6 +46,28 @@ async function main() {
   const stored = { none: 0, submitted: 0, generated: 0 };
   for (const row of r.rows) stored[row.existing]++;
   console.log(`before the run: ${stored.submitted} submitted by the BDE, ${stored.generated} already generated, ${stored.none} missing`);
+
+  const pct = (a: number, b: number) => (b ? `${Math.round((a / b) * 100)}%` : "—");
+  console.log("\nrebuilt assignments due in the range, by kind — received / contacted on time / missed:");
+  const kinds = { fresh: "new lead (created within a day)", older: "older lead handed out", reassigned: "taken over from another BDE" };
+  for (const [k, label] of Object.entries(kinds)) {
+    const b = r.breakdown.byKind[k as keyof typeof kinds];
+    console.log(`  ${label.padEnd(34)} ${String(b.received).padStart(5)}  ${String(b.contacted).padStart(5)}  ${String(b.missed).padStart(5)}   on time ${pct(b.contacted, b.contacted + b.missed)}`);
+  }
+  const why = {
+    nothing: "nothing logged by the BDE",
+    call_no_note: "call logged, no note",
+    stage_only: "stage/Status changed, no WhatsApp or call",
+    whatsapp_no_stage: "WhatsApp sent, no stage/Status change",
+    note_only: "note added, no call",
+    late: "a full pair, but after the cutoff",
+  };
+  const missedTotal = Object.values(r.breakdown.missed).reduce((a, b) => a + b, 0);
+  console.log("\nwhy the misses missed:");
+  for (const [k, label] of Object.entries(why)) {
+    const n = r.breakdown.missed[k as keyof typeof why];
+    console.log(`  ${label.padEnd(42)} ${String(n).padStart(5)}  (${pct(n, missedTotal)})`);
+  }
   if (r.applied) console.log("applied:", JSON.stringify(r.applied));
   console.log(`CSV written to ${out}`);
 }

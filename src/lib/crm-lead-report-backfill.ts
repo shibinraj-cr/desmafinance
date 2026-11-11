@@ -26,7 +26,7 @@ import { loadHolidaySet } from "./ops-dates";
 import { addDays, toPrismaDate } from "./lead-pulse-dates";
 import { computeDailyReport, istDayWindow } from "./crm-daily-report";
 import { cutoffOn, nextCutoff } from "./crm-cutoff";
-import { evaluateContact, type ContactStatus } from "./crm-contact";
+import { evaluateContact, type ContactHalves, type ContactStatus } from "./crm-contact";
 import { LEAD_REPORT_START_KEY, leadReportStart, loadContactEvents } from "./crm-contact-data";
 import { isDeliberateAssignment } from "./crm-team";
 import { handoverChannels, leadReportJson } from "./crm-lead-report-data";
@@ -47,8 +47,16 @@ export type LeadState = {
   assignedToId: string | null;
   assignedAt: Date | null;
   importBatchCreatedAt: Date | null;
+  createdAt?: Date | null;
 };
-export type Episode = { leadId: string; userId: string; assignedAt: Date; endedAt: Date | null };
+export type Episode = {
+  leadId: string;
+  userId: string;
+  assignedAt: Date;
+  endedAt: Date | null;
+  /** The BDE the lead was taken from, when this assignment was a reassignment. */
+  previousUserId: string | null;
+};
 
 /**
  * Replay each lead's assignment history into episodes — one per time it was
@@ -78,7 +86,7 @@ export function rebuildEpisodes(events: AssignmentEvent[], leads: LeadState[], f
       }
       if (open?.userId === e.toUserId) continue; // same owner again — not a new assignment
       if (open) open.endedAt = e.at;
-      open = { leadId: lead.id, userId: e.toUserId, assignedAt: e.at, endedAt: null };
+      open = { leadId: lead.id, userId: e.toUserId, assignedAt: e.at, endedAt: null, previousUserId: open?.userId ?? null };
       episodes.push(open);
     }
     // The current owner: line the episode up with Lead.assignedAt, or add it if
@@ -89,7 +97,7 @@ export function rebuildEpisodes(events: AssignmentEvent[], leads: LeadState[], f
         open.assignedAt = lead.assignedAt;
       } else if (!last || lead.assignedAt.getTime() >= last.at.getTime() - SAME_ASSIGNMENT_MS) {
         if (open) open.endedAt = lead.assignedAt;
-        episodes.push({ leadId: lead.id, userId: lead.assignedToId, assignedAt: lead.assignedAt, endedAt: null });
+        episodes.push({ leadId: lead.id, userId: lead.assignedToId, assignedAt: lead.assignedAt, endedAt: null, previousUserId: open?.userId ?? null });
       }
     }
     for (const ep of episodes) {
@@ -105,6 +113,37 @@ export function rebuildEpisodes(events: AssignmentEvent[], leads: LeadState[], f
   }
   return out;
 }
+
+// ── What the history shows (pure) ────────────────────────────────────────────
+
+export type AssignmentKind = "fresh" | "older" | "reassigned";
+
+/**
+ * A new lead (created within a day of the assignment), an older one handed out
+ * (from the pool, a backlog, a revival), or one taken over from another BDE.
+ */
+export function assignmentKind(ep: Pick<Episode, "assignedAt" | "previousUserId">, leadCreatedAt: Date | null): AssignmentKind {
+  if (ep.previousUserId) return "reassigned";
+  if (leadCreatedAt && ep.assignedAt.getTime() - leadCreatedAt.getTime() <= 86_400_000) return "fresh";
+  return "older";
+}
+
+export type MissReason = "nothing" | "call_no_note" | "stage_only" | "whatsapp_no_stage" | "note_only" | "late";
+
+/** Why a lead counted as missed: what the BDE had logged by the time it was judged. */
+export function missReason(status: string, h: ContactHalves): MissReason {
+  if (status === "contacted_late") return "late";
+  if (h.call && !h.note) return "call_no_note";
+  if (h.whatsapp && !h.stage) return "whatsapp_no_stage";
+  if (h.stage) return "stage_only";
+  if (h.note) return "note_only";
+  return "nothing";
+}
+
+export type Breakdown = {
+  byKind: Record<AssignmentKind, { received: number; contacted: number; missed: number }>;
+  missed: Record<MissReason, number>;
+};
 
 /** The working days (those with a cutoff) from `from` to `to`, inclusive. */
 export function workingDays(from: string, to: string, holidays: ReadonlySet<string>): string[] {
@@ -131,6 +170,8 @@ export type BackfillResult = {
   days: number;
   rebuilt: number;
   excludedImports: number;
+  /** For the rebuilt assignments due in the range: what kind they were, and why the misses missed. */
+  breakdown: Breakdown;
   rows: BackfillRow[];
   applied: { assignmentsAdded: number; reportsUpdated: number; reportsCreated: number; trackingStartMovedTo: string | null } | null;
 };
@@ -178,15 +219,22 @@ export async function backfillLeadReports(opts: {
     const part = [...leadIds].slice(i, i + CHUNK);
     const rows = await prisma.lead.findMany({
       where: { id: { in: part } },
-      select: { id: true, assignedToId: true, assignedAt: true, importBatch: { select: { createdAt: true } } },
+      select: { id: true, assignedToId: true, assignedAt: true, createdAt: true, importBatch: { select: { createdAt: true } } },
     });
-    for (const r of rows) leads.push({ id: r.id, assignedToId: r.assignedToId, assignedAt: r.assignedAt, importBatchCreatedAt: r.importBatch?.createdAt ?? null });
+    for (const r of rows) {
+      leads.push({ id: r.id, assignedToId: r.assignedToId, assignedAt: r.assignedAt, createdAt: r.createdAt, importBatchCreatedAt: r.importBatch?.createdAt ?? null });
+    }
   }
   const all = rebuildEpisodes(assignmentEvents, leads.map((l) => ({ ...l, importBatchCreatedAt: null })), windowFrom, start);
   const episodes = rebuildEpisodes(assignmentEvents, leads, windowFrom, start);
   log(`rebuilt ${episodes.length} assignment(s) before ${start.toISOString()} (${all.length - episodes.length} bulk-import carryover left out)`);
 
   // 2. Judge each against its cutoff, with what the BDE actually did.
+  const createdAtOf = new Map(leads.map((l) => [l.id, l.createdAt ?? null]));
+  const breakdown: Breakdown = {
+    byKind: { fresh: { received: 0, contacted: 0, missed: 0 }, older: { received: 0, contacted: 0, missed: 0 }, reassigned: { received: 0, contacted: 0, missed: 0 } },
+    missed: { nothing: 0, call_no_note: 0, stage_only: 0, whatsapp_no_stage: 0, note_only: 0, late: 0 },
+  };
   const judgedRebuilt: (Judged & Episode & { firstContactedAt: Date | null })[] = [];
   const sourceOf = await leadSources(episodes.map((e) => e.leadId));
   for (let i = 0; i < episodes.length; i += CHUNK) {
@@ -195,6 +243,15 @@ export async function backfillLeadReports(opts: {
     for (const ep of part) {
       const contactDueAt = nextCutoff(ep.assignedAt, holidays);
       const v = evaluateContact({ ...ep, contactDueAt }, evs.get(ep.leadId) ?? [], now);
+      if (contactDueAt >= rangeFrom && contactDueAt < rangeTo && v.status !== "reassigned") {
+        const k = breakdown.byKind[assignmentKind(ep, createdAtOf.get(ep.leadId) ?? null)];
+        k.received++;
+        if (v.status === "contacted") k.contacted++;
+        else if (v.status === "missed" || v.status === "contacted_late") {
+          k.missed++;
+          breakdown.missed[missReason(v.status, v.halves)]++;
+        }
+      }
       judgedRebuilt.push({
         ...ep,
         contactDueAt,
@@ -277,6 +334,7 @@ export async function backfillLeadReports(opts: {
     days: days.length,
     rebuilt: episodes.length,
     excludedImports: all.length - episodes.length,
+    breakdown,
     rows,
     applied: null,
   };
