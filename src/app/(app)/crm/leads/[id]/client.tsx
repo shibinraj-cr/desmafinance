@@ -9,6 +9,13 @@ import { isActionOnlyStatus, canUnenrollInto } from "@/lib/crm-leads";
 import { buildLeadMergeVars, DEFAULT_STATUS_COLOR, fillTemplate, LEAD_TEMPERATURES, TASK_TYPES, isOtherQualification, qualificationText, QUALIFICATION_OTHER_MAX, daysInStatus, STATUS_STALE_DAYS, type MessageTemplateDTO } from "@/lib/crm";
 import { ageFromDob } from "@/lib/age";
 import { COUNTRIES, countryCodeFor } from "@/lib/countries";
+import {
+  REFERRED_LIST_LIMIT,
+  referralShareMessage,
+  referrerFirstName,
+  whatsappShareHref,
+  type LeadReferralDTO,
+} from "@/lib/crm-referral-link";
 import { MultiSelect } from "@/components/MultiSelect";
 import { StatusPill, TemperaturePill, type StatusOpt, type Opt, type BdeOpt } from "../client";
 import { EnrollCelebration } from "@/components/EnrollCelebration";
@@ -338,6 +345,7 @@ export function LeadDetail({
   access,
   studyAbroad,
   taskReminders,
+  referral,
 }: {
   lead: LeadRow;
   notes: NoteRow[];
@@ -352,6 +360,7 @@ export function LeadDetail({
   access: DetailAccess;
   studyAbroad: { eligible: boolean; alreadySent: boolean };
   taskReminders: TaskReminderPreviewDTO;
+  referral: LeadReferralDTO;
 }) {
   const router = useRouter();
   const [tab, setTab] = useState<"overview" | "tasks" | "whatsapp" | "instagram" | "history">("overview");
@@ -514,7 +523,8 @@ export function LeadDetail({
                 canUnenroll={access.canUnenroll}
               />
               <AssignmentCard lead={lead} masters={masters} canAssign={access.canAssign} />
-              <LeadInfoCard lead={lead} masters={masters} canEdit={canEdit} />
+              <LeadInfoCard lead={lead} masters={masters} canEdit={canEdit} referredBy={referral.referredBy} />
+              <ReferralCard lead={lead} referral={referral} canSwitch={access.canAssign} />
             </div>
           </div>
         </>
@@ -2265,7 +2275,17 @@ function ReopenServiceModal({
 // `canEdit` (admin OR the assigned consultant) may link/unlink the lead to an
 // existing candidate record — e.g. a husband's enquiry for his wife, whose
 // candidate record already exists, gets linked to her.
-function LeadInfoCard({ lead, masters, canEdit }: { lead: LeadRow; masters: DetailMasters; canEdit: boolean }) {
+function LeadInfoCard({
+  lead,
+  masters,
+  canEdit,
+  referredBy,
+}: {
+  lead: LeadRow;
+  masters: DetailMasters;
+  canEdit: boolean;
+  referredBy: LeadReferralDTO["referredBy"];
+}) {
   const router = useRouter();
   const [busy, setBusy] = useState(false);
 
@@ -2291,6 +2311,16 @@ function LeadInfoCard({ lead, masters, canEdit }: { lead: LeadRow; masters: Deta
           </dd>
         </div>
         <Row label="Source" value={lead.source?.label ?? "—"} />
+        {referredBy && (
+          <Row
+            label="Referred by"
+            value={
+              <Link href={`/crm/leads/${referredBy.id}`} className="font-semibold text-on-surface hover:text-primary hover:underline">
+                {referredBy.candidateName}
+              </Link>
+            }
+          />
+        )}
         <Row label="Service" value={lead.service?.name ?? "—"} />
         <Row label="Qualification" value={qualificationText(lead.qualification?.label, lead.qualificationOther) ?? "—"} />
         {lead.status.code === "duplicate" && (
@@ -2313,6 +2343,161 @@ function LeadInfoCard({ lead, masters, canEdit }: { lead: LeadRow; masters: Deta
           />
         )}
       </div>
+    </div>
+  );
+}
+
+// ── Referral link ───────────────────────────────────────────────────────────
+// The candidate's personal /r/<code> link, made on first ask by anyone who can
+// open the lead, and what it has brought in. A consultant copies it (or sends it
+// straight to the candidate's WhatsApp) for them to share with friends and
+// groups; every new lead from it is filed under this candidate.
+const linkBtn =
+  "inline-flex items-center gap-xs h-9 px-md rounded-lg border border-outline-variant text-on-surface-variant text-label-sm font-semibold hover:bg-surface-container-low transition disabled:opacity-60";
+
+function ReferralCard({ lead, referral, canSwitch }: { lead: LeadRow; referral: LeadReferralDTO; canSwitch: boolean }) {
+  const router = useRouter();
+  const [busy, setBusy] = useState(false);
+  const [copied, setCopied] = useState<null | "link" | "message">(null);
+  const [error, setError] = useState<string | null>(null);
+  const { link, tally, referred } = referral;
+  const message = link ? referralShareMessage({ firstName: referrerFirstName(lead.candidateName), url: link.url }) : "";
+
+  async function copy(text: string, what: "link" | "message") {
+    setError(null);
+    try {
+      await navigator.clipboard.writeText(text);
+      setCopied(what);
+      setTimeout(() => setCopied(null), 2000);
+    } catch {
+      setError("Couldn't copy. Select the link and copy it by hand.");
+    }
+  }
+
+  async function send(method: "POST" | "PATCH", body?: { active: boolean }) {
+    setBusy(true);
+    setError(null);
+    const res = await fetch(`/api/crm/leads/${lead.id}/referral-link`, {
+      method,
+      headers: { "content-type": "application/json" },
+      body: body ? JSON.stringify(body) : undefined,
+    });
+    setBusy(false);
+    if (!res.ok) {
+      const payload = (await res.json().catch(() => ({}))) as { message?: string };
+      setError(payload.message || "Couldn't update the referral link.");
+      return;
+    }
+    router.refresh();
+  }
+
+  return (
+    <div className={cardCls}>
+      <CardHeading icon="share" color="#f59e0b">Referral link</CardHeading>
+      {!link ? (
+        <>
+          <p className="text-body-md text-on-surface-variant">
+            A personal link for {lead.candidateName} to share with friends and in WhatsApp groups. Everyone who registers
+            through it becomes a new lead filed under their name.
+          </p>
+          <button type="button" className={primaryBtn} disabled={busy} onClick={() => send("POST")}>
+            {busy ? "Creating…" : "Get referral link"}
+          </button>
+        </>
+      ) : (
+        <>
+          {!link.active && (
+            <div className="rounded-lg bg-amber-50 text-amber-800 border border-amber-200 px-md py-sm text-label-sm">
+              Switched off. The form still takes enquiries, but they aren&apos;t credited to {lead.candidateName}.
+            </div>
+          )}
+          <input
+            readOnly
+            value={link.url}
+            aria-label="Referral link"
+            onFocus={(e) => e.currentTarget.select()}
+            className={inputCls + " font-mono text-label-sm"}
+          />
+          <div className="flex flex-wrap gap-xs">
+            <button type="button" className={linkBtn} onClick={() => copy(link.url, "link")}>
+              <span className="material-symbols-outlined" style={{ fontSize: 18 }}>
+                {copied === "link" ? "check" : "content_copy"}
+              </span>
+              {copied === "link" ? "Copied" : "Copy link"}
+            </button>
+            <button type="button" className={linkBtn} onClick={() => copy(message, "message")}>
+              <span className="material-symbols-outlined" style={{ fontSize: 18 }}>
+                {copied === "message" ? "check" : "chat"}
+              </span>
+              {copied === "message" ? "Copied" : "Copy message"}
+            </button>
+            <a
+              href={whatsappShareHref(lead.phoneE164, message)}
+              target="_blank"
+              rel="noopener noreferrer"
+              className={linkBtn}
+              title={lead.phoneE164 ? `Opens WhatsApp to ${lead.phoneE164} with the message ready` : "Opens WhatsApp to pick a chat"}
+            >
+              <span className="material-symbols-outlined" style={{ fontSize: 18 }}>
+                send
+              </span>
+              WhatsApp
+            </a>
+          </div>
+        </>
+      )}
+
+      {(link || referred.length > 0) && (
+        <div className="grid grid-cols-4 gap-xs text-center">
+          {[
+            { label: "Visits", value: tally.visits, hint: "Times the link was opened (link previews don't count)" },
+            { label: "Leads", value: tally.leads, hint: "New leads credited to this candidate" },
+            { label: "Enrolled", value: tally.enrolled, hint: "Of those leads, how many have enrolled" },
+            { label: "In CRM", value: tally.existing, hint: "People who were already in the CRM — not credited" },
+          ].map((t) => (
+            <div key={t.label} className="rounded-lg bg-surface-container-low px-xs py-sm" title={t.hint}>
+              <div className="text-h3 text-on-surface">{t.value}</div>
+              <div className="text-[11px] text-on-surface-variant">{t.label}</div>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {referred.length > 0 && (
+        <div className="space-y-xs">
+          <div className="text-label-sm text-on-surface-variant">
+            Referred leads{tally.leads > referred.length ? ` (latest ${REFERRED_LIST_LIMIT} of ${tally.leads})` : ""}
+          </div>
+          <ul className="divide-y divide-outline-variant">
+            {referred.map((r) => (
+              <li key={r.id} className="flex items-center justify-between gap-sm py-xs">
+                <Link
+                  href={`/crm/leads/${r.id}`}
+                  className="text-body-md font-semibold text-on-surface hover:text-primary hover:underline truncate"
+                >
+                  {r.candidateName}
+                </Link>
+                <span className="flex items-center gap-xs flex-shrink-0">
+                  <span className="text-label-sm text-on-surface-variant">{fmtDateTime(r.createdAt).split(",")[0]}</span>
+                  <StatusPill status={r.status} />
+                </span>
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+
+      {link && canSwitch && (
+        <button
+          type="button"
+          disabled={busy}
+          onClick={() => send("PATCH", { active: !link.active })}
+          className="text-label-sm text-on-surface-variant hover:text-error underline disabled:opacity-60"
+        >
+          {link.active ? "Switch off this link" : "Switch the link back on"}
+        </button>
+      )}
+      {error && <p className="text-label-sm text-error">{error}</p>}
     </div>
   );
 }

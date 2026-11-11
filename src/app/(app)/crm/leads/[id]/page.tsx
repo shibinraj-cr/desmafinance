@@ -1,5 +1,6 @@
 import type { Prisma } from "@prisma/client";
 import Link from "next/link";
+import { headers } from "next/headers";
 import { notFound, redirect } from "next/navigation";
 import { TopBar } from "@/components/TopBar";
 import { prisma } from "@/lib/prisma";
@@ -27,6 +28,8 @@ import { STUDY_ABROAD_EVENT } from "@/lib/crm-webhook";
 import { previewTaskReminders } from "@/lib/crm-task-reminders-engine";
 import { TASK_TYPES } from "@/lib/crm";
 import { activeQualityReasons } from "@/lib/crm-lead-quality-data";
+import { loadLeadReferral } from "@/lib/crm-referral";
+import { siteBaseUrlFromHeaders } from "@/lib/site-url";
 import { LeadDetail } from "./client";
 
 export const dynamic = "force-dynamic";
@@ -233,6 +236,10 @@ export default async function LeadDetailPage({ params }: { params: { id: string 
   // the only moment anybody looks at it.
   const taskReminders = await previewTaskReminders(lead.id, TASK_TYPES);
 
+  // The lead's own referral link and the leads it brought in, plus who referred
+  // this lead, if anyone.
+  const referral = await loadLeadReferral(lead, siteBaseUrlFromHeaders(headers()));
+
   return (
     <>
       <TopBar
@@ -264,6 +271,7 @@ export default async function LeadDetailPage({ params }: { params: { id: string 
           templates={templates}
           studyAbroad={studyAbroad}
           taskReminders={taskReminders}
+          referral={referral}
           access={{
             isAdmin: access.isAdmin,
             canAssign: access.canAssign,

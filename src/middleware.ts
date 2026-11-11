@@ -78,8 +78,12 @@ export const config = {
     // bank given a download link has no Desgro login; the random token in the
     // URL is the credential, scoped to one document or folder, time-boxed and
     // revocable, and nothing under it can write),
+    // candidate referral links (`r/` + `api/referral/` — the friend filling the
+    // form has no Desgro login; the endpoint runs the careers form's honeypot,
+    // dwell-time and rate-limit checks, can only CREATE an unassigned lead or
+    // fold onto an existing one, and answers every outcome the same way),
     // Next.js internal asset routes, and any file with
     // an extension (/desfin.png, /favicon.ico, fonts).
-    "/((?!login|api/auth|api/health|api/whoami|api/integrations|api/crm/integrations/wabis/inbound|api/crm/integrations/wabis/delivery-status|api/crm/wa/webhook|api/crm/ig/webhook|api/crm/voxbay/webhook|psych/test|api/psych/test|privacy-policy|terms|careers|api/careers|offer|api/offer|partners|api/partners|api/hiring/calendar|api/wa-media|api/cron|share/|api/share/|sign/|api/sign/|verify/|api/verify/|_next/static|_next/image|.*\\..*).*)",
+    "/((?!login|api/auth|api/health|api/whoami|api/integrations|api/crm/integrations/wabis/inbound|api/crm/integrations/wabis/delivery-status|api/crm/wa/webhook|api/crm/ig/webhook|api/crm/voxbay/webhook|psych/test|api/psych/test|privacy-policy|terms|careers|api/careers|offer|api/offer|partners|api/partners|api/hiring/calendar|api/wa-media|api/cron|share/|api/share/|sign/|api/sign/|verify/|api/verify/|r/|api/referral/|_next/static|_next/image|.*\\..*).*)",
   ],
 };

@@ -27,6 +27,7 @@ import { CONVERSION_TARGET_PCT, FIRST_RESPONSE_FAST_HOURS, RESPONSE_SLA_HOURS, S
 import { BACKDATE_DAYS } from "./lead-pulse-dates";
 import { SATURDAY_CUTOFF_MINUTES, WEEKDAY_CUTOFF_MINUTES } from "./crm-cutoff";
 import { HANDOVER_REJECT_REASONS } from "./crm-handover";
+import { REFERRAL_LINK_SOURCE_LABEL } from "./crm-referral-link";
 
 /** "5:00 pm" for minutes after midnight. */
 function clock(minutes: number): string {
@@ -113,6 +114,12 @@ export type GuideChange = { date: string; section: string; title: string; detail
  * is the GuideSection id it updates (drives the "Updated" pill).
  */
 export const CRM_GUIDE_CHANGES: GuideChange[] = [
+  {
+    date: "2026-11-10",
+    section: "referral-links",
+    title: "Referral links",
+    detail: `Every lead now has a **Referral link** card. Send the candidate their link; everyone new who registers through it becomes a lead filed under their name, with source **${REFERRAL_LINK_SOURCE_LABEL}**.`,
+  },
   {
     date: "2026-11-10",
     section: "my-day",
@@ -675,7 +682,8 @@ export function crmGuideSections(f: GuideFacts, canSee: (href: string) => boolea
             ["Summary", "Contact details. The pencil edits them — and is where you close a lead to a lost stage."],
             ["Timeline", "Every call, message, note and change. Add notes here."],
             ["Deal", "**Set deal**, **Enroll**, **Reopen for another service**."],
-            ["Consultant / Lead detail", "Who owns the lead and since when; source, service, qualification, linked candidate."],
+            ["Consultant / Lead detail", "Who owns the lead and since when; source, service, qualification, linked candidate, and **Referred by** for a lead from a referral link."],
+            ["Referral link", "The candidate's own link to share, and the leads it has brought in."],
             ["Tabs", "**Tasks**, **WhatsApp** (company-number chat), **Instagram** (only for leads from an Instagram DM)."],
           ],
         },
@@ -686,6 +694,53 @@ export function crmGuideSections(f: GuideFacts, canSee: (href: string) => boolea
           ],
         },
         { kind: "warn", items: ["On a lead that isn't yours, everything is read-only."] },
+      ],
+    },
+    {
+      id: "referral-links",
+      title: "Referral links",
+      group: "Working a lead",
+      pages: ["/crm/leads"],
+      summary:
+        "Every lead can have a personal link to share with friends and in WhatsApp groups. Everyone new who registers through it becomes a lead filed under that candidate.",
+      blocks: [
+        {
+          kind: "steps",
+          title: "Give a candidate their link",
+          items: [
+            "Open the candidate's lead. In the **Referral link** card, click **Get referral link**. You only do this once; after that the link stays on the card.",
+            "Click **WhatsApp** to open a chat with the candidate with the message ready. Or use **Copy link** or **Copy message** and paste it anywhere.",
+            "Ask the candidate to share it with friends and in their groups.",
+          ],
+        },
+        {
+          kind: "table",
+          title: "When someone fills in the form",
+          head: ["Who", "What happens"],
+          rows: [
+            [
+              "Someone new",
+              `A new lead with source **${REFERRAL_LINK_SOURCE_LABEL}**, unassigned for the Marketing Admin to hand out. Its Lead detail shows **Referred by** and the candidate's name.`,
+            ],
+            ["Someone already in the CRM", "No new lead and no credit. Their existing lead gets a re-inquiry, as from any other channel."],
+            ["The candidate's own number or email", "Nothing happens."],
+          ],
+        },
+        {
+          kind: "tips",
+          items: [
+            "The card counts **Visits**, **Leads**, **Enrolled** and **In CRM** (people already in the CRM, not credited), and lists the leads the link brought in.",
+            "Anyone who can open a lead can copy its link. It doesn't have to be your lead.",
+            "WhatsApp's link preview doesn't count as a visit. Only people opening the page do.",
+          ],
+        },
+        {
+          kind: "warn",
+          items: [
+            `**${REFERRAL_LINK_SOURCE_LABEL}** is not **Candidate Referral**. Candidate Referral is a referral someone types in by hand.`,
+            "Whoever assigns leads can **Switch off this link**. The form still takes enquiries, but new leads from it aren't credited to the candidate.",
+          ],
+        },
       ],
     },
     {
@@ -1309,6 +1364,17 @@ export function crmGuideQuiz(f: GuideFacts): GuideQuizQuestion[] {
       [`Automatically at the cutoff (${WEEKDAY_CUTOFF}, ${SATURDAY_CUTOFF} on Saturdays) — there's nothing to submit`],
       ["When you click Submit report", "At midnight, if you remembered to fill it in", "Only when your manager asks for it"],
       "The CRM generates it from what you logged. Remarks are optional and don't change the numbers.",
+    ),
+    q(
+      "referral-link-existing",
+      "Someone who is already in the CRM fills in a candidate's referral-link form. What happens?",
+      ["Their existing lead gets a re-inquiry, and the candidate isn't credited"],
+      [
+        "A new lead is created and credited to the candidate",
+        "The form refuses to take their details",
+        "Their lead moves to the candidate's consultant",
+      ],
+      "Only someone new is credited to the candidate. People already in the CRM show on the card as In CRM.",
     ),
   ];
 }
