@@ -5,36 +5,14 @@ import { KpiCard, Section } from "@/components/Cards";
 import { DateFilter } from "@/components/DateFilter";
 import { getCurrentUserAndPermissions } from "@/lib/permissions";
 import { getCrmAccess } from "@/lib/crm-rbac";
-import { parsePeriod, rangeFor, periodLabel, monthLabelFor, singleMonthOf } from "@/lib/period";
-import { todayIst } from "@/lib/lead-pulse-dates";
-import {
-  resolveTeamScope,
-  getTeamActivity,
-  wholeTeamScope,
-  getScorecardExcludedUserIds,
-  SLA_THRESHOLD_DAYS,
-  ABANDONED_DAYS,
-  STUCK_DAYS,
-  type TeamLeadRef,
-  type TeamBdeRow,
-} from "@/lib/crm-team";
-import { buildL2Scorecard, type L2Score, type ScoreComponent } from "@/lib/crm-score";
-import { buildBestPerformers, BEST_PERFORMER_WEIGHTS, type BestPerformerEntry } from "@/lib/crm-best-performer";
-import { getMonthlyTargetByBde } from "@/lib/lead-pulse-crm-metrics";
+import { SLA_THRESHOLD_DAYS, ABANDONED_DAYS, STUCK_DAYS, type TeamLeadRef } from "@/lib/crm-team";
+import { loadTeamActivityView, crmPageLabel } from "@/lib/crm-team-view";
+import { type L2Score, type ScoreComponent } from "@/lib/crm-score";
+import { BEST_PERFORMER_WEIGHTS, type BestPerformerEntry } from "@/lib/crm-best-performer";
 import { QUALITY_DUE_AFTER_DAYS } from "@/lib/crm-lead-quality";
-import { getCrmUsageByUser } from "@/lib/usage-metrics";
-import { formatActiveTime, activeHours } from "@/lib/usage-tracking";
-import { MODULES } from "@/lib/modules";
+import { formatActiveTime } from "@/lib/usage-tracking";
 
 export const dynamic = "force-dynamic";
-
-/** CRM sub-page href → its sidebar label, for the engagement breakdown. */
-const CRM_PAGE_LABEL: Record<string, string> = Object.fromEntries(
-  (MODULES.find((m) => m.id === "crm")?.pages ?? []).map((p) => [p.href, p.label]),
-);
-function crmPageLabel(href: string): string {
-  return CRM_PAGE_LABEL[href] ?? href.replace(/^\/crm\//, "");
-}
 
 type SP = { [k: string]: string | string[] | undefined };
 
@@ -428,74 +406,16 @@ export default async function TeamActivityPage({ searchParams }: { searchParams:
     );
   }
 
-  const scope = resolveTeamScope(access, str(searchParams, "scope"));
-  // Opens on the current (IST) month, so enrollments, the scorecard and the Best
-  // Performer box agree by default; "All time" is an explicit choice.
-  const today = todayIst();
-  const defaultPeriod = monthLabelFor(today) ?? "all";
-  const period = parsePeriod({
-    period: str(searchParams, "period") ?? defaultPeriod,
-    from: str(searchParams, "from"),
-    to: str(searchParams, "to"),
-  });
-  const range = rangeFor(period);
-  const now = new Date();
-
-  const data = await getTeamActivity({ scope, range, now });
+  // Shared with the mobile app's GET /api/crm/activity (src/lib/crm-team-view.ts).
+  const { scope, today, defaultPeriod, rangeText, data, engagement, anyEngagement, scorecard, bestMonth, bestPerformers, rows } =
+    await loadTeamActivityView({
+      access,
+      requestedScope: str(searchParams, "scope"),
+      period: str(searchParams, "period"),
+      from: str(searchParams, "from"),
+      to: str(searchParams, "to"),
+    });
   const t = data.totals;
-  const rangeText = periodLabel(period);
-
-  // Engagement (active time) per consultant over the range — real focused-and-
-  // interacting time, not open-tab wall-clock. Joined by userId to the outcome
-  // rows so effort sits beside output.
-  const crmUsage = await getCrmUsageByUser(
-    range,
-    data.bdeRows.map((r) => r.userId),
-  );
-  const engagement = data.bdeRows
-    .map((r) => {
-      const secs = crmUsage.get(r.userId)?.totalSeconds ?? 0;
-      const byPage = crmUsage.get(r.userId)?.byPage ?? {};
-      const topPages = Object.entries(byPage)
-        .sort((a, b) => b[1] - a[1])
-        .slice(0, 3);
-      const hrs = activeHours(secs);
-      return {
-        userId: r.userId,
-        displayName: r.displayName,
-        role: r.role,
-        seconds: secs,
-        topPages,
-        contacts: r.contacts,
-        contactsPerHour: hrs >= 0.05 ? r.contacts / hrs : null,
-        tasksCompleted: r.tasksCompleted,
-        enrolledPeriod: r.enrolledPeriod,
-      };
-    })
-    .sort((a, b) => b.seconds - a.seconds || a.displayName.localeCompare(b.displayName));
-  const anyEngagement = engagement.some((e) => e.seconds > 0);
-  // L2 Scorecard — always team-wide (shown to everyone, ranks the whole team), so
-  // reuse the viewer's rows when they're already team-wide, else fetch team-wide.
-  const scoreRows = scope.teamWide
-    ? data.bdeRows
-    : (await getTeamActivity({ scope: wholeTeamScope(scope.selfUserId), range, now })).bdeRows;
-  const excludedUserIds = await getScorecardExcludedUserIds(scoreRows.map((r) => r.userId));
-  const scorecard = buildL2Scorecard(scoreRows, { excludeUserIds: excludedUserIds });
-
-  // Best Performer — a monthly award, so it shows only when the range is exactly
-  // one calendar month. It ranks the scorecard's members on the same rows.
-  const bestMonth = singleMonthOf(range);
-  const bestPerformers = bestMonth
-    ? buildBestPerformers(
-        scorecard,
-        scoreRows,
-        await getMonthlyTargetByBde(bestMonth.year, bestMonth.month, scorecard.map((s) => s.userId)),
-      )
-    : null;
-
-  // BDE table sorted worst-first by total attention pressure, then by name.
-  const pressure = (r: TeamBdeRow) => r.slaBreaches + r.abandoned + r.stuck + r.noTask + r.firstResponseBreached;
-  const rows = [...data.bdeRows].sort((a, b) => pressure(b) - pressure(a) || a.displayName.localeCompare(b.displayName));
 
   return (
     <>
