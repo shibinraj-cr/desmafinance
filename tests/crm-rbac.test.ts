@@ -207,6 +207,43 @@ describe("canBulkStatus (bulk stage change on the Leads list)", () => {
   });
 });
 
+describe("canAssign for the Marketing Admin (bulk + single-lead assign)", () => {
+  it("is granted to a Lead Pulse supervisor without any page marker", async () => {
+    vi.mocked(getLeadPulseAccess).mockResolvedValueOnce({
+      role: "supervisor",
+      displayName: "Marketing",
+      canSupervise: true,
+      canSubmitEntries: false,
+      desfinAdmin: false,
+    });
+    const a = await getCrmAccess("u1", perms(["/marketing/lead-pulse"]));
+    expect(a.canAssign).toBe(true);
+    // Assigning doesn't bring the rest of the CRM-admin tier with it.
+    expect(a.canManageCrm).toBe(false);
+    expect(a.canBulkEmail).toBe(false);
+    expect(a.canViewHistory).toBe(false);
+  });
+
+  it("is granted to the Marketing Admin role by name", async () => {
+    const a = await getCrmAccess("u1", { ...perms(["/crm/leads"]), roleName: "Marketing Admin" });
+    expect(a.canAssign).toBe(true);
+    expect(a.canManageCrm).toBe(false);
+  });
+
+  it("is still withheld from a plain BDE", async () => {
+    vi.mocked(getLeadPulseAccess).mockResolvedValueOnce({
+      role: "l2",
+      displayName: "Test BDE",
+      canSupervise: false,
+      canSubmitEntries: true,
+      desfinAdmin: false,
+    });
+    const a = await getCrmAccess("u1", perms(["/crm/leads"]));
+    expect(a.isBde).toBe(true);
+    expect(a.canAssign).toBe(false);
+  });
+});
+
 describe("referral leads marker (CRM_REFERRAL_LEADS_PAGE)", () => {
   function nextLeadPulseRole(role: "l1" | "l2") {
     vi.mocked(getLeadPulseAccess).mockResolvedValueOnce({

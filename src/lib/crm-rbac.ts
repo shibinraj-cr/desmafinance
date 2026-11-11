@@ -2,6 +2,7 @@ import type { Prisma } from "@prisma/client";
 import type { Permissions } from "./rbac";
 import { isAdmin, canSeePage } from "./rbac";
 import { getLeadPulseAccess } from "./lead-pulse-rbac";
+import { MARKETING_ADMIN_ROLE_NAME } from "./crm-uncontacted-alarm";
 
 /**
  * Capability marker (NOT a real route) granting VIEW-ONLY access to the whole
@@ -178,9 +179,12 @@ export type CrmAccess = {
    */
   canBulkStatus: boolean;
   /**
-   * Assign / reassign leads to consultants. True for full CRM admins and for any
-   * role granted the {@link CRM_ASSIGN_PAGE} marker — so a sales-team lead can
-   * re-distribute leads without CRM import/bulk-email/settings powers.
+   * Assign / reassign leads to consultants — one at a time, or many at once from
+   * the Leads list's bulk "Assign to BDE". True for full CRM admins, for the
+   * Marketing Admin (the role by name, or any Lead Pulse supervisor — the people
+   * who hand out leads, see marketingAdminUserIds), and for any role granted the
+   * {@link CRM_ASSIGN_PAGE} marker — so a sales-team lead can re-distribute
+   * leads without CRM import/bulk-email/settings powers.
    */
   canAssign: boolean;
   /**
@@ -221,7 +225,10 @@ export async function getCrmAccess(
   // read the full History tab without the full CRM-admin tier (import, bulk
   // email, settings). Same "one capability, not all of CRM admin" pattern as the
   // team-lead and templates markers.
-  const canAssignLeads = canManageCrm || (perms ? canSeePage(perms, CRM_ASSIGN_PAGE) : false);
+  // The Marketing Admin hands out the incoming leads, so assigning is part of the
+  // job rather than a marker someone has to remember to tick.
+  const isMarketingAdmin = isSupervisor || perms?.roleName === MARKETING_ADMIN_ROLE_NAME;
+  const canAssignLeads = canManageCrm || isMarketingAdmin || (perms ? canSeePage(perms, CRM_ASSIGN_PAGE) : false);
   const canViewLeadHistory = canManageCrm || (perms ? canSeePage(perms, CRM_HISTORY_PAGE) : false);
   // Template authoring: full CRM admins, plus any role explicitly granted the
   // Message Templates page (e.g. a marketing supervisor).

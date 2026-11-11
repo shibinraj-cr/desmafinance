@@ -121,6 +121,12 @@ export const CRM_GUIDE_CHANGES: GuideChange[] = [
     detail: "A lead from a Meta form now comes with **Qualification** already filled from the candidate's answer to *What is your qualification?* (BSN, GNM, PBSN for Post BSc, MSN or Other). Confirm it on your first call and correct it if it's wrong.",
   },
   {
+    date: "2026-11-11",
+    section: "extra-permissions",
+    title: "Assign leads in bulk",
+    detail: "If you assign leads, tick several on **Leads** (or select every lead matching the filter) and click **Assign to BDE**. Each one is assigned exactly as if you'd picked the consultant on its row.",
+  },
+  {
     date: "2026-11-10",
     section: "referral-links",
     title: "Referral links",
@@ -296,7 +302,7 @@ const days = (n: number) => (n === 1 ? "1 day" : `${n} days`);
 
 /** What each role permission lets its holder do — shown in the extra-permissions section. */
 const PERMISSION_HELP: Record<string, string> = {
-  "/crm/assign": "Assign and reassign leads: the **Consultant** column on Leads, the lead's **Consultant** card and the Inbox **Owner** become dropdowns.",
+  "/crm/assign": "Assign and reassign leads: the **Consultant** column on Leads, the lead's **Consultant** card and the Inbox **Owner** become dropdowns. To hand out many at once, tick them on Leads and click **Assign to BDE**.",
   "/crm/history": "See a lead's **History** tab — the full audit log of every change.",
   "/crm/team-all": "Switch the Dashboard between **Whole team** and **Just me** (view only).",
   "/crm/referral-leads": "Create referral leads (**New referral**) without being a BDE. They come in unassigned, with source Candidate Referral.",
