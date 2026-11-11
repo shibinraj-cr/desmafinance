@@ -13,6 +13,7 @@ import { badRequest, HttpError } from "./http-error";
 import { normalizePhone, emailKeyOf, computeDedupeKey, phoneMatchKeys } from "./crm";
 import { resolveDefaultStatus } from "./crm-leads";
 import { getSheetLeadsDateFloor } from "./app-settings";
+import { qualificationFromForm } from "./crm-form-qualification";
 import {
   recordReInquiry,
   resolveReInquiryContext,
@@ -248,9 +249,10 @@ export async function ingestSheetLeads(opts: {
     };
   }
 
-  const [defStatus, source] = await Promise.all([
+  const [defStatus, source, quals] = await Promise.all([
     resolveDefaultStatus(),
     prisma.leadPulseSource.findUnique({ where: { code: config.sourceCode }, select: { id: true } }),
+    prisma.crmQualification.findMany({ where: { active: true }, select: { id: true, label: true } }),
   ]);
   if (!defStatus) throw new HttpError(500, "No lead statuses configured — run db:seed-crm", "no_status_configured");
 
@@ -357,6 +359,8 @@ export async function ingestSheetLeads(opts: {
       sourceId: source?.id ?? null,
       statusId: defStatus.id,
       campaign: opts.campaign,
+      // The form's "What is your qualification?" answer, so the BDE doesn't re-ask.
+      qualificationId: qualificationFromForm(m.extra, quals)?.id ?? null,
       extra: m.extra,
       ...(m.createdAt ? { createdAt: m.createdAt, lastActivityAt: m.createdAt } : {}),
     });
