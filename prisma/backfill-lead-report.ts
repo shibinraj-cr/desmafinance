@@ -68,7 +68,7 @@ async function main() {
     stage_only: "stage/Status changed, no WhatsApp or call",
     whatsapp_no_stage: "WhatsApp sent, no stage/Status change",
     note_only: "note added, no call",
-    late: "a full pair, but after the cutoff",
+    late: r.rule === "any" ? "contacted, but after the cutoff" : "a full pair, but after the cutoff",
   };
   const missedTotal = Object.values(r.breakdown.missed).reduce((a, b) => a + b, 0);
   console.log("\nwhy the misses missed:");
