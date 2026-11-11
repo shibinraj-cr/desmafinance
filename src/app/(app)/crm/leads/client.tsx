@@ -17,6 +17,7 @@ import { DEFAULT_STATUS_COLOR, BULK_EMAIL_COOLDOWN_DAYS, BULK_EMAIL_MERGE_FIELDS
 import { ageFromDob } from "@/lib/age";
 import { COUNTRIES, countryCodeFor } from "@/lib/countries";
 import { MultiSelect } from "@/components/MultiSelect";
+import { LeadSearchPicker, type LeadPick } from "@/components/crm/LeadSearchPicker";
 import { listParam, applyFilterPatch } from "@/lib/filter-params";
 import { QualityPill } from "@/components/crm/LeadQualityPicker";
 import { LEAD_QUALITIES, QUALITY_UNRATED_BUCKETS, qualityBucket } from "@/lib/crm-lead-quality";
@@ -28,6 +29,8 @@ export type BdeOpt = { userId: string; displayName: string; username: string; ro
 export type Masters = {
   statuses: StatusOpt[];
   sources: Opt[];
+  /** The Candidate Referral source: picking it asks who referred the lead. */
+  referralSourceId: string | null;
   services: Opt[];
   qualifications: Opt[];
   /** Cross-stage statuses, ordered; `group` is the heading they sit under. */
@@ -322,6 +325,11 @@ function NewLeadButton({
     statusId: "",
     assignedToId: "",
   });
+  // Who referred them — asked only on a Candidate Referral lead, where it earns
+  // that candidate the referral reward if this lead enrols.
+  const [referredBy, setReferredBy] = useState<LeadPick | null>(null);
+  const asksReferrer =
+    access.referralLeadsOnly || (!!masters.referralSourceId && form.sourceId === masters.referralSourceId);
 
   // Live age preview from the entered DOB (auto-derived; never sent to the server).
   const dobAge = ageFromDob(form.dob || null, new Date());
@@ -373,6 +381,7 @@ function NewLeadButton({
         statusId: form.statusId || undefined,
         assignedToId: access.canAssign ? form.assignedToId || undefined : undefined,
         handoverId: prefill?.handoverId,
+        referredByLeadId: asksReferrer ? referredBy?.id : undefined,
       }),
     });
     setBusy(false);
@@ -407,6 +416,7 @@ function NewLeadButton({
       statusId: "",
       assignedToId: "",
     });
+    setReferredBy(null);
     setOpen(false);
     router.refresh();
   }
@@ -509,6 +519,18 @@ function NewLeadButton({
                   </select>
                 </Field>
               </div>
+              {asksReferrer && (
+                // Not a <label>: the picker holds its own buttons.
+                <div>
+                  <span className="block text-label-sm text-on-surface-variant mb-xs">
+                    Referred by — the candidate who sent them
+                  </span>
+                  <LeadSearchPicker value={referredBy} onChange={setReferredBy} inputClassName={inputCls} />
+                  <span className="block text-label-sm text-on-surface-variant mt-xs">
+                    They earn the referral reward if this lead enrols.
+                  </span>
+                </div>
+              )}
               <div className="grid grid-cols-2 gap-md">
                 <Field label="Qualification">
                   <select

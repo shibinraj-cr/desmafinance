@@ -25,6 +25,7 @@ vi.mock("@/lib/prisma", () => ({
     opsDocument: { count: vi.fn() },
     opsActionItem: { count: vi.fn() },
     crmLeadStatus: { findUnique: vi.fn() },
+    crmReferralReward: { findUnique: vi.fn() },
     $transaction: vi.fn(),
   },
 }));
@@ -53,6 +54,7 @@ function makeTx() {
     transactionDraft: { findUnique: vi.fn(), delete: vi.fn() },
     opsProject: { delete: vi.fn(), update: vi.fn() },
     partyService: { delete: vi.fn() },
+    crmReferralReward: { updateMany: vi.fn(async (_args: { where: { status: string } }) => ({ count: 0 })) },
   };
 }
 
@@ -71,6 +73,8 @@ type Scenario = {
   opsCounts?: { taskCount: number; touched: number; docs: number; items: number };
   /** The daily close row the pipeline points at (null → already gone). */
   close?: { id: string; entry: { id: string; closedWon: number } } | null;
+  /** The referral reward this enrollment earned someone (null → not a referral). */
+  reward?: { status: string; paidOn?: Date | null } | null;
 };
 
 function setup(s: Scenario = {}): TxSpies {
@@ -84,6 +88,7 @@ function setup(s: Scenario = {}): TxSpies {
     opsProject = { id: "proj1", status: "active", leadId: "lead1" },
     opsCounts = { taskCount: 12, touched: 0, docs: 0, items: 0 },
     close = { id: "close1", entry: { id: "entry1", closedWon: 3 } },
+    reward = null,
   } = s;
 
   fn(prisma.lead.findUnique).mockResolvedValue({
@@ -117,8 +122,17 @@ function setup(s: Scenario = {}): TxSpies {
   fn(prisma.opsDocument.count).mockResolvedValue(opsCounts.docs);
   fn(prisma.opsActionItem.count).mockResolvedValue(opsCounts.items);
   fn(prisma.crmLeadStatus.findUnique).mockResolvedValue(FOLLOW_UP);
+  fn(prisma.crmReferralReward.findUnique).mockResolvedValue(
+    reward
+      ? { id: "rw1", status: reward.status, amount: { toString: () => "5000" }, referrerName: "Asha Kumar", referrerLeadId: "asha", paidOn: reward.paidOn ?? null }
+      : null,
+  );
 
   const tx = makeTx();
+  // The reward's claim by status: due → cancelled, paid → flagged.
+  tx.crmReferralReward.updateMany.mockImplementation(async (args: { where: { status: string } }) => ({
+    count: reward && reward.status === args.where.status ? 1 : 0,
+  }));
   tx.lead.findUnique.mockResolvedValue({ id: "lead1", status: { code: statusCode, label: "Enrolled" } });
   tx.leadPulseDailyClose.findUnique.mockResolvedValue(close);
   tx.transactionDraft.findUnique.mockResolvedValue(draftRow ? { id: draftRow.id } : null);
@@ -325,5 +339,49 @@ describe("unenrollLead — the reversal itself", () => {
     expect(tx.opsProject.update).not.toHaveBeenCalled();
     expect(res.opsProjectDeleted).toBe(false);
     expect(res.opsProjectCancelled).toBe(false);
+  });
+});
+
+describe("unenrollLead — the referral reward it earned", () => {
+  it("cancels a reward still due, and the dialog says so", async () => {
+    setup({ reward: { status: "due" } });
+    const plan = await previewUnenroll("lead1");
+    expect(plan.warnings).toEqual([]);
+    expect(plan.effects.join(" ")).toContain("₹5,000 referral reward due to Asha Kumar is cancelled");
+
+    const tx = setup({ reward: { status: "due" } });
+    const res = await run();
+    expect(tx.crmReferralReward.updateMany).toHaveBeenCalledWith({
+      where: { id: "rw1", status: "due" },
+      data: expect.objectContaining({ status: "cancelled", cancelReason: "Un-enrolled" }),
+    });
+    expect(res.rewardCancelled).toBe(true);
+    expect(res.rewardFlagged).toBe(false);
+  });
+
+  it("asks for acknowledgement when the reward is already paid, then flags it and leaves it paid", async () => {
+    setup({ reward: { status: "paid", paidOn: new Date("2026-11-01T00:00:00.000Z") } });
+    const plan = await previewUnenroll("lead1");
+    expect(plan.warnings.map((w) => w.code)).toEqual(["referral_reward_paid"]);
+    expect(plan.warnings[0].message).toContain("on 2026-11-01");
+
+    setup({ reward: { status: "paid" } });
+    await expect(run()).rejects.toMatchObject({ code: "acknowledgement_required" });
+
+    const tx = setup({ reward: { status: "paid" } });
+    const res = await run({ acknowledge: true });
+    expect(tx.crmReferralReward.updateMany).toHaveBeenLastCalledWith({
+      where: { id: "rw1", status: "paid" },
+      data: { unenrolledAfterPaidAt: expect.any(Date) },
+    });
+    expect(res.rewardCancelled).toBe(false);
+    expect(res.rewardFlagged).toBe(true);
+  });
+
+  it("leaves a lead nobody referred alone", async () => {
+    const tx = setup();
+    const res = await run();
+    expect(tx.crmReferralReward.updateMany).not.toHaveBeenCalled();
+    expect(res.rewardCancelled).toBe(false);
   });
 });

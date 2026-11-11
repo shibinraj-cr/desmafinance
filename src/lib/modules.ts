@@ -104,6 +104,9 @@ export const MODULES: AppModule[] = [
         icon: "grid_on",
         group: "MONEY OUT",
       },
+      // Flat rewards owed to candidates whose referrals enrolled; marking one
+      // paid drafts the expense (src/lib/crm-referral-reward.ts).
+      { href: "/finance/referral-rewards", label: "Referral Rewards", icon: "card_giftcard", group: "MONEY OUT" },
       { href: "/finance/cashflow", label: "Cash Flow", icon: "account_balance", group: "MONEY OUT" },
       // Bank data: granted to a role deliberately, never by default (the New
       // Role form leaves it unticked). Approver roles with the grant also get

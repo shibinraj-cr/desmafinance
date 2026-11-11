@@ -27,13 +27,15 @@ import { CONVERSION_TARGET_PCT, FIRST_RESPONSE_FAST_HOURS, RESPONSE_SLA_HOURS, S
 import { BACKDATE_DAYS } from "./lead-pulse-dates";
 import { SATURDAY_CUTOFF_MINUTES, WEEKDAY_CUTOFF_MINUTES } from "./crm-cutoff";
 import { HANDOVER_REJECT_REASONS } from "./crm-handover";
-import { REFERRAL_LINK_SOURCE_LABEL } from "./crm-referral-link";
+import { REFERRAL_LINK_SOURCE_LABEL, REFERRAL_REWARD_AMOUNT } from "./crm-referral-link";
 
 /** "5:00 pm" for minutes after midnight. */
 function clock(minutes: number): string {
   const h = Math.floor(minutes / 60);
   return `${h % 12 || 12}:${String(minutes % 60).padStart(2, "0")} ${h < 12 ? "am" : "pm"}`;
 }
+/** "₹5,000" */
+const rupees = (n: number) => `₹${n.toLocaleString("en-IN")}`;
 const WEEKDAY_CUTOFF = clock(WEEKDAY_CUTOFF_MINUTES);
 const SATURDAY_CUTOFF = clock(SATURDAY_CUTOFF_MINUTES);
 
@@ -114,6 +116,12 @@ export type GuideChange = { date: string; section: string; title: string; detail
  * is the GuideSection id it updates (drives the "Updated" pill).
  */
 export const CRM_GUIDE_CHANGES: GuideChange[] = [
+  {
+    date: "2026-11-11",
+    section: "referral-links",
+    title: "Referral rewards",
+    detail: `A candidate now earns ${rupees(REFERRAL_REWARD_AMOUNT)} when someone they referred enrols — through their link or picked under **Referred by** on a Candidate Referral lead. Finance pays it; the lead shows it as due, then paid.`,
+  },
   {
     date: "2026-11-11",
     section: "lead-page",
@@ -661,6 +669,7 @@ export function crmGuideSections(f: GuideFacts, canSee: (href: string) => boolea
           items: [
             "On Leads, click **New lead**.",
             `Fill **Candidate name** (the only required field), phone and/or email, **Source**, **Service** and **Qualification**. If you pick **Others**, type the qualification (up to ${QUALIFICATION_OTHER_MAX} characters, e.g. MBA).`,
+            `If the source is **Candidate Referral**, search for the candidate who sent them under **Referred by**. That candidate earns the ${rupees(REFERRAL_REWARD_AMOUNT)} referral reward if this lead enrols.`,
             "Leave **Stage** and **Status** on **Default** unless you already know more. Set **Temperature** if you can judge it.",
             "Click **Create lead**. It is assigned to you.",
           ],
@@ -694,8 +703,8 @@ export function crmGuideSections(f: GuideFacts, canSee: (href: string) => boolea
             ["Summary", "Contact details. The pencil edits them — and is where you close a lead to a lost stage."],
             ["Timeline", "Every call, message, note and change. Add notes here."],
             ["Deal", "**Set deal**, **Enroll**, **Reopen for another service**."],
-            ["Consultant / Lead detail", "Who owns the lead and since when; source, service, qualification, linked candidate, and **Referred by** for a lead from a referral link."],
-            ["Referral link", "The candidate's own link to share, and the leads it has brought in."],
+            ["Consultant / Lead detail", "Who owns the lead and since when; source, service, qualification, linked candidate, and **Referred by** (with the referral reward) for a referred lead."],
+            ["Referral link", "The candidate's own link to share, the leads it has brought in, and their referral rewards."],
             ["Tabs", "**Tasks**, **WhatsApp** (company-number chat), **Instagram** (only for leads from an Instagram DM)."],
           ],
         },
@@ -740,9 +749,20 @@ export function crmGuideSections(f: GuideFacts, canSee: (href: string) => boolea
           ],
         },
         {
+          kind: "table",
+          title: "The referral reward",
+          head: ["When", "What happens"],
+          rows: [
+            ["A referred lead enrols", `The candidate who referred them is owed ${rupees(REFERRAL_REWARD_AMOUNT)}. It shows as **due** on both leads.`],
+            ["Finance pays the candidate", "It shows as **paid**. Finance pays it from **Referral Rewards**; you don't."],
+            ["The enrollment is undone before payment", "The reward is cancelled."],
+          ],
+        },
+        {
           kind: "tips",
           items: [
             "The card counts **Visits**, **Leads**, **Enrolled** and **In CRM** (people already in the CRM, not credited), and lists the leads the link brought in.",
+            "A referral typed in by hand earns the same reward: pick the candidate under **Referred by** when you create a **Candidate Referral** lead.",
             "Anyone who can open a lead can copy its link. It doesn't have to be your lead.",
             "WhatsApp's link preview doesn't count as a visit. Only people opening the page do.",
           ],
@@ -752,6 +772,7 @@ export function crmGuideSections(f: GuideFacts, canSee: (href: string) => boolea
           items: [
             `**${REFERRAL_LINK_SOURCE_LABEL}** is not **Candidate Referral**. Candidate Referral is a referral someone types in by hand.`,
             "Whoever assigns leads can **Switch off this link**. The form still takes enquiries, but new leads from it aren't credited to the candidate.",
+            "Only whoever assigns leads can change **Referred by** after the lead is created, and never once its reward is paid.",
           ],
         },
       ],
@@ -1388,6 +1409,13 @@ export function crmGuideQuiz(f: GuideFacts): GuideQuizQuestion[] {
         "Their lead moves to the candidate's consultant",
       ],
       "Only someone new is credited to the candidate. People already in the CRM show on the card as In CRM.",
+    ),
+    q(
+      "referral-reward",
+      "When does a candidate earn the referral reward?",
+      ["When someone they referred enrols"],
+      ["As soon as their friend fills in the form", "When their friend's lead is assigned to a consultant", "Only for referrals through their link, never hand-typed ones"],
+      `The ${rupees(REFERRAL_REWARD_AMOUNT)} is owed when the referred lead enrols — whether it came through the link or was typed in with Referred by. Finance pays it.`,
     ),
   ];
 }

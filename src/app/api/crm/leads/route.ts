@@ -26,6 +26,7 @@ import {
 import { recordReInquiry, resolveReInquiryContext, notifySupervisorOfReInquiries } from "@/lib/crm-reinquiry";
 import { recordAssignmentChange } from "@/lib/crm-contact-data";
 import { findOpenHandoversFor, linkHandovers, resolveHandoverSourceId } from "@/lib/crm-handover-data";
+import { validateReferrer } from "@/lib/crm-referral-reward";
 
 export const dynamic = "force-dynamic";
 
@@ -91,6 +92,9 @@ const CreateSchema = z.object({
   // The Lead Handover this lead is being created from (its "Create lead" button).
   // Matching on phone settles it anyway; the id also catches a number typed differently.
   handoverId: z.string().optional(),
+  // The candidate who referred them — only on a Candidate Referral lead. It earns
+  // that candidate the referral reward when this lead enrols.
+  referredByLeadId: z.string().optional(),
 });
 
 export const POST = withApiHandler(async (req: Request) => {
@@ -219,6 +223,21 @@ export const POST = withApiHandler(async (req: Request) => {
     data.qualificationOther,
   );
 
+  // Referred by: a hand-typed referral names its candidate here. Checked only
+  // for a lead that is being created (a re-inquiry above credits nobody).
+  const finalSourceId = handoverSourceId ?? (data.sourceId || null);
+  let referrer: { id: string; candidateName: string } | null = null;
+  if (data.referredByLeadId) {
+    const referralSource = await prisma.leadPulseSource.findUnique({
+      where: { code: CANDIDATE_REFERRAL_SOURCE_CODE },
+      select: { id: true },
+    });
+    if (!referralSource || finalSourceId !== referralSource.id) {
+      throw badRequest("“Referred by” is only for leads with the Candidate Referral source.", "referred_by_needs_referral_source");
+    }
+    referrer = await validateReferrer(data.referredByLeadId, { phoneE164, altPhoneE164, emailKey });
+  }
+
   // Every lead carries a status from the moment it exists — an unset one would
   // read as "nobody has looked at this" and make the filter lie. Falls back to
   // the `isDefault` row ("Not contacted yet"), mirroring how the stage defaults.
@@ -242,7 +261,8 @@ export const POST = withApiHandler(async (req: Request) => {
       altPhoneE164,
       emailKey,
       dedupeKey,
-      sourceId: handoverSourceId ?? (data.sourceId || null),
+      sourceId: finalSourceId,
+      referredByLeadId: referrer?.id ?? null,
       serviceId: data.serviceId || null,
       qualificationId: data.qualificationId || null,
       qualificationOther,
@@ -265,7 +285,7 @@ export const POST = withApiHandler(async (req: Request) => {
     leadId: created.id,
     actorId: userId,
     type: "LEAD_CREATED",
-    summary: "Lead created",
+    summary: referrer ? `Lead created — referred by ${referrer.candidateName}` : "Lead created",
   });
   await linkHandovers(handovers.map((h) => h.id), created.id, "created", userId);
   if (assignedToId) {
