@@ -115,6 +115,12 @@ export type GuideChange = { date: string; section: string; title: string; detail
  */
 export const CRM_GUIDE_CHANGES: GuideChange[] = [
   {
+    date: "2026-11-11",
+    section: "lead-page",
+    title: "Meta leads arrive with their qualification",
+    detail: "A lead from a Meta form now comes with **Qualification** already filled from the candidate's answer to *What is your qualification?* (BSN, GNM, PBSN for Post BSc, MSN or Other). Confirm it on your first call and correct it if it's wrong.",
+  },
+  {
     date: "2026-11-10",
     section: "referral-links",
     title: "Referral links",
@@ -691,6 +697,7 @@ export function crmGuideSections(f: GuideFacts, canSee: (href: string) => boolea
           kind: "tips",
           items: [
             "If the candidate has other records, a banner lists them with **Latest notes on those records**. Read it before you call — someone may already have spoken to them.",
+            "On a lead from a Meta form, **Qualification** is filled from the candidate's own answer on the form. Confirm it on the call — candidates sometimes tick the wrong one.",
           ],
         },
         { kind: "warn", items: ["On a lead that isn't yours, everything is read-only."] },

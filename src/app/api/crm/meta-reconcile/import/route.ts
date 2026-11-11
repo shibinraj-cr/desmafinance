@@ -8,6 +8,7 @@ import { getCurrentUserAndPermissions } from "@/lib/permissions";
 import { canSeePage } from "@/lib/rbac";
 import { normalizePhone, computeDedupeKey, emailKeyOf, phoneMatchKeys } from "@/lib/crm";
 import { resolveDefaultStatus } from "@/lib/crm-leads";
+import { qualificationFromForm } from "@/lib/crm-form-qualification";
 import {
   recordReInquiry,
   resolveReInquiryContext,
@@ -46,13 +47,14 @@ export const POST = withApiHandler(async (req: Request) => {
   const json = await req.json().catch(() => null);
   const body = BodySchema.parse(json);
 
-  const [defStatus, metaSource] = await Promise.all([
+  const [defStatus, metaSource, quals] = await Promise.all([
     resolveDefaultStatus(),
     prisma.leadPulseSource.upsert({
       where: { code: "meta" },
       create: { code: "meta", label: "Meta", displayOrder: 1, active: true },
       update: {},
     }),
+    prisma.crmQualification.findMany({ where: { active: true }, select: { id: true, label: true } }),
   ]);
   if (!defStatus) throw badRequest("No lead statuses configured — run db:seed-crm", "no_status_configured");
 
@@ -173,6 +175,8 @@ export const POST = withApiHandler(async (req: Request) => {
       sourceId: metaSource.id,
       campaign: p.campaign,
       statusId: defStatus.id,
+      // The form's "What is your qualification?" answer, so the BDE doesn't re-ask.
+      qualificationId: qualificationFromForm(p.extra, quals)?.id ?? null,
       extra: p.extra ?? Prisma.JsonNull,
       createdById: userId,
     });
