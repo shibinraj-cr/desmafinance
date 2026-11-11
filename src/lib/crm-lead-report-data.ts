@@ -99,7 +99,7 @@ async function loadDayAssignments(day: string, userId?: string): Promise<DayAssi
 }
 
 /** The handover channel of each lead created from a handover. */
-async function handoverChannels(leadIds: string[]): Promise<Map<string, string>> {
+export async function handoverChannels(leadIds: string[]): Promise<Map<string, string>> {
   if (leadIds.length === 0) return new Map();
   const rows = await prisma.crmLeadHandover.findMany({
     where: { linkedLeadId: { in: [...new Set(leadIds)] }, status: "created" },
@@ -322,6 +322,8 @@ export type TeamLeadReportRow = {
   sources: LeadReportSource[];
   handovers: HandoverCounts;
   live: boolean;
+  /** The generated report judged some leads by the older rule (see LeadReport.olderRule). */
+  olderRule: boolean;
   submission: { reportId: string; status: string; locked: boolean; submittedAt: string } | null;
 };
 
@@ -383,6 +385,7 @@ export async function getTeamLeadReport(day: string, now: Date = new Date()): Pr
       sources: report.sources,
       handovers: report.handovers,
       live: !snapshot,
+      olderRule: !!report.olderRule,
       submission: s
         ? { reportId: s.id, status: s.status, locked: s.locked, submittedAt: s.submittedAt.toISOString() }
         : null,

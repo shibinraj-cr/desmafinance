@@ -127,6 +127,28 @@ describe("evaluateContact — details", () => {
   });
 });
 
+describe("evaluateContact — the older rule (backfill of days before go-live)", () => {
+  const a = assignment("2026-11-09 10:00");
+
+  it("any single logged action counts — a stage change alone, a WhatsApp alone", () => {
+    expect(evaluateContact(a, [ev("stage", "2026-11-09 12:00")], afterCutoff, "any")).toMatchObject({
+      status: "contacted",
+      firstContactedAt: ist("2026-11-09 12:00"),
+    });
+    expect(evaluateContact(a, [ev("whatsapp", "2026-11-09 18:00")], ist("2026-11-09 19:00"), "any").status).toBe("contacted_late");
+  });
+
+  it("still only the assigned BDE, after the assignment; nothing at all is still a miss", () => {
+    expect(evaluateContact(a, [ev("stage", "2026-11-09 12:00", { actorId: OTHER })], afterCutoff, "any").status).toBe("missed");
+    expect(evaluateContact(a, [ev("call", "2026-11-09 09:00")], afterCutoff, "any").status).toBe("missed");
+    expect(evaluateContact(a, [], afterCutoff, "any").status).toBe("missed");
+  });
+
+  it("the default is still R1", () => {
+    expect(evaluateContact(a, [ev("stage", "2026-11-09 12:00")], afterCutoff).status).toBe("missed");
+  });
+});
+
 describe("evaluateContact — reassignment (R6)", () => {
   it("left before the cutoff, uncontacted → reassigned (on nobody's record)", () => {
     const a = assignment("2026-11-09 10:00", { endedAt: ist("2026-11-09 12:00") });

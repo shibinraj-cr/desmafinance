@@ -156,6 +156,11 @@ export default async function MyDayPage({ searchParams }: { searchParams: SP }) 
                 <p className="-mt-sm mb-sm text-caption text-on-surface-variant">
                   Filled in from the CRM. Contacted = a call and a note, or a WhatsApp and a stage or Status change.
                 </p>
+                {view.report.olderRule && (
+                  <p className="mb-sm text-caption font-semibold text-on-surface-variant">
+                    Leads assigned before the daily lead report went live are judged by the older rule: any call, note, WhatsApp or stage change by the cutoff counts as contacted.
+                  </p>
+                )}
                 <SourceTable sources={view.report.sources} totals={view.report.totals} />
               </Section>
               {view.queue && (
