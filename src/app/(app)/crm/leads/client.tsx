@@ -791,15 +791,20 @@ export function LeadsTable({
   }
 
   // ── Bulk selection ─────────────────────────────────────────────────────────
-  // One selection, several actions: "Send email" (CRM admins) and "Change
-  // stage" (admin / Marketing Admin). Rows are therefore selectable regardless
-  // of whether they have an email — each action reports what it had to skip.
-  const bulk = access.canBulkEmail || access.canBulkStatus;
+  // One selection, several actions: "Send email" (CRM admins), "Change stage"
+  // (admin / Marketing Admin) and "Assign to BDE" (anyone who may assign).
+  // Rows are therefore selectable regardless of whether they have an email —
+  // each action reports what it had to skip.
+  const bulk = access.canBulkEmail || access.canBulkStatus || access.canAssign;
+  // Stage and assign sweeps want every matching lead; only an email-only admin
+  // selects the emailable ones (see selectAllMatching).
+  const selectsAll = access.canBulkStatus || access.canAssign;
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [matchedAll, setMatchedAll] = useState<{ selected: number; emailable: number; total: number; truncated: boolean } | null>(null);
   const [selectingAll, setSelectingAll] = useState(false);
   const [composeOpen, setComposeOpen] = useState(false);
   const [stageOpen, setStageOpen] = useState(false);
+  const [assignOpen, setAssignOpen] = useState(false);
 
   // Reset the selection whenever the FILTER (not just the page) changes, so a
   // "select all matching" set can never leak onto a different filter.
@@ -828,6 +833,10 @@ export function LeadsTable({
     [leads, selected],
   );
   const selectedNoEmail = matchedAll ? Math.max(0, matchedAll.selected - matchedAll.emailable) : selectedNoEmailOnPage;
+  const selectedOwnedOnPage = useMemo(
+    () => leads.filter((l) => selected.has(l.id) && !!l.assignedTo).length,
+    [leads, selected],
+  );
 
   // ── Reorderable columns (drag headers; persisted per browser) ───────────────
   const [colOrder, setColOrder] = useState<string[]>([...LEADS_DEFAULT_COLUMNS]);
@@ -891,10 +900,11 @@ export function LeadsTable({
     const params = new URLSearchParams(search.toString());
     params.delete("page");
     params.delete("pageSize");
-    // "all" while the user can change stages — a stage sweep has no reason to
-    // skip leads without an email. Email-only admins keep the emailable scope so
-    // the 5,000-id cap can't fill up with leads they could never email.
-    params.set("scope", access.canBulkStatus ? "all" : "emailable");
+    // "all" while the user can change stages or assign — neither sweep has a
+    // reason to skip leads without an email. Email-only admins keep the
+    // emailable scope so the 5,000-id cap can't fill up with leads they could
+    // never email.
+    params.set("scope", selectsAll ? "all" : "emailable");
     const res = await fetch(`/api/crm/leads/ids?${params.toString()}`);
     setSelectingAll(false);
     if (!res.ok) return;
@@ -1426,7 +1436,7 @@ export function LeadsTable({
             <button type="button" onClick={selectAllMatching} disabled={selectingAll} className="text-label-sm text-primary hover:underline disabled:opacity-60">
               {selectingAll
                 ? "Selecting…"
-                : access.canBulkStatus
+                : selectsAll
                   ? `Select all ${total.toLocaleString()} leads matching the filter`
                   : "Select every emailable lead matching the filter"}
             </button>
@@ -1435,7 +1445,7 @@ export function LeadsTable({
             <span className="text-label-sm text-on-surface-variant">
               {matchedAll.truncated
                 ? `First ${matchedAll.selected.toLocaleString()} of ${matchedAll.total.toLocaleString()} matching leads selected (capped)`
-                : `All ${matchedAll.selected.toLocaleString()}${access.canBulkStatus ? "" : " emailable"} lead${matchedAll.selected === 1 ? "" : "s"} matching the filter selected`}
+                : `All ${matchedAll.selected.toLocaleString()}${selectsAll ? "" : " emailable"} lead${matchedAll.selected === 1 ? "" : "s"} matching the filter selected`}
               {selectedNoEmail > 0 ? ` · ${selectedNoEmail.toLocaleString()} have no email` : ""}
             </span>
           )}
@@ -1443,6 +1453,18 @@ export function LeadsTable({
             <button type="button" onClick={clearSelection} className="text-label-sm text-on-surface-variant hover:text-on-surface">
               Clear
             </button>
+            {access.canAssign && (
+              <button
+                type="button"
+                onClick={() => setAssignOpen(true)}
+                className="inline-flex items-center gap-xs h-9 px-md rounded-lg border border-primary/50 text-primary text-label-sm font-semibold hover:bg-primary/10 transition"
+              >
+                <span className="material-symbols-outlined" style={{ fontSize: 18 }}>
+                  person_add
+                </span>
+                Assign to BDE
+              </button>
+            )}
             {access.canBulkStatus && (
               <button
                 type="button"
@@ -1480,6 +1502,21 @@ export function LeadsTable({
           onClose={() => setStageOpen(false)}
           onDone={() => {
             setStageOpen(false);
+            clearSelection();
+            router.refresh();
+          }}
+        />
+      )}
+
+      {assignOpen && (
+        <BulkAssignModal
+          leadIds={Array.from(selected)}
+          bdes={masters.bdes}
+          knownOwned={selectedOwnedOnPage}
+          truncated={matchedAll?.truncated ?? false}
+          onClose={() => setAssignOpen(false)}
+          onDone={() => {
+            setAssignOpen(false);
             clearSelection();
             router.refresh();
           }}
@@ -2314,6 +2351,238 @@ function BulkStatusModal({
                 <p className="text-body-md font-semibold text-on-surface">Stage change stopped</p>
                 <p className="text-label-sm text-on-surface-variant">
                   {progress.moved.toLocaleString()} of {total.toLocaleString()} moved so far. {(total - cursor).toLocaleString()} not yet
+                  attempted.
+                </p>
+              </div>
+            </div>
+            {error && <div className="rounded-lg bg-error-container text-on-error-container px-md py-sm text-label-sm">{error}</div>}
+            <div className="flex justify-end gap-base">
+              <button type="button" className={secondaryBtn} onClick={onDone}>
+                Close
+              </button>
+              <button type="button" className={primaryBtn} onClick={() => void runFrom(cursor, progress)}>
+                Retry remaining ({(total - cursor).toLocaleString()})
+              </button>
+            </div>
+          </div>
+        )}
+      </div>
+    </div>,
+    document.body,
+  );
+}
+
+// ── Bulk assign ─────────────────────────────────────────────────────────────
+type AssignProgress = {
+  done: number;
+  assigned: number;
+  reassigned: number;
+  skippedUnchanged: number;
+  skippedRevival: number;
+  skippedMissing: number;
+};
+
+const ZERO_ASSIGN: AssignProgress = { done: 0, assigned: 0, reassigned: 0, skippedUnchanged: 0, skippedRevival: 0, skippedMissing: 0 };
+
+function BulkAssignModal({
+  leadIds,
+  bdes,
+  knownOwned,
+  truncated,
+  onClose,
+  onDone,
+}: {
+  leadIds: string[];
+  bdes: BdeOpt[];
+  /** Selected leads on this page that already have a consultant — a floor, not a total. */
+  knownOwned: number;
+  /** The "select all matching" set hit the 5,000-id cap, so leads are left behind. */
+  truncated: boolean;
+  onClose: () => void;
+  onDone: () => void;
+}) {
+  const [mounted, setMounted] = useState(false);
+  const [bdeId, setBdeId] = useState("");
+  const [status, setStatus] = useState<"idle" | "saving" | "done" | "error">("idle");
+  const [progress, setProgress] = useState<AssignProgress>(ZERO_ASSIGN);
+  const [cursor, setCursor] = useState(0); // next leadIds index to attempt (enables Retry remaining)
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => setMounted(true), []);
+  useEffect(() => {
+    const prev = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    return () => {
+      document.body.style.overflow = prev;
+    };
+  }, []);
+
+  const target = bdes.find((b) => b.userId === bdeId) ?? null;
+
+  // Assign leadIds[startIdx..] in chunks, accumulating onto `base`. On any chunk
+  // failure it stops at that index so "Retry remaining" can resume from there;
+  // leads that already landed come back as "already with them", never twice.
+  async function runFrom(startIdx: number, base: AssignProgress) {
+    setError(null);
+    setStatus("saving");
+    const agg: AssignProgress = { ...base };
+    const CHUNK = 50; // must stay ≤ MAX_PER_REQUEST on the server
+    let i = startIdx;
+    for (; i < leadIds.length; i += CHUNK) {
+      const chunk = leadIds.slice(i, i + CHUNK);
+      let res: Response | null = null;
+      try {
+        res = await fetch("/api/crm/leads/bulk-assign", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ leadIds: chunk, assignedToId: bdeId }),
+        });
+      } catch {
+        res = null; // network error
+      }
+      if (!res || !res.ok) {
+        const d = res ? ((await res.json().catch(() => ({}))) as { message?: string; error?: string }) : {};
+        setError(d.message || d.error || "The assignment was interrupted. Retrying won't touch the leads already assigned.");
+        setProgress({ ...agg });
+        setCursor(i); // resume here
+        setStatus("error");
+        return;
+      }
+      const d = (await res.json()) as Omit<AssignProgress, "done">;
+      agg.done += chunk.length;
+      agg.assigned += d.assigned;
+      agg.reassigned += d.reassigned;
+      agg.skippedUnchanged += d.skippedUnchanged;
+      agg.skippedRevival += d.skippedRevival;
+      agg.skippedMissing += d.skippedMissing;
+      setProgress({ ...agg });
+    }
+    setCursor(leadIds.length);
+    setStatus("done");
+  }
+
+  function start() {
+    if (!bdeId) {
+      setError("Pick the BDE to assign these leads to.");
+      return;
+    }
+    setProgress(ZERO_ASSIGN);
+    void runFrom(0, ZERO_ASSIGN);
+  }
+
+  if (!mounted) return null;
+  const total = leadIds.length;
+  const pct = total === 0 ? 0 : Math.round((progress.done / total) * 100);
+  const terminal = status === "done" || status === "error";
+  const landed = progress.assigned + progress.reassigned;
+
+  return createPortal(
+    <div className="fixed inset-0 z-[1000] grid place-items-center bg-black/50 p-md" onClick={() => (status === "idle" ? onClose() : terminal ? onDone() : undefined)}>
+      <div
+        onClick={(e) => e.stopPropagation()}
+        className="w-full max-w-md max-h-[90vh] overflow-y-auto bg-surface-container-lowest border border-outline-variant rounded-xl shadow-lg p-lg space-y-md"
+      >
+        <div className="flex items-center justify-between">
+          <h3 className="text-h3 text-on-surface">
+            Assign {total.toLocaleString()} lead{total === 1 ? "" : "s"}
+          </h3>
+          <span className="material-symbols-outlined text-on-surface-variant" style={{ fontSize: 24 }}>
+            person_add
+          </span>
+        </div>
+
+        {status === "idle" && (
+          <>
+            <Field label="Assign to">
+              <select className={inputCls} value={bdeId} onChange={(e) => setBdeId(e.target.value)}>
+                <option value="">Select a BDE…</option>
+                {bdes.map((b) => (
+                  <option key={b.userId} value={b.userId}>
+                    {b.displayName}
+                  </option>
+                ))}
+              </select>
+            </Field>
+
+            <p className="text-label-sm text-on-surface-variant">
+              Same as assigning each lead from its row: open tasks and WhatsApp threads move to {target ? target.displayName : "the BDE"},
+              they get a notification per lead, and L2 consultants&apos; candidates get the WhatsApp intro. Leads already with them
+              are left alone.
+              {knownOwned > 0
+                ? ` At least ${knownOwned.toLocaleString()} of this selection already ${knownOwned === 1 ? "has" : "have"} a consultant and will be reassigned.`
+                : ""}
+            </p>
+
+            {truncated && (
+              <div className="rounded-lg bg-amber-50 text-amber-800 border border-amber-200 px-md py-sm text-label-sm">
+                More than 5,000 leads match this filter; only the first 5,000 are selected. Narrow the filter and repeat to
+                reach the rest.
+              </div>
+            )}
+
+            {error && <div className="rounded-lg bg-error-container text-on-error-container px-md py-sm text-label-sm">{error}</div>}
+
+            <div className="flex justify-end gap-base pt-xs">
+              <button type="button" className={secondaryBtn} onClick={onClose}>
+                Cancel
+              </button>
+              <button type="button" className={primaryBtn} disabled={!bdeId} onClick={start}>
+                Assign {total.toLocaleString()} lead{total === 1 ? "" : "s"}
+              </button>
+            </div>
+          </>
+        )}
+
+        {status === "saving" && (
+          <div className="space-y-sm py-md">
+            <p className="text-body-md text-on-surface">
+              Assigning… {progress.done.toLocaleString()} / {total.toLocaleString()}
+            </p>
+            <div className="h-2 w-full rounded-full bg-surface-container-high overflow-hidden">
+              <div className="h-full bg-primary transition-all" style={{ width: `${pct}%` }} />
+            </div>
+            <p className="text-label-sm text-on-surface-variant">Please keep this window open.</p>
+          </div>
+        )}
+
+        {status === "done" && (
+          <div className="space-y-md py-sm">
+            <div className="flex items-center gap-sm">
+              <span className="material-symbols-outlined text-green-600" style={{ fontSize: 28 }}>
+                check_circle
+              </span>
+              <div>
+                <p className="text-body-md font-semibold text-on-surface">
+                  {landed.toLocaleString()} lead{landed === 1 ? "" : "s"} assigned to {target?.displayName}
+                </p>
+                <p className="text-label-sm text-on-surface-variant">
+                  {progress.reassigned > 0 && `${progress.reassigned.toLocaleString()} taken from another consultant · `}
+                  {progress.skippedUnchanged > 0 && `${progress.skippedUnchanged.toLocaleString()} already with them · `}
+                  {progress.skippedRevival > 0 &&
+                    `${progress.skippedRevival.toLocaleString()} back from the central pool, whose last owner was ${target?.displayName} (not assigned — pick someone else) · `}
+                  {progress.skippedMissing > 0 && `${progress.skippedMissing.toLocaleString()} no longer exist · `}
+                  logged on each lead&apos;s timeline.
+                </p>
+              </div>
+            </div>
+            <div className="flex justify-end">
+              <button type="button" className={primaryBtn} onClick={onDone}>
+                Done
+              </button>
+            </div>
+          </div>
+        )}
+
+        {status === "error" && (
+          <div className="space-y-md py-sm">
+            <div className="flex items-start gap-sm">
+              <span className="material-symbols-outlined text-error" style={{ fontSize: 28 }}>
+                error
+              </span>
+              <div>
+                <p className="text-body-md font-semibold text-on-surface">Assignment stopped</p>
+                <p className="text-label-sm text-on-surface-variant">
+                  {landed.toLocaleString()} of {total.toLocaleString()} assigned so far. {(total - cursor).toLocaleString()} not yet
                   attempted.
                 </p>
               </div>

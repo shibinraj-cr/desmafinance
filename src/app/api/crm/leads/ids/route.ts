@@ -16,7 +16,8 @@ const MAX_IDS = 5000;
 // GET /api/crm/leads/ids — ids of the leads matching the current filter, for
 // "select all N matching" in the Leads list's bulk actions.
 //
-//   ?scope=all        every matching lead (backs bulk "Change stage")
+//   ?scope=all        every matching lead (backs bulk "Change stage" and
+//                     "Assign to BDE")
 //   ?scope=emailable  only those with an email address (backs bulk email)
 //
 // `emailable` is always returned alongside `total` so the caller can say how
@@ -29,7 +30,7 @@ export const GET = withApiHandler(async (req: Request) => {
 
   const sp = new URL(req.url).searchParams;
   const scope = sp.get("scope") === "all" ? "all" : "emailable";
-  if (scope === "all" ? !(access.canBulkStatus || access.canBulkEmail) : !access.canBulkEmail) {
+  if (scope === "all" ? !(access.canBulkStatus || access.canAssign || access.canBulkEmail) : !access.canBulkEmail) {
     throw forbidden();
   }
 
