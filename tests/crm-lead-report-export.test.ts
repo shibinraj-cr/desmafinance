@@ -24,6 +24,7 @@ const report: TeamLeadReport = {
       sources: [{ key: "s1", label: "Meta", ...counts({ received: 3, contacted: 2, missed: 1, late: 1 }) }],
       handovers: hcounts({ given: 1, created: 1 }),
       live: false,
+      olderRule: false,
       submission: { reportId: "r1", status: "submitted", locked: true, submittedAt: "2026-11-16T12:00:00.000Z" },
     },
     {
@@ -34,6 +35,7 @@ const report: TeamLeadReport = {
       sources: [{ key: "none", label: "No source", ...counts({ received: 1, pending: 1 }) }],
       handovers: hcounts(),
       live: true,
+      olderRule: false,
       submission: null,
     },
   ],

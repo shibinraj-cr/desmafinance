@@ -50,6 +50,11 @@ export type LeadReport = {
   totals: LeadCounts;
   sources: LeadReportSource[];
   handovers: HandoverCounts;
+  /**
+   * Some leads in it were judged by the older rule (any logged action counts) —
+   * they were assigned before the daily lead report went live. Set by the backfill.
+   */
+  olderRule?: boolean;
 };
 
 /** One assignment row as the report sees it. */
@@ -115,6 +120,7 @@ export function buildLeadReport(
   day: string,
   assignments: ReportAssignment[],
   handovers: { status: string; isLate: boolean }[],
+  opts: { olderRule?: boolean } = {},
 ): LeadReport {
   const totals = zero();
   const bySource = new Map<string, LeadReportSource>();
@@ -128,7 +134,7 @@ export function buildLeadReport(
   const sources = [...bySource.values()].sort(
     (x, y) => y.received + y.carriedIn - (x.received + x.carriedIn) || x.label.localeCompare(y.label),
   );
-  return { day, totals, sources, handovers: buildHandoverCounts(handovers) };
+  return { day, totals, sources, handovers: buildHandoverCounts(handovers), ...(opts.olderRule ? { olderRule: true } : {}) };
 }
 
 /** Sum of several reports' totals and handover blocks — the team row. */

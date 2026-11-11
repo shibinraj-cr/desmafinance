@@ -14,6 +14,8 @@
  *   npx tsx prisma/backfill-lead-report.ts --from 2026-10-01                 # dry run
  *   npx tsx prisma/backfill-lead-report.ts --from 2026-10-01 --apply         # write
  *   options: --to YYYY-MM-DD (default yesterday, IST)  --out <file.csv>
+ *            --rule any|pair  how pre-go-live leads are judged (default any:
+ *            any logged action by the cutoff; pair: today's call+note / WhatsApp+stage)
  */
 import { writeFileSync } from "node:fs";
 import { prisma } from "../src/lib/prisma";
@@ -31,16 +33,22 @@ async function main() {
   const from = arg("--from");
   const to = arg("--to") ?? addDays(todayIst(), -1);
   const out = arg("--out") ?? "lead-report-backfill.csv";
-  if (!from || !DAY.test(from) || !DAY.test(to) || from > to) {
-    throw new Error("Usage: --from YYYY-MM-DD [--to YYYY-MM-DD] [--out file.csv] [--apply]");
+  const rule = arg("--rule") ?? "any";
+  if (!from || !DAY.test(from) || !DAY.test(to) || from > to || (rule !== "any" && rule !== "pair")) {
+    throw new Error("Usage: --from YYYY-MM-DD [--to YYYY-MM-DD] [--out file.csv] [--rule any|pair] [--apply]");
   }
 
-  const r = await backfillLeadReports({ from, to, apply: APPLY, log: (m) => console.log(m) });
+  const r = await backfillLeadReports({ from, to, apply: APPLY, rule, log: (m) => console.log(m) });
   writeFileSync(out, backfillCsv(r.rows));
 
   const sum = (k: "received" | "contacted" | "missed" | "late") => r.rows.reduce((n, row) => n + row.report.totals[k], 0);
   console.log(APPLY ? "\nAPPLIED" : "\nDRY RUN — nothing written to the database (pass --apply to write)");
   console.log(`${r.from} → ${r.to}: ${r.days} working day(s); tracking began ${r.trackingStart}`);
+  console.log(
+    r.rule === "any"
+      ? "leads assigned before go-live judged by the older rule: any call, note, WhatsApp or stage/Status change by the cutoff"
+      : "leads assigned before go-live judged by today's rule: call + note, or WhatsApp + stage/Status change",
+  );
   console.log(`rebuilt ${r.rebuilt} assignment(s); ${r.excludedImports} bulk-import carryover left out`);
   console.log(`${r.rows.length} BDE-day report(s): received ${sum("received")}, contacted on time ${sum("contacted")}, missed ${sum("missed")} (${sum("late")} contacted late)`);
   const stored = { none: 0, submitted: 0, generated: 0 };

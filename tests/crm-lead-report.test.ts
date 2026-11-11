@@ -83,6 +83,13 @@ describe("buildLeadReport", () => {
   });
 });
 
+describe("olderRule", () => {
+  it("is only on a report the backfill marks", () => {
+    expect(buildLeadReport("2026-11-16", [], []).olderRule).toBeUndefined();
+    expect(buildLeadReport("2026-11-16", [], [], { olderRule: true }).olderRule).toBe(true);
+  });
+});
+
 describe("reportSource", () => {
   it("groups a lead created from a handover under its channel", () => {
     expect(reportSource({ sourceId: "src-walk", sourceLabel: "Walk-in" }, "walk_in")).toEqual({

@@ -26,7 +26,7 @@ import { loadHolidaySet } from "./ops-dates";
 import { addDays, toPrismaDate } from "./lead-pulse-dates";
 import { computeDailyReport, istDayWindow } from "./crm-daily-report";
 import { cutoffOn, nextCutoff } from "./crm-cutoff";
-import { evaluateContact, type ContactHalves, type ContactStatus } from "./crm-contact";
+import { evaluateContact, type ContactHalves, type ContactRule, type ContactStatus } from "./crm-contact";
 import { LEAD_REPORT_START_KEY, leadReportStart, loadContactEvents } from "./crm-contact-data";
 import { isDeliberateAssignment } from "./crm-team";
 import { handoverChannels, leadReportJson } from "./crm-lead-report-data";
@@ -166,6 +166,7 @@ export type BackfillRow = {
 export type BackfillResult = {
   from: string;
   to: string;
+  rule: ContactRule;
   trackingStart: string;
   days: number;
   rebuilt: number;
@@ -176,7 +177,7 @@ export type BackfillResult = {
   applied: { assignmentsAdded: number; reportsUpdated: number; reportsCreated: number; trackingStartMovedTo: string | null } | null;
 };
 
-type Judged = ReportAssignment & { userId: string; leadId: string; key: string };
+type Judged = ReportAssignment & { userId: string; leadId: string; key: string; olderRule?: boolean };
 
 const keyOf = (leadId: string, userId: string, at: Date) => `${leadId}|${userId}|${at.getTime()}`;
 
@@ -184,10 +185,16 @@ export async function backfillLeadReports(opts: {
   from: string;
   to: string;
   apply: boolean;
+  /**
+   * How rebuilt (pre-go-live) assignments are judged: "any" logged action — the
+   * default, since nobody was asked to pair actions before go-live — or "pair" (R1).
+   */
+  rule?: ContactRule;
   now?: Date;
   log?: (msg: string) => void;
 }): Promise<BackfillResult> {
   const now = opts.now ?? new Date();
+  const rule = opts.rule ?? "any";
   const log = opts.log ?? (() => {});
   const start = await leadReportStart();
   if (!start) throw new Error(`No ${LEAD_REPORT_START_KEY} setting — has the daily lead report migration run?`);
@@ -242,7 +249,7 @@ export async function backfillLeadReports(opts: {
     const evs = await loadContactEvents(part);
     for (const ep of part) {
       const contactDueAt = nextCutoff(ep.assignedAt, holidays);
-      const v = evaluateContact({ ...ep, contactDueAt }, evs.get(ep.leadId) ?? [], now);
+      const v = evaluateContact({ ...ep, contactDueAt }, evs.get(ep.leadId) ?? [], now, rule);
       if (contactDueAt >= rangeFrom && contactDueAt < rangeTo && v.status !== "reassigned") {
         const k = breakdown.byKind[assignmentKind(ep, createdAtOf.get(ep.leadId) ?? null)];
         k.received++;
@@ -258,6 +265,7 @@ export async function backfillLeadReports(opts: {
         contactStatus: v.status as ContactStatus,
         firstContactedAt: v.firstContactedAt,
         key: keyOf(ep.leadId, ep.userId, ep.assignedAt),
+        olderRule: rule === "any",
         ...(sourceOf.get(ep.leadId) ?? { sourceKey: "none", sourceLabel: "No source" }),
       });
     }
@@ -321,7 +329,7 @@ export async function backfillLeadReports(opts: {
         day,
         userId,
         name: names.get(userId) ?? userId,
-        report: buildLeadReport(day, mine, given),
+        report: buildLeadReport(day, mine, given, { olderRule: mine.some((a) => a.olderRule) }),
         existing: !s ? "none" : s.leadReport ? "generated" : "submitted",
       });
     }
@@ -330,6 +338,7 @@ export async function backfillLeadReports(opts: {
   const result: BackfillResult = {
     from: opts.from,
     to: opts.to,
+    rule,
     trackingStart: start.toISOString(),
     days: days.length,
     rebuilt: episodes.length,
