@@ -959,6 +959,8 @@ export function LeadsTable({
     !!search.get("assignedOn") ||
     !!search.get("from") ||
     !!search.get("to") ||
+    !!search.get("enrolledFrom") ||
+    !!search.get("enrolledTo") ||
     !!search.get("q");
 
   // Created-date range filter ("from"/"to" + period=custom — shared with the
@@ -1317,6 +1319,29 @@ export function LeadsTable({
           />
         </label>
 
+        <label
+          className={selectClass + " inline-flex items-center gap-xs text-on-surface-variant"}
+          title="Show only leads enrolled within this date range (the enrollment date on the deal)"
+        >
+          <span className="material-symbols-outlined" style={{ fontSize: 18 }}>
+            school
+          </span>
+          <span className="whitespace-nowrap">Enrolled</span>
+          <input
+            type="date"
+            value={search.get("enrolledFrom") ?? ""}
+            onChange={(e) => update({ enrolledFrom: e.target.value || null })}
+            className="bg-transparent outline-none text-on-surface"
+          />
+          <span aria-hidden>–</span>
+          <input
+            type="date"
+            value={search.get("enrolledTo") ?? ""}
+            onChange={(e) => update({ enrolledTo: e.target.value || null })}
+            className="bg-transparent outline-none text-on-surface"
+          />
+        </label>
+
         {masters.campaigns.length > 0 && (
           <MultiSelect
             placeholder="All campaigns"
@@ -1415,7 +1440,7 @@ export function LeadsTable({
         {anyFilter && (
           <button
             type="button"
-            onClick={() => update({ status: null, substatus: null, source: null, service: null, qualification: null, assignee: null, campaign: null, temperature: null, quality: null, country: null, studyDestination: null, task: null, idle: null, ageMin: null, ageMax: null, assignedOn: null, from: null, to: null, period: null, q: null })}
+            onClick={() => update({ status: null, substatus: null, source: null, service: null, qualification: null, assignee: null, campaign: null, temperature: null, quality: null, country: null, studyDestination: null, task: null, idle: null, ageMin: null, ageMax: null, assignedOn: null, from: null, to: null, period: null, enrolledFrom: null, enrolledTo: null, q: null })}
             className="h-9 px-md rounded-lg border border-outline-variant text-label-sm text-on-surface-variant hover:text-on-surface hover:bg-surface-container-low transition"
           >
             Clear all

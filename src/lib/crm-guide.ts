@@ -117,10 +117,16 @@ export type GuideChange = { date: string; section: string; title: string; detail
  */
 export const CRM_GUIDE_CHANGES: GuideChange[] = [
   {
-    date: "2026-11-11",
+    date: "2026-11-12",
     section: "referral-links",
     title: "Referral rewards",
     detail: `A candidate now earns ${rupees(REFERRAL_REWARD_AMOUNT)} when someone they referred enrols — through their link or picked under **Referred by** when you create a Candidate Referral lead. Someone already in the CRM never counts. Finance pays it; the lead shows it as due, then paid.`,
+  },
+  {
+    date: "2026-11-11",
+    section: "leads-list",
+    title: "Filter leads by enrolled date",
+    detail: "**Enrolled** on the Leads filter row shows leads enrolled between two dates — the enrollment date on the deal, the same date Lead Pulse counts. Use it with **Export Excel** for a month's enrollments.",
   },
   {
     date: "2026-11-11",
@@ -635,7 +641,7 @@ export function crmGuideSections(f: GuideFacts, canSee: (href: string) => boolea
           items: [
             `The chips **My leads**, **My new leads** and **All leads** switch the view. **My new leads** counts your leads still in ${NEW}.`,
             "Type a name, email or phone in **Search name, email, phone…** and press Enter. Phone search ignores spaces and dashes.",
-            "Narrow it with the filters — each lets you tick several values: stage, source, service, qualification, consultant, **Any task**, **Any last update**, **Assigned**, **Created**, temperature, quality, status, country and age.",
+            "Narrow it with the filters — each lets you tick several values: stage, source, service, qualification, consultant, **Any task**, **Any last update**, **Assigned**, **Created**, **Enrolled**, temperature, quality, status, country and age.",
             "In the source filter, **(Blank) — no source** finds leads that have no source set. Open one and set its source so it counts for the right channel.",
             "In the qualification filter, **(Blank) — no qualification** finds leads with no qualification set. Ask the candidate and fill it in.",
             "Click a candidate's name to open the lead. The icons at the end of a row email, WhatsApp, call or open it.",
