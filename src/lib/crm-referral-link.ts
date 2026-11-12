@@ -143,6 +143,9 @@ export type ReferralTally = {
   enrolled: number;
   /** People who were already in the CRM — not credited. */
   existing: number;
+  /** Rewards owed and paid to the candidate, in rupees. */
+  rewardDue: number;
+  rewardPaid: number;
 };
 
 export type ReferredLeadRow = {
@@ -150,6 +153,8 @@ export type ReferredLeadRow = {
   candidateName: string;
   createdAt: string;
   status: { code: string; label: string; color: string | null };
+  /** The candidate's reward for this one, once it enrolled. */
+  reward: { status: ReferralRewardStatus; amount: number } | null;
 };
 
 /** How many referred leads the lead page lists (the tally counts them all). */
@@ -161,6 +166,70 @@ export type LeadReferralDTO = {
   tally: ReferralTally;
   /** Newest first, capped at {@link REFERRED_LIST_LIMIT}. */
   referred: ReferredLeadRow[];
-  /** The candidate whose link brought THIS lead in. */
+  /** The candidate who referred THIS lead (through a link or picked by hand). */
   referredBy: { id: string; candidateName: string } | null;
+  /** The reward owed for referring this lead, once it enrolled. */
+  rewardEarned: { status: ReferralRewardStatus; amount: number } | null;
 };
+
+// ── Rewards ─────────────────────────────────────────────────────────────────
+// A candidate is paid a flat reward when someone they referred enrols (owner's
+// decision, 11 Nov 2026). Finance pays and marks it paid; marking it paid
+// drafts the expense. The database side is src/lib/crm-referral-reward.ts.
+
+/** Rupees per enrolled referral. Stored on each reward, so changing this never rewrites one already owed. */
+export const REFERRAL_REWARD_AMOUNT = 5000;
+
+export const REFERRAL_REWARD_STATUSES = ["due", "paid", "cancelled"] as const;
+export type ReferralRewardStatus = (typeof REFERRAL_REWARD_STATUSES)[number];
+
+export function normalizeRewardStatus(v: string | null | undefined): ReferralRewardStatus {
+  return (REFERRAL_REWARD_STATUSES as readonly string[]).includes(v ?? "") ? (v as ReferralRewardStatus) : "due";
+}
+
+/** The Finance page where rewards are paid (granted to Finance roles by the migration). */
+export const REFERRAL_REWARDS_PAGE = "/finance/referral-rewards";
+
+/** The ledger line a paid reward is drafted to (owner's decision): Expense › Commissions › Commissions. */
+export const REFERRAL_REWARD_LEDGER = { type: "Expense", category: "Commissions", subItem: "Commissions" } as const;
+
+/** How a paid reward reads in My Drafts and, once approved, in the ledger. */
+export function referralRewardDescription(p: { referrerName: string; referredName: string; reference?: string | null }): string {
+  const ref = p.reference?.trim();
+  return `Referral reward — ${p.referrerName} for referring ${p.referredName}${ref ? ` · ref ${ref}` : ""}`;
+}
+
+/**
+ * What enrolling a referred lead does to its reward: none yet → raise one; one
+ * cancelled (an earlier un-enroll) → reopen it; due or paid → leave it, so a
+ * candidate is never owed twice for one person.
+ */
+export function rewardOnEnroll(existing: { status: string } | null): "create" | "reopen" | "keep" {
+  if (!existing) return "create";
+  return existing.status === "cancelled" ? "reopen" : "keep";
+}
+
+/**
+ * What un-enrolling the referred lead does to its reward: an unpaid one is
+ * cancelled; a paid one stays paid and is flagged, because the money is
+ * already out and recovering it is Finance's call.
+ */
+export function rewardOnUnenroll(existing: { status: string } | null): "cancel" | "flag" | "none" {
+  if (!existing) return "none";
+  if (existing.status === "due") return "cancel";
+  return existing.status === "paid" ? "flag" : "none";
+}
+
+/**
+ * Whether two leads are the same person — any shared phone (either field) or
+ * email. A candidate can't be credited with referring themselves.
+ */
+export function sameReferralIdentity(
+  a: { phoneE164: string | null; altPhoneE164: string | null; emailKey: string | null },
+  b: { phoneE164: string | null; altPhoneE164: string | null; emailKey: string | null },
+): boolean {
+  const phones = (x: typeof a) => [x.phoneE164, x.altPhoneE164].filter((p): p is string => !!p);
+  const bp = phones(b);
+  if (phones(a).some((p) => bp.includes(p))) return true;
+  return !!a.emailKey && a.emailKey === b.emailKey;
+}

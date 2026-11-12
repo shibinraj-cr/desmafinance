@@ -30,6 +30,8 @@ import { recordOpsActivity } from "./ops-activity";
 import { recordAudit } from "./audit";
 import { syncPipelineToLeadStatus } from "./crm-enroll";
 import { canUnenrollInto } from "./crm-leads";
+import { rewardForUnenroll } from "./crm-referral-reward";
+import { rewardOnUnenroll } from "./crm-referral-link";
 
 /**
  * How close (ms) a row's `createdAt` must be to the ENROLLED activity for us to
@@ -90,6 +92,8 @@ type ResolvedState = {
   committedDraftId: string | null;
   partyService: { id: string; createdAt: Date } | null;
   opsProject: { id: string; status: string; taskCount: number; touched: number; docs: number; items: number } | null;
+  /** The referral reward this enrollment earned the candidate who referred them. */
+  reward: Awaited<ReturnType<typeof rewardForUnenroll>>;
 };
 
 /**
@@ -222,6 +226,7 @@ async function resolveState(leadId: string): Promise<ResolvedState> {
     committedDraftId,
     partyService,
     opsProject,
+    reward: await rewardForUnenroll(lead.id),
   };
 }
 
@@ -292,6 +297,19 @@ function buildPlan(s: ResolvedState): UnenrollPlan {
     }
   }
 
+  const rewardFate = rewardOnUnenroll(s.reward);
+  if (s.reward && rewardFate === "cancel") {
+    effects.push(`The ${inr(Number(s.reward.amount))} referral reward due to ${s.reward.referrerName} is cancelled.`);
+  } else if (s.reward && rewardFate === "flag") {
+    warnings.push({
+      code: "referral_reward_paid",
+      message:
+        `${s.reward.referrerName} was already paid the ${inr(Number(s.reward.amount))} referral reward for this candidate` +
+        `${s.reward.paidOn ? ` on ${s.reward.paidOn.toISOString().slice(0, 10)}` : ""}. It stays recorded as paid and is flagged ` +
+        "on Referral Rewards for Finance to decide whether to recover it.",
+    });
+  }
+
   retained.push(
     "The candidate's Party record and its link to this lead are kept — Finance may already reference it, and removing a master record is not something an un-enroll should do silently.",
   );
@@ -334,6 +352,8 @@ export type UnenrollResult = {
   opsProjectDeleted: boolean;
   opsProjectCancelled: boolean;
   partyServiceDeleted: boolean;
+  rewardCancelled: boolean;
+  rewardFlagged: boolean;
 };
 
 /**
@@ -459,6 +479,27 @@ export async function unenrollLead(args: UnenrollArgs): Promise<UnenrollResult> 
     // `partyId` and `pipelineId` are deliberately left linked — see `retained`.
     await tx.lead.update({ where: { id: state.lead.id }, data: { statusId: target.id } });
 
+    // ── 6. Referral reward: cancel it while unpaid, flag it once paid ──────
+    // Claimed by status, so a payment landing at the same moment wins cleanly:
+    // the reward is then flagged rather than cancelled under Finance's feet.
+    let rewardCancelled = false;
+    let rewardFlagged = false;
+    if (state.reward) {
+      const now = new Date();
+      const cancelled = await tx.crmReferralReward.updateMany({
+        where: { id: state.reward.id, status: "due" },
+        data: { status: "cancelled", cancelledAt: now, cancelReason: "Un-enrolled" },
+      });
+      rewardCancelled = cancelled.count === 1;
+      if (!rewardCancelled) {
+        const flagged = await tx.crmReferralReward.updateMany({
+          where: { id: state.reward.id, status: "paid" },
+          data: { unenrolledAfterPaidAt: now },
+        });
+        rewardFlagged = flagged.count === 1;
+      }
+    }
+
     return {
       fromLabel: fresh.status.label,
       pipelineReopened,
@@ -467,6 +508,8 @@ export async function unenrollLead(args: UnenrollArgs): Promise<UnenrollResult> 
       opsProjectDeleted,
       opsProjectCancelled,
       partyServiceDeleted,
+      rewardCancelled,
+      rewardFlagged,
     };
   });
 
@@ -481,6 +524,7 @@ export async function unenrollLead(args: UnenrollArgs): Promise<UnenrollResult> 
     outcome.opsProjectDeleted ? "operations project removed" : null,
     outcome.opsProjectCancelled ? "operations project cancelled" : null,
     outcome.partyServiceDeleted ? "package amount removed" : null,
+    outcome.rewardCancelled ? "referral reward cancelled" : null,
   ].filter(Boolean) as string[];
 
   await recordLeadActivity({
@@ -521,6 +565,18 @@ export async function unenrollLead(args: UnenrollArgs): Promise<UnenrollResult> 
       changes: { via: "crm_unenroll", leadId: state.lead.id, amount: state.draft.amount },
     });
   }
+  // The referring candidate's timeline says what happened to their reward.
+  if (state.reward?.referrerLeadId && (outcome.rewardCancelled || outcome.rewardFlagged)) {
+    await recordLeadActivity({
+      leadId: state.reward.referrerLeadId,
+      actorId: args.actorId,
+      type: "REFERRAL_REWARD",
+      summary: outcome.rewardCancelled
+        ? `Referral reward for ${state.lead.candidateName} cancelled: their enrollment was undone`
+        : `${state.lead.candidateName}'s enrollment was undone after the referral reward was paid`,
+      metadata: { rewardId: state.reward.id, via: "crm_unenroll" },
+    });
+  }
   if (outcome.opsProjectCancelled && state.opsProject) {
     await recordOpsActivity({
       projectId: state.opsProject.id,
@@ -552,5 +608,7 @@ export async function unenrollLead(args: UnenrollArgs): Promise<UnenrollResult> 
     opsProjectDeleted: outcome.opsProjectDeleted,
     opsProjectCancelled: outcome.opsProjectCancelled,
     partyServiceDeleted: outcome.partyServiceDeleted,
+    rewardCancelled: outcome.rewardCancelled,
+    rewardFlagged: outcome.rewardFlagged,
   };
 }

@@ -56,6 +56,10 @@ export const CRM_ACTIVITY_TYPES = [
   // Agreements (e-sign): the client finished signing, or declined.
   "AGREEMENT_SIGNED",
   "AGREEMENT_DECLINED",
+  // A referral reward was raised, paid, cancelled or reopened
+  // (src/lib/crm-referral-reward.ts). Written on both the referred lead and the
+  // referring candidate's.
+  "REFERRAL_REWARD",
 ] as const;
 
 export type CrmActivityType = (typeof CRM_ACTIVITY_TYPES)[number];
@@ -64,6 +68,9 @@ export type CrmActivityType = (typeof CRM_ACTIVITY_TYPES)[number];
 // merely-viewed lead look freshly worked, defeating stale-lead sorting).
 const NON_BUMPING_TYPES: ReadonlySet<CrmActivityType> = new Set<CrmActivityType>([
   "LEAD_OPENED",
+  // Finance paying a candidate is not work on their lead; it must not make a
+  // neglected lead look freshly worked.
+  "REFERRAL_REWARD",
 ]);
 
 /**
