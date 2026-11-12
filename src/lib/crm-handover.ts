@@ -1,6 +1,7 @@
 /**
  * Lead Handovers — leads the Marketing Admin gives a BDE outside DesGro (a
- * YouTube comment, a personal WhatsApp, a phone call, a walk-in, a referral).
+ * YouTube comment, an Instagram message, a personal WhatsApp, a phone call, a
+ * walk-in, a referral).
  * The BDE must create each one in the CRM by the cutoff (crm-cutoff.ts).
  *
  *   H1  On save, a phone that already belongs to a lead → `duplicate`, linked
@@ -21,6 +22,8 @@ import { MARKETING_ADMIN_ROLE_NAME } from "./crm-uncontacted-alarm";
 /** Where a handover came from, and the lead source a lead created from it gets. */
 export const HANDOVER_CHANNELS = [
   { code: "youtube", label: "YouTube", sourceCode: "youtube", sourceLabel: "YouTube" },
+  // The same "Insta" source Instagram DM leads get (src/lib/ig/ingest.ts).
+  { code: "instagram", label: "Instagram", sourceCode: "insta", sourceLabel: "Insta" },
   { code: "whatsapp_outside", label: "WhatsApp (personal)", sourceCode: "whatsapp_personal", sourceLabel: "WhatsApp (personal)" },
   { code: "phone", label: "Phone call", sourceCode: "phone_direct", sourceLabel: "Phone (direct)" },
   { code: "walk_in", label: "Walk-in", sourceCode: "walk_in", sourceLabel: "Walk-in" },

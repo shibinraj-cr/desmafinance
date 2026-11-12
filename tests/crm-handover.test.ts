@@ -11,9 +11,10 @@ import {
 } from "@/lib/crm-handover";
 
 describe("channels", () => {
-  it("map to the existing YouTube / Candidate Referral sources and the four new ones", () => {
+  it("map to the existing YouTube / Insta / Candidate Referral sources and the four new ones", () => {
     expect(Object.fromEntries(HANDOVER_CHANNELS.map((c) => [c.code, c.sourceCode]))).toEqual({
       youtube: "youtube",
+      instagram: "insta",
       whatsapp_outside: "whatsapp_personal",
       phone: "phone_direct",
       walk_in: "walk_in",
@@ -25,6 +26,7 @@ describe("channels", () => {
   it("group in the report as 'Handover – <channel>'", () => {
     expect(handoverGroupLabel("walk_in")).toBe("Handover – Walk-in");
     expect(handoverGroupLabel("youtube")).toBe("Handover – YouTube");
+    expect(handoverGroupLabel("instagram")).toBe("Handover – Instagram");
   });
 });
 

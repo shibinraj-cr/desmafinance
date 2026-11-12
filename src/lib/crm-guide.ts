@@ -115,6 +115,12 @@ export type GuideChange = { date: string; section: string; title: string; detail
  */
 export const CRM_GUIDE_CHANGES: GuideChange[] = [
   {
+    date: "2026-11-12",
+    section: "handovers",
+    title: "Instagram handovers",
+    detail: "Marketing can now hand you a lead from **Instagram**. Create it from the handover as usual — the lead gets the **Insta** source, the same as leads from Instagram DMs.",
+  },
+  {
     date: "2026-11-11",
     section: "lead-page",
     title: "Meta leads arrive with their qualification",
@@ -557,7 +563,7 @@ export function crmGuideSections(f: GuideFacts, canSee: (href: string) => boolea
       title: "Create your handovers from marketing",
       group: "Your day",
       pages: ["/crm/handovers"],
-      summary: `Leads marketing gives you outside DesGro — a YouTube comment, your WhatsApp, a call, a walk-in, a referral — are **handovers**. They show on ${nav("/crm/my-day")} and in ${where("/crm/handovers")}, and each must be created in the CRM by the cutoff.`,
+      summary: `Leads marketing gives you outside DesGro — a YouTube comment, an Instagram message, your WhatsApp, a call, a walk-in, a referral — are **handovers**. They show on ${nav("/crm/my-day")} and in ${where("/crm/handovers")}, and each must be created in the CRM by the cutoff.`,
       blocks: [
         {
           kind: "steps",
