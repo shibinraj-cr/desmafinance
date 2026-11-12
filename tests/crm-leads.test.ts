@@ -11,6 +11,7 @@ import {
   crmTaskAssigneeScope,
   crmTaskFilterParamsFromQuery,
   dueDateRange,
+  enrolledDateRange,
   requiresNextStepOnComplete,
   crmTaskFollowAssignmentWhere,
   bulkStageSkipReason,
@@ -831,5 +832,36 @@ describe("buildLeadWhere — quality", () => {
   it("is read from the query string like every other filter", () => {
     const sp = new URLSearchParams("quality=junk&quality=overdue");
     expect(leadFilterParamsFromQuery(sp, { isBde: false, userId: "u1" }).quality).toEqual(["junk", "overdue"]);
+  });
+});
+
+describe("enrolled-date filter (the deal's closedDate)", () => {
+  const opts = { isBde: false, userId: "u1" };
+  const d = (s: string) => new Date(`${s}T00:00:00.000Z`);
+
+  it("cuts at UTC midnight — closedDate is a pure @db.Date", () => {
+    expect(enrolledDateRange("2026-11-01", "2026-11-10")).toEqual({ from: d("2026-11-01"), to: d("2026-11-11") });
+  });
+
+  it("applies each side on its own and rolls over month ends", () => {
+    expect(enrolledDateRange("2026-10-01", undefined)).toEqual({ from: d("2026-10-01"), to: undefined });
+    expect(enrolledDateRange(undefined, "2026-10-31")).toEqual({ from: undefined, to: d("2026-11-01") });
+  });
+
+  it("ignores an inverted or garbled range", () => {
+    expect(enrolledDateRange("2026-11-10", "2026-11-01")).toEqual({});
+    expect(enrolledDateRange("nope", "")).toEqual({ from: undefined, to: undefined });
+  });
+
+  it("filters to won deals closed in the range", () => {
+    const p = leadFilterParamsFromQuery(new URLSearchParams("enrolledFrom=2026-11-01&enrolledTo=2026-11-01"), opts);
+    expect(buildLeadWhere(p).pipeline).toEqual({
+      is: { status: "closed_won", closedDate: { gte: d("2026-11-01"), lt: d("2026-11-02") } },
+    });
+  });
+
+  it("leaves the pipeline alone when no enrolled date is picked", () => {
+    const p = leadFilterParamsFromQuery(new URLSearchParams("status=x"), opts);
+    expect(buildLeadWhere(p).pipeline).toBeUndefined();
   });
 });
