@@ -100,7 +100,7 @@ Every failure raises a bell notification for Admins and for approver roles grant
 | `BANK_GOOGLE_CLIENT_ID`, `BANK_GOOGLE_CLIENT_SECRET` | yes | Google OAuth client for Gmail (falls back to `YOUTUBE_CLIENT_ID/SECRET`). |
 | `BANK_SECRETS_KEY` | recommended | Key for sealing secrets at rest. Falls back to an HKDF of `NEXTAUTH_SECRET`. Rotating it invalidates stored secrets (UI asks to re-enter / reconnect). |
 | `BLOB_READ_WRITE_TOKEN` | yes | Private Blob store for archived PDFs (already set for Finance Documents). |
-| `CRON_SECRET` | yes | Authenticates the 5-minute worker cron (already set). |
+| `CRON_SECRET` | yes | Authenticates the worker cron (already set). |
 | `BANK_CHROMIUM_PATH` | local only | Chrome/Chromium binary for local runs (macOS Chrome is auto-detected). |
 
 Never put the password in source, `.env` files that are committed, or the UI anywhere it can be read back — the UI is write-only.
@@ -126,7 +126,9 @@ browser context that is closed afterwards — no cookies or bank session persist
 
 ### Scheduler
 
-`vercel.json` runs `/api/cron/bank-statements` every 5 minutes. On each tick it:
+`vercel.json` runs `/api/cron/bank-statements` every 5 minutes from 06:30 to 22:25 IST; overnight
+it does not run, so the database can sleep (`src/lib/db-quiet-hours.ts`). The execution time must
+therefore be between 06:30 and 22:00 IST (enforced in Settings). On each tick it:
 queues the day's scheduled run once the configured time (default **09:30 Asia/Kolkata**) has
 passed, raises the "no statement for N business days" alert (default 2; Sundays and 2nd/4th
 Saturdays are not business days), and advances any queued/running runs. "Run now",

@@ -5,13 +5,18 @@ import { withApiHandler } from "@/lib/api";
 import { recordAudit } from "@/lib/audit";
 import { requireBank } from "@/lib/bank/access";
 import { logEvent } from "@/lib/bank/events";
+import { RUN_TIME_EARLIEST, RUN_TIME_LATEST, isRunTimeInWorkerHours } from "@/lib/bank/schedule";
 
 export const dynamic = "force-dynamic";
 
 const Schema = z.object({
   integrationId: z.string().min(1),
   automationEnabled: z.boolean().optional(),
-  runTime: z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/, "HH:MM, 24-hour").optional(),
+  runTime: z
+    .string()
+    .regex(/^([01]\d|2[0-3]):[0-5]\d$/, "HH:MM, 24-hour")
+    .refine(isRunTimeInWorkerHours, `Pick a time between ${RUN_TIME_EARLIEST} and ${RUN_TIME_LATEST} IST — the worker sleeps overnight`)
+    .optional(),
   lookbackDays: z.number().int().min(1).max(30).optional(),
   alertAfterBusinessDays: z.number().int().min(1).max(15).optional(),
   browserAutomationEnabled: z.boolean().optional(),
