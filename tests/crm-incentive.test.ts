@@ -5,6 +5,7 @@ import {
   NO_BONUSES,
   computeBdePay,
   computeTeamPool,
+  fillQuarterMemberships,
   doubleBookedMember,
   isFastClose,
   isIncentiveMonthClosed,
@@ -218,5 +219,37 @@ describe("setup helpers", () => {
   it("finds a BDE placed in two teams", () => {
     expect(doubleBookedMember([{ teamId: "a", userIds: ["x", "y"] }, { teamId: "b", userIds: ["z"] }])).toBeNull();
     expect(doubleBookedMember([{ teamId: "a", userIds: ["x", "y"] }, { teamId: "b", userIds: ["y"] }])).toBe("y");
+  });
+});
+
+describe("fillQuarterMemberships", () => {
+  const nov = [
+    { month: 11, teamId: "alpha", userId: "a" },
+    { month: 11, teamId: "beta", userId: "b" },
+  ];
+
+  it("counts a month before teams were set up with the team as first set up", () => {
+    expect(fillQuarterMemberships(nov, [10, 11])).toEqual([
+      ...nov,
+      { month: 10, teamId: "alpha", userId: "a" },
+      { month: 10, teamId: "beta", userId: "b" },
+    ]);
+  });
+
+  it("keeps a month that has teams saved exactly as saved (a mover stays put)", () => {
+    const rows = [{ month: 10, teamId: "beta", userId: "a" }, ...nov];
+    expect(fillQuarterMemberships(rows, [10, 11])).toEqual(rows);
+  });
+
+  it("never copies teams forward into a later month left empty", () => {
+    const oct = [{ month: 10, teamId: "alpha", userId: "a" }];
+    expect(fillQuarterMemberships(oct, [10, 11])).toEqual(oct);
+  });
+
+  it("puts October's enrolments into the quarter pool", () => {
+    const rows = fillQuarterMemberships([{ month: 11, teamId: "alpha", userId: "a" }], [10, 11]);
+    const enrolled: Record<number, number> = { 10: 12, 11: 9.5 };
+    const facts = rows.map((r) => ({ ...r, enrolled: enrolled[r.month], minimum: 8 }));
+    expect(quarterMembers(facts, "alpha")).toEqual([{ userId: "a", enrolled: 21.5, minimum: 16 }]);
   });
 });

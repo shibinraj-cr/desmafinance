@@ -21,6 +21,7 @@ import {
   NO_BONUSES,
   computeBdePay,
   computeTeamPool,
+  fillQuarterMemberships,
   isFastClose,
   milestones,
   quarterMembers,
@@ -187,7 +188,8 @@ export async function getIncentiveMonth(year: number, month: number): Promise<In
   const teamRows = teamIds.length
     ? await prisma.leadPulseTeam.findMany({ where: { id: { in: teamIds } }, select: { id: true, name: true } })
     : [];
-  const quarterFacts: QuarterMonthFact[] = memberships.map((m) => ({
+  // A month before teams were first set up this quarter counts with the team as later set up.
+  const quarterFacts: QuarterMonthFact[] = fillQuarterMemberships(memberships, qMonths).map((m) => ({
     month: m.month,
     teamId: m.teamId,
     userId: m.userId,
