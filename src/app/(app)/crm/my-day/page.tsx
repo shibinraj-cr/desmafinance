@@ -11,6 +11,9 @@ import { canEditNarrative } from "@/lib/crm-daily-report";
 import { ReportTiles, SourceTable, istDayTime, istTime } from "@/components/crm/LeadReportParts";
 import { ContactQueue, CutoffPill, HandoverTable, ShareBox } from "@/components/crm/LeadReportActions";
 import { DayNav, ReportForm } from "../report/client";
+import { IncentiveCard } from "@/components/crm/IncentiveCard";
+import { getIncentiveCard } from "@/lib/crm-incentive-data";
+import { todayIst } from "@/lib/lead-pulse-dates";
 
 export const dynamic = "force-dynamic";
 
@@ -78,11 +81,22 @@ function LeadRows({ rows, label, now }: { rows: MyDayLead[]; label: string; now:
   );
 }
 
+/** The L2 BDE's incentive card; a failure here must never take My Day down. */
+async function incentiveFor(userId: string) {
+  try {
+    return await getIncentiveCard(userId, todayIst());
+  } catch (e) {
+    console.error("[my-day] incentive card", e);
+    return null;
+  }
+}
+
 /**
- * My Day — a BDE's leads for the day against the cutoff (the daily lead
- * report), the rest of their work in the order to do it, and the day's report
- * — generated automatically at the cutoff, with optional remarks.
- * Managers and the Marketing Admin open any BDE's day read-only with ?bde=.
+ * My Day — an L2 BDE's month so far and provisional incentive, a BDE's leads
+ * for the day against the cutoff (the daily lead report), the rest of their
+ * work in the order to do it, and the day's report — generated automatically
+ * at the cutoff, with optional remarks. Managers and the Marketing Admin open
+ * any BDE's day read-only with ?bde= (without the incentive card).
  */
 export default async function MyDayPage({ searchParams }: { searchParams: SP }) {
   const { userId, perms } = await getCurrentUserAndPermissions();
@@ -101,10 +115,12 @@ export default async function MyDayPage({ searchParams }: { searchParams: SP }) 
       : await bdeName(target)
     : null;
 
-  const [view, work, bdes] = await Promise.all([
+  const ownToday = !viewingOther && day === todayIst();
+  const [view, work, bdes, incentive] = await Promise.all([
     target && targetName ? getLeadReportView({ userId: target, name: targetName, day, now }) : Promise.resolve(null),
     viewingOther ? Promise.resolve(null) : getMyDay(userId, now),
     access.canViewOthers ? getAssignableBdes() : Promise.resolve([]),
+    ownToday && access.crm.isBde ? incentiveFor(userId) : Promise.resolve(null),
   ]);
   const isToday = view ? view.day === view.today : true;
   const cutoffLabel = view?.cutoff ? istTime(view.cutoff) : null;
@@ -141,6 +157,8 @@ export default async function MyDayPage({ searchParams }: { searchParams: SP }) 
             )}
           </div>
         </div>
+
+        {incentive && <IncentiveCard view={incentive.view} closedLine={incentive.closedLine} />}
 
         {view && (
           <>

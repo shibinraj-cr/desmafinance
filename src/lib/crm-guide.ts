@@ -28,6 +28,7 @@ import { BACKDATE_DAYS } from "./lead-pulse-dates";
 import { SATURDAY_CUTOFF_MINUTES, WEEKDAY_CUTOFF_MINUTES } from "./crm-cutoff";
 import { HANDOVER_REJECT_REASONS } from "./crm-handover";
 import { REFERRAL_LINK_SOURCE_LABEL, REFERRAL_REWARD_AMOUNT } from "./crm-referral-link";
+import { FAST_CLOSE_HOURS, NO_BONUSES, SLAB_COUNT, computeBdePay, type Slab } from "./crm-incentive";
 
 /** "5:00 pm" for minutes after midnight. */
 function clock(minutes: number): string {
@@ -38,6 +39,16 @@ function clock(minutes: number): string {
 const rupees = (n: number) => `₹${n.toLocaleString("en-IN")}`;
 const WEEKDAY_CUTOFF = clock(WEEKDAY_CUTOFF_MINUTES);
 const SATURDAY_CUTOFF = clock(SATURDAY_CUTOFF_MINUTES);
+
+/** The incentive example the guide and the quiz use — paid by the real engine. */
+const EXAMPLE_SLABS: Slab[] = [
+  { from: 10, rate: 1000 },
+  { from: 16, rate: 1500 },
+];
+const slabPay = (enrolled: number) =>
+  computeBdePay({ enrolled, fastCloses: 0, referrals: 0, target: 0, slabs: EXAMPLE_SLABS, bonuses: NO_BONUSES }).slabPay;
+const EXAMPLE_TOP = EXAMPLE_SLABS[EXAMPLE_SLABS.length - 1];
+const EXAMPLE_LABEL = EXAMPLE_SLABS.map((s) => `from ${s.from} at ${rupees(s.rate)}`).join(", ");
 
 /**
  * Fixed id of the guide's knowledge-check SalesTrainingModule (created by HR).
@@ -116,6 +127,12 @@ export type GuideChange = { date: string; section: string; title: string; detail
  * is the GuideSection id it updates (drives the "Updated" pill).
  */
 export const CRM_GUIDE_CHANGES: GuideChange[] = [
+  {
+    date: "2026-11-12",
+    section: "incentive",
+    title: "Your incentive on My Day",
+    detail: "L2 BDEs: **My Day** now opens with your month so far — enrolments against your target, your provisional incentive, what your next slab or bonus pays, and your team's pools.",
+  },
   {
     date: "2026-11-12",
     section: "referral-links",
@@ -463,6 +480,49 @@ export function crmGuideSections(f: GuideFacts, canSee: (href: string) => boolea
           items: [
             "A lead not contacted by the cutoff counts as **missed** for that day, even if you contact it later.",
             "If a lead is reassigned to someone else before the cutoff, it leaves your day. Contact by anyone other than the assigned BDE doesn't count.",
+          ],
+        },
+      ],
+    },
+    {
+      id: "incentive",
+      title: "Your incentive on My Day",
+      group: "Your day",
+      pages: ["/crm/my-day"],
+      summary: `If you are an L2 BDE, ${where("/crm/my-day")} opens with your month so far: your enrolments against your target, your incentive at today's numbers, and what the next step pays.`,
+      blocks: [
+        {
+          kind: "text",
+          text: `Each month Marketing Admin sets your **target**, your **minimum** and up to ${SLAB_COUNT} **slabs**. A slab is a starting count and an amount per enrolment. The highest slab you reach pays on **every** enrolment in the month — not just the ones above it. The minimum pays nothing by itself; it is what you need to share a team pool.`,
+        },
+        {
+          kind: "table",
+          title: `Example — slabs ${EXAMPLE_LABEL}`,
+          head: ["Enrolments", "Slab pay"],
+          rows: [9, 10, 15, 16].map((n) => [String(n), rupees(slabPay(n))]),
+        },
+        {
+          kind: "steps",
+          items: [
+            "**‹Month› so far** — your enrolments, your target, and whether you are ahead of or behind pace for the month. The bar marks your minimum, your target and each slab.",
+            "**Your incentive so far · provisional** — what you have earned at today's numbers, line by line, and what you would have at each next step.",
+            "**Your ladder this month** — every step, ticked once reached. The next one is outlined.",
+            "Your team's month and quarter pools — how far the team is from its target and your share at today's split.",
+          ],
+        },
+        {
+          kind: "tips",
+          items: [
+            "An enrolment counts when you click **Enroll** on the lead, which you only do once payment is received. A half-weight service counts 0.5.",
+            `When Marketing Admin sets them, there are bonuses on top: for reaching your target, for each enrolment closed within ${FAST_CLOSE_HOURS} hours of assignment, and for each of your own candidate referrals that enrols.`,
+            "Everyone's enrolments count toward the team target, but you share the pool only once you reach your own minimum. For the quarter, your minimum is your three monthly minimums added up.",
+          ],
+        },
+        {
+          kind: "warn",
+          items: [
+            "The figures are **provisional**. Finance confirms the payout after the month ends.",
+            "L1 BDEs have no incentive card.",
           ],
         },
       ],
@@ -1423,6 +1483,17 @@ export function crmGuideQuiz(f: GuideFacts): GuideQuizQuestion[] {
       ["When someone they referred enrols"],
       ["As soon as their friend fills in the form", "When their friend's lead is assigned to a consultant", "Only for referrals through their link, never hand-typed ones"],
       `The ${rupees(REFERRAL_REWARD_AMOUNT)} is owed when the referred lead enrols — whether it came through the link or was typed in with Referred by. Finance pays it.`,
+    ),
+    q(
+      "incentive-all-units",
+      `Your slabs are ${EXAMPLE_LABEL}. You have ${EXAMPLE_TOP.from} enrolments this month. What is your slab pay?`,
+      [`${rupees(slabPay(EXAMPLE_TOP.from))} — all ${EXAMPLE_TOP.from} pay ${rupees(EXAMPLE_TOP.rate)}`],
+      [
+        `${rupees(slabPay(EXAMPLE_TOP.from - 1) + EXAMPLE_TOP.rate)} — ${EXAMPLE_TOP.from - 1} at ${rupees(EXAMPLE_SLABS[0].rate)} and the last one at ${rupees(EXAMPLE_TOP.rate)}`,
+        `${rupees(EXAMPLE_TOP.rate)} — only the enrolment that reached the slab pays`,
+        "Nothing until the month ends",
+      ],
+      "The highest slab you reach pays on every enrolment in the month. My Day shows it as your provisional incentive; Finance confirms it after the month ends.",
     ),
   ];
 }

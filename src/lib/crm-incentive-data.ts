@@ -17,6 +17,7 @@ import { monthBounds } from "./lead-pulse-metrics";
 import { toPrismaDate } from "./lead-pulse-dates";
 import { getMonthlyTargetByBde } from "./lead-pulse-crm-metrics";
 import { CANDIDATE_REFERRAL_SOURCE_CODE } from "./crm-rbac";
+import { closedMonthLine, incentiveCard, type IncentiveCardView } from "./crm-incentive-card";
 import {
   NO_BONUSES,
   computeBdePay,
@@ -37,7 +38,12 @@ import {
   type TeamShare,
 } from "./crm-incentive";
 
-export type TeamPoolForMember = Omit<TeamPool, "members"> & { me: TeamShare | null };
+export type TeamPoolForMember = Omit<TeamPool, "members"> & {
+  me: TeamShare | null;
+  /** Members in the pool, and how many of them have reached their minimum so far. */
+  size: number;
+  qualifying: number;
+};
 
 export type BdeStanding = {
   userId: string;
@@ -224,7 +230,12 @@ export async function getIncentiveMonth(year: number, month: number): Promise<In
   const forMember = (pool: TeamPool | null, userId: string): TeamPoolForMember | null => {
     if (!pool) return null;
     const { members, ...rest } = pool;
-    return { ...rest, me: members.find((m) => m.userId === userId) ?? null };
+    return {
+      ...rest,
+      me: members.find((m) => m.userId === userId) ?? null,
+      size: members.length,
+      qualifying: members.filter((m) => m.eligible).length,
+    };
   };
 
   // ── BDEs ──
@@ -256,8 +267,42 @@ export async function getIncentiveMonth(year: number, month: number): Promise<In
   return { year, month, quarter, quarterMonthsSoFar: qMonths, bonuses, bdes, teams };
 }
 
-/** One L2 BDE's standing for a month, or null when they are not an active L2. */
-export async function getIncentiveStanding(userId: string, year: number, month: number): Promise<BdeStanding | null> {
+/** One L2 BDE's standing for a month, with the month's bonuses, or null when they are not an active L2. */
+export async function getIncentiveStanding(
+  userId: string,
+  year: number,
+  month: number,
+): Promise<{ bde: BdeStanding; bonuses: MonthBonuses } | null> {
   const all = await getIncentiveMonth(year, month);
-  return all.bdes.find((b) => b.userId === userId) ?? null;
+  const bde = all.bdes.find((b) => b.userId === userId);
+  return bde ? { bde, bonuses: all.bonuses } : null;
+}
+
+/** Days into a month that the card still shows last month's result. */
+export const CLOSED_LINE_DAYS = 3;
+
+/**
+ * What an L2 BDE's My Day card shows for the IST month of `today` (YYYY-MM-DD),
+ * plus — in the first {@link CLOSED_LINE_DAYS} days of a month — last month's
+ * result. Null for anyone who isn't an active L2 BDE (L1s have no incentive).
+ */
+export async function getIncentiveCard(
+  userId: string,
+  today: string,
+): Promise<{ view: IncentiveCardView; closedLine: string | null } | null> {
+  const role = await prisma.leadPulseRole.findUnique({ where: { userId }, select: { role: true, active: true } });
+  if (role?.role !== "l2" || !role.active) return null;
+
+  const year = Number(today.slice(0, 4));
+  const month = Number(today.slice(5, 7));
+  const prev = month === 1 ? { year: year - 1, month: 12 } : { year, month: month - 1 };
+  const [mine, last] = await Promise.all([
+    getIncentiveStanding(userId, year, month),
+    Number(today.slice(8, 10)) <= CLOSED_LINE_DAYS ? getIncentiveStanding(userId, prev.year, prev.month) : Promise.resolve(null),
+  ]);
+  if (!mine) return null;
+  return {
+    view: incentiveCard({ ...mine, year, month, today }),
+    closedLine: last ? closedMonthLine({ ...last, ...prev }) : null,
+  };
 }
