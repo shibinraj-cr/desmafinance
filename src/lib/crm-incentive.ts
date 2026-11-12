@@ -280,6 +280,26 @@ export function quarterMonths(quarter: number): number[] {
   return [first, first + 1, first + 2];
 }
 
+/**
+ * A quarter's team memberships, with the months before teams were first set up
+ * filled from the first later month that has them. Teams can start mid-quarter
+ * (set up in November for Oct–Dec); without this, October's enrolments would
+ * count for no team. A month with any membership saved is kept exactly as
+ * saved, so a mover's months still stay with the team they were in.
+ */
+export function fillQuarterMemberships<T extends { month: number }>(rows: T[], months: number[]): T[] {
+  const sorted = [...months].sort((a, b) => a - b);
+  const saved = new Set(rows.map((r) => r.month));
+  const out = [...rows];
+  for (const m of sorted) {
+    if (saved.has(m)) continue;
+    const from = sorted.find((x) => x > m && saved.has(x));
+    if (from === undefined) continue;
+    out.push(...rows.filter((r) => r.month === from).map((r) => ({ ...r, month: m })));
+  }
+  return out;
+}
+
 /** One BDE's month inside a quarter: their team that month, enrolments and minimum. */
 export type QuarterMonthFact = { month: number; teamId: string; userId: string; enrolled: number; minimum: number };
 
