@@ -12,7 +12,7 @@ import {
   sendProblems,
   withSigningOrder,
 } from "@/lib/esign/requests";
-import { DEFAULT_EMAIL_BODY, inviteEmail } from "@/lib/esign/notify";
+import { DEFAULT_EMAIL_BODY, inviteEmail, signedCopyEmail } from "@/lib/esign/notify";
 
 type F = { key: string; label: string | null; role: "Client" | "DESMA"; mergeKey: string | null };
 const fields: F[] = [
@@ -194,5 +194,21 @@ describe("invite email", () => {
     expect(text.startsWith("As discussed on the call.")).toBe(true);
     expect(text).toContain("Hello Test, please sign.");
     expect(text).toContain("https://desgro.in/sign/TOKEN");
+  });
+});
+
+describe("signedCopyEmail", () => {
+  const base = { templateName: "AHPRA Agreement", recipientName: "DESMA International", verifyUrl: "https://desgro.in/verify/r1" };
+
+  it("names the candidate in the subject and the body", () => {
+    const { subject, text } = signedCopyEmail({ ...base, candidateName: "  Test   Candidate\n" });
+    expect(subject).toBe("Signed: AHPRA Agreement for Test Candidate");
+    expect(text).toContain("The AHPRA Agreement for Test Candidate has been signed by everyone.");
+    expect(text).toContain("https://desgro.in/verify/r1");
+  });
+
+  it("falls back to the agreement alone when there is no candidate", () => {
+    expect(signedCopyEmail({ ...base, candidateName: null }).subject).toBe("Signed: AHPRA Agreement");
+    expect(signedCopyEmail({ ...base, candidateName: "  " }).subject).toBe("Signed: AHPRA Agreement");
   });
 });

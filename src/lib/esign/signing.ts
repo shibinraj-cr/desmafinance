@@ -367,6 +367,8 @@ export async function completeSigning(opts: {
   const signedCopies = await sendSignedCopies({
     reference: done.reference,
     templateName: request.templateVersion.template.name,
+    // The name the client signed under, else the lead it was sent from.
+    candidateName: done.signers.find((s) => s.role === "Client")?.name || request.lead?.candidateName || null,
     recipients: [
       ...done.signers.filter((s) => s.email).map((s) => ({ name: s.name, email: s.email! })),
       ...cc,
