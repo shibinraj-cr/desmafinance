@@ -28,6 +28,7 @@ import {
   referralReInquirySource,
   referralUrl,
   REFERRED_LIST_LIMIT,
+  normalizeRewardStatus,
   type LeadReferralDTO,
   type ReferralOutcome,
 } from "./crm-referral-link";
@@ -257,7 +258,7 @@ export async function loadLeadReferral(
   lead: { id: string; referredByLeadId: string | null },
   baseUrl: string,
 ): Promise<LeadReferralDTO> {
-  const [link, referredBy, referred, leads, enrolled] = await Promise.all([
+  const [link, referredBy, referred, leads, enrolled, rewards, rewardEarned] = await Promise.all([
     prisma.crmReferralLink.findUnique({ where: { referrerLeadId: lead.id }, select: { id: true, code: true, active: true } }),
     lead.referredByLeadId
       ? prisma.lead.findUnique({ where: { id: lead.referredByLeadId }, select: { id: true, candidateName: true } })
@@ -270,7 +271,15 @@ export async function loadLeadReferral(
     }),
     prisma.lead.count({ where: { referredByLeadId: lead.id } }),
     prisma.lead.count({ where: { referredByLeadId: lead.id, status: { code: ENROLLED_STATUS_CODE } } }),
+    // Every reward this candidate is owed or was paid, keyed by the referred lead.
+    prisma.crmReferralReward.findMany({
+      where: { referrerLeadId: lead.id, status: { in: ["due", "paid"] } },
+      select: { referredLeadId: true, status: true, amount: true },
+    }),
+    prisma.crmReferralReward.findUnique({ where: { referredLeadId: lead.id }, select: { status: true, amount: true } }),
   ]);
+  const rewardOf = new Map(rewards.map((r) => [r.referredLeadId, { status: normalizeRewardStatus(r.status), amount: Number(r.amount) }]));
+  const sum = (status: string) => rewards.filter((r) => r.status === status).reduce((t, r) => t + Number(r.amount), 0);
 
   let visits = 0;
   let existing = 0;
@@ -285,13 +294,17 @@ export async function loadLeadReferral(
 
   return {
     link: link ? { code: link.code, url: referralUrl(baseUrl, link.code), active: link.active } : null,
-    tally: { visits, leads, enrolled, existing },
+    tally: { visits, leads, enrolled, existing, rewardDue: sum("due"), rewardPaid: sum("paid") },
     referred: referred.map((r) => ({
       id: r.id,
       candidateName: r.candidateName,
       createdAt: r.createdAt.toISOString(),
       status: r.status,
+      reward: rewardOf.get(r.id) ?? null,
     })),
     referredBy,
+    rewardEarned: rewardEarned
+      ? { status: normalizeRewardStatus(rewardEarned.status), amount: Number(rewardEarned.amount) }
+      : null,
   };
 }

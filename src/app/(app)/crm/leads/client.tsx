@@ -17,6 +17,7 @@ import { DEFAULT_STATUS_COLOR, BULK_EMAIL_COOLDOWN_DAYS, BULK_EMAIL_MERGE_FIELDS
 import { ageFromDob } from "@/lib/age";
 import { COUNTRIES, countryCodeFor } from "@/lib/countries";
 import { MultiSelect } from "@/components/MultiSelect";
+import { LeadSearchPicker, type LeadPick } from "@/components/crm/LeadSearchPicker";
 import { listParam, applyFilterPatch } from "@/lib/filter-params";
 import { QualityPill } from "@/components/crm/LeadQualityPicker";
 import { LEAD_QUALITIES, QUALITY_UNRATED_BUCKETS, qualityBucket } from "@/lib/crm-lead-quality";
@@ -28,6 +29,8 @@ export type BdeOpt = { userId: string; displayName: string; username: string; ro
 export type Masters = {
   statuses: StatusOpt[];
   sources: Opt[];
+  /** The Candidate Referral source: picking it asks who referred the lead. */
+  referralSourceId: string | null;
   services: Opt[];
   qualifications: Opt[];
   /** Cross-stage statuses, ordered; `group` is the heading they sit under. */
@@ -322,6 +325,11 @@ function NewLeadButton({
     statusId: "",
     assignedToId: "",
   });
+  // Who referred them — asked only on a Candidate Referral lead, where it earns
+  // that candidate the referral reward if this lead enrols.
+  const [referredBy, setReferredBy] = useState<LeadPick | null>(null);
+  const asksReferrer =
+    access.referralLeadsOnly || (!!masters.referralSourceId && form.sourceId === masters.referralSourceId);
 
   // Live age preview from the entered DOB (auto-derived; never sent to the server).
   const dobAge = ageFromDob(form.dob || null, new Date());
@@ -373,6 +381,7 @@ function NewLeadButton({
         statusId: form.statusId || undefined,
         assignedToId: access.canAssign ? form.assignedToId || undefined : undefined,
         handoverId: prefill?.handoverId,
+        referredByLeadId: asksReferrer ? referredBy?.id : undefined,
       }),
     });
     setBusy(false);
@@ -407,6 +416,7 @@ function NewLeadButton({
       statusId: "",
       assignedToId: "",
     });
+    setReferredBy(null);
     setOpen(false);
     router.refresh();
   }
@@ -509,6 +519,18 @@ function NewLeadButton({
                   </select>
                 </Field>
               </div>
+              {asksReferrer && (
+                // Not a <label>: the picker holds its own buttons.
+                <div>
+                  <span className="block text-label-sm text-on-surface-variant mb-xs">
+                    Referred by — the candidate who sent them
+                  </span>
+                  <LeadSearchPicker value={referredBy} onChange={setReferredBy} inputClassName={inputCls} />
+                  <span className="block text-label-sm text-on-surface-variant mt-xs">
+                    They earn the referral reward if this lead enrols.
+                  </span>
+                </div>
+              )}
               <div className="grid grid-cols-2 gap-md">
                 <Field label="Qualification">
                   <select
@@ -937,6 +959,8 @@ export function LeadsTable({
     !!search.get("assignedOn") ||
     !!search.get("from") ||
     !!search.get("to") ||
+    !!search.get("enrolledFrom") ||
+    !!search.get("enrolledTo") ||
     !!search.get("q");
 
   // Created-date range filter ("from"/"to" + period=custom — shared with the
@@ -1295,6 +1319,29 @@ export function LeadsTable({
           />
         </label>
 
+        <label
+          className={selectClass + " inline-flex items-center gap-xs text-on-surface-variant"}
+          title="Show only leads enrolled within this date range (the enrollment date on the deal)"
+        >
+          <span className="material-symbols-outlined" style={{ fontSize: 18 }}>
+            school
+          </span>
+          <span className="whitespace-nowrap">Enrolled</span>
+          <input
+            type="date"
+            value={search.get("enrolledFrom") ?? ""}
+            onChange={(e) => update({ enrolledFrom: e.target.value || null })}
+            className="bg-transparent outline-none text-on-surface"
+          />
+          <span aria-hidden>–</span>
+          <input
+            type="date"
+            value={search.get("enrolledTo") ?? ""}
+            onChange={(e) => update({ enrolledTo: e.target.value || null })}
+            className="bg-transparent outline-none text-on-surface"
+          />
+        </label>
+
         {masters.campaigns.length > 0 && (
           <MultiSelect
             placeholder="All campaigns"
@@ -1393,7 +1440,7 @@ export function LeadsTable({
         {anyFilter && (
           <button
             type="button"
-            onClick={() => update({ status: null, substatus: null, source: null, service: null, qualification: null, assignee: null, campaign: null, temperature: null, quality: null, country: null, studyDestination: null, task: null, idle: null, ageMin: null, ageMax: null, assignedOn: null, from: null, to: null, period: null, q: null })}
+            onClick={() => update({ status: null, substatus: null, source: null, service: null, qualification: null, assignee: null, campaign: null, temperature: null, quality: null, country: null, studyDestination: null, task: null, idle: null, ageMin: null, ageMax: null, assignedOn: null, from: null, to: null, period: null, enrolledFrom: null, enrolledTo: null, q: null })}
             className="h-9 px-md rounded-lg border border-outline-variant text-label-sm text-on-surface-variant hover:text-on-surface hover:bg-surface-container-low transition"
           >
             Clear all

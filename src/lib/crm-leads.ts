@@ -7,6 +7,7 @@ import { listParam, oneOf, oneParam } from "./filter-params";
 import { parseAgeParam } from "./age";
 import { parsePeriod, rangeFor } from "./period";
 import { istDayStart, utcMidnightToIst } from "./dates";
+import { toPrismaDate } from "./lead-pulse-dates";
 
 // Kept as a literal rather than importing REMARKETING_STATUS_CODE from
 // crm-reinquiry: this module is type-imported by client components, and
@@ -238,6 +239,14 @@ export type LeadFilterParams = {
   /** Half-open assignedAt range — "leads assigned on/within these dates". `assignedTo` is exclusive. */
   assignedFrom?: Date;
   assignedTo?: Date;
+  /**
+   * Half-open enrollment-date range — "leads enrolled on/within these dates".
+   * Matched on the deal's `closedDate` (a pure `@db.Date`, so UTC-midnight
+   * bounds from {@link enrolledDateRange}), the same field Lead Pulse and the
+   * BDE Enrollment page count enrollments by. `enrolledTo` is exclusive.
+   */
+  enrolledFrom?: Date;
+  enrolledTo?: Date;
   /** Injected "now" so the age→dob translation is stable within a request/test. */
   now?: Date;
 };
@@ -252,6 +261,32 @@ export function assignedDayRange(day: string | undefined): { from: Date; to: Dat
   const from = istDayStart(day);
   if (!from) return null;
   return { from, to: istDayStart(day, 1)! };
+}
+
+/**
+ * Half-open `[from, to)` range on the deal's enrollment date (`closedDate`, a
+ * pure `@db.Date`) from the two calendar days the Leads "Enrolled" filter
+ * offers. Either side may be blank. Bounds are UTC midnight on purpose: a
+ * `@db.Date` value is stored as UTC midnight, so no IST shift applies here
+ * (unlike the created/assigned filters, which bound real timestamps). An
+ * inverted range is a half-typed state and is ignored.
+ */
+export function enrolledDateRange(
+  from: string | undefined,
+  to: string | undefined,
+): { from?: Date; to?: Date } {
+  const day = (v: string | undefined, offsetDays = 0): Date | undefined => {
+    const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec((v ?? "").trim());
+    if (!m) return undefined;
+    const d = toPrismaDate(`${m[1]}-${m[2]}-${m[3]}`);
+    if (Number.isNaN(d.getTime())) return undefined;
+    d.setUTCDate(d.getUTCDate() + offsetDays);
+    return d;
+  };
+  const start = day(from);
+  const end = day(to, 1);
+  if (start && end && start >= end) return {};
+  return { from: start, to: end };
 }
 
 /**
@@ -578,6 +613,15 @@ export function buildLeadWhere(p: LeadFilterParams): Prisma.LeadWhereInput {
     if (p.assignedTo) assignedAt.lt = p.assignedTo;
     where.assignedAt = assignedAt;
   }
+  // Enrolled date lives on the linked deal: only a won deal has one, so this
+  // also drops leads that were never enrolled (or were un-enrolled, which
+  // flips the deal back to open).
+  if (p.enrolledFrom || p.enrolledTo) {
+    const closedDate: Prisma.DateTimeNullableFilter = {};
+    if (p.enrolledFrom) closedDate.gte = p.enrolledFrom;
+    if (p.enrolledTo) closedDate.lt = p.enrolledTo;
+    where.pipeline = { is: { status: "closed_won", closedDate } };
+  }
   if (and.length > 0) where.AND = and;
   return where;
 }
@@ -622,6 +666,7 @@ export function leadFilterParamsFromQuery(
   const createdFrom = range.from && utcMidnightToIst(range.from);
   const createdTo = range.to && utcMidnightToIst(range.to);
   const assigned = assignedDayRange(readOne(sp, "assignedOn"));
+  const enrolled = enrolledDateRange(readOne(sp, "enrolledFrom"), readOne(sp, "enrolledTo"));
   return {
     status: readAll(sp, "status"),
     source: readAll(sp, "source"),
@@ -645,6 +690,8 @@ export function leadFilterParamsFromQuery(
     to: createdTo,
     assignedFrom: assigned?.from,
     assignedTo: assigned?.to,
+    enrolledFrom: enrolled.from,
+    enrolledTo: enrolled.to,
   };
 }
 

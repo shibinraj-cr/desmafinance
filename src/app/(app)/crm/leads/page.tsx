@@ -3,7 +3,7 @@ import { TopBar } from "@/components/TopBar";
 import { DateFilter } from "@/components/DateFilter";
 import { prisma } from "@/lib/prisma";
 import { getCurrentUserAndPermissions } from "@/lib/permissions";
-import { getCrmAccess } from "@/lib/crm-rbac";
+import { getCrmAccess, CANDIDATE_REFERRAL_SOURCE_CODE } from "@/lib/crm-rbac";
 import {
   buildLeadWhere,
   leadOrderBy,
@@ -75,7 +75,7 @@ export default async function LeadsPage({ searchParams }: { searchParams: SP }) 
     prisma.leadPulseSource.findMany({
       where: { active: true },
       orderBy: [{ displayOrder: "asc" }, { label: "asc" }],
-      select: { id: true, label: true },
+      select: { id: true, label: true, code: true },
     }),
     prisma.service.findMany({
       where: { isActive: true },
@@ -121,7 +121,9 @@ export default async function LeadsPage({ searchParams }: { searchParams: SP }) 
 
   const masters = {
     statuses,
-    sources,
+    sources: sources.map((s) => ({ id: s.id, label: s.label })),
+    // The source whose leads name a referring candidate ("Referred by").
+    referralSourceId: sources.find((s) => s.code === CANDIDATE_REFERRAL_SOURCE_CODE)?.id ?? null,
     services: services.map((s) => ({ id: s.id, label: s.name })),
     qualifications,
     subStatuses,

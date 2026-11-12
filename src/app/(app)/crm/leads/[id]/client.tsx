@@ -17,6 +17,7 @@ import {
   type LeadReferralDTO,
 } from "@/lib/crm-referral-link";
 import { MultiSelect } from "@/components/MultiSelect";
+import { LeadSearchPicker, type LeadPick } from "@/components/crm/LeadSearchPicker";
 import { StatusPill, TemperaturePill, type StatusOpt, type Opt, type BdeOpt } from "../client";
 import { EnrollCelebration } from "@/components/EnrollCelebration";
 import { NextStepDialog, type NextStepPayload } from "@/components/crm/NextStepDialog";
@@ -196,6 +197,7 @@ const ACTIVITY_ICON: Record<string, string> = {
   DEAL_UPDATED: "handshake",
   ENROLLED: "verified",
   UNENROLLED: "undo",
+  REFERRAL_REWARD: "card_giftcard",
   REVENUE_DRAFTED: "request_quote",
 };
 
@@ -523,7 +525,14 @@ export function LeadDetail({
                 canUnenroll={access.canUnenroll}
               />
               <AssignmentCard lead={lead} masters={masters} canAssign={access.canAssign} />
-              <LeadInfoCard lead={lead} masters={masters} canEdit={canEdit} referredBy={referral.referredBy} />
+              <LeadInfoCard
+                lead={lead}
+                masters={masters}
+                canEdit={canEdit}
+                referredBy={referral.referredBy}
+                rewardEarned={referral.rewardEarned}
+                canSetReferrer={access.canAssign}
+              />
               <ReferralCard lead={lead} referral={referral} canSwitch={access.canAssign} />
             </div>
           </div>
@@ -2280,14 +2289,20 @@ function LeadInfoCard({
   masters,
   canEdit,
   referredBy,
+  rewardEarned,
+  canSetReferrer,
 }: {
   lead: LeadRow;
   masters: DetailMasters;
   canEdit: boolean;
   referredBy: LeadReferralDTO["referredBy"];
+  rewardEarned: LeadReferralDTO["rewardEarned"];
+  /** Whoever hands out leads may set or change who referred one. */
+  canSetReferrer: boolean;
 }) {
   const router = useRouter();
   const [busy, setBusy] = useState(false);
+  const [editingReferrer, setEditingReferrer] = useState(false);
 
   async function linkParty(value: string | null) {
     setBusy(true);
@@ -2311,15 +2326,33 @@ function LeadInfoCard({
           </dd>
         </div>
         <Row label="Source" value={lead.source?.label ?? "—"} />
-        {referredBy && (
+        {/* Only a lead referred when it was created has a referrer. One already
+            in the CRM is never counted, so there is no way to add one later —
+            only to correct it. */}
+        {referredBy && !editingReferrer && (
           <Row
             label="Referred by"
             value={
-              <Link href={`/crm/leads/${referredBy.id}`} className="font-semibold text-on-surface hover:text-primary hover:underline">
-                {referredBy.candidateName}
-              </Link>
+              <span className="inline-flex flex-wrap items-center justify-end gap-xs">
+                <Link href={`/crm/leads/${referredBy.id}`} className="font-semibold text-on-surface hover:text-primary hover:underline">
+                  {referredBy.candidateName}
+                </Link>
+                {rewardEarned && <RewardPill reward={rewardEarned} />}
+                {canSetReferrer && rewardEarned?.status !== "paid" && (
+                  <button
+                    type="button"
+                    onClick={() => setEditingReferrer(true)}
+                    className="text-label-sm font-semibold text-primary hover:underline"
+                  >
+                    Change
+                  </button>
+                )}
+              </span>
             }
           />
+        )}
+        {referredBy && editingReferrer && (
+          <ReferredByEditor leadId={lead.id} current={referredBy} onClose={() => setEditingReferrer(false)} />
         )}
         <Row label="Service" value={lead.service?.name ?? "—"} />
         <Row label="Qualification" value={qualificationText(lead.qualification?.label, lead.qualificationOther) ?? "—"} />
@@ -2463,6 +2496,18 @@ function ReferralCard({ lead, referral, canSwitch }: { lead: LeadRow; referral: 
         </div>
       )}
 
+      {(tally.rewardDue > 0 || tally.rewardPaid > 0) && (
+        <div className="flex flex-wrap items-center gap-xs text-label-sm text-on-surface-variant">
+          <span className="material-symbols-outlined" style={{ fontSize: 16 }}>
+            card_giftcard
+          </span>
+          Referral rewards:
+          {tally.rewardDue > 0 && <span className="font-semibold text-amber-700">{inr(tally.rewardDue)} due</span>}
+          {tally.rewardDue > 0 && tally.rewardPaid > 0 && "·"}
+          {tally.rewardPaid > 0 && <span className="font-semibold text-emerald-700">{inr(tally.rewardPaid)} paid</span>}
+        </div>
+      )}
+
       {referred.length > 0 && (
         <div className="space-y-xs">
           <div className="text-label-sm text-on-surface-variant">
@@ -2479,6 +2524,7 @@ function ReferralCard({ lead, referral, canSwitch }: { lead: LeadRow; referral: 
                 </Link>
                 <span className="flex items-center gap-xs flex-shrink-0">
                   <span className="text-label-sm text-on-surface-variant">{fmtDateTime(r.createdAt).split(",")[0]}</span>
+                  {r.reward && <RewardPill reward={r.reward} />}
                   <StatusPill status={r.status} />
                 </span>
               </li>
@@ -2498,6 +2544,93 @@ function ReferralCard({ lead, referral, canSwitch }: { lead: LeadRow; referral: 
         </button>
       )}
       {error && <p className="text-label-sm text-error">{error}</p>}
+    </div>
+  );
+}
+
+const inr = (n: number) => `₹${n.toLocaleString("en-IN")}`;
+
+/** A referral reward's state, small enough to sit beside a stage pill. */
+function RewardPill({ reward }: { reward: { status: string; amount: number } }) {
+  const style =
+    reward.status === "paid"
+      ? "bg-emerald-50 text-emerald-700 border-emerald-200"
+      : reward.status === "due"
+        ? "bg-amber-50 text-amber-800 border-amber-200"
+        : "bg-surface-container-low text-on-surface-variant border-outline-variant";
+  const text = reward.status === "cancelled" ? "Reward cancelled" : `${inr(reward.amount)} ${reward.status}`;
+  return (
+    <span className={`px-xs py-[2px] rounded-full text-[10px] font-bold uppercase tracking-wider whitespace-nowrap border ${style}`}>
+      {text}
+    </span>
+  );
+}
+
+// Correct who referred this lead (Marketing Admin): pick someone else, or
+// remove it. The server keeps the reward in step: an unpaid one follows the
+// change, a paid one pins it. Removing can't be undone — a lead without a
+// referrer can't be given one, so it is never counted as a referral again.
+function ReferredByEditor({
+  leadId,
+  current,
+  onClose,
+}: {
+  leadId: string;
+  current: { id: string; candidateName: string };
+  onClose: () => void;
+}) {
+  const router = useRouter();
+  const [pick, setPick] = useState<LeadPick | null>({ id: current.id, name: current.candidateName });
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  async function save(referredByLeadId: string | null) {
+    setBusy(true);
+    setError(null);
+    const res = await fetch(`/api/crm/leads/${leadId}/referred-by`, {
+      method: "PATCH",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ referredByLeadId }),
+    });
+    setBusy(false);
+    if (!res.ok) {
+      const d = (await res.json().catch(() => ({}))) as { message?: string };
+      setError(d.message || "Couldn't save who referred them.");
+      return;
+    }
+    onClose();
+    router.refresh();
+  }
+
+  return (
+    <div className="rounded-lg border border-outline-variant p-sm space-y-sm">
+      <div className="text-label-sm text-on-surface-variant">Referred by — the candidate who sent them</div>
+      <LeadSearchPicker value={pick} onChange={setPick} inputClassName={inputCls} excludeId={leadId} disabled={busy} />
+      <p className="text-label-sm text-on-surface-variant">
+        Removing it means this lead is no longer a referral, and it can&apos;t be added back.
+      </p>
+      {error && <p className="text-label-sm text-error">{error}</p>}
+      <div className="flex flex-wrap items-center justify-end gap-xs">
+        <button
+          type="button"
+          className="mr-auto text-label-sm text-on-surface-variant hover:text-error underline"
+          disabled={busy}
+          onClick={() => save(null)}
+        >
+          Remove
+        </button>
+        <button type="button" className={linkBtn} disabled={busy} onClick={onClose}>
+          Cancel
+        </button>
+        <button
+          type="button"
+          className={linkBtn + " !bg-primary !text-on-primary !border-primary"}
+          disabled={busy || !pick || pick.id === current.id}
+          onClick={() => pick && save(pick.id)}
+        >
+          Save
+        </button>
+      </div>
     </div>
   );
 }

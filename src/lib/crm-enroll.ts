@@ -13,6 +13,7 @@ import { loadHolidaySet } from "./ops-dates";
 import { monthCodeFromDate, flowFor } from "./catalog";
 import { toPrismaDate, fromPrismaDate, todayIst } from "./lead-pulse-dates";
 import { isLostStatusCode } from "./crm-reinquiry";
+import { noteRewardRaised, raiseReferralReward } from "./crm-referral-reward";
 
 /**
  * Resolve a finance (category, subItem) for a revenue draft from the enrolled
@@ -415,6 +416,7 @@ export async function enrollLead(
       status: { select: { label: true, code: true } },
       expectedValue: true,
       expectedCloseDate: true,
+      referredByLeadId: true,
     },
   });
   if (!lead) throw new HttpError(404, "Lead not found", "not_found");
@@ -532,6 +534,16 @@ export async function enrollLead(
       assigneeId: opsAssigneeId,
     });
 
+    // A referred candidate enrolling earns their referrer the flat reward, in
+    // the same transaction so the two can never disagree.
+    const reward = lead.referredByLeadId
+      ? await raiseReferralReward(tx, {
+          referredLeadId: lead.id,
+          referredName: lead.candidateName,
+          referrerLeadId: lead.referredByLeadId,
+        })
+      : null;
+
     return {
       partyId,
       pipelineId,
@@ -539,6 +551,7 @@ export async function enrollLead(
       opsProjectId: opsProject?.projectId ?? null,
       opsCreated: opsProject?.created ?? false,
       opsTaskCount: opsProject?.taskCount ?? 0,
+      reward,
     };
   });
 
@@ -572,6 +585,15 @@ export async function enrollLead(
       : `Enrolled value ₹${expectedValue.toLocaleString("en-IN")} — no draft-review user configured; record the revenue transaction manually.`,
     metadata: { draftId: result.draftId, amount: expectedValue, partyId: result.partyId, serviceId },
   });
+
+  if (result.reward && lead.referredByLeadId) {
+    await noteRewardRaised(result.reward, {
+      referredLeadId: lead.id,
+      referredName: lead.candidateName,
+      referrerLeadId: lead.referredByLeadId,
+      actorId: args.actorId,
+    });
+  }
 
   // Operations handoff — surface the project on the lead timeline AND on the
   // project's own timeline. Only on first creation (re-enroll is a no-op).
