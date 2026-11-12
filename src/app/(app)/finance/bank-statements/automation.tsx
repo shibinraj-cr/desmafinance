@@ -4,6 +4,7 @@ import { useCallback, useEffect, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { Section } from "@/components/Cards";
 import type { AutomationStatus } from "@/lib/bank/status";
+import { RUN_TIME_EARLIEST, RUN_TIME_LATEST } from "@/lib/bank/schedule";
 import { Modal, Notice, StatusChip, api, day, inputCls, money, primaryBtn, secondaryBtn, time, when } from "./_ui";
 
 type Run = {
@@ -505,7 +506,10 @@ function SettingsForm({
           </label>
           <label className="space-y-xs">
             <span className="text-label-sm font-semibold">Execution time (Asia/Kolkata)</span>
-            <input type="time" className={inputCls} value={f.runTime} onChange={(e) => setF({ ...f, runTime: e.target.value })} required />
+            <input type="time" min={RUN_TIME_EARLIEST} max={RUN_TIME_LATEST} className={inputCls} value={f.runTime} onChange={(e) => setF({ ...f, runTime: e.target.value })} required />
+            <span className="block text-caption text-on-surface-variant">
+              {RUN_TIME_EARLIEST}–{RUN_TIME_LATEST}; the worker sleeps overnight
+            </span>
           </label>
           <label className="space-y-xs">
             <span className="text-label-sm font-semibold">Lookback (days)</span>

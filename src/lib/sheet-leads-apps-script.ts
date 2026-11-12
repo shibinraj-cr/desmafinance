@@ -1,3 +1,5 @@
+import { QUIET_END_IST_MINUTE, QUIET_HEARTBEAT_MINUTES, QUIET_START_IST_MINUTE } from "./db-quiet-hours";
+
 // Single source of truth for the Google Apps Script that syncs a lead
 // spreadsheet to the CRM. Served on the CRM Integrations page (copy button) so
 // non-developers can set it up without touching the repo. Keep it dependency-free
@@ -25,13 +27,38 @@ export const SHEET_LEADS_APPS_SCRIPT = `/**
  *
  * Every run checks in with the CRM even when there is nothing to send, so the
  * Integrations page can tell "no new leads" apart from "this script stopped".
+ * Overnight (22:30-06:30 IST) the CRM's database sleeps to save cost: new leads
+ * still go out the minute they appear, but the empty check-in drops to once
+ * every ${QUIET_HEARTBEAT_MINUTES} minutes so it stops waking the database to say "nothing new".
  */
 
 var HEADER_ROW = 1;
 var SERVER_BATCH = 200;
+var QUIET_START_IST_MINUTE = ${QUIET_START_IST_MINUTE};
+var QUIET_END_IST_MINUTE = ${QUIET_END_IST_MINUTE};
+var QUIET_HEARTBEAT_MINUTES = ${QUIET_HEARTBEAT_MINUTES};
+var LAST_CONTACT_KEY = 'crm::lastContactMs';
 
 function _docProps() { return PropertiesService.getDocumentProperties(); }
 function _cursorKey(sheetName) { return 'cursor::' + sheetName; }
+
+/** IST is UTC+5:30 with no daylight saving, whatever the script's own time zone. */
+function _inQuietHours(now) {
+  var m = (now.getUTCHours() * 60 + now.getUTCMinutes() + 330) % 1440;
+  return m >= QUIET_START_IST_MINUTE || m < QUIET_END_IST_MINUTE;
+}
+
+/**
+ * Every run by day. Overnight, once per clock half-hour (:00 and :30) unless
+ * the CRM already heard from us in it, so both sheets check in together and
+ * wake the database once rather than each on its own beat.
+ */
+function _heartbeatDue(now) {
+  if (!_inQuietHours(now)) return true;
+  var last = parseInt(_docProps().getProperty(LAST_CONTACT_KEY) || '0', 10);
+  var slot = QUIET_HEARTBEAT_MINUTES * 60000;
+  return !(last > 0) || Math.floor(now.getTime() / slot) !== Math.floor(last / slot);
+}
 
 function _config() {
   var p = PropertiesService.getScriptProperties();
@@ -71,7 +98,8 @@ function syncNewLeads() {
     });
     // Nothing new this run -> still check in, so that silence on the CRM's
     // Integrations page means this script stopped rather than "no leads today".
-    if (sent === 0) _post(cfg, null, []);
+    // Overnight it checks in less often (see _heartbeatDue).
+    if (sent === 0 && _heartbeatDue(new Date())) _post(cfg, null, []);
   } finally {
     lock.releaseLock();
   }
@@ -167,7 +195,10 @@ function _post(cfg, campaign, rows) {
     muteHttpExceptions: true,
   });
   var code = res.getResponseCode();
-  if (code >= 200 && code < 300) return true;
+  if (code >= 200 && code < 300) {
+    _docProps().setProperty(LAST_CONTACT_KEY, String(Date.now()));
+    return true;
+  }
   Logger.log('CRM webhook returned ' + code + ': ' + res.getContentText());
   return false;
 }

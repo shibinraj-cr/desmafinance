@@ -2,6 +2,7 @@
  * Pure scheduling rules: when the daily run is due, when the next one is, and
  * what counts as a bank business day for the "no statement received" alert.
  */
+import { QUIET_END_IST_MINUTE } from "../db-quiet-hours";
 
 /** Wall-clock date and minute-of-day in `timeZone`. */
 export function zonedParts(now: Date, timeZone: string): { date: string; minutes: number } {
@@ -22,6 +23,20 @@ export function zonedParts(now: Date, timeZone: string): { date: string; minutes
 export function parseRunTime(s: string): number | null {
   const m = /^([01]\d|2[0-3]):([0-5]\d)$/.exec(s.trim());
   return m ? Number(m[1]) * 60 + Number(m[2]) : null;
+}
+
+/**
+ * The daily run time must fall while the worker cron runs: it sleeps through
+ * the database's quiet hours (db-quiet-hours), first tick 06:30 IST, last
+ * 22:25. A time outside that would never be picked up — by the next tick it is
+ * already a new day. 22:00 leaves the run a few ticks to finish.
+ */
+export const RUN_TIME_EARLIEST = "06:30";
+export const RUN_TIME_LATEST = "22:00";
+
+export function isRunTimeInWorkerHours(s: string): boolean {
+  const m = parseRunTime(s);
+  return m !== null && m >= QUIET_END_IST_MINUTE && m <= parseRunTime(RUN_TIME_LATEST)!;
 }
 
 /** Due once per local day, at or after the configured time. */
