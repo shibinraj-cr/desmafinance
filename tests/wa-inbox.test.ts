@@ -1,6 +1,7 @@
 import { describe, it, expect } from "vitest";
 import {
   buildInboxWhere,
+  inboxPageAfter,
   isAwaitingReply,
   normalizeInboxFilter,
   WA_INBOX_FILTERS,
@@ -308,5 +309,28 @@ describe("canAssignConversation", () => {
   it("still lets a BDE claim a lead-linked thread nobody owns", () => {
     const conv = { leadOwnerIds: [], conversationAssignedToId: null, hasLead: true };
     expect(canAssignConversation(access({ isBde: true }), conv, "u1", "u1")).toBe(true);
+  });
+});
+
+describe("inboxPageAfter", () => {
+  const t = new Date("2026-11-13T10:00:00Z");
+
+  // Order is lastMessageAt desc (nulls last), then id desc. "After" the anchor is
+  // anything older, the same instant with a smaller id, or undated.
+  it("pages past a dated anchor by value, keeping undated threads for the end", () => {
+    expect(inboxPageAfter({ id: "m", lastMessageAt: t })).toEqual({
+      OR: [{ lastMessageAt: { lt: t } }, { lastMessageAt: t, id: { lt: "m" } }, { lastMessageAt: null }],
+    });
+  });
+
+  it("pages within the undated tail by id alone", () => {
+    expect(inboxPageAfter({ id: "m", lastMessageAt: null })).toEqual({ lastMessageAt: null, id: { lt: "m" } });
+  });
+
+  // The point of paging by value: it does not care whether the anchor row is
+  // still in the filtered list — only where it sat.
+  it("does not reference the anchor row itself", () => {
+    const where = JSON.stringify(inboxPageAfter({ id: "gone", lastMessageAt: t }));
+    expect(where).not.toContain('"id":"gone"');
   });
 });

@@ -156,6 +156,30 @@ export function buildInboxWhere(filter: WaInboxFilter, scope: InboxScope, search
 }
 
 /**
+ * The rows after `anchor` in the list's order (`lastMessageAt` desc, nulls last,
+ * then `id` desc) — keyset paging by VALUE.
+ *
+ * Not Prisma's `cursor`: that only works while the cursor row still matches the
+ * filter, and returns NOTHING once it doesn't. On a shared "Needs reply" list the
+ * last row of a page is routinely answered or assigned by a colleague before
+ * "load more" is pressed, and the list then simply ended at 50. Comparing on the
+ * anchor's values works whether or not the anchor is still in the list.
+ */
+export function inboxPageAfter(anchor: { id: string; lastMessageAt: Date | null }): Prisma.WaConversationWhereInput {
+  if (!anchor.lastMessageAt) {
+    return { lastMessageAt: null, id: { lt: anchor.id } };
+  }
+  return {
+    OR: [
+      { lastMessageAt: { lt: anchor.lastMessageAt } },
+      { lastMessageAt: anchor.lastMessageAt, id: { lt: anchor.id } },
+      // Nulls sort last, so every undated thread comes after any dated one.
+      { lastMessageAt: null },
+    ],
+  };
+}
+
+/**
  * The rule the `awaitingReply` column stores, in one place.
  *
  * Every outbound send bumps `lastMessageAt` and leaves `lastInboundAt` alone, so

@@ -117,6 +117,12 @@ export type GuideChange = { date: string; section: string; title: string; detail
  */
 export const CRM_GUIDE_CHANGES: GuideChange[] = [
   {
+    date: "2026-11-13",
+    section: "inbox",
+    title: "Inbox shows every chat, and replies reach the right owner",
+    detail: "The Inbox list used to stop at 50 chats. Click **load more** at the bottom to see the rest. A reply on a lead with no consultant now shows under **Unassigned**, not under a consultant who no longer has the lead.",
+  },
+  {
     date: "2026-11-12",
     section: "handovers",
     title: "Instagram handovers",
@@ -495,6 +501,7 @@ export function crmGuideSections(f: GuideFacts, canSee: (href: string) => boolea
           items: [
             "Every reply you send is logged on the lead's timeline as a WhatsApp contact by you, so it counts for your response time and stops the uncontacted alarm.",
             "**Close conversation** clears a finished chat from your list. It doesn't change the lead's stage, and the chat reopens by itself if the candidate writes again.",
+            "The list shows 50 chats at a time. If there are more, click **load more** at the bottom.",
             "When a number the CRM has never seen messages the company WhatsApp, a new lead is created by itself, named with the phone number and with source **WA API**. Add the candidate's name once you know it.",
           ],
         },

@@ -79,3 +79,50 @@ export function pickThreadLead<T extends ThreadLeadCandidate>(leads: readonly T[
 
   return best;
 }
+
+/**
+ * Who should own a number's thread once a message has been filed under a lead.
+ *
+ * The inbox's consultant filter — "Unassigned" above all — reads the thread's
+ * OWN owner column, which is a copy of a lead's owner and drifts from it: an
+ * assignment made before threads were synced, a deleted lead, a sync that
+ * failed quietly. The mirror used to fill that column only when it was empty,
+ * so a stale owner was never corrected, and a reply on a lead nobody owned was
+ * filed under a consultant who no longer had anything to do with it. It sat in
+ * their queue instead of the dispatcher's "Unassigned + Needs reply".
+ *
+ * The rule, in order:
+ *   - No lead on the thread: leave it. Handing an unlinked thread to someone is
+ *     a deliberate act, and there is no record to correct it against.
+ *   - No owner yet: the lead's owner (what the mirror always did).
+ *   - The owner still owns SOME real lead on this number: leave it. One number
+ *     can carry several leads, and the thread follows whichever was assigned
+ *     last — re-filing it under the bound lead's owner would undo that. A row
+ *     flagged `duplicate` does not count: it is a copy, so owning it is not
+ *     owning the candidate.
+ *   - Otherwise the owner is stale: the lead's owner, which may be nobody, and
+ *     then the thread lands in "Unassigned" where somebody will pick it up.
+ *
+ * Returns `undefined` when nothing should change, so a caller writes only real
+ * corrections.
+ */
+export function threadOwnerAfterInbound(input: {
+  /** The thread's current owner. */
+  current: string | null;
+  /** The lead the thread is now filed under, or null for an unlinked thread. */
+  lead: { assignedToId: string | null } | null;
+  /** Every lead on the number, with its owner and stage code. */
+  numberLeads: readonly { assignedToId: string | null; statusCode: string | null }[];
+}): string | null | undefined {
+  const { current, lead, numberLeads } = input;
+  if (!lead) return undefined;
+
+  const next = lead.assignedToId ?? null;
+  if (current === next) return undefined;
+  if (!current) return next ?? undefined;
+  const stillOwnsOne = numberLeads.some(
+    (l) => l.assignedToId === current && l.statusCode !== DUPLICATE_STATUS_CODE,
+  );
+  if (stillOwnsOne) return undefined;
+  return next;
+}
