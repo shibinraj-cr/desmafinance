@@ -770,7 +770,12 @@ async function sendCloudTouch(opts: {
 
   // The part Wabis could never do: put it in the thread.
   await recordTouchOnThread({
-    lead: { id: lead.id, phoneE164, assignedToId: ownerId },
+    // The thread belongs to whoever owns the LEAD — nobody, for a lead released
+    // to the re-marketing pool. `ownerId` falls back to the campaign's former
+    // owner because the template signs off in their name; filing the thread under
+    // them too put the candidate's reply in a queue that no longer covers them,
+    // out of sight of "Unassigned + Needs reply".
+    lead: { id: lead.id, phoneE164, assignedToId: lead.assignedToId ?? null },
     template,
     providerMessageId: result.providerMessageId,
     now: opts.now,

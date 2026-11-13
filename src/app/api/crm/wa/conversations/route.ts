@@ -5,7 +5,7 @@ import { withApiHandler } from "@/lib/api";
 import { unauthorized, forbidden } from "@/lib/http-error";
 import { getCurrentUserAndPermissions } from "@/lib/permissions";
 import { getCrmAccess } from "@/lib/crm-rbac";
-import { buildInboxWhere, inboxOwnerWhere, normalizeInboxFilter, serializeInboxRow } from "@/lib/wa/inbox";
+import { buildInboxWhere, inboxOwnerWhere, inboxPageAfter, normalizeInboxFilter, serializeInboxRow } from "@/lib/wa/inbox";
 import { conversationVisibilityWhere } from "@/lib/wa/access";
 
 export const dynamic = "force-dynamic";
@@ -53,11 +53,22 @@ export const GET = withApiHandler(async (req: Request) => {
   const visibility = conversationVisibilityWhere(access, userId);
   const where = buildInboxWhere(filter, { userId, isBde: access.isBde, visibility, owner, campaign }, search);
 
+  // The cursor is the id of the last row the client has. Its position is read
+  // WITHOUT the filter and the next page is everything after it (inboxPageAfter):
+  // Prisma's own `cursor` returns nothing at all once that row has left the
+  // filter, which on a shared "Needs reply" list happens whenever a colleague
+  // answers the row a page ended on. A cursor that no longer exists ends the list.
+  const anchor = cursor
+    ? await prisma.waConversation.findUnique({ where: { id: cursor }, select: { id: true, lastMessageAt: true } })
+    : null;
+
+  const pageWhere: Prisma.WaConversationWhereInput =
+    cursor && !anchor ? { id: { in: [] } } : anchor ? { AND: [where, inboxPageAfter(anchor)] } : where;
+
   const rows = await prisma.waConversation.findMany({
-    where,
+    where: pageWhere,
     orderBy: [{ lastMessageAt: { sort: "desc", nulls: "last" } }, { id: "desc" }],
     take: take + 1, // one extra row is how we know there is a next page
-    ...(cursor ? { cursor: { id: cursor }, skip: 1 } : {}),
     select: {
       id: true,
       phoneE164: true,

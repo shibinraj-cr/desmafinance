@@ -37,7 +37,7 @@ import {
   WA_PROVIDER_KEY,
 } from "../app-settings";
 import { isOptOutMessage, type WaInboundMessage } from "./inbound";
-import { pickThreadLead } from "./thread-lead";
+import { pickThreadLead, threadOwnerAfterInbound } from "./thread-lead";
 import { renderTemplatePreview } from "./cloud-provider";
 import type { WaProviderKey } from "./provider";
 
@@ -444,20 +444,6 @@ export async function ingestInboundMessage(
       select: { id: true, leadId: true, assignedToId: true, lastMessageAt: true, lastInboundAt: true },
     });
 
-    // Hand an ownerless thread to whoever owns the lead. Only when it has no
-    // owner: a conversation can be deliberately passed to someone other than the
-    // lead's consultant (the inbox allows exactly that), and re-stamping it on
-    // every inbound message would silently undo that handover.
-    //
-    // This is the common case rather than an edge one — a stranger's first
-    // message creates the thread AND the lead, and the lead is assigned minutes
-    // later, so without this the thread would never reach anyone's queue.
-    if (!conversation.assignedToId && lead?.assignedToId) {
-      await prisma.waConversation
-        .update({ where: { id: conversation.id }, data: { assignedToId: lead.assignedToId } })
-        .catch(() => undefined);
-    }
-
     const created = await prisma.waMessage.createMany({
       data: [
         {
@@ -483,6 +469,39 @@ export async function ingestInboundMessage(
 
     if (created.count === 0) {
       return { ok: true, action: "duplicate", conversationId: conversation.id, leadId: conversation.leadId };
+    }
+
+    // Point the thread at whoever is responsible for this candidate now — see
+    // threadOwnerAfterInbound for the rule. An ownerless thread takes the lead's
+    // owner (the common case: a stranger's first message creates the thread AND
+    // the lead, which is assigned minutes later). A thread whose owner no longer
+    // owns any real lead on the number is stale and is corrected — otherwise a
+    // reply on a lead nobody owns sits in a former consultant's queue, invisible
+    // to whoever filters for "Unassigned + Needs reply".
+    //
+    // After the duplicate check, so a redelivery changes nothing. The sibling
+    // leads are only fetched when the owner disagrees with the lead, so the usual
+    // message costs nothing extra. The write is guarded on the owner read above:
+    // a dispatcher assigning this very reply while it is being stored must win,
+    // not be overwritten with a decision made from the value before theirs.
+    if (lead && conversation.assignedToId !== (lead.assignedToId ?? null)) {
+      const numberLeads = conversation.assignedToId
+        ? (
+            await prisma.lead.findMany({
+              where: { OR: [{ phoneE164 }, { altPhoneE164: phoneE164 }] },
+              select: { assignedToId: true, status: { select: { code: true } } },
+            })
+          ).map((l) => ({ assignedToId: l.assignedToId, statusCode: l.status?.code ?? null }))
+        : [];
+      const nextOwner = threadOwnerAfterInbound({ current: conversation.assignedToId, lead, numberLeads });
+      if (nextOwner !== undefined) {
+        await prisma.waConversation
+          .updateMany({
+            where: { id: conversation.id, assignedToId: conversation.assignedToId },
+            data: { assignedToId: nextOwner },
+          })
+          .catch(() => undefined);
+      }
     }
 
     // Counted so we can see which kinds candidates actually send that Meta will

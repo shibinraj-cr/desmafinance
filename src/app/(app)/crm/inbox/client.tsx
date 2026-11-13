@@ -227,29 +227,114 @@ export function InboxClient({
   const [rows, setRows] = useState<InboxRow[]>([]);
   const [counts, setCounts] = useState({ needsReply: 0, unread: 0, unassigned: 0 });
   const [listLoading, setListLoading] = useState(true);
+  // The API pages at 50. The list used to read only the first page, so on a
+  // busy filter — "Unassigned + Needs reply" across the whole re-marketing pool
+  // — every thread past row 50 was simply not there, while the chip's count
+  // still included it.
+  const [nextCursor, setNextCursor] = useState<string | null>(null);
+  const [loadingMore, setLoadingMore] = useState(false);
+  // Bumped on every fresh load, so a "Load more" that returns after the filters
+  // changed is dropped instead of appending another filter's rows.
+  const listGeneration = useRef(0);
   const [selectedId, setSelectedId] = useState<string | null>(initialConversationId);
 
-  const loadList = useCallback(async () => {
-    setListLoading(true);
+  const listQuery = useCallback(() => {
     const qs = new URLSearchParams({ filter });
     if (search.trim()) qs.set("q", search.trim());
     for (const o of owner) qs.append("owner", o);
     if (campaign) qs.set("campaign", campaign);
-    const res = await fetch(`/api/crm/wa/conversations?${qs}`).catch(() => null);
-    setListLoading(false);
-    if (!res?.ok) return;
-    const d = (await res.json()) as { conversations: InboxRow[]; counts: typeof counts; campaigns?: string[] };
-    setRows(d.conversations);
-    setCounts(d.counts);
-    const nextCampaigns = d.campaigns ?? [];
-    setCampaigns(nextCampaigns);
-    // If the selected campaign is no longer offered (its last visible thread was
-    // reassigned/closed, so the dropdown would vanish), fall back to All — the
-    // select is the only control for this state, so leaving it set would strand
-    // the user on an empty, uncontrollable filter.
-    if (campaign && campaign !== "__any__" && !nextCampaigns.includes(campaign)) setCampaign("");
-    else if (campaign === "__any__" && nextCampaigns.length === 0) setCampaign("");
+    return qs;
   }, [filter, search, owner, campaign]);
+
+  type ListPage = {
+    conversations: InboxRow[];
+    nextCursor?: string | null;
+    counts: typeof counts;
+    campaigns?: string[];
+  };
+  const fetchPage = useCallback(
+    async (cursor: string | null): Promise<ListPage | null> => {
+      const qs = listQuery();
+      if (cursor) qs.set("cursor", cursor);
+      const res = await fetch(`/api/crm/wa/conversations?${qs}`).catch(() => null);
+      if (!res?.ok) return null;
+      return (await res.json().catch(() => null)) as ListPage | null;
+    },
+    [listQuery],
+  );
+
+  // Rows currently shown, read by a refresh without making it re-create (and
+  // re-fire the load effect) on every page appended.
+  const shownRows = useRef(0);
+  shownRows.current = rows.length;
+
+  /**
+   * Load the list from the top. `keepRows` re-reads that many rows rather than
+   * one page: a refresh after replying or assigning must not collapse a list the
+   * dispatcher has paged through back to 50, losing their place in it.
+   */
+  const loadList = useCallback(
+    async (keepRows = 0) => {
+      const generation = ++listGeneration.current;
+      // Any "Load more" still in flight belongs to the previous list.
+      setLoadingMore(false);
+      setNextCursor(null);
+      setListLoading(true);
+
+      const first = await fetchPage(null);
+      if (generation !== listGeneration.current) return;
+      if (!first) {
+        setListLoading(false);
+        return;
+      }
+      let collected = first.conversations;
+      let cursor = first.nextCursor ?? null;
+      const target = Math.min(keepRows, 500);
+      while (cursor && collected.length < target) {
+        const more = await fetchPage(cursor);
+        if (generation !== listGeneration.current) return;
+        if (!more) break;
+        const seen = new Set(collected.map((r) => r.id));
+        collected = [...collected, ...more.conversations.filter((r) => !seen.has(r.id))];
+        cursor = more.nextCursor ?? null;
+      }
+
+      setListLoading(false);
+      setRows(collected);
+      setNextCursor(cursor);
+      setCounts(first.counts);
+      const nextCampaigns = first.campaigns ?? [];
+      setCampaigns(nextCampaigns);
+      // If the selected campaign is no longer offered (its last visible thread was
+      // reassigned/closed, so the dropdown would vanish), fall back to All — the
+      // select is the only control for this state, so leaving it set would strand
+      // the user on an empty, uncontrollable filter.
+      if (campaign && campaign !== "__any__" && !nextCampaigns.includes(campaign)) setCampaign("");
+      else if (campaign === "__any__" && nextCampaigns.length === 0) setCampaign("");
+    },
+    [fetchPage, campaign],
+  );
+
+  const refreshList = useCallback(() => void loadList(shownRows.current), [loadList]);
+
+  const loadMore = useCallback(async () => {
+    if (!nextCursor) return;
+    const generation = listGeneration.current;
+    setLoadingMore(true);
+    const d = await fetchPage(nextCursor);
+    // A fresh load started meanwhile: it has already reset loadingMore and the
+    // cursor, and these rows belong to the list it replaced.
+    if (generation !== listGeneration.current) return;
+    setLoadingMore(false);
+    if (!d) return;
+    // De-duplicated: a thread that took a new message between the two requests
+    // moves up the order and could otherwise be listed twice.
+    setRows((prev) => {
+      const seen = new Set(prev.map((r) => r.id));
+      return [...prev, ...d.conversations.filter((r) => !seen.has(r.id))];
+    });
+    setNextCursor(d.nextCursor ?? null);
+  }, [nextCursor, fetchPage]);
 
   // Debounced so typing in the search box does not fire a request per keystroke.
   useEffect(() => {
@@ -271,6 +356,9 @@ export function InboxClient({
           rows={rows}
           counts={counts}
           loading={listLoading}
+          hasMore={!!nextCursor}
+          loadingMore={loadingMore}
+          onLoadMore={() => void loadMore()}
           filter={filter}
           onFilter={setFilter}
           search={search}
@@ -294,7 +382,7 @@ export function InboxClient({
           templates={templates}
           bdes={bdes}
           masters={masters}
-          onChanged={loadList}
+          onChanged={refreshList}
         />
       </div>
     </div>
@@ -305,6 +393,9 @@ function ConversationList({
   rows,
   counts,
   loading,
+  hasMore,
+  loadingMore,
+  onLoadMore,
   filter,
   onFilter,
   search,
@@ -322,6 +413,9 @@ function ConversationList({
   rows: InboxRow[];
   counts: { needsReply: number; unread: number; unassigned: number };
   loading: boolean;
+  hasMore: boolean;
+  loadingMore: boolean;
+  onLoadMore: () => void;
   filter: string;
   onFilter: (f: string) => void;
   search: string;
@@ -476,6 +570,16 @@ function ConversationList({
             </div>
           </button>
         ))}
+        {!loading && hasMore && (
+          <button
+            type="button"
+            onClick={onLoadMore}
+            disabled={loadingMore}
+            className="w-full py-sm text-label-sm font-semibold text-primary hover:bg-surface-container-low disabled:opacity-60"
+          >
+            {loadingMore ? "Loading…" : `Showing ${rows.length} — load more`}
+          </button>
+        )}
       </div>
     </div>
   );
