@@ -220,10 +220,38 @@ export async function sendOtpEmail(to: string, name: string, code: string, agree
   });
 }
 
+/**
+ * The signed-copy email. The candidate's name is in the subject so a shared
+ * inbox (hello@desma.in gets every signed agreement) can tell them apart.
+ */
+export function signedCopyEmail(input: {
+  templateName: string;
+  candidateName: string | null;
+  recipientName: string;
+  verifyUrl: string;
+}): { subject: string; text: string } {
+  const candidate = input.candidateName?.replace(/\s+/g, " ").trim();
+  const agreement = candidate ? `${input.templateName} for ${candidate}` : input.templateName;
+  return {
+    subject: `Signed: ${agreement}`,
+    text: [
+      `Dear ${input.recipientName || "Sir/Madam"},`,
+      "",
+      `The ${agreement} has been signed by everyone. The signed copy is attached; its last page is the certificate of completion.`,
+      "",
+      `Anyone can confirm the file is genuine and unchanged at: ${input.verifyUrl}`,
+      "",
+      "DESMA International",
+    ].join("\n"),
+  };
+}
+
 /** Everyone gets the signed agreement, with the certificate inside. */
 export async function sendSignedCopies(input: {
   reference: string;
   templateName: string;
+  /** The client who signed; null when the agreement has no client signer or lead. */
+  candidateName: string | null;
   recipients: Array<{ name: string; email: string }>;
   pdf: Uint8Array;
   verifyUrl: string;
@@ -243,16 +271,12 @@ export async function sendSignedCopies(input: {
     try {
       await sendEmail(cfg, {
         to: r.email,
-        subject: `Signed: ${input.templateName}`,
-        text: [
-          `Dear ${r.name || "Sir/Madam"},`,
-          "",
-          `The ${input.templateName} has been signed by everyone. The signed copy is attached; its last page is the certificate of completion.`,
-          "",
-          `Anyone can confirm the file is genuine and unchanged at: ${input.verifyUrl}`,
-          "",
-          "DESMA International",
-        ].join("\n"),
+        ...signedCopyEmail({
+          templateName: input.templateName,
+          candidateName: input.candidateName,
+          recipientName: r.name,
+          verifyUrl: input.verifyUrl,
+        }),
         attachments: [{ filename: `${input.reference.replace(/[\\/:*?"<>|]+/g, "-")}.pdf`, content: Buffer.from(input.pdf), contentType: "application/pdf" }],
       });
       out.push({ ...base, ok: true });
