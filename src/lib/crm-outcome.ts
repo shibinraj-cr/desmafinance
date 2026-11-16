@@ -3,6 +3,8 @@
  * and the lead page's call sheet). Pure, so the sheet and the route agree.
  */
 
+import { fromIstWallClock, istDayKey, istDayKeyFrom } from "@/lib/dates";
+
 /**
  * The New stage's code. Mirrors NEW_LEAD_STATUS_CODE in crm-leads.ts, which is
  * server-only (prisma) and so cannot be imported by the call sheet; a test keeps
@@ -30,32 +32,29 @@ export function outcomeMovesNewLead(outcome: CallOutcome, stageCode: string): bo
   return outcome === "connected" && stageCode === NEW_STAGE_CODE;
 }
 
-/** Follow-up presets the sheet offers, as a due date from `now` (local time). */
+/**
+ * Follow-up presets the sheet offers, as a due date from `now`. Days and hours
+ * are India wall-clock time, not the browser's: a laptop left on another
+ * timezone would otherwise book "tomorrow 10:00" at 10:00 somewhere else.
+ */
 export function followUpPreset(preset: "later_today" | "tomorrow" | "in_3_days" | "next_week", now: Date): Date {
-  const d = new Date(now);
+  const tenAm = (days: number) => fromIstWallClock(`${istDayKeyFrom(now, days)}T10:00`)!;
   switch (preset) {
     case "later_today": {
       // Two hours on, but not past 18:00 — a "later today" that lands at
       // midnight is not one. After 18:00, an hour from now.
-      const sixPm = new Date(now);
-      sixPm.setHours(18, 0, 0, 0);
+      const sixPm = fromIstWallClock(`${istDayKey(now)}T18:00`)!;
       const plusTwo = new Date(now.getTime() + 2 * 3_600_000);
       if (plusTwo.getTime() <= sixPm.getTime()) return plusTwo;
       if (now.getTime() < sixPm.getTime()) return sixPm;
       return new Date(now.getTime() + 3_600_000);
     }
     case "tomorrow":
-      d.setDate(d.getDate() + 1);
-      d.setHours(10, 0, 0, 0);
-      return d;
+      return tenAm(1);
     case "in_3_days":
-      d.setDate(d.getDate() + 3);
-      d.setHours(10, 0, 0, 0);
-      return d;
+      return tenAm(3);
     case "next_week":
-      d.setDate(d.getDate() + 7);
-      d.setHours(10, 0, 0, 0);
-      return d;
+      return tenAm(7);
   }
 }
 

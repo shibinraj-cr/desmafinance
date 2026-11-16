@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import { createPortal } from "react-dom";
 import { TASK_TYPES } from "@/lib/crm";
 import { CHANNEL_LABELS, TASK_REMINDER_CHANNELS, type TaskReminderChannel } from "@/lib/crm-task-reminders";
+import { istDayKeyFrom } from "@/lib/dates";
 
 /**
  * "Schedule the next step" dialog shown when a consultant completes the last
@@ -19,11 +20,9 @@ const inputCls =
 const textareaCls =
   "w-full px-md py-sm rounded-lg border border-outline-variant bg-surface-container-lowest text-on-surface text-label-sm focus:border-primary focus:ring-2 focus:ring-primary/30 outline-none transition resize-y";
 
-/** Tomorrow as a yyyy-mm-dd string, the sensible default for a follow-up. */
+/** Tomorrow (India calendar day) as yyyy-mm-dd, the sensible default for a follow-up. */
 function tomorrowISO(): string {
-  const d = new Date();
-  d.setDate(d.getDate() + 1);
-  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+  return istDayKeyFrom(new Date(), 1);
 }
 
 export type NextStepPayload = {
