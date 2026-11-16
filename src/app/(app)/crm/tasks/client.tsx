@@ -7,6 +7,7 @@ import type { CrmTaskListRow } from "@/lib/crm-leads";
 import { MultiSelect } from "@/components/MultiSelect";
 import { listParam, applyFilterPatch } from "@/lib/filter-params";
 import { DEFAULT_STATUS_COLOR } from "@/lib/crm";
+import { istDayKey, istDayStart } from "@/lib/dates";
 import { NextStepDialog, type NextStepPayload } from "@/components/crm/NextStepDialog";
 import { TaskEditDialog, type TaskEditPayload } from "@/components/crm/TaskEditDialog";
 import { reminderStatusLabel, type TaskReminderChannel } from "@/lib/crm-task-reminders";
@@ -46,13 +47,15 @@ function Td({ children, className = "" }: { children?: React.ReactNode; classNam
 }
 
 const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+// India calendar days, not the browser's — a laptop on a US timezone would show
+// every due date a day early and flag tasks overdue on the day they are due.
 function fmtDate(iso: string): string {
-  const d = new Date(iso);
-  return `${String(d.getDate()).padStart(2, "0")} ${MONTHS[d.getMonth()]} ${String(d.getFullYear()).slice(2)}`;
+  const key = istDayKey(iso);
+  if (!key) return "—";
+  return `${key.slice(8, 10)} ${MONTHS[Number(key.slice(5, 7)) - 1]} ${key.slice(2, 4)}`;
 }
 function startOfToday(): number {
-  const n = new Date();
-  return new Date(n.getFullYear(), n.getMonth(), n.getDate()).getTime();
+  return istDayStart(istDayKey(new Date()))!.getTime();
 }
 
 const PRIORITY_STYLE: Record<string, string> = {

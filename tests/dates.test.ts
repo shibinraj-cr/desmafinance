@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { parseLooseDate } from "@/lib/dates";
+import { dayKeyDiff, fromIstWallClock, istDayKey, istDayKeyFrom, parseLooseDate, toIstWallClock } from "@/lib/dates";
 
 describe("parseLooseDate", () => {
   it("returns null for null/undefined/empty/invalid", () => {
@@ -67,5 +67,32 @@ describe("parseLooseDate", () => {
     const d = parseLooseDate("  30-04-2026  ");
     expect(d).not.toBeNull();
     expect(d!.getUTCDate()).toBe(30);
+  });
+});
+
+describe("India calendar helpers", () => {
+  it("a picked due date (00:00 UTC) is that same India day", () => {
+    // The task composer posts "2026-11-17", stored as 17 Nov 00:00 UTC.
+    expect(istDayKey("2026-11-17T00:00:00.000Z")).toBe("2026-11-17");
+  });
+  it("flips at India midnight, not UTC or browser midnight", () => {
+    expect(istDayKey("2026-11-16T18:29:00.000Z")).toBe("2026-11-16"); // 23:59 IST
+    expect(istDayKey("2026-11-16T18:30:00.000Z")).toBe("2026-11-17"); // 00:00 IST
+  });
+  it("is empty for an invalid date", () => {
+    expect(istDayKey("nope")).toBe("");
+  });
+  it("counts days forward across a month end", () => {
+    expect(istDayKeyFrom(new Date("2026-11-30T12:00:00+05:30"), 1)).toBe("2026-12-01");
+    expect(istDayKeyFrom(new Date("2026-11-16T23:30:00+05:30"), 1)).toBe("2026-11-17");
+    expect(dayKeyDiff("2026-11-16", "2026-11-17")).toBe(1);
+    expect(dayKeyDiff("2026-11-17", "2026-11-16")).toBe(-1);
+    expect(dayKeyDiff("2026-12-31", "2027-01-01")).toBe(1);
+  });
+  it("round-trips a datetime-local value as India time", () => {
+    const at = fromIstWallClock("2026-11-17T10:00");
+    expect(at?.toISOString()).toBe("2026-11-17T04:30:00.000Z");
+    expect(toIstWallClock(at!)).toBe("2026-11-17T10:00");
+    expect(fromIstWallClock("")).toBeNull();
   });
 });

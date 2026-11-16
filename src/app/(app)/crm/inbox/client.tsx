@@ -7,6 +7,7 @@ import { WaComposer, type WaTemplateOpt } from "@/components/crm/WaComposer";
 import { WaAttachment } from "@/components/crm/WaAttachment";
 import { WaMessageText } from "@/components/crm/WaMessageText";
 import { statusTooltip } from "@/lib/wa/status-label";
+import { fromIstWallClock, istDayKeyFrom } from "@/lib/dates";
 import { isOtherQualification, qualificationText, QUALIFICATION_OTHER_MAX, daysInStatus } from "@/lib/crm";
 import { leadQualityMeta, type LeadQualityRating, type QualityReasonOpt } from "@/lib/crm-lead-quality";
 import { LeadQualityDialog, QualityPill, qualityDraftFrom } from "@/components/crm/LeadQualityPicker";
@@ -1209,11 +1210,7 @@ function QuickTask({ leadId, canEdit }: { leadId: string; canEdit: boolean }) {
   // is usually pinned to something — a results date, a flight, a call already
   // promised — and none of those are "in 3 days". Defaults to tomorrow so the
   // common case is still one keystroke away.
-  const [dueDate, setDueDate] = useState(() => {
-    const d = new Date();
-    d.setDate(d.getDate() + 1);
-    return d.toISOString().slice(0, 10);
-  });
+  const [dueDate, setDueDate] = useState(() => istDayKeyFrom(new Date(), 1));
   const [busy, setBusy] = useState(false);
   const [note, setNote] = useState<string | null>(null);
 
@@ -1222,11 +1219,9 @@ function QuickTask({ leadId, canEdit }: { leadId: string; canEdit: boolean }) {
   async function add() {
     setBusy(true);
     setNote(null);
-    // 09:00 LOCAL on the chosen day. Parsing the bare "YYYY-MM-DD" would be read
-    // as UTC midnight, which lands on the previous evening east of Greenwich —
-    // a task due "the 19th" would show as the 18th here.
-    const [y, m, day] = dueDate.split("-").map(Number);
-    const d = new Date(y, (m ?? 1) - 1, day ?? 1, 9, 0, 0, 0);
+    // 09:00 India time on the chosen day — not the browser's 09:00, which on a
+    // laptop left on a US timezone lands on the evening of the next IST day.
+    const d = fromIstWallClock(`${dueDate}T09:00`) ?? new Date(NaN);
 
     const res = await fetch(`/api/crm/leads/${leadId}/tasks`, {
       method: "POST",

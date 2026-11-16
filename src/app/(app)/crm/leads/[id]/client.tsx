@@ -60,6 +60,7 @@ import {
   suggestedFollowUpSubject,
   type CallOutcome,
 } from "@/lib/crm-outcome";
+import { dayKeyDiff, fromIstWallClock, istDayKey, toIstWallClock } from "@/lib/dates";
 
 export type PartyOpt = { id: string; label: string; phone: string | null };
 export type DetailMasters = {
@@ -2962,10 +2963,13 @@ const FOLLOW_UP_PRESETS: { value: "later_today" | "tomorrow" | "in_3_days" | "ne
   { value: "next_week", label: "Next week" },
 ];
 
-/** `datetime-local` value for a Date, in the browser's local time. */
+/**
+ * `datetime-local` value for a Date, on India's wall clock. The picker shows
+ * and is read back (fromIstWallClock in save) as IST, so a laptop on another
+ * timezone still books the time the consultant typed.
+ */
 function toLocalInput(d: Date): string {
-  const pad = (n: number) => String(n).padStart(2, "0");
-  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
+  return toIstWallClock(d);
 }
 
 /**
@@ -3006,6 +3010,7 @@ function CallModal({
     setBusy(true);
     setError(null);
     const mins = minutes.trim() ? Math.max(0, parseInt(minutes, 10) || 0) : undefined;
+    const nextDue = dueAt ? fromIstWallClock(dueAt) : null;
     const res = await fetch(`/api/crm/leads/${lead.id}/outcome`, {
       method: "POST",
       headers: { "content-type": "application/json" },
@@ -3014,7 +3019,7 @@ function CallModal({
         durationMin: mins,
         note: note.trim() || undefined,
         subStatusId: subStatusId || undefined,
-        next: book && dueAt && subject.trim() ? { dueAt: new Date(dueAt).toISOString(), subject: subject.trim() } : undefined,
+        next: book && nextDue && subject.trim() ? { dueAt: nextDue.toISOString(), subject: subject.trim() } : undefined,
       }),
     });
     setBusy(false);
@@ -3674,14 +3679,17 @@ const PRIORITY_META: Record<string, { label: string; color: string }> = {
   low: { label: "Low", color: "#6b7280" },
 };
 
+/**
+ * Days are India calendar days, not the browser's: a due date is stored as
+ * 00:00 UTC (05:30 IST) of the picked day, which a laptop on a US timezone
+ * would read as the evening before — "Due today" a day early.
+ */
 function taskDueLabel(iso: string | null): { text: string; overdue: boolean } | null {
   if (!iso) return null;
-  const d = new Date(iso);
-  const today = new Date();
-  today.setHours(0, 0, 0, 0);
-  const day = new Date(d.getFullYear(), d.getMonth(), d.getDate());
-  const diff = Math.round((day.getTime() - today.getTime()) / 86400000);
-  const base = `${d.getDate()} ${MONTHS[d.getMonth()]}`;
+  const dueKey = istDayKey(iso);
+  if (!dueKey) return null;
+  const diff = dayKeyDiff(istDayKey(new Date()), dueKey);
+  const base = `${Number(dueKey.slice(8, 10))} ${MONTHS[Number(dueKey.slice(5, 7)) - 1]}`;
   if (diff < 0) return { text: `Overdue · ${base}`, overdue: true };
   if (diff === 0) return { text: "Due today", overdue: false };
   if (diff === 1) return { text: "Due tomorrow", overdue: false };

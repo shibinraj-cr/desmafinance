@@ -19,20 +19,25 @@ describe("outcomeMovesNewLead", () => {
   });
 });
 
+// Explicit +05:30 instants: the presets are India wall-clock time whatever
+// timezone the test machine (or the consultant's laptop) is on.
+const ist = (s: string) => new Date(`${s}:00+05:30`);
+
 describe("followUpPreset", () => {
-  it("later today is two hours on, capped at 18:00", () => {
-    const morning = new Date(2026, 9, 26, 10, 0);
-    expect(followUpPreset("later_today", morning)).toEqual(new Date(2026, 9, 26, 12, 0));
-    const lateAfternoon = new Date(2026, 9, 26, 17, 0);
-    expect(followUpPreset("later_today", lateAfternoon)).toEqual(new Date(2026, 9, 26, 18, 0));
-    const evening = new Date(2026, 9, 26, 19, 0);
-    expect(followUpPreset("later_today", evening)).toEqual(new Date(2026, 9, 26, 20, 0));
+  it("later today is two hours on, capped at 18:00 IST", () => {
+    expect(followUpPreset("later_today", ist("2026-10-26T10:00"))).toEqual(ist("2026-10-26T12:00"));
+    expect(followUpPreset("later_today", ist("2026-10-26T17:00"))).toEqual(ist("2026-10-26T18:00"));
+    expect(followUpPreset("later_today", ist("2026-10-26T19:00"))).toEqual(ist("2026-10-26T20:00"));
   });
-  it("tomorrow / in 3 days / next week land at 10:00", () => {
-    const now = new Date(2026, 9, 26, 15, 30);
-    expect(followUpPreset("tomorrow", now)).toEqual(new Date(2026, 9, 27, 10, 0));
-    expect(followUpPreset("in_3_days", now)).toEqual(new Date(2026, 9, 29, 10, 0));
-    expect(followUpPreset("next_week", now)).toEqual(new Date(2026, 10, 2, 10, 0));
+  it("tomorrow / in 3 days / next week land at 10:00 IST", () => {
+    const now = ist("2026-10-26T15:30");
+    expect(followUpPreset("tomorrow", now)).toEqual(ist("2026-10-27T10:00"));
+    expect(followUpPreset("in_3_days", now)).toEqual(ist("2026-10-29T10:00"));
+    expect(followUpPreset("next_week", now)).toEqual(ist("2026-11-02T10:00"));
+  });
+  it("counts days from the India date, not the UTC one", () => {
+    // 00:30 IST on the 27th is still the 26th in UTC — tomorrow is the 28th.
+    expect(followUpPreset("tomorrow", ist("2026-10-27T00:30"))).toEqual(ist("2026-10-28T10:00"));
   });
 });
 

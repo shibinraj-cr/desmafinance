@@ -8,6 +8,7 @@ import {
   reminderStatusLabel,
   type TaskReminderChannel,
 } from "@/lib/crm-task-reminders";
+import { istDayKey } from "@/lib/dates";
 
 /**
  * Edit an existing follow-up task in place (PATCH), instead of the old
@@ -26,11 +27,14 @@ const inputCls =
 const textareaCls =
   "w-full px-md py-sm rounded-lg border border-outline-variant bg-surface-container-lowest text-on-surface text-label-sm focus:border-primary focus:ring-2 focus:ring-primary/30 outline-none transition resize-y";
 
-/** ISO datetime -> yyyy-mm-dd for the date input's value (local calendar day, same convention as NextStepDialog). */
+/**
+ * ISO datetime -> yyyy-mm-dd for the date input's value: the India calendar
+ * day, same convention as NextStepDialog. The browser's own day would pre-fill
+ * the day before on a laptop set to a US timezone, and saving the dialog
+ * unchanged would then quietly move the task a day earlier.
+ */
 function toDateInput(iso: string | null): string {
-  if (!iso) return "";
-  const d = new Date(iso);
-  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+  return iso ? istDayKey(iso) : "";
 }
 
 export type TaskEditPayload = {
