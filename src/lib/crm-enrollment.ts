@@ -49,6 +49,9 @@ import {
 
 export const ENROLLMENTS_PAGE = "/finance/enrollments";
 
+/** Moving an enrollment's date touches the pipeline and two daily entries: allow for it. */
+const TX_OPTS = { timeout: 20_000, maxWait: 10_000 };
+
 const inr = (n: number) => `₹${n.toLocaleString("en-IN", { maximumFractionDigits: 2 })}`;
 
 // ── reading ──────────────────────────────────────────────────────────────────
@@ -407,7 +410,7 @@ export async function editEnrollmentByBde(args: {
       ...(exception !== e.exception ? { exception, exceptionById: null, exceptionAt: null, exceptionNote: null } : {}),
     });
     return { e, changes, wasStatus: e.status, newException: exception !== e.exception && exception === "pending" ? next.firstAmount : null };
-  });
+   }, TX_OPTS);
 
   const resubmitted = out.wasStatus !== "pending";
   await recordLeadActivity({
@@ -467,10 +470,11 @@ function merged(e: Row, patch: FinancePatch): Required<EnrollmentFields> {
   return next as Required<EnrollmentFields>;
 }
 
-async function checkClassification(f: EnrollmentFields) {
+/** The category and sub-item must be live Revenue master entries. Reads on the transaction's connection. */
+async function checkClassification(tx: Prisma.TransactionClient, f: EnrollmentFields) {
   if (f.category && f.subItem) {
-    const err = await verifyCategorySubItem(f.category, f.subItem, "Revenue");
-    if (err) throw badRequest(err, "classification_invalid");
+    const err = await verifyCategorySubItem(f.category, f.subItem, "Revenue", tx);
+    if (err) throw badRequest(err === "category_not_found" ? "Pick a Revenue category from the list." : "Pick a sub-item of that category.", "classification_invalid");
   }
 }
 
@@ -482,14 +486,14 @@ export async function financeSave(a: EnrollmentAccess, id: string, patch: Financ
     const next = merged(e, patch);
     const problems = financeProblems(next, todayIst());
     if (problems.length) throw badRequest(problems[0], "enrollment_invalid");
-    await checkClassification(next);
+    await checkClassification(tx, next);
     const before = fieldsOf(e);
     const changes = enrollmentChanges(before, next);
     if (!changes.length) return { e, changes, newException: null };
     const exception = nextException(e.exception, before.firstAmount, next.firstAmount);
     await writeFields(tx, e, next, OPEN_STATUSES, exception !== e.exception ? { exception, exceptionById: null, exceptionAt: null, exceptionNote: null } : {});
     return { e, changes, newException: exception !== e.exception && exception === "pending" ? next.firstAmount : null };
-  });
+   }, TX_OPTS);
   if (out.changes.length) await logFinanceChanges(a, out.e, out.changes);
   if (out.newException != null) await askSalesHead(out.e, out.newException, a.userId);
   return { changes: out.changes };
@@ -552,7 +556,7 @@ export async function approveEnrollment(a: EnrollmentAccess, id: string, patch: 
       const exception = nextException(e.exception, before.firstAmount, f.firstAmount);
       const blocker = approveBlocker({ ...f, status: e.status, exception });
       if (blocker) throw conflict(blocker, "cannot_approve");
-      await checkClassification(f);
+      await checkClassification(tx, f);
       const month = ledgerMonth(f.paidOn!);
       const changes = enrollmentChanges(before, f);
       const now = new Date();
@@ -620,7 +624,7 @@ export async function approveEnrollment(a: EnrollmentAccess, id: string, patch: 
       });
       return { e, f, changes, transactionId: row.id, planId: plan.id };
     },
-    { timeout: 20_000, maxWait: 10_000 },
+    TX_OPTS,
   );
 
   if (out.changes.length) await logFinanceChanges(a, out.e, out.changes);

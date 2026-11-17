@@ -9,8 +9,10 @@ export async function verifyCategorySubItem(
   category: string,
   subItem: string,
   type: string,
+  // A transaction's client, so a check inside a transaction reads on its connection.
+  db: Pick<typeof prisma, "category"> = prisma,
 ): Promise<string | null> {
-  const cat = await prisma.category.findFirst({
+  const cat = await db.category.findFirst({
     where: {
       name: category,
       OR: [{ type }, { type: "Both" }],
