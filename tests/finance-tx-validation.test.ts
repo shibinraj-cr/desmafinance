@@ -16,14 +16,16 @@ vi.mock("@/lib/master-data", () => ({
 }));
 vi.mock("@/lib/tx-counterparty", () => ({
   validateCounterparty: vi.fn(async () => null),
+  isCandidateParty: vi.fn(async () => true),
 }));
 
 import { buildValidatedProposed } from "@/lib/finance-tx-validation";
 import { verifyCategorySubItem } from "@/lib/master-data";
-import { validateCounterparty } from "@/lib/tx-counterparty";
+import { isCandidateParty, validateCounterparty } from "@/lib/tx-counterparty";
 
 const verifyCat = verifyCategorySubItem as unknown as ReturnType<typeof vi.fn>;
 const verifyCp = validateCounterparty as unknown as ReturnType<typeof vi.fn>;
+const candidate = isCandidateParty as unknown as ReturnType<typeof vi.fn>;
 
 /** A valid Revenue payload; individual tests override single fields. */
 function revenue(overrides: Record<string, unknown> = {}) {
@@ -48,6 +50,8 @@ beforeEach(() => {
   verifyCp.mockReset();
   verifyCat.mockResolvedValue(null);
   verifyCp.mockResolvedValue(null);
+  candidate.mockReset();
+  candidate.mockResolvedValue(true);
 });
 
 describe("buildValidatedProposed — month derivation", () => {
@@ -192,5 +196,89 @@ describe("buildValidatedProposed — counterparty", () => {
         expDom: "DOM",
       },
     });
+  });
+});
+
+describe("buildValidatedProposed — payments from before DesGro", () => {
+  /** An instalment paid by a candidate before DesGro's books began. */
+  function past(overrides: Record<string, unknown> = {}) {
+    return revenue({
+      date: "2025-01-15",
+      category: "Collection - Nursing Registrations",
+      subItem: "AHPRA OBA Pathway (Collection)",
+      ...overrides,
+    });
+  }
+
+  it("accepts a candidate's payment and keeps its real month", async () => {
+    const res = await buildValidatedProposed(past());
+    expect("proposed" in res && res.proposed.month).toBe("Jan-25");
+    expect(candidate).toHaveBeenCalledWith("party1");
+  });
+
+  it("accepts a first payment (Sales) too", async () => {
+    const res = await buildValidatedProposed(past({ category: "Sales - Nursing Registrations" }));
+    expect("proposed" in res).toBe(true);
+  });
+
+  it("covers 1 Apr 2023 through 31 Mar 2026", async () => {
+    expect("proposed" in (await buildValidatedProposed(past({ date: "2023-04-01" })))).toBe(true);
+    expect("proposed" in (await buildValidatedProposed(past({ date: "2026-03-31" })))).toBe(true);
+    expect(await buildValidatedProposed(past({ date: "2023-03-31" }))).toEqual({
+      error: "historical_too_old",
+    });
+  });
+
+  it("treats 1 Apr 2026 as live, with no candidate check", async () => {
+    const res = await buildValidatedProposed(past({ date: "2026-04-01" }));
+    expect("proposed" in res && res.proposed.month).toBe("Apr-26");
+    expect(candidate).not.toHaveBeenCalled();
+  });
+
+  it("still refuses dates after the tracked year", async () => {
+    expect(await buildValidatedProposed(past({ date: "2030-01-01" }))).toEqual({
+      error: "month_out_of_range",
+    });
+  });
+
+  it("refuses expenses (refunds included)", async () => {
+    const res = await buildValidatedProposed(
+      past({ type: "Expense", category: "Refund", subItem: "Refund", expDom: null }),
+    );
+    expect(res).toEqual({ error: "historical_payments_only" });
+  });
+
+  it("refuses revenue that isn't a Sales or Collection payment", async () => {
+    const res = await buildValidatedProposed(past({ category: "Commissions", subItem: "Commission" }));
+    expect(res).toEqual({ error: "historical_payments_only" });
+  });
+
+  it("refuses a party that isn't a candidate", async () => {
+    candidate.mockResolvedValue(false);
+    expect(await buildValidatedProposed(past({ partyId: "vendor1" }))).toEqual({
+      error: "historical_candidate_only",
+    });
+  });
+
+  it("refuses a payment with no party", async () => {
+    expect(await buildValidatedProposed(past({ partyId: null }))).toEqual({
+      error: "historical_candidate_only",
+    });
+  });
+
+  it("keeps an edited row on its side of 1 Apr 2026", async () => {
+    expect(
+      await buildValidatedProposed(past({ date: "2026-05-01" }), { existingIsHistorical: true }),
+    ).toEqual({ error: "historical_kind_change" });
+    expect(await buildValidatedProposed(past(), { existingIsHistorical: false })).toEqual({
+      error: "historical_kind_change",
+    });
+    expect("proposed" in (await buildValidatedProposed(past(), { existingIsHistorical: true }))).toBe(
+      true,
+    );
+    expect(
+      "proposed" in
+        (await buildValidatedProposed(revenue({ date: "2026-08-01" }), { existingIsHistorical: false })),
+    ).toBe(true);
   });
 });

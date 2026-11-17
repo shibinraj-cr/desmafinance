@@ -7,6 +7,7 @@ import { verifyCategorySubItem } from "@/lib/master-data";
 import { canApprove, canSeePage } from "@/lib/rbac";
 import { recordAudit } from "@/lib/audit";
 import type { TxProposed } from "@/lib/approval";
+import { isHistoricalDate } from "@/lib/finance-historical";
 
 export const dynamic = "force-dynamic";
 
@@ -17,6 +18,9 @@ const MONTH_CODES = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Se
 
 function monthFromDate(d: Date): string {
   const code = `${MONTH_CODES[d.getUTCMonth()]}-${String(d.getUTCFullYear()).slice(-2)}`;
+  // A payment from before DesGro keeps its real month (it is kept out of the
+  // month-bucketed reports by isHistorical, so there's no bucket to fit).
+  if (isHistoricalDate(d)) return code;
   return (MONTHS as readonly string[]).includes(code) ? code : MONTHS[0];
 }
 
@@ -190,6 +194,7 @@ export async function POST(
           flow: proposed.flow,
           partyId: plan.partyId,
           expDom: proposed.expDom ?? null,
+          isHistorical: isHistoricalDate(expectedDate),
           createdById: userId,
         },
       });

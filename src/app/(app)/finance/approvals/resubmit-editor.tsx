@@ -2,7 +2,9 @@
 
 import { useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
-import { MONTHS, PAYMENT_MODES, TYPES, type TxType } from "@/lib/catalog";
+import { MONTHS, PAYMENT_MODES, TYPES, monthCodeFromDate, type TxType } from "@/lib/catalog";
+import { HISTORICAL_LABEL, isHistoricalDate } from "@/lib/finance-historical";
+import { txErrorMessage } from "@/lib/finance-tx-errors";
 
 type MasterCategory = {
   id: string;
@@ -225,7 +227,7 @@ export function ResubmitEditor({
     setBusy(false);
     if (!res.ok) {
       const data = await res.json().catch(() => ({}));
-      setError((data as { error?: string }).error ?? "Failed to resubmit.");
+      setError(txErrorMessage((data as { error?: string }).error, "Failed to resubmit."));
       return;
     }
     setOpen(false);
@@ -295,17 +297,23 @@ export function ResubmitEditor({
             />
           </Field>
           <Field label="Month">
-            <select
-              value={month}
-              onChange={(e) => setMonth(e.target.value)}
-              className={inputCls}
-            >
-              {MONTHS.map((m) => (
-                <option key={m} value={m}>
-                  {m}
-                </option>
-              ))}
-            </select>
+            {isHistoricalDate(date) ? (
+              <div className={inputCls + " flex items-center text-on-surface-variant"}>
+                {monthCodeFromDate(new Date(date))} · {HISTORICAL_LABEL}
+              </div>
+            ) : (
+              <select
+                value={month}
+                onChange={(e) => setMonth(e.target.value)}
+                className={inputCls}
+              >
+                {MONTHS.map((m) => (
+                  <option key={m} value={m}>
+                    {m}
+                  </option>
+                ))}
+              </select>
+            )}
           </Field>
           <Field label="Type">
             <select

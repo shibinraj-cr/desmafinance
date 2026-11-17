@@ -63,6 +63,7 @@ export default async function RevenuePage({
     prisma.transaction.aggregate({
       where: {
         deletedAt: null,
+        isHistorical: false,
         type: "Revenue",
         expDom: "DOM",
         paymentMode: { in: gstModes },

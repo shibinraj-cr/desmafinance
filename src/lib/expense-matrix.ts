@@ -243,6 +243,7 @@ async function cellsForFy(fy: number): Promise<ExpenseCell[]> {
     where: {
       type: "Expense",
       deletedAt: null,
+      isHistorical: false,
       date: { gte: fyStart(fy), lt: fyEnd(fy) },
     },
     select: { date: true, category: true, amount: true },

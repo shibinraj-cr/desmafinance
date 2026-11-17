@@ -2,6 +2,7 @@ import type { Prisma } from "@prisma/client";
 import { prisma } from "./prisma";
 import { recordAudit } from "./audit";
 import { canApprove, canWorkSalaryDrafts, needsApproval, type Permissions } from "./rbac";
+import { isHistoricalDate } from "./finance-historical";
 
 export type TxProposed = {
   date: string; // ISO date
@@ -85,6 +86,7 @@ export async function submitCreate(opts: {
         partyId: data.partyId ?? null,
         employeeId: data.employeeId ?? null,
         expDom: data.type === "Revenue" ? (data.expDom ?? null) : null,
+        isHistorical: isHistoricalDate(data.date),
         createdById: userId,
       },
     });
@@ -258,6 +260,7 @@ export async function submitDraftToPending(opts: {
           partyId: draft.partyId,
           employeeId: draft.employeeId,
           expDom: draft.type === "Revenue" ? (draft.expDom ?? null) : null,
+          isHistorical: isHistoricalDate(draft.date),
           createdById: ownerId,
         },
       });
@@ -326,6 +329,7 @@ export async function submitUpdate(opts: {
         partyId: data.partyId ?? null,
         employeeId: data.employeeId ?? null,
         expDom: data.type === "Revenue" ? (data.expDom ?? null) : null,
+        isHistorical: isHistoricalDate(data.date),
       },
     });
     await recordAudit({
@@ -476,6 +480,7 @@ export async function approvePending(opts: {
           partyId: data.partyId ?? null,
           employeeId: data.employeeId ?? null,
           expDom: data.type === "Revenue" ? (data.expDom ?? null) : null,
+          isHistorical: isHistoricalDate(data.date),
           createdById: p.submittedById,
         },
       });
@@ -535,6 +540,7 @@ export async function approvePending(opts: {
           partyId: data.partyId ?? null,
           employeeId: data.employeeId ?? null,
           expDom: data.type === "Revenue" ? (data.expDom ?? null) : null,
+          isHistorical: isHistoricalDate(data.date),
         },
       });
       await tx.pendingApproval.update({

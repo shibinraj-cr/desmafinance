@@ -50,3 +50,13 @@ export async function validateCounterparty(opts: {
   }
   return null;
 }
+
+/** True when the party is a Candidate. A payment dated before DesGro's
+ *  ledger began may only come from a candidate. */
+export async function isCandidateParty(partyId: string): Promise<boolean> {
+  const party = await prisma.party.findUnique({
+    where: { id: partyId },
+    select: { group: true },
+  });
+  return party?.group === "Candidate";
+}

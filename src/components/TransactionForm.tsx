@@ -2,7 +2,14 @@
 
 import { useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
-import { MONTHS, PAYMENT_MODES, TYPES, type TxType } from "@/lib/catalog";
+import { MONTHS, PAYMENT_MODES, TYPES, monthCodeFromDate, type TxType } from "@/lib/catalog";
+import {
+  HISTORICAL_FROM_ISO,
+  HISTORICAL_LABEL,
+  HISTORICAL_TO_ISO,
+  isHistoricalDate,
+} from "@/lib/finance-historical";
+import { txErrorMessage } from "@/lib/finance-tx-errors";
 import { InlineNewParty } from "./InlineNewParty";
 
 export type TransactionFormValues = {
@@ -131,6 +138,10 @@ export function TransactionForm({
   const [error, setError] = useState<string | null>(null);
   const [ok, setOk] = useState(false);
   const [okMessage, setOkMessage] = useState<string | null>(null);
+  // A payment from before DesGro (dated before 1 Apr 2026). An existing one
+  // must keep a date in that period; the server enforces the same.
+  const historical = isHistoricalDate(date);
+  const editingHistorical = mode === "edit" && !!initial?.date && isHistoricalDate(initial.date);
 
   const visibleParties = useMemo(
     () =>
@@ -214,13 +225,7 @@ export function TransactionForm({
     setBusy(false);
     if (!res.ok && res.status !== 202) {
       const data = await res.json().catch(() => ({}));
-      setError(
-        data?.error === "validation_failed"
-          ? "Please check the values entered."
-          : data?.error === "not_found"
-            ? "Transaction no longer exists."
-            : "Failed to save.",
-      );
+      setError(txErrorMessage(data?.error));
       return;
     }
     const data = await res.json().catch(() => ({}));
@@ -244,7 +249,7 @@ export function TransactionForm({
     }
     router.refresh();
     if (mode === "edit") {
-      router.push("/finance/daily-tracker");
+      router.push(historical ? "/finance/daily-tracker?historical=1" : "/finance/daily-tracker");
     }
   }
 
@@ -325,18 +330,33 @@ export function TransactionForm({
             value={date}
             onChange={(e) => onDateChange(e.target.value)}
             className={inputCls}
+            min={editingHistorical ? HISTORICAL_FROM_ISO : undefined}
+            max={editingHistorical ? HISTORICAL_TO_ISO : undefined}
             required
           />
         </Field>
         <Field label="Month">
-          <select value={month} onChange={(e) => setMonth(e.target.value)} className={inputCls}>
-            {MONTHS.map((m) => (
-              <option key={m} value={m}>
-                {m}
-              </option>
-            ))}
-          </select>
+          {historical ? (
+            <div className={inputCls + " flex items-center text-on-surface-variant"}>
+              {monthCodeFromDate(new Date(date))} · {HISTORICAL_LABEL}
+            </div>
+          ) : (
+            <select value={month} onChange={(e) => setMonth(e.target.value)} className={inputCls}>
+              {MONTHS.map((m) => (
+                <option key={m} value={m}>
+                  {m}
+                </option>
+              ))}
+            </select>
+          )}
         </Field>
+        {historical && (
+          <p className="md:col-span-2 rounded-lg bg-amber-50 text-amber-900 border border-amber-200 px-md py-sm text-body-md">
+            {HISTORICAL_LABEL}: a candidate&apos;s payment from before 1 Apr 2026. It counts towards
+            the candidate&apos;s paid amount only and stays out of every report. Only Sales or
+            Collection payments from a candidate, dated from 1 Apr 2023, can be recorded.
+          </p>
+        )}
         <Field label="Category">
           <select
             value={categoryName}

@@ -82,8 +82,18 @@ export async function POST(
     // The employee already on the rejected row may have left since (a leaver's
     // last salary, say); only newly picking an inactive one is refused.
     const previous = existing.proposed as unknown as TxProposed | null;
+    // A rejected edit still targets its row, which must stay on its side of
+    // DesGro's start date (see the transaction PATCH route).
+    const target =
+      existing.kind === "update" && existing.targetTxId
+        ? await prisma.transaction.findUnique({
+            where: { id: existing.targetTxId },
+            select: { isHistorical: true },
+          })
+        : null;
     const built = await buildValidatedProposed(parsed.data.proposed, {
       allowInactiveEmployeeId: previous?.employeeId,
+      existingIsHistorical: target?.isHistorical,
     });
     if ("error" in built) {
       return NextResponse.json({ error: built.error }, { status: 400 });

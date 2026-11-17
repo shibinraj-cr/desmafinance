@@ -432,7 +432,7 @@ export async function getSalesObjective(asOf: Date = new Date()): Promise<SalesO
   let archiveRows: Array<{ monthKey: string; collected: { toString(): string } }> = [];
   const [revenue, stored] = await Promise.allSettled([
     prisma.transaction.findMany({
-      where: { deletedAt: null, type: "Revenue", date: { gte: from } },
+      where: { deletedAt: null, isHistorical: false, type: "Revenue", date: { gte: from } },
       select: { date: true, amount: true },
     }),
     prisma.salesObjectiveArchive.findMany({

@@ -235,7 +235,7 @@ export function buildWeeklyPnl({
 /** Read one fiscal year of the ledger and bucket it into weeks. */
 export async function weeklyPnl(fy: number, now: Date = new Date()): Promise<WeeklyPnl> {
   const rows = await prisma.transaction.findMany({
-    where: { deletedAt: null, date: { gte: fyStart(fy), lt: fyEnd(fy) } },
+    where: { deletedAt: null, isHistorical: false, date: { gte: fyStart(fy), lt: fyEnd(fy) } },
     select: { date: true, type: true, category: true, amount: true },
   });
   return buildWeeklyPnl({

@@ -4,6 +4,15 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useState } from "react";
 import { inrFull } from "@/lib/format";
+import { PAYMENT_MODES } from "@/lib/catalog";
+import {
+  HISTORICAL_FROM_ISO,
+  HISTORICAL_LABEL,
+  HISTORICAL_TO_ISO,
+  isBeforeHistoricalFloor,
+  isHistoricalDate,
+} from "@/lib/finance-historical";
+import { txErrorMessage } from "@/lib/finance-tx-errors";
 
 type ServiceOption = { id: string; name: string };
 type SourceOption = { id: string; code: string; label: string; active: boolean };
@@ -45,14 +54,34 @@ type TransactionRow = {
   description: string | null;
   paymentMode: string;
   amount: number;
+  /** Paid before DesGro (1 Apr 2026): counted here, left out of reports. */
+  isHistorical: boolean;
 };
 
 type Totals = {
   totalQuoted: number;
   totalPaid: number;
+  /** The part of totalPaid paid before DesGro's books began. */
+  paidBeforeDesgro: number;
   totalRefunded: number;
   balanceRemaining: number;
 };
+
+/** A Sales / Collection ledger line and the service it books to. */
+type PaymentOption = { category: string; subItem: string; serviceId: string | null };
+
+/** An entry for this candidate not yet in the ledger. */
+type AwaitingRow = {
+  id: string;
+  date: string;
+  subItem: string;
+  amount: number;
+  status: "pending" | "draft";
+  by: string | null;
+};
+
+/** Present only for users who may record payments, on a Candidate. */
+type PastPayments = { options: PaymentOption[]; awaiting: AwaitingRow[] };
 
 const errorLabels: Record<string, string> = {
   validation_failed: "Check the values entered.",
@@ -70,6 +99,7 @@ export function PartyProfile({
   sources,
   l2Bdes,
   transactions,
+  pastPayments = null,
 }: {
   party: Party;
   totals: Totals;
@@ -77,6 +107,7 @@ export function PartyProfile({
   sources: SourceOption[];
   l2Bdes: L2Bde[];
   transactions: TransactionRow[];
+  pastPayments?: PastPayments | null;
 }) {
   return (
     <div className="space-y-lg">
@@ -89,6 +120,11 @@ export function PartyProfile({
           <h2 className="text-h3">Totals</h2>
           <Stat label="Quoted (sum of services)" value={inrFull(totals.totalQuoted)} />
           <Stat label="Paid so far (Revenue)" value={inrFull(totals.totalPaid)} positive />
+          {totals.paidBeforeDesgro > 0 && (
+            <p className="-mt-sm text-caption text-on-surface-variant text-right">
+              incl. {inrFull(totals.paidBeforeDesgro)} paid before DesGro
+            </p>
+          )}
           {totals.totalRefunded > 0 && (
             <Stat label="Refunds / outflow" value={inrFull(totals.totalRefunded)} negative />
           )}
@@ -104,7 +140,7 @@ export function PartyProfile({
         <ServicesPanel party={party} services={services} />
       )}
 
-      <TransactionsPanel transactions={transactions} />
+      <TransactionsPanel transactions={transactions} party={party} pastPayments={pastPayments} />
     </div>
   );
 }
@@ -651,10 +687,42 @@ function ServicesPanel({
   );
 }
 
-function TransactionsPanel({ transactions }: { transactions: TransactionRow[] }) {
+function TransactionsPanel({
+  transactions,
+  party,
+  pastPayments,
+}: {
+  transactions: TransactionRow[];
+  party: Party;
+  pastPayments: PastPayments | null;
+}) {
+  const [recording, setRecording] = useState(false);
   return (
     <div className="bg-surface-container-lowest border border-outline-variant rounded-xl p-lg">
-      <h2 className="text-h3 mb-md">Transactions ({transactions.length})</h2>
+      <div className="flex items-center justify-between gap-md mb-md">
+        <h2 className="text-h3">Transactions ({transactions.length})</h2>
+        {pastPayments && !recording && (
+          <button
+            type="button"
+            onClick={() => setRecording(true)}
+            className="h-8 px-md rounded-lg border border-outline-variant text-label-sm hover:bg-surface-container-low"
+            title="Record a payment this candidate made before DesGro (before 1 Apr 2026)"
+          >
+            + Record past payment
+          </button>
+        )}
+      </div>
+      {pastPayments && recording && (
+        <RecordPastPayment
+          party={party}
+          options={pastPayments.options}
+          existing={[...transactions, ...pastPayments.awaiting]}
+          onClose={() => setRecording(false)}
+        />
+      )}
+      {pastPayments && pastPayments.awaiting.length > 0 && (
+        <AwaitingList rows={pastPayments.awaiting} />
+      )}
       {transactions.length === 0 ? (
         <p className="text-body-md text-on-surface-variant">
           No transactions linked to this party yet.
@@ -682,7 +750,10 @@ function TransactionsPanel({ transactions }: { transactions: TransactionRow[] })
                     key={t.id}
                     className="border-t border-outline-variant/60 hover:bg-surface-container-low"
                   >
-                    <td className="px-md py-sm">{t.date}</td>
+                    <td className="px-md py-sm whitespace-nowrap">
+                      {t.date}
+                      {t.isHistorical && <HistoricalBadge />}
+                    </td>
                     <td className="px-md py-sm">
                       <span
                         className={
@@ -726,6 +797,327 @@ function TransactionsPanel({ transactions }: { transactions: TransactionRow[] })
         </div>
       )}
     </div>
+  );
+}
+
+function HistoricalBadge() {
+  return (
+    <span
+      title="Paid before 1 Apr 2026. Counts towards this candidate's balance, not in any report."
+      className="block mt-[2px] w-fit px-sm py-[1px] rounded-full border border-amber-300 bg-amber-50 text-amber-800 text-[10px] font-bold uppercase tracking-wider"
+    >
+      {HISTORICAL_LABEL}
+    </span>
+  );
+}
+
+/** Entries for this candidate a manager hasn't approved yet (and the
+ *  viewer's own unsubmitted drafts), so a payment isn't entered twice. */
+function AwaitingList({ rows }: { rows: AwaitingRow[] }) {
+  return (
+    <div className="mb-md rounded-lg border border-amber-200 bg-amber-50/50 p-md">
+      <h3 className="text-label-md font-semibold mb-sm">Not in the ledger yet ({rows.length})</h3>
+      <ul className="space-y-xs text-body-md">
+        {rows.map((r) => (
+          <li key={r.id} className="flex flex-wrap items-center gap-x-md gap-y-xs">
+            <span className="font-mono whitespace-nowrap">{r.date}</span>
+            <span className="flex-1 min-w-[160px]">{r.subItem}</span>
+            <span className="font-mono text-green-700">{inrFull(r.amount)}</span>
+            {r.status === "pending" ? (
+              <Link href="/finance/approvals/pending" className="text-label-sm text-amber-800 underline">
+                Waiting for approval{r.by ? ` · entered by ${r.by}` : ""}
+              </Link>
+            ) : (
+              <Link href="/finance/approvals/my-drafts" className="text-label-sm text-amber-800 underline">
+                In your drafts, not yet submitted
+              </Link>
+            )}
+          </li>
+        ))}
+      </ul>
+    </div>
+  );
+}
+
+/**
+ * Record a payment a candidate made before DesGro's books began (1 Apr
+ * 2023 – 31 Mar 2026). It goes through the normal transaction route, so a
+ * Finance Executive's entry waits for a Finance Manager's approval; once in,
+ * it counts towards this candidate's paid amount and never in a report.
+ */
+function RecordPastPayment({
+  party,
+  options,
+  existing,
+  onClose,
+}: {
+  party: Party;
+  options: PaymentOption[];
+  existing: { date: string; amount: number }[];
+  onClose: () => void;
+}) {
+  const router = useRouter();
+  const services = party.partyServices;
+  const [date, setDate] = useState("");
+  const [serviceId, setServiceId] = useState(services[0]?.serviceId ?? "");
+  const [kind, setKind] = useState<"Collection" | "Sales">("Collection");
+  const [lineKey, setLineKey] = useState("");
+  const [amount, setAmount] = useState("");
+  const [paymentMode, setPaymentMode] = useState<string>(PAYMENT_MODES[0]);
+  const [expDom, setExpDom] = useState<"DOM" | "EXP">("DOM");
+  const [reference, setReference] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [done, setDone] = useState<string | null>(null);
+
+  const ofKind = options.filter((o) => o.category.startsWith(`${kind} - `));
+  const forService = ofKind.filter((o) => serviceId && o.serviceId === serviceId);
+  // The service's own line when it has one; otherwise let them pick.
+  const choices = forService.length ? forService : ofKind;
+  const keyOf = (o: PaymentOption) => `${o.category}||${o.subItem}`;
+  const line = choices.find((o) => keyOf(o) === lineKey) ?? choices[0] ?? null;
+
+  async function submit(e: React.FormEvent) {
+    e.preventDefault();
+    setError(null);
+    setDone(null);
+    if (!date || !isHistoricalDate(date) || isBeforeHistoricalFloor(date)) {
+      setError("Enter the date paid, between 1 Apr 2023 and 31 Mar 2026.");
+      return;
+    }
+    const amt = Number(amount);
+    if (!Number.isFinite(amt) || amt <= 0) {
+      setError("Enter an amount greater than zero.");
+      return;
+    }
+    if (!line) {
+      setError("No Sales / Collection sub-item is set up. Ask an admin to add one in Master Data.");
+      return;
+    }
+    const twin = existing.find((x) => x.date === date && Math.abs(x.amount - amt) < 0.005);
+    if (
+      twin &&
+      !window.confirm(
+        `A payment of ${inrFull(amt)} dated ${date} is already recorded or waiting for approval for this candidate. Record it again?`,
+      )
+    ) {
+      return;
+    }
+    setBusy(true);
+    const res = await fetch("/api/finance/transactions", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        date,
+        type: "Revenue",
+        category: line.category,
+        subItem: line.subItem,
+        description: reference.trim() || null,
+        paymentMode,
+        amount: amt,
+        partyId: party.id,
+        employeeId: null,
+        expDom,
+      }),
+    });
+    setBusy(false);
+    const data = (await res.json().catch(() => ({}))) as {
+      error?: string;
+      applied?: boolean;
+      isDraft?: boolean;
+    };
+    if (!res.ok && res.status !== 202) {
+      setError(txErrorMessage(data.error));
+      return;
+    }
+    setDone(
+      data.applied
+        ? "Recorded. It now counts towards this candidate's paid amount."
+        : data.isDraft
+          ? "Saved to your drafts. Submit it from Approvals → My Drafts to send it for approval."
+          : "Sent to the Finance Manager for approval. It counts once approved.",
+    );
+    setDate("");
+    setAmount("");
+    setReference("");
+    router.refresh();
+  }
+
+  return (
+    <form
+      onSubmit={submit}
+      className="mb-md grid grid-cols-1 md:grid-cols-12 gap-sm items-end border-2 border-dashed border-primary/40 rounded-lg p-md bg-primary/5"
+    >
+      <p className="md:col-span-12 text-body-md text-on-surface-variant">
+        A payment this candidate made <strong>before DesGro</strong> (1 Apr 2023 – 31 Mar 2026). It
+        counts towards their paid amount and balance, and stays out of every report.
+      </p>
+      <label className="md:col-span-3 block">
+        <span className="block text-label-sm text-on-surface-variant mb-xs">Date paid</span>
+        <input
+          type="date"
+          required
+          min={HISTORICAL_FROM_ISO}
+          max={HISTORICAL_TO_ISO}
+          value={date}
+          onChange={(e) => setDate(e.target.value)}
+          className={inputCls}
+        />
+      </label>
+      {services.length > 0 && (
+        <label className="md:col-span-5 block">
+          <span className="block text-label-sm text-on-surface-variant mb-xs">Service</span>
+          <select
+            value={serviceId}
+            onChange={(e) => {
+              setServiceId(e.target.value);
+              setLineKey("");
+            }}
+            className={inputCls}
+          >
+            {services.map((s) => (
+              <option key={s.serviceId} value={s.serviceId}>
+                {s.serviceName}
+              </option>
+            ))}
+          </select>
+        </label>
+      )}
+      <div className="md:col-span-4 block">
+        <span className="block text-label-sm text-on-surface-variant mb-xs">Payment</span>
+        <div className="flex rounded-lg border border-outline-variant overflow-hidden h-10">
+          {(
+            [
+              ["Sales", "First payment"],
+              ["Collection", "Instalment"],
+            ] as const
+          ).map(([k, label]) => (
+            <button
+              type="button"
+              key={k}
+              onClick={() => {
+                setKind(k);
+                setLineKey("");
+              }}
+              className={
+                "flex-1 px-sm text-label-sm font-semibold transition " +
+                (kind === k
+                  ? "bg-primary text-on-primary"
+                  : "bg-surface-container-lowest text-on-surface-variant hover:bg-surface-container-low")
+              }
+            >
+              {label}
+            </button>
+          ))}
+        </div>
+      </div>
+      <div className="md:col-span-12 block">
+        <span className="block text-label-sm text-on-surface-variant mb-xs">Books as</span>
+        {forService.length === 1 ? (
+          <span className="block text-body-md">
+            {forService[0].category} › {forService[0].subItem}
+          </span>
+        ) : (
+          <>
+            <select
+              value={line ? keyOf(line) : ""}
+              onChange={(e) => setLineKey(e.target.value)}
+              className={inputCls}
+            >
+              {choices.length === 0 && <option value="">(no {kind} sub-items set up)</option>}
+              {choices.map((o) => (
+                <option key={keyOf(o)} value={keyOf(o)}>
+                  {o.category} › {o.subItem}
+                </option>
+              ))}
+            </select>
+            {forService.length === 0 && choices.length > 0 && (
+              <span className="block text-caption text-on-surface-variant mt-xs">
+                No {kind} sub-item is linked to this service, so pick the right one.
+              </span>
+            )}
+          </>
+        )}
+      </div>
+      <label className="md:col-span-3 block">
+        <span className="block text-label-sm text-on-surface-variant mb-xs">Amount (₹)</span>
+        <input
+          type="number"
+          min={0}
+          step="0.01"
+          required
+          value={amount}
+          onChange={(e) => setAmount(e.target.value)}
+          className={inputCls + " text-right font-mono"}
+        />
+      </label>
+      <label className="md:col-span-3 block">
+        <span className="block text-label-sm text-on-surface-variant mb-xs">Payment mode</span>
+        <select value={paymentMode} onChange={(e) => setPaymentMode(e.target.value)} className={inputCls}>
+          {PAYMENT_MODES.map((m) => (
+            <option key={m} value={m}>
+              {m}
+            </option>
+          ))}
+        </select>
+      </label>
+      <div className="md:col-span-2 block">
+        <span className="block text-label-sm text-on-surface-variant mb-xs">EXP / DOM</span>
+        <div className="flex rounded-lg border border-outline-variant overflow-hidden h-10">
+          {(["DOM", "EXP"] as const).map((opt) => (
+            <button
+              type="button"
+              key={opt}
+              onClick={() => setExpDom(opt)}
+              className={
+                "flex-1 text-label-sm font-semibold transition " +
+                (expDom === opt
+                  ? "bg-primary text-on-primary"
+                  : "bg-surface-container-lowest text-on-surface-variant hover:bg-surface-container-low")
+              }
+            >
+              {opt}
+            </button>
+          ))}
+        </div>
+      </div>
+      <label className="md:col-span-4 block">
+        <span className="block text-label-sm text-on-surface-variant mb-xs">Receipt no. / reference</span>
+        <input
+          value={reference}
+          maxLength={500}
+          onChange={(e) => setReference(e.target.value)}
+          className={inputCls}
+          placeholder="Optional"
+        />
+      </label>
+      {error && (
+        <div className="md:col-span-12 rounded-lg bg-error-container text-on-error-container px-md py-sm text-body-md">
+          {error}
+        </div>
+      )}
+      {done && (
+        <div className="md:col-span-12 rounded-lg bg-green-50 text-green-700 px-md py-sm text-body-md">
+          {done}
+        </div>
+      )}
+      <div className="md:col-span-12 flex justify-end gap-xs">
+        <button
+          type="button"
+          onClick={onClose}
+          className="h-9 px-md rounded-lg text-label-sm text-on-surface-variant"
+        >
+          Close
+        </button>
+        <button
+          type="submit"
+          disabled={busy}
+          className="h-9 px-md rounded-lg bg-primary text-on-primary text-label-sm font-semibold disabled:opacity-60"
+        >
+          {busy ? "Saving…" : "Record payment"}
+        </button>
+      </div>
+    </form>
   );
 }
 

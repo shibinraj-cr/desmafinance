@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useRef, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import { inrFull } from "@/lib/format";
+import { HISTORICAL_LABEL, isHistoricalDate } from "@/lib/finance-historical";
 
 /** localStorage key for in-progress approve/reject decisions. Kept
  *  scoped to this page so other surfaces (daily tracker drafts etc.)
@@ -311,7 +312,10 @@ export function PendingList({
                   key={r.id}
                   className={"border-t border-outline-variant/60 " + rowTint}
                 >
-                  <td className="px-md py-sm font-mono text-on-surface whitespace-nowrap">{fmtDDMMYY(r.date)}</td>
+                  <td className="px-md py-sm font-mono text-on-surface whitespace-nowrap">
+                    {fmtDDMMYY(r.date)}
+                    {isHistoricalDate(r.date) && <HistoricalBadge />}
+                  </td>
                   <td className="px-md py-sm">{r.type}</td>
                   <td className="px-md py-sm">
                     {r.type === "Revenue" ? <ExpDomBadge value={r.expDom} /> : <span className="text-on-surface-variant">—</span>}
@@ -456,6 +460,19 @@ function ExpDomBadge({ value }: { value: string | null }) {
       }
     >
       {value}
+    </span>
+  );
+}
+
+/** A candidate payment dated before DesGro's books began: approving it
+ *  updates the candidate's balance but no report. */
+function HistoricalBadge() {
+  return (
+    <span
+      title="Paid before 1 Apr 2026. Counts towards the candidate's balance only, not in any report."
+      className="block mt-[2px] w-fit px-sm py-[1px] rounded-full border border-amber-300 bg-amber-50 text-amber-800 font-sans text-[10px] font-bold uppercase tracking-wider"
+    >
+      {HISTORICAL_LABEL}
     </span>
   );
 }

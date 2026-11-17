@@ -235,6 +235,11 @@ model Transaction {
   /// calc on the Revenue Analysis page: only DOM revenue carries
   /// the 18% GST line.
   expDom      String?
+  /// A candidate payment received before DesGro's ledger began (dated
+  /// before 1 Apr 2026). Set from the date at every write. Such rows count
+  /// towards the candidate's "paid so far" but are kept out of every finance
+  /// report, which only covers the period DesGro has complete books for.
+  isHistorical Boolean  @default(false)
   partyId     String?
   party       Party?    @relation(fields: [partyId], references: [id], onDelete: SetNull)
   /// Employee counterparty — used for salary / incentive outflows. A
