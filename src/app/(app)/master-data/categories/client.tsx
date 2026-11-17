@@ -22,16 +22,17 @@ type Category = {
   subItems: SubItem[];
   txCount: number;
 };
-type ServiceOption = { id: string; name: string };
+type ServiceOption = { id: string; name: string; isActive: boolean };
 
-const SERVICE_LINK_CATEGORIES = new Set([
-  "Sales - Nursing Registrations",
-  "Collection - Nursing Registrations",
-  "Sales - Study Abroad",
-  "Collection - Study Abroad",
-]);
+// Any revenue sub-item can be linked to a Service. Every reader of the link
+// (enroll → revenue draft, the candidate's paid-per-service, Sales Analysis)
+// works off SubCategory.serviceId whatever the category is called, so a
+// fixed list of category names only hid the dropdown on new revenue
+// categories (e.g. a new service line's own Sales / Collection category).
+const canLinkService = (t: CatType) => t === "Revenue" || t === "Both";
 
 const errorLabels: Record<string, string> = {
+  service_not_found: "That service no longer exists — refresh the page.",
   name_taken: "A category with that name and type already exists.",
   validation_failed: "Check the values entered.",
   forbidden: "Only admins can do that.",
@@ -121,7 +122,7 @@ function CategoryCard({
   category: Category;
   services: ServiceOption[];
 }) {
-  const showServiceLink = SERVICE_LINK_CATEGORIES.has(category.name);
+  const showServiceLink = canLinkService(category.type);
   const router = useRouter();
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -455,11 +456,24 @@ function SubItemRow({
               }
             >
               <option value="">— No service —</option>
-              {services.map((s) => (
-                <option key={s.id} value={s.id}>
-                  {s.name}
-                </option>
-              ))}
+              {services
+                .filter((s) => s.isActive)
+                .map((s) => (
+                  <option key={s.id} value={s.id}>
+                    {s.name}
+                  </option>
+                ))}
+              {services.some((s) => !s.isActive) && (
+                <optgroup label="Inactive services">
+                  {services
+                    .filter((s) => !s.isActive)
+                    .map((s) => (
+                      <option key={s.id} value={s.id}>
+                        {s.name} (inactive)
+                      </option>
+                    ))}
+                </optgroup>
+              )}
             </select>
           )}
           <button

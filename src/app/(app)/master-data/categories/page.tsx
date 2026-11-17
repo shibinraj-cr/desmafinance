@@ -43,10 +43,13 @@ export default async function CategoriesPage() {
         _count: { select: { subItems: true } },
       },
     }),
+    // Inactive services are included so a sub-item already linked to one
+    // still shows its link, and a service that is being set up (not yet
+    // switched on) can be linked ahead of time. The dropdown lists them
+    // separately.
     prisma.service.findMany({
-      where: { isActive: true },
       orderBy: { name: "asc" },
-      select: { id: true, name: true },
+      select: { id: true, name: true, isActive: true },
     }),
   ]);
 
