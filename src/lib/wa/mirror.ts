@@ -36,7 +36,13 @@ import {
   WA_MIRROR_ENABLED_KEY,
   WA_PROVIDER_KEY,
 } from "../app-settings";
-import { isOptOutMessage, type WaInboundMessage } from "./inbound";
+import {
+  adReferralExtra,
+  adReferralSummary,
+  isOptOutMessage,
+  type WaAdReferral,
+  type WaInboundMessage,
+} from "./inbound";
 import { pickThreadLead } from "./thread-lead";
 import { renderTemplatePreview } from "./cloud-provider";
 import type { WaProviderKey } from "./provider";
@@ -211,6 +217,7 @@ export function waInboundExternalKey(phoneE164: string): string {
  */
 async function createInboundLead(
   phoneE164: string,
+  adReferral: WaAdReferral | null,
 ): Promise<{ lead: { id: string; assignedToId: string | null }; created: boolean } | null> {
   const [defStatus, sourceId] = await Promise.all([resolveDefaultStatus(), resolveWaInboundSourceId()]);
   if (!defStatus) return null;
@@ -226,6 +233,8 @@ async function createInboundLead(
         externalKey,
         statusId: defStatus.id,
         sourceId,
+        // Which Meta ad (if any) brought them — the only time we learn it.
+        ...(adReferral ? { extra: adReferralExtra(adReferral) } : {}),
       },
     ],
     skipDuplicates: true,
@@ -243,8 +252,10 @@ async function createInboundLead(
     await recordLeadActivity({
       leadId: lead.id,
       type: "LEAD_CREATED",
-      summary: "Created from an inbound WhatsApp message",
-      metadata: { channel: "whatsapp", phoneE164 },
+      summary: adReferral
+        ? `Created from an inbound WhatsApp message. ${adReferralSummary(adReferral)}`
+        : "Created from an inbound WhatsApp message",
+      metadata: { channel: "whatsapp", phoneE164, ...(adReferral ? { adReferral } : {}) },
     });
   }
 
@@ -410,7 +421,7 @@ export async function ingestInboundMessage(
 
     let leadCreated = false;
     if (!lead && config.autoCreateLeads) {
-      const result = await createInboundLead(phoneE164);
+      const result = await createInboundLead(phoneE164, msg.adReferral ?? null);
       lead = result?.lead ?? null;
       // False when we lost the create race and adopted the winner's lead — the
       // summary counts leads that came into existence, not lookups that succeeded.
@@ -483,6 +494,27 @@ export async function ingestInboundMessage(
 
     if (created.count === 0) {
       return { ok: true, action: "duplicate", conversationId: conversation.id, leadId: conversation.leadId };
+    }
+
+    // Ad attribution. A brand-new lead already carries it (createInboundLead).
+    // Someone already in the CRM who taps an ad (remarketing, lookalike) keeps
+    // their original source; the ad goes on their timeline as evidence instead.
+    // Logged either way, so we can see whether the relay forwards referrals.
+    if (msg.adReferral) {
+      logger.info("wa_inbound_ad_referral", {
+        sourceType: msg.adReferral.sourceType,
+        sourceId: msg.adReferral.sourceId,
+        leadCreated,
+        hasLead: !!lead,
+      });
+      if (lead && !leadCreated) {
+        await recordLeadActivity({
+          leadId: lead.id,
+          type: "AD_REFERRAL",
+          summary: adReferralSummary(msg.adReferral),
+          metadata: { channel: "whatsapp", adReferral: msg.adReferral },
+        });
+      }
     }
 
     // Counted so we can see which kinds candidates actually send that Meta will

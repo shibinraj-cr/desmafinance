@@ -43,7 +43,65 @@ export type WaInboundMessage = {
    * readUnsupportedType. Null on every other type.
    */
   unsupportedType: string | null;
+  /**
+   * Set when the candidate tapped a Meta click-to-WhatsApp ad (or a boosted
+   * post) to send this message — Meta attaches it to that first message only.
+   * Optional so the other places that build messages need not mention it.
+   */
+  adReferral?: WaAdReferral | null;
 };
+
+/**
+ * Meta's `referral` object on a message sent from a click-to-WhatsApp ad.
+ * Meta documents it on the Cloud API message; a relay may forward it under the
+ * same name. Kept as plain strings: it is attribution evidence, not logic.
+ */
+export type WaAdReferral = {
+  /** "ad" or "post". */
+  sourceType: string | null;
+  /** The ad id when sourceType is "ad", the post id when "post". */
+  sourceId: string | null;
+  sourceUrl: string | null;
+  headline: string | null;
+  /** Click id Meta issues per ad click — the key for any later conversion upload. */
+  ctwaClid: string | null;
+};
+
+export function readAdReferral(raw: Record<string, unknown>): WaAdReferral | null {
+  const r = asObject(raw.referral) ?? asObject(raw.ad_referral) ?? asObject(raw.adReferral);
+  if (!r) return null;
+  const ref: WaAdReferral = {
+    sourceType: pick(r, "source_type", "sourceType")?.toLowerCase() ?? null,
+    sourceId: pick(r, "source_id", "sourceId", "ad_id", "adId"),
+    sourceUrl: pick(r, "source_url", "sourceUrl"),
+    headline: pick(r, "headline", "ad_title", "title"),
+    ctwaClid: pick(r, "ctwa_clid", "ctwaClid"),
+  };
+  return Object.values(ref).some(Boolean) ? ref : null;
+}
+
+/**
+ * The keys a referral adds to a NEW lead's `extra`. `ad_id` is the key Meta's
+ * lead sheets already use, so Sales Analysis's ad dimension (meta-ad-fields.ts)
+ * groups WhatsApp-ad leads with no other change. A boosted post's id is kept
+ * under its own key so it is never mistaken for an ad.
+ */
+export function adReferralExtra(ref: WaAdReferral): Record<string, string> {
+  const out: Record<string, string> = {};
+  if (ref.sourceId) out[ref.sourceType === "post" ? "post_id" : "ad_id"] = ref.sourceId;
+  if (ref.sourceType) out.ad_source_type = ref.sourceType;
+  if (ref.headline) out.ad_headline = ref.headline;
+  if (ref.sourceUrl) out.ad_source_url = ref.sourceUrl;
+  if (ref.ctwaClid) out.ctwa_clid = ref.ctwaClid;
+  return out;
+}
+
+/** "Messaged from a Meta ad: <headline>" — or the ad id when there is no headline. */
+export function adReferralSummary(ref: WaAdReferral): string {
+  const what = ref.sourceType === "post" ? "a boosted Meta post" : "a Meta ad";
+  const name = ref.headline ?? (ref.sourceId ? `id ${ref.sourceId}` : null);
+  return name ? `Messaged from ${what}: ${name}` : `Messaged from ${what}`;
+}
 
 export const WA_MESSAGE_TYPES = [
   "text",
@@ -226,6 +284,7 @@ function readMessage(raw: Record<string, unknown>): WaInboundMessage {
     occurredAt: parseWaTimestamp(raw.timestamp ?? raw.occurredAt ?? raw.created_at ?? raw.time),
     leadId: pick(raw, "lead_id", "leadId"),
     unsupportedType: type === "unsupported" ? readUnsupportedType(raw, rawType) : null,
+    adReferral: readAdReferral(raw),
   };
 }
 

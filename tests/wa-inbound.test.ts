@@ -1,10 +1,14 @@
 import { describe, it, expect } from "vitest";
 import {
+  adReferralExtra,
+  adReferralSummary,
   extractInboundMessages,
   extractBody,
   normalizeMessageType,
   parseWaTimestamp,
+  readAdReferral,
 } from "@/lib/wa/inbound";
+import { metaAdField } from "@/lib/meta-ad-fields";
 import { advanceTimestamps, isSessionOpen, sessionExpiryFrom, WA_SESSION_WINDOW_MS } from "@/lib/wa/mirror";
 
 /** Meta's real webhook shape, trimmed to the fields the parser reads. */
@@ -321,5 +325,71 @@ describe("advanceTimestamps", () => {
       expiry,
     );
     expect(patch).toEqual({});
+  });
+});
+
+describe("click-to-WhatsApp ad referral", () => {
+  // Meta's documented `referral` on the first message sent from a CTWA ad.
+  const referral = {
+    source_url: "https://fb.me/abc",
+    source_id: "120210000000000001",
+    source_type: "ad",
+    headline: "Work as a nurse in Australia",
+    body: "Free eligibility check",
+    media_type: "image",
+    image_url: "https://example.invalid/i.jpg",
+    ctwa_clid: "ARAkLkA8rmlFeiCktEJQ",
+  };
+
+  it("reads the referral from Meta's native envelope", () => {
+    const [m] = extractInboundMessages(
+      metaEnvelope([{ from: "919876543210", id: "wamid.AD1", type: "text", text: { body: "Hi" }, referral }]),
+    );
+    expect(m.adReferral).toEqual({
+      sourceType: "ad",
+      sourceId: "120210000000000001",
+      sourceUrl: "https://fb.me/abc",
+      headline: "Work as a nurse in Australia",
+      ctwaClid: "ARAkLkA8rmlFeiCktEJQ",
+    });
+  });
+
+  it("reads a referral a relay forwards on a flat message", () => {
+    const [m] = extractInboundMessages({ phone: "919876543210", message: "Hi", referral });
+    expect(m.adReferral?.sourceId).toBe("120210000000000001");
+  });
+
+  it("is null on an ordinary message and on an empty referral", () => {
+    expect(readAdReferral({ from: "1", text: { body: "Hi" } })).toBeNull();
+    expect(readAdReferral({ referral: {} })).toBeNull();
+    expect(readAdReferral({ referral: "not an object" })).toBeNull();
+  });
+
+  it("files an ad's id under ad_id, where Sales Analysis already looks", () => {
+    const extra = adReferralExtra(readAdReferral({ referral })!);
+    expect(extra).toEqual({
+      ad_id: "120210000000000001",
+      ad_source_type: "ad",
+      ad_headline: "Work as a nurse in Australia",
+      ad_source_url: "https://fb.me/abc",
+      ctwa_clid: "ARAkLkA8rmlFeiCktEJQ",
+    });
+    expect(metaAdField(extra, "ad")).toBe("id 120210000000000001");
+  });
+
+  it("never files a boosted post's id as an ad", () => {
+    const ref = readAdReferral({ referral: { source_type: "post", source_id: "999", headline: "Our story" } })!;
+    expect(adReferralExtra(ref)).toEqual({ post_id: "999", ad_source_type: "post", ad_headline: "Our story" });
+    expect(metaAdField(adReferralExtra(ref), "ad")).toBeNull();
+    expect(adReferralSummary(ref)).toBe("Messaged from a boosted Meta post: Our story");
+  });
+
+  it("summarises with the headline, else the ad id", () => {
+    expect(adReferralSummary(readAdReferral({ referral })!)).toBe(
+      "Messaged from a Meta ad: Work as a nurse in Australia",
+    );
+    expect(adReferralSummary({ sourceType: "ad", sourceId: "42", sourceUrl: null, headline: null, ctwaClid: null })).toBe(
+      "Messaged from a Meta ad: id 42",
+    );
   });
 });
