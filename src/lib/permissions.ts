@@ -1,9 +1,8 @@
-import { getServerSession } from "next-auth";
-import { decode } from "next-auth/jwt";
+import { getServerSession, type Session } from "next-auth";
 import { headers } from "next/headers";
 import { authOptions } from "./auth";
 import { prisma } from "./prisma";
-import { env } from "./env";
+import { readAppToken, isCurrentMobileSession } from "./mobile-session";
 import { fromLegacyString, type Permissions } from "./rbac";
 import { PC_ENROLL_PAGE } from "./partner-commissions/constants";
 
@@ -46,18 +45,33 @@ function withPersonalPages(
  * SECURITY: this only yields a userId — permissions are ALWAYS re-derived from
  * the DB below (roleRef / isActive), so a forged or stale token claim can never
  * escalate privileges, and a deactivated account loses access immediately.
+ * The token's `sid` is checked there too: one signed-in phone per user
+ * (src/lib/mobile-session.ts).
  */
-async function bearerUserId(): Promise<string | null> {
+async function bearerToken(): Promise<{ uid: string; sid: string | null } | null> {
   try {
-    const authz = headers().get("authorization");
-    if (authz?.startsWith("Bearer ")) {
-      const token = await decode({ token: authz.slice(7), secret: env.NEXTAUTH_SECRET });
-      if (token?.uid) return String(token.uid);
-    }
+    return await readAppToken(headers().get("authorization"));
   } catch {
-    // malformed / expired token → treat as unauthenticated
+    // outside a request → unauthenticated
+    return null;
   }
-  return null;
+}
+
+/** The signed-in user's id: the web cookie first, else the app's bearer token. */
+async function resolveUserId(): Promise<{
+  session: Session | null;
+  userId: string | null;
+  bearerSid: string | null | undefined;
+}> {
+  const session = await getServerSession(authOptions);
+  if (session?.user?.id) return { session, userId: session.user.id, bearerSid: undefined };
+  const bearer = await bearerToken();
+  return { session, userId: bearer?.uid ?? null, bearerSid: bearer ? bearer.sid : undefined };
+}
+
+/** False for an app token superseded by a newer app sign-in; web sessions always pass. */
+function appSessionOk(user: { mobileSessionId: string | null }, bearerSid: string | null | undefined): boolean {
+  return bearerSid === undefined || isCurrentMobileSession(user.mobileSessionId, bearerSid);
 }
 
 /**
@@ -68,14 +82,15 @@ async function bearerUserId(): Promise<string | null> {
  * Returns null when there's no active session.
  */
 export async function getCurrentUserPermissions(): Promise<Permissions | null> {
-  const session = await getServerSession(authOptions);
-  const userId = session?.user?.id ?? (await bearerUserId());
+  const { userId, bearerSid } = await resolveUserId();
   if (!userId) return null;
   const user = await prisma.user.findUnique({
     where: { id: userId },
     include: USER_INCLUDE,
   });
   if (!user) return null;
+  // Signed in on another phone since this token was issued.
+  if (!appSessionOk(user, bearerSid)) return null;
   // A deactivated account loses access immediately, even mid-session.
   if (!user.isActive) return null;
   if (user.roleRef) {
@@ -94,14 +109,15 @@ export async function getCurrentUserPermissions(): Promise<Permissions | null> {
 
 export async function getCurrentUserAndPermissions() {
   // Cookie (web) is tried first and unchanged; bearer (mobile) is the fallback.
-  const session = await getServerSession(authOptions);
-  const userId = session?.user?.id ?? (await bearerUserId());
+  const { session, userId, bearerSid } = await resolveUserId();
   if (!userId) return { session: null, perms: null, userId: null };
   const user = await prisma.user.findUnique({
     where: { id: userId },
     include: USER_INCLUDE,
   });
   if (!user) return { session, perms: null, userId };
+  // Signed in on another phone since this token was issued: unauthenticated (401).
+  if (!appSessionOk(user, bearerSid)) return { session: null, perms: null, userId: null };
   // A deactivated account loses access immediately, even mid-session.
   if (!user.isActive) return { session, perms: null, userId: user.id };
   const legacy = user.roleRef ? null : fromLegacyString(user.role);

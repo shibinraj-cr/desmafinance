@@ -4,6 +4,7 @@ import bcrypt from "bcryptjs";
 import { encode } from "next-auth/jwt";
 import { prisma } from "@/lib/prisma";
 import { env } from "@/lib/env";
+import { newMobileSessionId, cleanDeviceLabel } from "@/lib/mobile-session";
 
 export const dynamic = "force-dynamic";
 
@@ -18,6 +19,8 @@ const DUMMY_HASH = bcrypt.hashSync("desgro-timing-guard", 10);
 const Body = z.object({
   username: z.string().min(1),
   password: z.string().min(1),
+  /** The phone's name, shown to the phone this sign-in replaces. Older app builds don't send it. */
+  device: z.string().optional(),
 });
 
 /**
@@ -28,6 +31,10 @@ const Body = z.object({
  * next-auth's own `encode()` and the SAME NEXTAUTH_SECRET + `{ uid, role }`
  * shape as the web cookie — so `getCurrentUserAndPermissions()`'s bearer path
  * (and middleware's getToken) accept it without any special handling.
+ *
+ * One signed-in phone per user: every sign-in stores a fresh session id on the
+ * user and in the token (`sid`), which signs out any other phone on its next
+ * request (src/lib/mobile-session.ts). The web session is unaffected.
  *
  * This route sits under /api/auth, which the middleware matcher already
  * excludes, so the unauthenticated login request reaches it.
@@ -50,8 +57,14 @@ export async function POST(req: Request) {
     return NextResponse.json({ error: "invalid_credentials" }, { status: 401 });
   }
 
+  const sid = newMobileSessionId();
+  await prisma.user.update({
+    where: { id: user.id },
+    data: { mobileSessionId: sid, mobileSessionAt: new Date(), mobileSessionDevice: cleanDeviceLabel(parsed.data.device) },
+  });
+
   const token = await encode({
-    token: { uid: user.id, role: user.role },
+    token: { uid: user.id, role: user.role, sid },
     secret: env.NEXTAUTH_SECRET,
     maxAge: MAX_AGE,
   });
