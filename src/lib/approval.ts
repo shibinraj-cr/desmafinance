@@ -3,6 +3,7 @@ import { prisma } from "./prisma";
 import { recordAudit } from "./audit";
 import { canApprove, canWorkSalaryDrafts, needsApproval, type Permissions } from "./rbac";
 import { isHistoricalDate } from "./finance-historical";
+import { gstInAmount } from "./finance-gst";
 import { guardLedgerWrite, invoiceBlocks, invoicedOrThrow, INVOICED } from "./invoices/ledger-lock";
 
 export type TxProposed = {
@@ -88,6 +89,7 @@ export async function submitCreate(opts: {
         employeeId: data.employeeId ?? null,
         expDom: data.type === "Revenue" ? (data.expDom ?? null) : null,
         isHistorical: isHistoricalDate(data.date),
+        gstAmount: gstInAmount(data),
         createdById: userId,
       },
     });
@@ -262,6 +264,7 @@ export async function submitDraftToPending(opts: {
           employeeId: draft.employeeId,
           expDom: draft.type === "Revenue" ? (draft.expDom ?? null) : null,
           isHistorical: isHistoricalDate(draft.date),
+          gstAmount: gstInAmount(draft),
           createdById: ownerId,
         },
       });
@@ -339,6 +342,7 @@ export async function submitUpdate(opts: {
             employeeId: data.employeeId ?? null,
             expDom: data.type === "Revenue" ? (data.expDom ?? null) : null,
             isHistorical: isHistoricalDate(data.date),
+            gstAmount: gstInAmount(data),
           },
         });
       })
@@ -546,6 +550,7 @@ async function approvePendingInner(opts: {
           employeeId: data.employeeId ?? null,
           expDom: data.type === "Revenue" ? (data.expDom ?? null) : null,
           isHistorical: isHistoricalDate(data.date),
+          gstAmount: gstInAmount(data),
           createdById: p.submittedById,
         },
       });
@@ -604,6 +609,7 @@ async function approvePendingInner(opts: {
           employeeId: data.employeeId ?? null,
           expDom: data.type === "Revenue" ? (data.expDom ?? null) : null,
           isHistorical: isHistoricalDate(data.date),
+          gstAmount: gstInAmount(data),
         },
       });
       return updated;

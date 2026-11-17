@@ -4,7 +4,7 @@ import { canSeePage } from "@/lib/rbac";
 import { TopBar } from "@/components/TopBar";
 import { KpiCard, Section } from "@/components/Cards";
 import { CashflowDualLine, NetCashFlowLine } from "@/components/Charts";
-import { monthlySeries, paymentModeMix, totalsByType } from "@/lib/aggregations";
+import { asCashSeries, monthlySeries, paymentModeMix, totalsByType } from "@/lib/aggregations";
 import { inrFull } from "@/lib/format";
 import { parsePeriod, periodLabel, rangeFor } from "@/lib/period";
 import { DateFilter } from "@/components/DateFilter";
@@ -24,11 +24,13 @@ export default async function CashFlowPage({
 
   const period = parsePeriod(searchParams);
   const range = rangeFor(period);
-  const [totals, series, modes] = await Promise.all([
+  // Cash Flow follows the money: GST received and GST paid both count here.
+  const [totals, ledgerSeries, modes] = await Promise.all([
     totalsByType(range),
     monthlySeries(range),
     paymentModeMix(range),
   ]);
+  const series = asCashSeries(ledgerSeries);
   const positiveMonths = series.filter((s) => s.net > 0).length;
   const negativeMonths = series.filter((s) => s.net < 0).length;
 
@@ -37,12 +39,12 @@ export default async function CashFlowPage({
       <TopBar title="Cash Flow Statement" subtitle={periodLabel(period)} action={<DateFilter />} />
       <div className="p-margin space-y-lg">
         <section className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-gutter">
-          <KpiCard label="Total Inflow" value={totals.revenue} tone="success" />
-          <KpiCard label="Total Outflow" value={totals.expense} tone="danger" />
+          <KpiCard label="Total Inflow" value={totals.inflow} tone="success" />
+          <KpiCard label="Total Outflow" value={totals.outflow} tone="danger" />
           <KpiCard
             label="Net Cash"
-            value={totals.net}
-            tone={totals.net >= 0 ? "success" : "danger"}
+            value={totals.cashNet}
+            tone={totals.cashNet >= 0 ? "success" : "danger"}
             hero
           />
           <KpiCard

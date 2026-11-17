@@ -42,6 +42,7 @@ import {
 import { gstStateByName, gstStateOfGstin, placeOfSupplyLabel } from "./gst-states";
 import { buildCandidateInvoicePdf, stampWatermark, type InvoicePdfInput } from "./pdf";
 import { lockLedgerRow } from "./ledger-lock";
+import { gstInAmount } from "@/lib/finance-gst";
 import { advisoryLock, lockInvoiceStem } from "./numbering";
 
 /**
@@ -654,7 +655,14 @@ export async function issueInvoice(a: InvoiceAccess, input: IssueInput): Promise
       });
       await tx.invoiceFile.create({ data: { invoiceId: inv.id, kind: "original", bytes: Buffer.from(pdf), sha256: sha256(pdf) } });
       if (p.entityCode === "DIPL" && p.ledger.expDom !== p.kind) {
-        await tx.transaction.update({ where: { id: p.ledger.id }, data: { expDom: p.kind } });
+        // The ledger's GST follows its EXP/DOM (src/lib/finance-gst.ts).
+        await tx.transaction.update({
+          where: { id: p.ledger.id },
+          data: {
+            expDom: p.kind,
+            gstAmount: gstInAmount({ type: "Revenue", paymentMode: p.ledger.paymentMode, expDom: p.kind, amount: p.amounts.receivedInr }),
+          },
+        });
       }
       if (input.saveToParty) {
         await tx.party.update({

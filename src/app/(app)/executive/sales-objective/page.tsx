@@ -67,7 +67,7 @@ export default async function SalesObjectivePage({
     <>
       <TopBar
         title="Sales Objective"
-        subtitle={`Collection against the ${COMMIT_RATE * 100}% target · ${objective.months[0].label} → ${objective.months[objective.months.length - 1].label}`}
+        subtitle={`Collection (GST included) against the ${COMMIT_RATE * 100}% target · ${objective.months[0].label} → ${objective.months[objective.months.length - 1].label}`}
         action={
           <Link
             href="/executive/dashboard"

@@ -56,13 +56,24 @@ export default async function ExpensesPage({
       <TopBar title="Expense Tracker" subtitle={periodLabel(period)} action={<DateFilter />} />
       <div className="p-margin space-y-lg">
         <section className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-gutter">
-          <KpiCard label="Total Expenses" value={totals.expense} tone="danger" hero />
+          <KpiCard
+            label="Total Expenses"
+            value={totals.expense}
+            tone="danger"
+            hero
+            hint={
+              totals.gstPaid
+                ? `GST paid to the government (₹${Math.round(totals.gstPaid).toLocaleString("en-IN")}) isn't counted: revenue is already net of GST`
+                : undefined
+            }
+          />
           <KpiCard label="Categories" value={breakdown.length} />
           <KpiCard label="Top 3 Share" value={`${top3Pct}%`} hint="Concentration of spend" />
           <KpiCard
             label="Net After Expenses"
             value={totals.net}
             tone={totals.net >= 0 ? "success" : "danger"}
+            hint="Revenue net of GST, less expenses"
           />
         </section>
         <section className="grid grid-cols-1 lg:grid-cols-12 gap-gutter">

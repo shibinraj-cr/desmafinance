@@ -140,3 +140,25 @@ describe("buildProfitStatement", () => {
     });
   });
 });
+
+describe("buildProfitStatement — revenue net of GST", () => {
+  it("counts income without its GST and doesn't count GST paid as an expense", () => {
+    const from = new Date("2026-11-01T00:00:00Z");
+    const to = new Date("2026-12-01T00:00:00Z");
+    const at = new Date("2026-11-05T00:00:00Z");
+    const s = buildProfitStatement(
+      [
+        { date: at, type: "Revenue", category: "Sales - AHPRA", subItem: "AHPRA (Sales)", amount: 118_000, gstAmount: 18_000 },
+        { date: at, type: "Expense", category: "Taxes", subItem: "GST", amount: 18_000 },
+        { date: at, type: "Expense", category: "Taxes", subItem: "TDS", amount: 2_000 },
+        { date: at, type: "Expense", category: "Rent", subItem: "Office Rent", amount: 30_000 },
+      ],
+      from,
+      to,
+    );
+    expect(s.income).toBe(100_000);
+    expect(s.expenses).toBe(32_000);
+    expect(s.profit).toBe(68_000);
+  });
+});
+

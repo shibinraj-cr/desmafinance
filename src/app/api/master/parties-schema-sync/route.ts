@@ -717,7 +717,12 @@ export async function POST() {
     );
     await step(
       "Backfill Revenue rows → DOM (only if NULL)",
-      `UPDATE "Transaction" SET "expDom" = 'DOM' WHERE type = 'Revenue' AND "expDom" IS NULL`,
+      // A DOM tag puts Axis/HDFC receipts under GST: keep gstAmount in step
+      // (the rule in src/lib/finance-gst.ts).
+      `UPDATE "Transaction" SET "expDom" = 'DOM',
+         "gstAmount" = CASE WHEN "paymentMode" IN ('Axis Bank', 'HDFC Bank') AND "amount" > 0
+                            THEN "amount" - ROUND("amount" / 1.18, 2) ELSE 0 END
+       WHERE type = 'Revenue' AND "expDom" IS NULL`,
     );
     await step(
       "TransactionDraft.expDom column",

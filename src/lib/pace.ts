@@ -1,5 +1,6 @@
 import { prisma } from "./prisma";
 import { MONTH_LABELS } from "./period";
+import { isGstRemittance } from "./finance-gst";
 
 export type PaceMetric = {
   /** This month's value summed from day 1 to today's day-of-month inclusive. */
@@ -66,7 +67,7 @@ export async function pace(asOfDate: Date = new Date()): Promise<Pace> {
           isHistorical: false,
           date: { gte: earliest, lt: latest },
         },
-        select: { date: true, type: true, amount: true },
+        select: { date: true, type: true, amount: true, gstAmount: true, category: true, subItem: true },
       })
     : [];
 
@@ -83,8 +84,10 @@ export async function pace(asOfDate: Date = new Date()): Promise<Pace> {
     const idx = (yr - FY_FIRST_YEAR) * 12 + (m - 3);
     if (idx < 0 || idx > thisFyIndex) continue;
     const v = num(r.amount);
-    if (r.type === "Revenue") buckets[idx].revenue += v;
-    else if (r.type === "Expense") buckets[idx].expense += v;
+    // The P&L view (src/lib/finance-gst.ts): revenue net of GST, and GST
+    // paid to the government isn't an expense.
+    if (r.type === "Revenue") buckets[idx].revenue += v - num(r.gstAmount);
+    else if (r.type === "Expense" && !isGstRemittance(r)) buckets[idx].expense += v;
   }
 
   const thisBucket = buckets[Math.max(0, Math.min(11, thisFyIndex))];

@@ -9,7 +9,9 @@ import {
   revenueByCategory,
   topRevenueServices,
   totalsByType,
+  asCashSeries,
 } from "@/lib/aggregations";
+import { GST_BEARING_MODES } from "@/lib/finance-gst";
 import { parsePeriod, periodLabel, rangeFor } from "@/lib/period";
 import { DateFilter } from "@/components/DateFilter";
 import { PaymentModeFilter } from "@/components/PaymentModeFilter";
@@ -17,13 +19,6 @@ import { listParam } from "@/lib/filter-params";
 import { prisma } from "@/lib/prisma";
 
 export const dynamic = "force-dynamic";
-
-/** GST liability bake-in rate. Payment modes considered "taxable
- *  banking channels" — Suhaina's spec is: only Axis Bank + HDFC Bank
- *  revenue carries the 18% GST line. Cash / Cheque / other modes are
- *  treated as non-GST for this view. */
-const GST_RATE = 0.18;
-const GST_TAXABLE_MODES = ["Axis Bank", "HDFC Bank"] as const;
 
 const PAGE = "/finance/revenue";
 
@@ -42,19 +37,11 @@ export default async function RevenuePage({
   const range = rangeFor(period);
   const modes = listParam(searchParams.mode);
 
-  // The GST tile is the intersection of its own Axis/HDFC rule with whatever
-  // the user has picked, so the whole page reads off one filter: pick Axis
-  // only and the tile drops HDFC; pick modes that carry no GST at all (RCS,
-  // Cash) and it correctly shows nothing.
-  const gstModes = modes.length
-    ? GST_TAXABLE_MODES.filter((m) => modes.includes(m))
-    : [...GST_TAXABLE_MODES];
-
-  // GST liability now honours the same period filter as the rest of the
-  // page — supervisors can flip to a different month / quarter / FY and
-  // the tile recomputes. Two narrowing rules:
-  //   - paymentMode must be one of GST_TAXABLE_MODES (Axis / HDFC), AND
-  //   - expDom = 'DOM' (Domestic). Exports are GST-exempt for this team.
+  // Revenue on this page is net of GST. The GST tile is the GST stored on
+  // each row (src/lib/finance-gst.ts: Axis/HDFC DOM receipts at 18%), under
+  // the same period and payment-mode filter as everything else, so picking
+  // Cash or RCS correctly shows none.
+  const gstModes = GST_BEARING_MODES.filter((m) => !modes.length || modes.includes(m));
   const [totals, series, byCat, topRev, gstAgg] = await Promise.all([
     totalsByType(range, modes),
     monthlySeries(range, modes),
@@ -65,7 +52,7 @@ export default async function RevenuePage({
         deletedAt: null,
         isHistorical: false,
         type: "Revenue",
-        expDom: "DOM",
+        gstAmount: { gt: 0 },
         paymentMode: { in: gstModes },
         ...(range.from || range.to
           ? {
@@ -76,14 +63,12 @@ export default async function RevenuePage({
             }
           : {}),
       },
-      _sum: { amount: true },
+      _sum: { amount: true, gstAmount: true },
       _count: { _all: true },
     }),
   ]);
-  // GST baked into a GST-inclusive amount: liability = total − total/1.18.
   const gstGross = gstAgg._sum.amount ? Number(gstAgg._sum.amount.toString()) : 0;
-  const gstBase = gstGross / (1 + GST_RATE);
-  const gstLiability = gstGross - gstBase;
+  const gstLiability = gstAgg._sum.gstAmount ? Number(gstAgg._sum.gstAmount.toString()) : 0;
   const gstCount = gstAgg._count._all;
   const last = series[series.length - 1];
   const prev = series[series.length - 2];
@@ -123,7 +108,7 @@ export default async function RevenuePage({
                   : `No DOM revenue in ${gstModes.join(" / ")} for this period yet.`
             }
           />
-          <KpiCard label="Total Revenue" value={totals.revenue} tone="primary" hero />
+          <KpiCard label="Total Revenue" value={totals.revenue} tone="primary" hero hint="Net of GST" />
           <KpiCard
             label="MoM Growth"
             value={`${mom >= 0 ? "+" : ""}${mom}%`}
@@ -149,7 +134,8 @@ export default async function RevenuePage({
           </div>
         </section>
         <Section title="Inflow vs Outflow (Monthly)">
-          <CashflowDualLine data={series} />
+          {/* Money in and out, GST included: the cash view of the same rows. */}
+          <CashflowDualLine data={asCashSeries(series)} />
         </Section>
       </div>
     </>
