@@ -3,6 +3,7 @@
 import { useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
+import { txErrorMessage } from "@/lib/finance-tx-errors";
 
 const inputCls =
   "w-full h-10 px-md rounded-lg border border-outline-variant bg-surface-container-lowest focus:border-primary focus:ring-2 focus:ring-primary/20 outline-none transition text-body-md";
@@ -109,7 +110,7 @@ export function PlanDetailClient({
     );
     if (!res.ok) {
       const data = await res.json().catch(() => ({}));
-      setError(data.error ?? `Submission failed (${res.status})`);
+      setError(txErrorMessage(data.error, data.error ?? `Submission failed (${res.status})`));
       return false;
     }
     router.refresh();

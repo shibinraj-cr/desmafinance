@@ -41,7 +41,7 @@ const auditMock = recordAudit as unknown as ReturnType<typeof vi.fn>;
 let txClient: {
   $queryRaw: ReturnType<typeof vi.fn>;
   transaction: { create: ReturnType<typeof vi.fn>; update: ReturnType<typeof vi.fn>; findUnique: ReturnType<typeof vi.fn> };
-  pendingApproval: { update: ReturnType<typeof vi.fn> };
+  pendingApproval: { update: ReturnType<typeof vi.fn>; updateMany: ReturnType<typeof vi.fn> };
   collectionPlanInstallment: { update: ReturnType<typeof vi.fn> };
   invoice: { findFirst: ReturnType<typeof vi.fn> };
 };
@@ -91,10 +91,11 @@ beforeEach(() => {
   $transaction.mockReset();
   auditMock.mockReset();
   txClient = {
-    // The row lock (SELECT … FOR UPDATE) and the invoice check that guard every ledger edit.
+    // The row lock (SELECT … FOR NO KEY UPDATE) and the invoice check that guard every ledger edit.
     $queryRaw: vi.fn().mockResolvedValue([]),
     transaction: { create: vi.fn(), update: vi.fn(), findUnique: vi.fn().mockResolvedValue({ ...before, partyId: "party1", expDom: "DOM" }) },
-    pendingApproval: { update: vi.fn() },
+    // The in-transaction claim succeeds unless a test says another reviewer won.
+    pendingApproval: { update: vi.fn(), updateMany: vi.fn().mockResolvedValue({ count: 1 }) },
     collectionPlanInstallment: { update: vi.fn() },
     invoice: { findFirst: vi.fn().mockResolvedValue(null) },
   };
@@ -120,14 +121,17 @@ describe("approvePending — create", () => {
     expect(res).toEqual({ applied: true, transactionId: "tx1" });
     // Atomicity: exactly one transaction wraps the writes...
     expect($transaction).toHaveBeenCalledTimes(1);
-    // ...and both the ledger write and the pending resolution ran on the tx client.
+    // ...the pending is claimed (only while still pending) on the tx client...
+    expect(txClient.pendingApproval.updateMany).toHaveBeenCalledWith({
+      where: { id: "p1", status: "pending" },
+      data: expect.objectContaining({ status: "approved", reviewedById: "rev1" }),
+    });
+    // ...and the ledger write and its link ran on the same tx client.
     expect(txClient.transaction.create).toHaveBeenCalledTimes(1);
-    expect(txClient.pendingApproval.update).toHaveBeenCalledWith(
-      expect.objectContaining({
-        where: { id: "p1" },
-        data: expect.objectContaining({ status: "approved", targetTxId: "tx1" }),
-      }),
-    );
+    expect(txClient.pendingApproval.update).toHaveBeenCalledWith({
+      where: { id: "p1" },
+      data: { targetTxId: "tx1" },
+    });
     // Audit is best-effort and runs after the commit.
     expect(auditMock).toHaveBeenCalledTimes(1);
   });
@@ -191,12 +195,10 @@ describe("approvePending — update", () => {
     expect(res).toEqual({ applied: true, transactionId: "tx1" });
     expect($transaction).toHaveBeenCalledTimes(1);
     expect(txClient.transaction.update).toHaveBeenCalledTimes(1);
-    expect(txClient.pendingApproval.update).toHaveBeenCalledWith(
-      expect.objectContaining({
-        where: { id: "p1" },
-        data: expect.objectContaining({ status: "approved" }),
-      }),
-    );
+    expect(txClient.pendingApproval.updateMany).toHaveBeenCalledWith({
+      where: { id: "p1", status: "pending" },
+      data: expect.objectContaining({ status: "approved" }),
+    });
   });
 
   it("returns target_gone (before opening a transaction) when the target is missing", async () => {
@@ -234,7 +236,7 @@ describe("approvePending — delete", () => {
       where: { id: "tx1" },
       data: expect.objectContaining({ deletedById: "rev1" }),
     });
-    expect(txClient.pendingApproval.update).toHaveBeenCalledTimes(1);
+    expect(txClient.pendingApproval.updateMany).toHaveBeenCalledTimes(1);
   });
 });
 
@@ -280,12 +282,10 @@ describe("rejectPending", () => {
 
     expect(res).toEqual({ rejected: true });
     expect($transaction).toHaveBeenCalledTimes(1);
-    expect(txClient.pendingApproval.update).toHaveBeenCalledWith(
-      expect.objectContaining({
-        where: { id: "p1" },
-        data: expect.objectContaining({ status: "rejected" }),
-      }),
-    );
+    expect(txClient.pendingApproval.updateMany).toHaveBeenCalledWith({
+      where: { id: "p1", status: "pending" },
+      data: expect.objectContaining({ status: "rejected" }),
+    });
     expect(txClient.collectionPlanInstallment.update).toHaveBeenCalledWith({
       where: { id: "inst1" },
       data: { status: "pending", pendingApprovalId: null },
@@ -312,7 +312,9 @@ describe("approvePending — a GST invoice freezes the ledger row", () => {
     expect(res).toEqual({ error: "invoiced" });
     expect(txClient.$queryRaw).toHaveBeenCalledTimes(1);
     expect(txClient.transaction.update).not.toHaveBeenCalled();
-    expect(txClient.pendingApproval.update).not.toHaveBeenCalled();
+    // The claim ran inside the transaction the guard then aborted, so in the
+    // database it rolls back and the pending stays open for a reject.
+    expect($transaction).toHaveBeenCalledTimes(1);
     expect(auditMock).not.toHaveBeenCalled();
   });
 
@@ -338,5 +340,64 @@ describe("approvePending — a GST invoice freezes the ledger row", () => {
 
     expect(res).toMatchObject({ applied: true, transactionId: "tx1" });
     expect(txClient.transaction.update).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("concurrent resolution (two reviewers, double-click, bulk + single)", () => {
+  // Both callers read "pending" before opening a transaction; only the first
+  // claim matches `status = 'pending'`. The loser's claim matches 0 rows.
+  const pendingCreate = {
+    id: "p1",
+    status: "pending",
+    kind: "create",
+    proposed,
+    submittedById: "u1",
+    collectionInstallmentId: "inst1",
+  };
+
+  it("an approve that loses the race posts nothing and reports already_resolved", async () => {
+    findUnique.mockResolvedValueOnce(pendingCreate);
+    txClient.pendingApproval.updateMany.mockResolvedValueOnce({ count: 0 });
+
+    const res = await approvePending({ pendingId: "p1", reviewerId: "rev2", reviewerPerms: approver });
+
+    expect(res).toEqual({ error: "already_resolved" });
+    expect(txClient.transaction.create).not.toHaveBeenCalled();
+    expect(txClient.collectionPlanInstallment.update).not.toHaveBeenCalled();
+    expect(auditMock).not.toHaveBeenCalled();
+  });
+
+  it("an update or delete approve that loses the race leaves the ledger row alone", async () => {
+    for (const kind of ["update", "delete"] as const) {
+      findUnique.mockResolvedValueOnce({ id: "p1", status: "pending", kind, targetTxId: "tx1", proposed });
+      txFindUnique.mockResolvedValueOnce(before);
+      txClient.pendingApproval.updateMany.mockResolvedValueOnce({ count: 0 });
+
+      const res = await approvePending({ pendingId: "p1", reviewerId: "rev2", reviewerPerms: approver });
+
+      expect(res).toEqual({ error: "already_resolved" });
+    }
+    expect(txClient.transaction.update).not.toHaveBeenCalled();
+    expect(auditMock).not.toHaveBeenCalled();
+  });
+
+  it("a reject that loses to an approve does not revert the installment", async () => {
+    findUnique.mockResolvedValueOnce(pendingCreate);
+    txClient.pendingApproval.updateMany.mockResolvedValueOnce({ count: 0 });
+
+    const res = await rejectPending({ pendingId: "p1", reviewerId: "rev2", reviewerPerms: approver });
+
+    expect(res).toEqual({ error: "already_resolved" });
+    expect(txClient.collectionPlanInstallment.update).not.toHaveBeenCalled();
+    expect(auditMock).not.toHaveBeenCalled();
+  });
+
+  it("other errors inside the transaction still propagate", async () => {
+    findUnique.mockResolvedValueOnce(pendingCreate);
+    txClient.pendingApproval.updateMany.mockRejectedValueOnce(new Error("db down"));
+
+    await expect(
+      approvePending({ pendingId: "p1", reviewerId: "rev1", reviewerPerms: approver }),
+    ).rejects.toThrow("db down");
   });
 });

@@ -466,8 +466,46 @@ export async function submitDelete(opts: {
   return { applied: false as const, pending };
 }
 
+/** Thrown inside a $transaction when another reviewer resolved the pending first. */
+class PendingAlreadyResolved extends Error {}
+
+/**
+ * Resolve a pending row only if it is STILL pending, as the first write of the
+ * transaction. The status check before the transaction is just a fast path:
+ * two reviewers (or a double-click, or Approve racing Bulk approve) can both
+ * read "pending" there. Here Postgres row-locks the row; the second writer
+ * waits, re-checks `status = 'pending'` after the first commits, matches
+ * nothing, and its whole transaction rolls back, so revenue is never posted
+ * twice and an approve can't overwrite a reject.
+ */
+async function claimPending(
+  tx: Prisma.TransactionClient,
+  pendingId: string,
+  data: { status: "approved" | "rejected"; reviewedById: string; reviewNote: string | null },
+): Promise<void> {
+  const { count } = await tx.pendingApproval.updateMany({
+    where: { id: pendingId, status: "pending" },
+    data: { ...data, reviewedAt: new Date() },
+  });
+  if (count !== 1) throw new PendingAlreadyResolved();
+}
+
 /** Manager/admin approves a pending change → applies it to the canonical Transaction table. */
 export async function approvePending(opts: {
+  pendingId: string;
+  reviewerId: string;
+  reviewerPerms: Permissions;
+  note?: string;
+}) {
+  try {
+    return await approvePendingInner(opts);
+  } catch (e) {
+    if (e instanceof PendingAlreadyResolved) return { error: "already_resolved" as const };
+    throw e;
+  }
+}
+
+async function approvePendingInner(opts: {
   pendingId: string;
   reviewerId: string;
   reviewerPerms: Permissions;
@@ -479,14 +517,20 @@ export async function approvePending(opts: {
   const p = await prisma.pendingApproval.findUnique({ where: { id: pendingId } });
   if (!p) return { error: "not_found" as const };
   if (p.status !== "pending") return { error: "already_resolved" as const };
+  const resolution = {
+    status: "approved" as const,
+    reviewedById: reviewerId,
+    reviewNote: note ?? null,
+  };
 
   if (p.kind === "create") {
     const data = p.proposed as unknown as TxProposed;
-    // Atomic: create the ledger row, resolve the pending, and flip any
+    // Atomic: claim the pending, create the ledger row, link it, and flip any
     // linked installment together. A crash mid-way must not leave a
     // committed Transaction behind a still-"pending" approval (which
     // could then be approved again → double-posted revenue).
     const created = await prisma.$transaction(async (tx) => {
+      await claimPending(tx, pendingId, resolution);
       const row = await tx.transaction.create({
         data: {
           date: new Date(data.date),
@@ -507,13 +551,7 @@ export async function approvePending(opts: {
       });
       await tx.pendingApproval.update({
         where: { id: pendingId },
-        data: {
-          status: "approved",
-          reviewedById: reviewerId,
-          reviewNote: note ?? null,
-          reviewedAt: new Date(),
-          targetTxId: row.id,
-        },
+        data: { targetTxId: row.id },
       });
       // If this pending was raised from a Collection Plan installment,
       // flip the installment to 'received' + link to the new transaction.
@@ -544,9 +582,11 @@ export async function approvePending(opts: {
     const targetTxId = p.targetTxId;
     const before = await prisma.transaction.findUnique({ where: { id: targetTxId } });
     if (!before || before.deletedAt) return { error: "target_gone" as const };
-    // Atomic: apply the edit and resolve the pending together. An invoice
-    // issued since the edit was submitted refuses it (reject it instead).
+    // Atomic: claim the pending and apply the edit together. An invoice
+    // issued since the edit was submitted refuses it, rolling the claim back
+    // so the pending stays open (reject it instead).
     const after = await prisma.$transaction(async (tx) => {
+      await claimPending(tx, pendingId, resolution);
       await guardLedgerWrite(tx, targetTxId, data);
       const updated = await tx.transaction.update({
         where: { id: targetTxId },
@@ -564,15 +604,6 @@ export async function approvePending(opts: {
           employeeId: data.employeeId ?? null,
           expDom: data.type === "Revenue" ? (data.expDom ?? null) : null,
           isHistorical: isHistoricalDate(data.date),
-        },
-      });
-      await tx.pendingApproval.update({
-        where: { id: pendingId },
-        data: {
-          status: "approved",
-          reviewedById: reviewerId,
-          reviewNote: note ?? null,
-          reviewedAt: new Date(),
         },
       });
       return updated;
@@ -597,21 +628,14 @@ export async function approvePending(opts: {
     const targetTxId = p.targetTxId;
     const before = await prisma.transaction.findUnique({ where: { id: targetTxId } });
     if (!before || before.deletedAt) return { error: "target_gone" as const };
-    // Atomic: soft-delete the row and resolve the pending together.
+    // Atomic: claim the pending and soft-delete the row together (refused,
+    // and the claim rolled back, while a live invoice stands on the row).
     const deleted = await prisma.$transaction(async (tx) => {
+      await claimPending(tx, pendingId, resolution);
       await guardLedgerWrite(tx, targetTxId, null);
       await tx.transaction.update({
         where: { id: targetTxId },
         data: { deletedAt: new Date(), deletedById: reviewerId },
-      });
-      await tx.pendingApproval.update({
-        where: { id: pendingId },
-        data: {
-          status: "approved",
-          reviewedById: reviewerId,
-          reviewNote: note ?? null,
-          reviewedAt: new Date(),
-        },
       });
     }).catch(invoicedOrThrow);
     if (deleted === INVOICED) return { error: "invoiced" as const };
@@ -641,28 +665,30 @@ export async function rejectPending(opts: {
   if (!p) return { error: "not_found" as const };
   if (p.status !== "pending") return { error: "already_resolved" as const };
 
-  // Atomic: mark the pending rejected and revert any linked installment
-  // together, so a crash can't leave a rejected approval still owning a
-  // 'pending'-status installment (or vice versa).
-  await prisma.$transaction(async (tx) => {
-    await tx.pendingApproval.update({
-      where: { id: pendingId },
-      data: {
+  // Atomic: mark the pending rejected (only if nobody resolved it meanwhile)
+  // and revert any linked installment together, so a crash can't leave a
+  // rejected approval still owning a 'pending'-status installment (or vice
+  // versa), and a reject racing an approve can't undo posted revenue's link.
+  try {
+    await prisma.$transaction(async (tx) => {
+      await claimPending(tx, pendingId, {
         status: "rejected",
         reviewedById: reviewerId,
         reviewNote: note ?? null,
-        reviewedAt: new Date(),
-      },
-    });
-    // Revert any linked installment back to 'pending' so the executive
-    // can edit + resubmit it from the Collection Plan detail page.
-    if (p.collectionInstallmentId) {
-      await tx.collectionPlanInstallment.update({
-        where: { id: p.collectionInstallmentId },
-        data: { status: "pending", pendingApprovalId: null },
       });
-    }
-  });
+      // Revert any linked installment back to 'pending' so the executive
+      // can edit + resubmit it from the Collection Plan detail page.
+      if (p.collectionInstallmentId) {
+        await tx.collectionPlanInstallment.update({
+          where: { id: p.collectionInstallmentId },
+          data: { status: "pending", pendingApprovalId: null },
+        });
+      }
+    });
+  } catch (e) {
+    if (e instanceof PendingAlreadyResolved) return { error: "already_resolved" as const };
+    throw e;
+  }
   await recordAudit({
     entityType: "PendingApproval",
     entityId: pendingId,

@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 import { prisma } from "@/lib/prisma";
 import { getCurrentUserAndPermissions } from "@/lib/permissions";
-import { MONTHS, PAYMENT_MODES, flowFor } from "@/lib/catalog";
+import { MONTHS, PAYMENT_MODES, flowFor, monthCodeFromDate } from "@/lib/catalog";
 import { verifyCategorySubItem } from "@/lib/master-data";
 import { canApprove, canSeePage } from "@/lib/rbac";
 import { recordAudit } from "@/lib/audit";
@@ -14,14 +14,18 @@ export const dynamic = "force-dynamic";
 // Collection-plan installments are submitted from the Collection Plan page.
 const PAGE = "/finance/collection-plan";
 
-const MONTH_CODES = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
-
-function monthFromDate(d: Date): string {
-  const code = `${MONTH_CODES[d.getUTCMonth()]}-${String(d.getUTCFullYear()).slice(-2)}`;
-  // A payment from before DesGro keeps its real month (it is kept out of the
-  // month-bucketed reports by isHistorical, so there's no bucket to fit).
+/**
+ * The ledger month for an installment's date, or null when the date falls
+ * outside the months the ledger tracks. This used to fall back to MONTHS[0],
+ * so an installment due in Apr 2027 was posted with its 2027 date but the
+ * month "Apr-26", landing in the wrong month of every month-bucketed report.
+ * A payment from before DesGro keeps its real month: isHistorical keeps it
+ * out of those reports, so there's no bucket to fit.
+ */
+function ledgerMonthFor(d: Date): string | null {
+  const code = monthCodeFromDate(d);
   if (isHistoricalDate(d)) return code;
-  return (MONTHS as readonly string[]).includes(code) ? code : MONTHS[0];
+  return (MONTHS as readonly string[]).includes(code) ? code : null;
 }
 
 /** Optional body: lets the caller supply category/sub-item/payment-mode/
@@ -118,6 +122,13 @@ export async function POST(
   const verr = await verifyCategorySubItem(category, subItem, "Revenue");
   if (verr) return NextResponse.json({ error: verr }, { status: 400 });
 
+  // Refuse before writing anything: the ledger row takes this date.
+  const expectedDate = installment.expectedDate;
+  const month = ledgerMonthFor(expectedDate);
+  if (!month) {
+    return NextResponse.json({ error: "month_out_of_range" }, { status: 400 });
+  }
+
   // Persist the user's picks back onto plan + installment so the next
   // submit doesn't re-prompt for the same answers.
   await prisma.$transaction([
@@ -147,10 +158,9 @@ export async function POST(
   ]);
 
   const amountNum = Number(installment.amount.toString());
-  const expectedDate = installment.expectedDate;
   const proposed: TxProposed = {
     date: expectedDate.toISOString(),
-    month: monthFromDate(expectedDate),
+    month,
     type: "Revenue",
     category,
     subItem,
