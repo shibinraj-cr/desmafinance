@@ -25,10 +25,18 @@ import { CALL_OUTCOME_LABEL } from "./crm-outcome";
 import { UNCONTACTED_AFTER_MINUTES, UNCONTACTED_REMIND_EVERY_MINUTES } from "./crm-uncontacted-alarm";
 import { CONVERSION_TARGET_PCT, FIRST_RESPONSE_FAST_HOURS, RESPONSE_SLA_HOURS, SCORE_BANDS, SCORE_WEIGHTS } from "./crm-score";
 import { BACKDATE_DAYS } from "./lead-pulse-dates";
+import { ENROLL_PREVIOUS_MONTH_OPEN_UNTIL_DAY } from "./crm-enroll-date";
 import { SATURDAY_CUTOFF_MINUTES, WEEKDAY_CUTOFF_MINUTES } from "./crm-cutoff";
 import { HANDOVER_REJECT_REASONS } from "./crm-handover";
 import { REFERRAL_LINK_SOURCE_LABEL, REFERRAL_REWARD_AMOUNT } from "./crm-referral-link";
 import { FAST_CLOSE_HOURS, NO_BONUSES, SLAB_COUNT, computeBdePay, type Slab } from "./crm-incentive";
+
+/** 7 → "7th", 22 → "22nd". */
+function ordinal(n: number): string {
+  const v = n % 100;
+  const suffix = v >= 11 && v <= 13 ? "th" : (["th", "st", "nd", "rd"][n % 10] ?? "th");
+  return `${n}${suffix}`;
+}
 
 /** "5:00 pm" for minutes after midnight. */
 function clock(minutes: number): string {
@@ -127,6 +135,12 @@ export type GuideChange = { date: string; section: string; title: string; detail
  * is the GuideSection id it updates (drives the "Updated" pill).
  */
 export const CRM_GUIDE_CHANGES: GuideChange[] = [
+  {
+    date: "2026-11-17",
+    section: "deal-enroll",
+    title: "Enrollment dates have limits",
+    detail: `The **Enrollment date** is the day the candidate paid, and it decides which month the enrollment counts in. It can't be in the future. You can date it back to the 1st of this month, or into last month until the ${ordinal(ENROLL_PREVIOUS_MONTH_OPEN_UNTIL_DAY)}. For an older date, ask an admin or your sales head.`,
+  },
   {
     date: "2026-11-17",
     section: "deal-enroll",
@@ -1014,7 +1028,7 @@ export function crmGuideSections(f: GuideFacts, canSee: (href: string) => boolea
           title: "Enroll",
           items: [
             "Click **Enroll** on the Deal card.",
-            "Check **Service**, **Expected value (₹)** and **Enrollment date** — set the date back if the deal actually closed earlier. Rate quality if asked.",
+            `Check **Service**, **Expected value (₹)** and **Enrollment date**. The date is the day the candidate paid, and it decides which month the enrollment counts in. It can't be in the future. You can date it back to the 1st of this month, or into last month until the ${ordinal(ENROLL_PREVIOUS_MONTH_OPEN_UNTIL_DAY)}. Rate quality if asked.`,
             "Click **Enroll**. Finance receives a revenue draft to approve (you don't approve revenue), and an operations project starts if the service has one.",
           ],
         },
@@ -1038,6 +1052,7 @@ export function crmGuideSections(f: GuideFacts, canSee: (href: string) => boolea
           items: [
             "The lead's **Source** must be set before you can set a deal or enroll.",
             "Enrolled by mistake? You can't undo it yourself — ask an admin or supervisor to **Un-enroll** it.",
+            "Need an older enrollment date? Ask an admin or your sales head to enroll the candidate.",
           ],
         },
       ],

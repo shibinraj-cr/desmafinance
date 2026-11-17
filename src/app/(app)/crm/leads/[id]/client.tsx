@@ -20,6 +20,7 @@ import { MultiSelect } from "@/components/MultiSelect";
 import { LeadSearchPicker, type LeadPick } from "@/components/crm/LeadSearchPicker";
 import { StatusPill, TemperaturePill, type StatusOpt, type Opt, type BdeOpt } from "../client";
 import { EnrollCelebration } from "@/components/EnrollCelebration";
+import { earliestEnrollDate, enrollDateMessage, enrollDateProblem, formatEnrollDate } from "@/lib/crm-enroll-date";
 import { NextStepDialog, type NextStepPayload } from "@/components/crm/NextStepDialog";
 import { TaskReminderFields, type TaskReminderPreviewDTO } from "@/components/crm/TaskReminderFields";
 import { reminderStatusLabel, type TaskReminderChannel } from "@/lib/crm-task-reminders";
@@ -1827,6 +1828,7 @@ function DealCard({
           masters={masters}
           userId={userId}
           mode={modal}
+          canBackdate={canUnenroll}
           onClose={() => setModal(null)}
           onEnrolled={(name) => {
             setModal(null);
@@ -2074,6 +2076,7 @@ function DealModal({
   masters,
   userId,
   mode,
+  canBackdate,
   onClose,
   onEnrolled,
 }: {
@@ -2081,6 +2084,8 @@ function DealModal({
   masters: DetailMasters;
   userId: string;
   mode: "deal" | "enroll";
+  /** May date an enrollment before the normal window (see crm-enroll-date.ts). */
+  canBackdate: boolean;
   onClose: () => void;
   /** Fired on a successful enroll — hands the candidate name to the celebration. */
   onEnrolled?: (name: string) => void;
@@ -2092,12 +2097,15 @@ function DealModal({
   const [value, setValue] = useState(lead.expectedValue != null ? String(lead.expectedValue) : "");
   const [closeDate, setCloseDate] = useState(lead.expectedCloseDate ? lead.expectedCloseDate.slice(0, 10) : "");
   // Enroll: the date the close counts against in the CRM metrics. Defaults to
-  // the lead's expected close date when it's already set and not in the future
-  // (a month-end deal keyed the next morning dates back to when it closed),
-  // else today (IST). Never defaults to a future date.
+  // the lead's expected close date when it's already set and inside the
+  // allowed window (a month-end deal keyed the next morning dates back to when
+  // it closed), else today (IST). Never defaults to a date the server refuses.
   const todayIst = new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Kolkata" }).format(new Date());
+  const earliestEnroll = canBackdate ? undefined : earliestEnrollDate(todayIst);
   const expClose = lead.expectedCloseDate ? lead.expectedCloseDate.slice(0, 10) : "";
-  const [enrollDate, setEnrollDate] = useState(expClose && expClose <= todayIst ? expClose : todayIst);
+  const [enrollDate, setEnrollDate] = useState(
+    expClose && !enrollDateProblem(expClose, todayIst, { canBackdate }) ? expClose : todayIst,
+  );
   const [ownerId, setOwnerId] = useState(assigneeIsL2 ? lead.assignedTo!.id : "");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -2114,6 +2122,8 @@ function DealModal({
     if (!(Number(value) > 0)) return setError("Enter an expected value.");
     if (mode === "deal" && !closeDate) return setError("Pick an expected close date.");
     if (mode === "enroll" && !enrollDate) return setError("Pick the enrollment date.");
+    const dateProblem = mode === "enroll" ? enrollDateProblem(enrollDate, todayIst, { canBackdate }) : null;
+    if (dateProblem) return setError(enrollDateMessage(dateProblem, todayIst));
     if (!assigneeIsL2 && !ownerId) return setError("Choose an L2 BDE as the deal owner.");
     const qualityProblem = qualityAsk ? qualityDraftError(quality) : null;
     if (qualityProblem) return setError(qualityProblem);
@@ -2172,10 +2182,19 @@ function DealModal({
       </Field>
       {mode === "enroll" ? (
         <Field label="Enrollment date">
-          <input className={inputCls} type="date" value={enrollDate} onChange={(e) => setEnrollDate(e.target.value)} />
+          <input
+            className={inputCls}
+            type="date"
+            value={enrollDate}
+            min={earliestEnroll}
+            max={todayIst}
+            onChange={(e) => setEnrollDate(e.target.value)}
+          />
           <p className="mt-xs text-label-sm text-on-surface-variant">
-            The date this enrollment counts against in the reports. Defaults to today — set it back (e.g. to the last of the
-            month) if the deal actually closed earlier.
+            The day the candidate paid. It decides which month this enrollment counts in.{" "}
+            {earliestEnroll
+              ? `It can't be in the future or before ${formatEnrollDate(earliestEnroll)}. For an older date, ask an admin or your sales head.`
+              : "It can't be in the future."}
           </p>
         </Field>
       ) : (

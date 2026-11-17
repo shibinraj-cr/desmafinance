@@ -13,6 +13,7 @@ import { loadHolidaySet } from "./ops-dates";
 import { monthCodeFromDate, flowFor } from "./catalog";
 import { toPrismaDate, fromPrismaDate, todayIst } from "./lead-pulse-dates";
 import { isLostStatusCode } from "./crm-reinquiry";
+import { enrollDateMessage, enrollDateProblem } from "./crm-enroll-date";
 import { noteRewardRaised, raiseReferralReward } from "./crm-referral-reward";
 
 /**
@@ -398,10 +399,14 @@ type EnrollArgs = {
   expectedCloseDate?: Date | null;
   // The actual enrollment date. Drives the pipeline's `closedDate` — i.e. which
   // month the enrollment counts in across every CRM metric. Defaults to now
-  // when omitted (e.g. an older client that doesn't send it).
+  // when omitted (e.g. an older client that doesn't send it). Never in the
+  // future; limited back-dating unless `canBackdate` (see crm-enroll-date.ts).
   closedDate?: Date | null;
   ownerUserId?: string | null;
   actorId: string;
+  /** May date the enrollment before the normal window (admin / supervisor /
+   *  CRM manager — the same people who may un-enroll). */
+  canBackdate?: boolean;
 };
 
 /** Enroll: status → Enrolled, create/link the candidate (Party) for Finance,
@@ -426,6 +431,16 @@ export async function enrollLead(
   // button) is rejected rather than silently re-drafted.
   if (lead.status.code === "enrolled") {
     throw badRequest("This lead is already enrolled.", "already_enrolled");
+  }
+
+  // The date decides which month this enrollment counts in (Lead Pulse,
+  // targets, incentive), so it is checked here rather than only in the dialog.
+  if (args.closedDate) {
+    const today = todayIst();
+    const problem = enrollDateProblem(fromPrismaDate(args.closedDate), today, {
+      canBackdate: !!args.canBackdate,
+    });
+    if (problem) throw badRequest(enrollDateMessage(problem, today), problem);
   }
 
   const serviceId = args.serviceId ?? lead.serviceId;
