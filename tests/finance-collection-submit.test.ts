@@ -210,3 +210,44 @@ describe("authorization", () => {
     expect(instFindUnique).not.toHaveBeenCalled();
   });
 });
+
+describe("ledger month — no silent clamp", () => {
+  it("refuses an installment dated after the tracked months, before writing anything", async () => {
+    getPerms.mockResolvedValue({
+      perms: perms({ canApprove: true, needsApproval: false }),
+      userId: "u1",
+    });
+    // Due in Apr 2027 — used to post with month "Apr-26" (the first tracked month).
+    instFindUnique.mockResolvedValue({
+      ...pendingInstallment(),
+      expectedDate: new Date("2027-04-15T00:00:00.000Z"),
+    });
+
+    const res = await submitPost(req() as never, params);
+
+    expect(res.status).toBe(400);
+    expect(await res.json()).toEqual({ error: "month_out_of_range" });
+    expect($transaction).not.toHaveBeenCalled();
+    expect(txClient.transaction.create).not.toHaveBeenCalled();
+  });
+
+  it("posts an in-range installment with the month taken from its date", async () => {
+    getPerms.mockResolvedValue({
+      perms: perms({ canApprove: true, needsApproval: false }),
+      userId: "u1",
+    });
+    txClient.transaction.create.mockResolvedValue({ id: "tx1" });
+    txClient.collectionPlanInstallment.update.mockResolvedValue({
+      id: "inst1",
+      status: "received",
+      amount: { toString: () => "5000" },
+    });
+
+    const res = await submitPost(req() as never, params);
+
+    expect(res.status).toBe(200);
+    expect(txClient.transaction.create).toHaveBeenCalledWith(
+      expect.objectContaining({ data: expect.objectContaining({ month: "Jul-26" }) }),
+    );
+  });
+});

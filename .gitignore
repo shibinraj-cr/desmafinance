@@ -19,3 +19,19 @@ prisma/*.db-journal
 
 # pdf.js worker, copied from node_modules at build/dev start (scripts/copy-pdfjs-worker.mjs)
 /public/pdfjs/
+
+# Files dropped into the repo root for a task — bank statements, ESI/PF
+# returns, signed documents. This repo is PUBLIC, so they must never be
+# committed. Root-only (leading slash): real fixtures elsewhere stay trackable.
+# Both cases are listed because CI and Linux checkouts are case-sensitive.
+/*.xls
+/*.XLS
+/*.xlsx
+/*.XLSX
+/*.csv
+/*.CSV
+/*.pdf
+/*.PDF
+/*.docx
+/*.DOCX
+/~$*
