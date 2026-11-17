@@ -125,18 +125,21 @@ export const GET = withApiHandler(async (_req: Request, { params }: { params: { 
         },
       })
     : null;
+  // Enough to recognise the person, not to look anyone up: a BDE could rename
+  // their own lead to probe the candidate master, so the phone is masked, the
+  // email left out, and on a name-only match nothing else is shown at all.
+  const strong = !!match && match.by !== "name";
   return NextResponse.json({
     match:
       match && party
         ? {
             by: match.by,
             name: party.name,
-            email: party.email,
-            phone: party.phone,
-            services: party.partyServices.map((s) => s.service.name),
+            phone: party.phone ? `••••${party.phone.replace(/\D/g, "").slice(-4)}` : null,
+            services: strong ? party.partyServices.map((s) => s.service.name) : [],
           }
         : null,
-    billing: party
+    billing: party && strong
       ? {
           name: party.billingName,
           address: party.billingAddress,

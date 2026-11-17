@@ -51,8 +51,9 @@ function makeTx() {
     lead: { findUnique: vi.fn(), update: vi.fn() },
     leadPulseDailyClose: { findUnique: vi.fn(), delete: vi.fn() },
     leadPulseDailyEntry: { update: vi.fn() },
-    leadPulsePipeline: { update: vi.fn() },
+    leadPulsePipeline: { findUnique: vi.fn(), update: vi.fn() },
     transactionDraft: { findUnique: vi.fn(), delete: vi.fn() },
+    collectionPlan: { update: vi.fn() },
     opsProject: { delete: vi.fn(), update: vi.fn() },
     partyService: { delete: vi.fn() },
     crmReferralReward: { updateMany: vi.fn(async (_args: { where: { status: string } }) => ({ count: 0 })) },
@@ -78,7 +79,14 @@ type Scenario = {
   /** The referral reward this enrollment earned someone (null → not a referral). */
   reward?: { status: string; paidOn?: Date | null } | null;
   /** The Enroll sheet's confirmation waiting for Finance (null → an older enrollment with a draft). */
-  enrollment?: { id: string; status: string; firstAmount: { toString: () => string } | null; transactionId: string | null } | null;
+  enrollment?: {
+    id: string;
+    status: string;
+    firstAmount: { toString: () => string } | null;
+    transactionId: string | null;
+    collectionPlanId?: string | null;
+    transaction?: { deletedAt: Date | null } | null;
+  } | null;
 };
 
 function setup(s: Scenario = {}): TxSpies {
@@ -141,6 +149,7 @@ function setup(s: Scenario = {}): TxSpies {
   }));
   tx.lead.findUnique.mockResolvedValue({ id: "lead1", status: { code: statusCode, label: "Enrolled" } });
   tx.leadPulseDailyClose.findUnique.mockResolvedValue(close);
+  tx.leadPulsePipeline.findUnique.mockResolvedValue(pipeline ? { dailyCloseId: pipeline.dailyCloseId } : null);
   tx.transactionDraft.findUnique.mockResolvedValue(draftRow ? { id: draftRow.id } : null);
   fn(prisma.$transaction).mockImplementation(async (cb: (t: TxSpies) => Promise<unknown>) => cb(tx));
   return tx;
@@ -403,12 +412,16 @@ describe("unenrollLead — an enrollment made with the Enroll sheet", () => {
 
     await expect(run()).resolves.toMatchObject({ enrollmentWithdrawn: true });
     expect(tx.crmEnrollment.updateMany).toHaveBeenCalledWith(
-      expect.objectContaining({ where: expect.objectContaining({ id: "enr1", transactionId: null }), data: { status: "withdrawn" } }),
+      expect.objectContaining({ where: expect.objectContaining({ id: "enr1" }), data: { status: "withdrawn" } }),
     );
   });
 
   it("refuses once Finance has verified it and posted the payment, and writes nothing", async () => {
-    const tx = setup({ recordedDraftId: null, draftRow: null, enrollment: { ...PENDING, status: "verified", transactionId: "tx1" } });
+    const tx = setup({
+      recordedDraftId: null,
+      draftRow: null,
+      enrollment: { ...PENDING, status: "verified", transactionId: "tx1", transaction: { deletedAt: null } },
+    });
     await expect(run()).rejects.toMatchObject({ status: 400, code: "enrollment_verified" });
     expect(prisma.$transaction).not.toHaveBeenCalled();
     expect(tx.crmEnrollment.updateMany).not.toHaveBeenCalled();
@@ -418,5 +431,31 @@ describe("unenrollLead — an enrollment made with the Enroll sheet", () => {
     const tx = setup({ recordedDraftId: null, draftRow: null, enrollment: PENDING });
     tx.crmEnrollment.updateMany.mockResolvedValue({ count: 0 });
     await expect(run()).rejects.toMatchObject({ status: 400, code: "enrollment_verified" });
+  });
+});
+
+describe("unenrollLead — a verified enrollment Finance has reversed", () => {
+  it("withdraws it and cancels its plan once the payment is deleted", async () => {
+    const tx = setup({
+      recordedDraftId: null,
+      draftRow: null,
+      enrollment: {
+        id: "enr1",
+        status: "verified",
+        firstAmount: { toString: () => "34220" },
+        transactionId: "tx1",
+        collectionPlanId: "plan1",
+        transaction: { deletedAt: new Date("2026-11-20T10:00:00Z") },
+      },
+    });
+    await expect(run()).resolves.toMatchObject({ enrollmentWithdrawn: true });
+    expect(tx.collectionPlan.update).toHaveBeenCalledWith({ where: { id: "plan1" }, data: { status: "cancelled" } });
+  });
+
+  it("reverses the close the pipeline points at now, not the one the preview saw", async () => {
+    const tx = setup();
+    tx.leadPulsePipeline.findUnique.mockResolvedValue({ dailyCloseId: "close-moved" });
+    await run();
+    expect(tx.leadPulseDailyClose.findUnique).toHaveBeenCalledWith(expect.objectContaining({ where: { id: "close-moved" } }));
   });
 });

@@ -16,6 +16,7 @@ vi.mock("@/lib/prisma", () => ({
     subCategory: { findMany: vi.fn() },
     category: { findFirst: vi.fn() },
     transactionDraft: { create: vi.fn() },
+    crmEnrollment: { findFirst: vi.fn() },
     $transaction: vi.fn(),
   },
 }));
@@ -33,7 +34,7 @@ vi.mock("@/lib/crm-notify", () => ({
 }));
 
 import { prisma } from "@/lib/prisma";
-import { enrollLead } from "@/lib/crm-enroll";
+import { applyLeadDeal, enrollLead } from "@/lib/crm-enroll";
 import { notifyEnrollment } from "@/lib/crm-notify";
 import { recordLeadActivity } from "@/lib/crm-activity";
 import type { EnrollConfirm } from "@/lib/crm-enroll-confirm";
@@ -167,5 +168,27 @@ describe("enrollLead with the Enroll sheet", () => {
       paymentMode: null,
       plan: [],
     });
+  });
+});
+
+describe("Edit deal once enrolled with the sheet", () => {
+  it("is refused: the total and date change through the enrollment", async () => {
+    fn(prisma.lead.findUnique).mockResolvedValueOnce({
+      id: "lead1",
+      candidateName: "Test Candidate",
+      email: null,
+      phone: null,
+      sourceId: "src1",
+      serviceId: "svc1",
+      assignedToId: "bde1",
+      partyId: "party1",
+      pipelineId: "pipe1",
+      status: { code: "enrolled", label: "Enrolled" },
+    });
+    fn(prisma.crmEnrollment.findFirst).mockResolvedValueOnce({ id: "enr1" });
+    await expect(
+      applyLeadDeal({ leadId: "lead1", serviceId: "svc2", expectedValue: 1000, expectedCloseDate: new Date("2026-12-01"), actorId: "bde1" }),
+    ).rejects.toMatchObject({ status: 400, code: "deal_locked_by_enrollment" });
+    expect(prisma.$transaction).not.toHaveBeenCalled();
   });
 });

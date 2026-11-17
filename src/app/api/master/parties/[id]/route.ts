@@ -236,11 +236,12 @@ export async function DELETE(_req: NextRequest, { params }: { params: { id: stri
 
   const party = await prisma.party.findUnique({
     where: { id: params.id },
-    include: { _count: { select: { transactions: true } } },
+    include: { _count: { select: { transactions: true, crmEnrollments: true } } },
   });
   if (!party) return NextResponse.json({ error: "not_found" }, { status: 404 });
 
-  if (party._count.transactions > 0) {
+  // A CRM enrollment points at the candidate too (and holds it: FK Restrict).
+  if (party._count.transactions > 0 || party._count.crmEnrollments > 0) {
     return NextResponse.json(
       { error: "in_use", message: "Set isActive=false to retire instead." },
       { status: 409 },

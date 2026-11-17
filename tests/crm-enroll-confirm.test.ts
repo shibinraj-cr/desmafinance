@@ -8,6 +8,7 @@ import { describe, expect, it } from "vitest";
 import {
   MIN_FIRST_PAYMENT,
   addMonths,
+  EnrollConfirmSchema,
   approveBlocker,
   belowMinimum,
   changeSummary,
@@ -185,5 +186,19 @@ describe("the incentive", () => {
     expect(incentiveStanding({ status: "verified", verifiedAt: new Date("2026-12-08T03:00:00Z") }, cutoff, after)).toBe("late");
     expect(incentiveStanding({ status: "pending", verifiedAt: null }, cutoff, before)).toBe("awaiting");
     expect(incentiveStanding({ status: "sent_back", verifiedAt: null }, cutoff, after)).toBe("missed");
+  });
+});
+
+describe("the sheet's schema", () => {
+  const raw = { ...sheet(), paidOn: "2026-11-10" };
+  it("refuses a day that doesn't exist instead of rolling it over", () => {
+    expect(EnrollConfirmSchema.safeParse({ ...raw, paidOn: "2026-02-30" }).success).toBe(false);
+    expect(EnrollConfirmSchema.safeParse({ ...raw, plan: [{ date: "2026-11-31", amount: 87320 }] }).success).toBe(false);
+  });
+  it("rounds to the paisa before any rule runs, and refuses absurd amounts", () => {
+    const parsed = EnrollConfirmSchema.parse({ ...raw, firstAmount: 9999.999 });
+    expect(parsed.firstAmount).toBe(10000);
+    expect(belowMinimum(parsed.firstAmount)).toBe(false);
+    expect(EnrollConfirmSchema.safeParse({ ...raw, totalAmount: 1e13 }).success).toBe(false);
   });
 });

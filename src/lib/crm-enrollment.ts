@@ -337,6 +337,20 @@ async function lockRow(tx: Prisma.TransactionClient, id: string): Promise<Row> {
   return e;
 }
 
+/**
+ * Refuse a change made on a stale screen: Finance's panel sends the
+ * `updatedAt` it opened with, and anything since (the BDE fixing it, another
+ * Finance user's save, the sales head's decision) means it must reload, so
+ * an old screen can never overwrite a newer change or approve the wrong amount.
+ */
+function assertFresh(e: Row, expectedUpdatedAt: string | null | undefined) {
+  if (expectedUpdatedAt && e.updatedAt.toISOString() !== new Date(expectedUpdatedAt).toISOString()) {
+    throw conflict("This enrollment changed since you opened it. Close it and open it again to see the latest.", "enrollment_stale");
+  }
+}
+
+class NeedsSalesHead extends Error {}
+
 const bdeOf = (e: { ownerUserId: string | null; submittedById: string | null }) => [e.ownerUserId, e.submittedById];
 
 async function askSalesHead(e: Row, firstAmount: number, actorId: string) {
@@ -425,19 +439,35 @@ export async function editEnrollmentByBde(args: {
 }
 
 /** The sales head approves or rejects a first payment under the minimum. */
-export async function decideException(args: { leadId: string; actorId: string; approve: boolean; note: string | null }) {
+export async function decideException(args: {
+  leadId: string;
+  actorId: string;
+  /** Admins may decide their own; nobody else may. */
+  actorIsAdmin: boolean;
+  approve: boolean;
+  note: string | null;
+  /** The amount the sales head was shown: the decision is for that amount only. */
+  expectedFirstAmount: number | null;
+}) {
   const e = await prisma.crmEnrollment.findFirst({
     where: { leadId: args.leadId, status: { not: "withdrawn" }, exception: "pending" },
     orderBy: { createdAt: "desc" },
     select: ROW,
   });
   if (!e) throw conflict("There's no first-payment exception waiting on this lead.", "no_exception");
+  if (!args.actorIsAdmin && (args.actorId === e.ownerUserId || args.actorId === e.submittedById)) {
+    throw forbidden("You can't decide the exception on your own enrollment. Ask another sales head or an admin.");
+  }
   const decision = args.approve ? "approved" : "rejected";
   const res = await prisma.crmEnrollment.updateMany({
-    where: { id: e.id, exception: "pending" },
+    where: {
+      id: e.id,
+      exception: "pending",
+      ...(args.expectedFirstAmount != null ? { firstAmount: args.expectedFirstAmount } : {}),
+    },
     data: { exception: decision, exceptionById: args.actorId, exceptionAt: new Date(), exceptionNote: args.note },
   });
-  if (res.count !== 1) throw conflict("Someone decided this exception just now.", "no_exception");
+  if (res.count !== 1) throw conflict("The first payment changed, or someone decided it, just now. Reload the lead and look again.", "no_exception");
   const amount = num(e.firstAmount) ?? 0;
   await recordLeadActivity({
     leadId: e.leadId,
@@ -479,9 +509,10 @@ async function checkClassification(tx: Prisma.TransactionClient, f: EnrollmentFi
 }
 
 /** Finance edits an open enrollment. Every change is logged and the BDE told. */
-export async function financeSave(a: EnrollmentAccess, id: string, patch: FinancePatch) {
+export async function financeSave(a: EnrollmentAccess, id: string, patch: FinancePatch, expectedUpdatedAt?: string | null) {
   const out = await prisma.$transaction(async (tx) => {
     const e = await lockRow(tx, id);
+    assertFresh(e, expectedUpdatedAt);
     if (!OPEN_STATUSES.includes(e.status as EnrollmentStatus)) throw conflict("Only an enrollment waiting for Finance can be changed.", "enrollment_closed");
     const next = merged(e, patch);
     const problems = financeProblems(next, todayIst());
@@ -536,16 +567,18 @@ function ledgerMonth(paidOn: string): string {
  * row, and the passport name and address become the candidate's billing
  * details. Any last edits in `patch` are applied (and logged) first.
  */
-export async function approveEnrollment(a: EnrollmentAccess, id: string, patch: FinancePatch | null) {
+export async function approveEnrollment(a: EnrollmentAccess, id: string, patch: FinancePatch | null, expectedUpdatedAt?: string | null) {
   if (!a.canApprove) throw forbidden("Only a Finance approver (the Finance Manager, or the director) can approve.");
   const collection = await prisma.crmEnrollment
     .findUnique({ where: { id }, select: { serviceId: true } })
     .then((r) => (r ? resolveRevenueClassification(r.serviceId, "collection") : null));
   if (!collection) throw notFound("Enrollment not found.");
 
-  const out = await prisma.$transaction(
+  const out = await prisma
+    .$transaction(
     async (tx) => {
       const e = await lockRow(tx, id);
+      assertFresh(e, expectedUpdatedAt);
       if (!OPEN_STATUSES.includes(e.status as EnrollmentStatus)) {
         throw conflict(e.status === "verified" ? "This enrollment is already verified." : "This enrollment can't be approved now.", "enrollment_closed");
       }
@@ -554,6 +587,9 @@ export async function approveEnrollment(a: EnrollmentAccess, id: string, patch: 
       const problems = financeProblems(f, todayIst());
       if (problems.length) throw badRequest(problems[0], "enrollment_invalid");
       const exception = nextException(e.exception, before.firstAmount, f.firstAmount);
+      // Finance lowered the first payment under the minimum: that needs the
+      // sales head first. Saved and asked below, outside this transaction.
+      if (exception === "pending" && e.exception !== "pending") throw new NeedsSalesHead();
       const blocker = approveBlocker({ ...f, status: e.status, exception });
       if (blocker) throw conflict(blocker, "cannot_approve");
       await checkClassification(tx, f);
@@ -625,7 +661,16 @@ export async function approveEnrollment(a: EnrollmentAccess, id: string, patch: 
       return { e, f, changes, transactionId: row.id, planId: plan.id };
     },
     TX_OPTS,
-  );
+  )
+    .catch(async (err) => {
+      if (!(err instanceof NeedsSalesHead)) throw err;
+      // Keep Finance's edits and ask the sales head, then say why it isn't posted.
+      await financeSave(a, id, patch ?? {}, expectedUpdatedAt);
+      throw conflict(
+        `Saved, not posted: the first payment is now under ${inr(MIN_FIRST_PAYMENT)}, so the sales head has been asked to approve it. Approve the enrollment once they have.`,
+        "exception_requested",
+      );
+    });
 
   if (out.changes.length) await logFinanceChanges(a, out.e, out.changes);
   const f = out.f;

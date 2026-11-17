@@ -1474,9 +1474,9 @@ export function crmGuideQuiz(f: GuideFacts): GuideQuizQuestion[] {
     q(
       "enroll-revenue",
       "After you enroll a candidate, who approves the revenue?",
-      ["Finance reviews and approves the revenue draft"],
+      ["Finance checks the first payment against the bank and approves it"],
       ["You approve it on the Deal card", "The candidate confirms it", "Nobody — it's approved automatically"],
-      "Enroll sends Finance a revenue draft. You don't approve revenue yourself.",
+      `Enroll sends Finance your enrollment to verify. Until Finance approves it the lead shows **${ENROLLMENT_STATUS_LABEL.pending}**; you don't approve revenue yourself.`,
     ),
     q(
       "second-service",
@@ -1490,7 +1490,7 @@ export function crmGuideQuiz(f: GuideFacts): GuideQuizQuestion[] {
       "You enrolled a lead by mistake. What do you do?",
       ["Ask an admin or supervisor to Un-enroll it"],
       ["Move it back on the stage bar", "Delete the lead", "Leave it — Finance will fix it"],
-      "Un-enroll also reverses the revenue draft and the operations project, so only admins and supervisors have it.",
+      "Un-enroll also withdraws the enrollment from Finance and reverses the operations project, so only admins and supervisors have it.",
     ),
     q(
       "touch-clock",

@@ -33,7 +33,8 @@ import { Callout, Field, Icon, Modal, btnCls, cardCls, inputCls, primaryBtnCls }
  */
 
 type Preview = {
-  match: { by: "linked" | "email" | "phone" | "name"; name: string; email: string | null; phone: string | null; services: string[] } | null;
+  /** The phone comes masked ("••••3210"); services only on a match stronger than the name. */
+  match: { by: "linked" | "email" | "phone" | "name"; name: string; phone: string | null; services: string[] } | null;
   billing: { name: string | null; address: string | null; pin: string | null; state: string | null; country: string | null } | null;
 };
 
@@ -373,62 +374,67 @@ export function EnrollSheet(props: EnrollSheetProps) {
           <p className="text-body-md">
             Balance: <b>{inr(balance)}</b> ({inr(totalN)} total − {inr(firstN)} paid)
           </p>
-          {balance > 0 ? (
-            <>
-              <div className="flex flex-wrap items-center gap-2">
-                <span className="text-label-sm text-on-surface-variant">Split evenly into</span>
-                {[1, 2, 3].map((n) => (
-                  <button key={n} type="button" className={btnCls} onClick={() => split(n)}>
-                    {n} instalment{n === 1 ? "" : "s"}
-                  </button>
-                ))}
-              </div>
-              {plan.map((row, i) => (
-                <div key={i} className="grid grid-cols-[auto_1fr_1fr_auto] items-end gap-2">
-                  <span className="text-label-sm text-on-surface-variant pb-2.5">#{i + 2}</span>
-                  <Field label="Due on">
-                    <input
-                      className={inputCls}
-                      type="date"
-                      value={row.date}
-                      min={paidOn}
-                      onChange={(e) => setPlan(plan.map((r, j) => (j === i ? { ...r, date: e.target.value } : r)))}
-                    />
-                  </Field>
-                  <Field label="Amount (₹)">
-                    <input
-                      className={inputCls}
-                      type="number"
-                      min={0}
-                      inputMode="decimal"
-                      value={String(row.amount)}
-                      onChange={(e) => setPlan(plan.map((r, j) => (j === i ? { ...r, amount: Number(e.target.value) || 0 } : r)))}
-                    />
-                  </Field>
-                  <button type="button" className={btnCls} aria-label={`Remove instalment ${i + 2}`} onClick={() => setPlan(plan.filter((_, j) => j !== i))}>
-                    <Icon name="close" />
-                  </button>
-                </div>
-              ))}
-              {plan.length > 0 && (
-                <p className={`text-caption ${Math.abs(planTotal(plan) - balance) < 0.005 ? "text-on-surface-variant" : "text-error"}`}>
-                  Planned {inr(planTotal(plan))} of {inr(balance)}.
-                </p>
-              )}
-              <div>
-                <button
-                  type="button"
-                  className={btnCls}
-                  onClick={() => setPlan([...plan, { date: plan.length ? plan[plan.length - 1].date : paidOn, amount: Math.max(0, balance - planTotal(plan)) }])}
-                >
-                  <Icon name="add" /> Add an instalment
+          {balance > 0 && (
+            <div className="flex flex-wrap items-center gap-2">
+              <span className="text-label-sm text-on-surface-variant">Split evenly into</span>
+              {[1, 2, 3].map((n) => (
+                <button key={n} type="button" className={btnCls} onClick={() => split(n)}>
+                  {n} instalment{n === 1 ? "" : "s"}
                 </button>
-              </div>
-            </>
+              ))}
+            </div>
+          )}
+          {/* Rows show whenever there are any, so a plan left over from a
+              bigger balance can always be removed. */}
+          {plan.map((row, i) => (
+            <div key={i} className="grid grid-cols-[auto_1fr_1fr_auto] items-end gap-2">
+              <span className="text-label-sm text-on-surface-variant pb-2.5">#{i + 2}</span>
+              <Field label="Due on">
+                <input
+                  className={inputCls}
+                  type="date"
+                  value={row.date}
+                  min={paidOn}
+                  onChange={(e) => setPlan(plan.map((r, j) => (j === i ? { ...r, date: e.target.value } : r)))}
+                />
+              </Field>
+              <Field label="Amount (₹)">
+                <input
+                  className={inputCls}
+                  type="number"
+                  min={0}
+                  inputMode="decimal"
+                  value={String(row.amount)}
+                  onChange={(e) => setPlan(plan.map((r, j) => (j === i ? { ...r, amount: Number(e.target.value) || 0 } : r)))}
+                />
+              </Field>
+              <button type="button" className={btnCls} aria-label={`Remove instalment ${i + 2}`} onClick={() => setPlan(plan.filter((_, j) => j !== i))}>
+                <Icon name="close" />
+              </button>
+            </div>
+          ))}
+          {plan.length > 0 && (
+            <p className={`text-caption ${Math.abs(planTotal(plan) - balance) < 0.005 ? "text-on-surface-variant" : "text-error"}`}>
+              Planned {inr(planTotal(plan))} of {inr(balance)}.
+              {balance === 0 ? " Nothing is left to pay: remove these instalments." : ""}
+            </p>
+          )}
+          {balance > 0 ? (
+            <div>
+              <button
+                type="button"
+                className={btnCls}
+                onClick={() => setPlan([...plan, { date: plan.length ? plan[plan.length - 1].date : paidOn, amount: Math.max(0, balance - planTotal(plan)) }])}
+              >
+                <Icon name="add" /> Add an instalment
+              </button>
+            </div>
           ) : (
-            <Callout tone="ok" icon="check_circle">
-              Paid in full: no balance to plan.
-            </Callout>
+            plan.length === 0 && (
+              <Callout tone="ok" icon="check_circle">
+                Paid in full: no balance to plan.
+              </Callout>
+            )
           )}
         </>
       )}

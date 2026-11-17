@@ -11,6 +11,8 @@ export const dynamic = "force-dynamic";
 const Body = z.object({
   approve: z.boolean(),
   note: z.string().trim().max(300).optional().nullable(),
+  // The first payment the sales head was shown: the decision holds for that amount only.
+  expectedFirstAmount: z.number().nullable().optional(),
 });
 
 // POST /api/crm/leads/[id]/enrollment/exception — the sales head approves or
@@ -22,5 +24,14 @@ export const POST = withApiHandler(async (req: Request, { params }: { params: { 
   const access = await getCrmAccess(userId, perms);
   if (!access.canUnenroll) throw forbidden("Only the sales head can decide a smaller first payment.");
   const d = Body.parse(await req.json().catch(() => null));
-  return NextResponse.json(await decideException({ leadId: params.id, actorId: userId, approve: d.approve, note: d.note || null }));
+  return NextResponse.json(
+    await decideException({
+      leadId: params.id,
+      actorId: userId,
+      actorIsAdmin: access.isAdmin,
+      approve: d.approve,
+      note: d.note || null,
+      expectedFirstAmount: d.expectedFirstAmount ?? null,
+    }),
+  );
 });

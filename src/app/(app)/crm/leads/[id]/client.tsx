@@ -1784,9 +1784,13 @@ function DealCard({
 
       {canEdit && (
         <div className="flex flex-wrap items-center gap-base pt-xs">
-          <button type="button" className={secondaryBtn + " h-9"} onClick={() => setModal("deal")}>
-            {hasDeal ? "Edit deal" : "Set deal"}
-          </button>
+          {/* Once enrolled with the sheet, the deal is the enrollment's: its total and
+              date change through Edit details, and Finance's check (never here). */}
+          {!(isEnrolled && enrollment) && (
+            <button type="button" className={secondaryBtn + " h-9"} onClick={() => setModal("deal")}>
+              {hasDeal ? "Edit deal" : "Set deal"}
+            </button>
+          )}
           {isEnrolled ? (
             <span className="inline-flex items-center gap-xs text-green-700 font-semibold text-label-sm">
               <span className="material-symbols-outlined" style={{ fontSize: 18 }}>
@@ -2295,7 +2299,7 @@ function EnrollmentStatusPanel({
     const res = await fetch(`/api/crm/leads/${e.leadId}/enrollment/exception`, {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ approve, note }),
+      body: JSON.stringify({ approve, note, expectedFirstAmount: f.firstAmount }),
     });
     setBusy(false);
     if (!res.ok) {
@@ -2323,7 +2327,7 @@ function EnrollmentStatusPanel({
       {e.status === "verified" && (
         <div className="text-green-800">
           Verified{e.verifiedByName ? ` by ${e.verifiedByName}` : ""}
-          {e.verifiedAt ? ` on ${formatEnrollDate(e.verifiedAt.slice(0, 10))}` : ""}
+          {e.verifiedAt ? ` on ${formatEnrollDate(new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Kolkata" }).format(new Date(e.verifiedAt)))}` : ""}
           {e.invoice ? ` · invoice ${e.invoice.number}` : ""}
         </div>
       )}

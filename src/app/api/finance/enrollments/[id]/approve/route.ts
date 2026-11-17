@@ -10,6 +10,8 @@ export const dynamic = "force-dynamic";
 
 const Body = z.object({
   patch: FinancePatchSchema.nullable().optional(),
+  // The version Finance opened: refused if the enrollment changed since.
+  expectedUpdatedAt: z.string().nullable().optional(),
   // Issue the GST invoice straight after posting (Axis, HDFC, Wio).
   invoice: z
     .object({
@@ -29,7 +31,7 @@ const Body = z.object({
 export const POST = withApiHandler(async (req: Request, { params }: { params: { id: string } }) => {
   const a = await requireEnrollmentAccess("approve");
   const d = Body.parse(await req.json().catch(() => null));
-  const approved = await approveEnrollment(a, params.id, d.patch ?? null);
+  const approved = await approveEnrollment(a, params.id, d.patch ?? null, d.expectedUpdatedAt);
 
   let invoice: { id: string; number: string } | null = null;
   let invoiceError: string | null = null;

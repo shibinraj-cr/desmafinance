@@ -49,7 +49,9 @@ const TABS: Array<[EnrollmentTab, string]> = [
 ];
 
 const inr = (n: number) => `₹${n.toLocaleString("en-IN", { maximumFractionDigits: 2 })}`;
-const date = (iso: string | null) => (iso ? formatEnrollDate(iso.slice(0, 10)) : "—");
+/** A calendar day ("2026-11-10") as is; a timestamp as its IST day. */
+const date = (iso: string | null) =>
+  iso ? formatEnrollDate(iso.length <= 10 ? iso : new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Kolkata" }).format(new Date(iso))) : "—";
 
 export function EnrollmentsClient({ data }: { data: EnrollmentsPageData }) {
   const router = useRouter();
@@ -180,6 +182,14 @@ function Review({ row, data, onClose, onDone }: { row: EnrollmentDTO; data: Enro
     ...(init as Required<EnrollmentFields>),
     expDom: init.expDom ?? suggestedExpDom(init.billingCountry, init.paymentMode),
   }));
+  /** Only what Finance changed: a field left alone never overwrites someone else's newer value. */
+  const patch = useMemo(() => {
+    const out: Partial<EnrollmentFields> = {};
+    for (const k of Object.keys(f) as Array<keyof EnrollmentFields>) {
+      if (JSON.stringify(f[k] ?? null) !== JSON.stringify(init[k] ?? null)) (out as Record<string, unknown>)[k] = f[k];
+    }
+    return out;
+  }, [f, init]);
   const [history, setHistory] = useState<History>([]);
   const [busy, setBusy] = useState<null | "save" | "approve" | "back" | "none">(null);
   const [error, setError] = useState<string | null>(null);
@@ -196,6 +206,10 @@ function Review({ row, data, onClose, onDone }: { row: EnrollmentDTO; data: Enro
       : data.invoiceBlock[f.paymentMode!] || null;
   const [issue, setIssue] = useState(!invoiceWhyNot);
   const [invoiceDate, setInvoiceDate] = useState(init.paidOn ?? data.today);
+  // The invoice can't be dated before the payment: follow a corrected payment date.
+  useEffect(() => {
+    if (f.paidOn && invoiceDate < f.paidOn) setInvoiceDate(f.paidOn);
+  }, [f.paidOn, invoiceDate]);
   const [description, setDescription] = useState(defaultDescription(init.subItem));
   const [currency, setCurrency] = useState(entity === "DLLC" ? "AED" : "");
   const [foreign, setForeign] = useState("");
@@ -232,12 +246,13 @@ function Review({ row, data, onClose, onDone }: { row: EnrollmentDTO; data: Enro
     setBusy(kind);
     try {
       if (kind === "save") {
-        await api(`/api/finance/enrollments/${row.id}`, f, "PATCH");
+        await api(`/api/finance/enrollments/${row.id}`, { patch, expectedUpdatedAt: row.updatedAt }, "PATCH");
         onDone(changes.length ? "Saved. The BDE was told what changed." : "Nothing changed.");
       } else if (kind === "approve") {
         const wio = entity === "DLLC";
         const res = await api<{ invoice: { number: string } | null; invoiceError: string | null }>(`/api/finance/enrollments/${row.id}/approve`, {
-          patch: f,
+          patch,
+          expectedUpdatedAt: row.updatedAt,
           invoice:
             issue && !invoiceWhyNot
               ? {

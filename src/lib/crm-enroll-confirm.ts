@@ -97,7 +97,20 @@ export function parsePlan(json: unknown): PlanRow[] {
 
 // ── the confirmation ─────────────────────────────────────────────────────────
 
-const isoDate = z.string().regex(/^\d{4}-\d{2}-\d{2}$/, "Pick a date.");
+/** A real calendar day: "2026-02-30" is refused, not rolled into March. */
+const isoDate = z
+  .string()
+  .regex(/^\d{4}-\d{2}-\d{2}$/, "Pick a date.")
+  .refine((v) => {
+    const d = new Date(`${v}T00:00:00Z`);
+    return !isNaN(d.getTime()) && d.toISOString().slice(0, 10) === v;
+  }, "Pick a real date.");
+/** Rupees to the paisa, within what the ledger column holds. */
+const MAX_AMOUNT = 1_000_000_000;
+const money = z.coerce
+  .number()
+  .refine((n) => Number.isFinite(n) && Math.abs(n) <= MAX_AMOUNT, "That amount is too large.")
+  .transform((n) => Math.round((n + Number.EPSILON) * 100) / 100);
 const optText = (max: number) =>
   z
     .string()
@@ -113,14 +126,14 @@ export const EnrollConfirmSchema = z.object({
   billingState: optText(60),
   billingAddress: optText(400),
   billingPin: optText(12),
-  totalAmount: z.coerce.number(),
-  firstAmount: z.coerce.number(),
+  totalAmount: money,
+  firstAmount: money,
   paidOn: isoDate,
   paymentMode: z.enum(PAYMENT_MODES),
   utr: optText(40),
   payerRelation: z.enum(["candidate", "parent", "spouse", "other"]),
   payerName: optText(120),
-  plan: z.array(z.object({ date: isoDate, amount: z.coerce.number() })).max(MAX_PLAN_ROWS),
+  plan: z.array(z.object({ date: isoDate, amount: money })).max(MAX_PLAN_ROWS),
 });
 export type EnrollConfirm = z.output<typeof EnrollConfirmSchema>;
 
@@ -386,14 +399,14 @@ export const FinancePatchSchema = z.object({
   billingState: nullableText(60),
   billingAddress: nullableText(400),
   billingPin: nullableText(12),
-  totalAmount: z.coerce.number().optional(),
-  firstAmount: z.coerce.number().nullable().optional(),
+  totalAmount: money.optional(),
+  firstAmount: money.nullable().optional(),
   paidOn: isoDate.nullable().optional(),
   paymentMode: z.enum(PAYMENT_MODES).nullable().optional(),
   utr: nullableText(40),
   payerRelation: z.enum(["candidate", "parent", "spouse", "other"]).nullable().optional(),
   payerName: nullableText(120),
-  plan: z.array(z.object({ date: isoDate, amount: z.coerce.number() })).max(MAX_PLAN_ROWS).optional(),
+  plan: z.array(z.object({ date: isoDate, amount: money })).max(MAX_PLAN_ROWS).optional(),
   category: nullableText(120),
   subItem: nullableText(160),
   expDom: z.enum(["EXP", "DOM"]).nullable().optional(),

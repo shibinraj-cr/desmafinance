@@ -417,6 +417,15 @@ export async function applyLeadDeal(args: DealArgs): Promise<{ pipelineId: strin
   // Setting a deal moves the lead to the action-only "Pipeline" stage — unless
   // it's already enrolled (a won lead must not be downgraded).
   const alreadyEnrolled = lead.status.code === "enrolled";
+  // Enrolled with the Enroll sheet: the deal is the enrollment's now. Its total
+  // and date change through the enrollment (logged, and checked by Finance);
+  // the service doesn't change at all. Older enrollments keep Edit deal.
+  if (alreadyEnrolled) {
+    const enrollment = await prisma.crmEnrollment.findFirst({ where: { leadId: lead.id, status: { not: "withdrawn" } }, select: { id: true } });
+    if (enrollment) {
+      throw badRequest("This enrollment is with Finance. Change the total or the payment date with Edit details on the Deal card, or ask Finance.", "deal_locked_by_enrollment");
+    }
+  }
   const pipelineStatus = alreadyEnrolled
     ? null
     : await prisma.crmLeadStatus.findFirst({ where: { code: "pipeline", active: true }, select: { id: true } });

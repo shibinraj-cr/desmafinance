@@ -57,14 +57,17 @@ async function enrollmentForUnenroll(leadId: string) {
   const e = await prisma.crmEnrollment.findFirst({
     where: { leadId, status: { not: "withdrawn" } },
     orderBy: { createdAt: "desc" },
-    select: { id: true, status: true, firstAmount: true, transactionId: true },
+    select: { id: true, status: true, firstAmount: true, transactionId: true, collectionPlanId: true, transaction: { select: { deletedAt: true } } },
   });
   return e
     ? {
         id: e.id,
         status: e.status,
         firstAmount: e.firstAmount == null ? null : Number(e.firstAmount.toString()),
-        posted: e.status === "verified" || !!e.transactionId,
+        // In the books while its ledger row is live. Once Finance deletes that
+        // row (the reversal), the enrollment can be undone like any other.
+        posted: !!e.transactionId && !!e.transaction && e.transaction.deletedAt === null,
+        collectionPlanId: e.collectionPlanId,
       }
     : null;
 }
@@ -288,7 +291,7 @@ function buildPlan(s: ResolvedState): UnenrollPlan {
       code: "enrollment_verified",
       message:
         `Finance has verified this enrollment and posted its first payment${s.enrollment.firstAmount ? ` (${inr(s.enrollment.firstAmount)})` : ""} to the ledger. ` +
-        "Finance must reverse that payment first; un-enrolling will not delete a recorded payment.",
+        "Finance must delete that payment in the ledger first; un-enrolling will not delete a recorded payment.",
     });
   }
 
@@ -454,9 +457,13 @@ export async function unenrollLead(args: UnenrollArgs): Promise<UnenrollResult> 
     let pipelineReopened = false;
     let dailyCloseReversed = false;
     if (state.pipeline) {
-      if (state.pipeline.dailyCloseId) {
+      // Re-read inside the transaction: a payment-date correction may have
+      // moved the close since the preview read it.
+      const live = await tx.leadPulsePipeline.findUnique({ where: { id: state.pipeline.id }, select: { dailyCloseId: true } });
+      const dailyCloseId = live ? live.dailyCloseId : state.pipeline.dailyCloseId;
+      if (dailyCloseId) {
         const close = await tx.leadPulseDailyClose.findUnique({
-          where: { id: state.pipeline.dailyCloseId },
+          where: { id: dailyCloseId },
           select: { id: true, entry: { select: { id: true, closedWon: true } } },
         });
         if (close) {
@@ -496,13 +503,24 @@ export async function unenrollLead(args: UnenrollArgs): Promise<UnenrollResult> 
     let enrollmentWithdrawn = false;
     if (state.enrollment) {
       const res = await tx.crmEnrollment.updateMany({
-        where: { id: state.enrollment.id, status: { in: ["pending", "sent_back", "not_received"] }, transactionId: null },
+        where: {
+          id: state.enrollment.id,
+          OR: [
+            { status: { in: ["pending", "sent_back", "not_received"] }, transactionId: null },
+            // Verified, but Finance has since deleted the payment.
+            { status: "verified", transaction: { deletedAt: { not: null } } },
+          ],
+        },
         data: { status: "withdrawn" },
       });
       if (res.count !== 1) {
-        throw badRequest("Finance has just verified this enrollment, so its payment is in the ledger. Finance must reverse it first.", "enrollment_verified");
+        throw badRequest("Finance has just verified this enrollment, so its payment is in the ledger. Finance must delete it first.", "enrollment_verified");
       }
       enrollmentWithdrawn = true;
+      // A plan made on verification goes with it.
+      if (state.enrollment.collectionPlanId) {
+        await tx.collectionPlan.update({ where: { id: state.enrollment.collectionPlanId }, data: { status: "cancelled" } });
+      }
     }
 
     // ── 3. Operations: delete an untouched project, cancel a worked one ────
