@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { submitUpdate, submitDelete } from "@/lib/approval";
+import { prisma } from "@/lib/prisma";
 import { getCurrentUserAndPermissions } from "@/lib/permissions";
 import { canSeePage } from "@/lib/rbac";
 import { RawTxFieldsSchema, buildValidatedProposed } from "@/lib/finance-tx-validation";
@@ -37,8 +38,21 @@ export async function PATCH(req: NextRequest, { params }: { params: { id: string
     return NextResponse.json({ error: "forbidden" }, { status: 403 });
   }
 
+  // An edit keeps the row on its side of DesGro's start date: a payment from
+  // before DesGro stays one, and a live row can't be back-dated into that
+  // period (where it would drop out of every report).
+  const current = await prisma.transaction.findUnique({
+    where: { id: params.id },
+    select: { isHistorical: true, deletedAt: true },
+  });
+  if (!current || current.deletedAt) {
+    return NextResponse.json({ error: "not_found" }, { status: 404 });
+  }
+
   // Single server-authoritative validation shared with create/resubmit/draft.
-  const built = await buildValidatedProposed(parsed.data);
+  const built = await buildValidatedProposed(parsed.data, {
+    existingIsHistorical: current.isHistorical,
+  });
   if ("error" in built) {
     return NextResponse.json({ error: built.error }, { status: 400 });
   }

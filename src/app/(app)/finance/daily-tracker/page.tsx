@@ -9,6 +9,7 @@ import { parsePeriod, periodLabel, rangeFor } from "@/lib/period";
 import { DateFilter } from "@/components/DateFilter";
 import { FilterBand } from "@/components/FilterBand";
 import { listParam, oneOf } from "@/lib/filter-params";
+import { HISTORICAL_LABEL, isHistoricalDate } from "@/lib/finance-historical";
 import { DeleteRowButton } from "./delete-button";
 
 export const dynamic = "force-dynamic";
@@ -38,6 +39,9 @@ export default async function DailyTrackerPage({
     party?: string | string[];
     mode?: string | string[];
     flow?: string | string[];
+    /** "1" → show only candidate payments from before DesGro, which the
+     *  normal ledger view (and every report) leaves out. */
+    historical?: string;
   };
 }) {
   const perms = await getCurrentUserPermissions();
@@ -51,6 +55,7 @@ export default async function DailyTrackerPage({
   const partyIds = listParam(searchParams.party);
   const modes = listParam(searchParams.mode);
   const flows = listParam(searchParams.flow);
+  const historicalView = searchParams.historical === "1";
   const where = {
     deletedAt: null,
     ...(searchParams.type ? { type: searchParams.type } : {}),
@@ -70,7 +75,8 @@ export default async function DailyTrackerPage({
   };
   const [items, pendingCreates, pendingMutations, categories, parties, employees] = await Promise.all([
     prisma.transaction.findMany({
-      where,
+      // Payments from before DesGro show only in their own view.
+      where: { ...where, isHistorical: historicalView },
       orderBy: [{ date: "desc" }, { createdAt: "desc" }],
       take: 500,
     }),
@@ -208,6 +214,7 @@ export default async function DailyTrackerPage({
       if (flows.length && !flows.includes(r.flow)) return false;
       if (range.from && r.date < range.from) return false;
       if (range.to && r.date >= range.to) return false;
+      if (isHistoricalDate(r.date) !== historicalView) return false;
       return true;
     });
 
@@ -235,7 +242,8 @@ export default async function DailyTrackerPage({
     flows.length > 0 ||
     !!searchParams.period ||
     !!searchParams.from ||
-    !!searchParams.to;
+    !!searchParams.to ||
+    historicalView;
 
   const filterQs = (extra: Record<string, string | undefined>) => {
     const qs = new URLSearchParams();
@@ -248,6 +256,7 @@ export default async function DailyTrackerPage({
     for (const v of partyIds) qs.append("party", v);
     for (const v of modes) qs.append("mode", v);
     for (const v of flows) qs.append("flow", v);
+    if (historicalView) qs.set("historical", "1");
     for (const [k, v] of Object.entries(extra)) {
       if (v) qs.set(k, v);
       else qs.delete(k);
@@ -260,7 +269,11 @@ export default async function DailyTrackerPage({
     <>
       <TopBar
         title="Daily Tracker"
-        subtitle={`${items.length} transactions · ${periodLabel(period)}`}
+        subtitle={
+          historicalView
+            ? `${items.length} candidate payments from before DesGro · not in any report`
+            : `${items.length} transactions · ${periodLabel(period)}`
+        }
         action={
           <div className="flex items-center gap-base">
             <DateFilter />
@@ -296,7 +309,22 @@ export default async function DailyTrackerPage({
           >
             Outflow
           </FilterChip>
+          <span className="ml-auto" />
+          <FilterChip
+            href={"/finance/daily-tracker" + filterQs({ historical: historicalView ? undefined : "1" })}
+            active={historicalView}
+          >
+            {HISTORICAL_LABEL}
+          </FilterChip>
         </div>
+
+        {historicalView && (
+          <p className="text-body-md text-on-surface-variant">
+            Payments candidates made before 1 Apr 2026, recorded so their balances are right. They
+            count on the candidate&apos;s page only, never in the ledger totals or reports. Record
+            new ones from the candidate&apos;s page.
+          </p>
+        )}
 
         <FilterBand
           categories={categories.map((c) => ({
@@ -322,6 +350,7 @@ export default async function DailyTrackerPage({
           expense={totalExpense}
           net={totalNet}
           showAll={!hasActiveFilters}
+          historical={historicalView}
         />
 
         <div className="bg-surface-container-lowest border border-outline-variant rounded-xl shadow-sm overflow-hidden">
@@ -499,11 +528,13 @@ function TotalsStrip({
   expense,
   net,
   showAll,
+  historical,
 }: {
   count: number;
   revenue: number;
   expense: number;
   net: number;
+  historical?: boolean;
   /** When no filters are set we still want to show totals, but the
    *  label flips to "All transactions" so the reader doesn't think a
    *  hidden filter is in play. */
@@ -512,7 +543,7 @@ function TotalsStrip({
   return (
     <div className="rounded-xl border border-outline-variant bg-surface-container-lowest px-md py-sm flex flex-wrap items-center gap-md text-body-md">
       <span className="text-caption uppercase tracking-wider font-semibold text-on-surface-variant">
-        {showAll ? "All transactions" : "Filtered"}
+        {historical ? HISTORICAL_LABEL : showAll ? "All transactions" : "Filtered"}
       </span>
       <span className="text-body-md">
         <strong className="text-on-surface">{count}</strong>{" "}

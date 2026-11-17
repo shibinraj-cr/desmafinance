@@ -235,6 +235,7 @@ async function loadLedgerRows(from: string, to: string): Promise<Omit<LedgerRowD
       type: "Expense",
       category: MARKETING_CATEGORY,
       deletedAt: null,
+      isHistorical: false,
       date: { gte: toPrismaDate(from), lte: toPrismaDate(to) },
     },
     select: {

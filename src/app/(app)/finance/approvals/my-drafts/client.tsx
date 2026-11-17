@@ -4,6 +4,8 @@ import { useMemo, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import { PAYMENT_MODES } from "@/lib/catalog";
 import { inrFull } from "@/lib/format";
+import { HISTORICAL_LABEL, isHistoricalDate } from "@/lib/finance-historical";
+import { txErrorMessage } from "@/lib/finance-tx-errors";
 
 export type Draft = {
   id: string;
@@ -115,7 +117,7 @@ export function MyDraftsClient({
     });
     if (!res.ok) {
       const data = await res.json().catch(() => ({}));
-      setError(`Edit failed: ${(data as { error?: string }).error ?? "unknown"}`);
+      setError(`Edit failed: ${txErrorMessage((data as { error?: string }).error, "unknown error")}`);
       return;
     }
     setDrafts((rows) => rows.map((r) => (r.id === id ? { ...e, partyName: partyById.get(e.partyId ?? "")?.name ?? null, partyGroup: partyById.get(e.partyId ?? "")?.group ?? null } : r)));
@@ -324,7 +326,17 @@ export function MyDraftsClient({
                           className="h-9 px-sm rounded-md border border-outline-variant w-[140px]"
                         />
                       ) : (
-                        <span className="font-mono">{fmtDDMMYY(row.date)}</span>
+                        <span className="font-mono">
+                          {fmtDDMMYY(row.date)}
+                          {isHistoricalDate(row.date) && (
+                            <span
+                              title="Paid before 1 Apr 2026. Counts towards the candidate's balance only, not in any report."
+                              className="block mt-[2px] w-fit px-sm py-[1px] rounded-full border border-amber-300 bg-amber-50 text-amber-800 font-sans text-[10px] font-bold uppercase tracking-wider"
+                            >
+                              {HISTORICAL_LABEL}
+                            </span>
+                          )}
+                        </span>
                       )}
                     </td>
                     {isAdminViewer && (

@@ -137,6 +137,7 @@ export async function ceoHeadline(): Promise<CeoHeadline> {
         prisma.transaction.aggregate({
           where: {
             deletedAt: null,
+            isHistorical: false,
             type: "Revenue",
             date: { gte: currentMonthStart, lt: nextMonthStart },
           },
@@ -150,6 +151,7 @@ export async function ceoHeadline(): Promise<CeoHeadline> {
         prisma.transaction.aggregate({
           where: {
             deletedAt: null,
+            isHistorical: false,
             type: "Revenue",
             date: { gte: prevMonthStart, lt: currentMonthStart },
           },
@@ -356,7 +358,7 @@ export async function ceoProfit(): Promise<CeoProfit> {
     "transaction.findMany(profit)",
     () =>
       prisma.transaction.findMany({
-        where: { deletedAt: null, date: { gte: FY_START } },
+        where: { deletedAt: null, isHistorical: false, date: { gte: FY_START } },
         select: {
           date: true,
           type: true,
@@ -445,6 +447,7 @@ export async function fyMonthlySeries(): Promise<MonthlyRow[]> {
           by: ["month", "type"],
           where: {
             deletedAt: null,
+            isHistorical: false,
             date: { gte: FY_START, lt: FY_END },
           },
           _sum: { amount: true },
@@ -623,6 +626,7 @@ export async function orgHealth(series: MonthlyRow[]): Promise<OrgHealth> {
         prisma.transaction.aggregate({
           where: {
             deletedAt: null,
+            isHistorical: false,
             type: "Expense",
             category: "Salary",
             date: { gte: currentMonthStart, lt: nextMonthStart },
@@ -637,6 +641,7 @@ export async function orgHealth(series: MonthlyRow[]): Promise<OrgHealth> {
         prisma.transaction.aggregate({
           where: {
             deletedAt: null,
+            isHistorical: false,
             type: "Expense",
             category: "Salary",
             date: { gte: prevMonthStart, lt: currentMonthStart },
@@ -651,6 +656,7 @@ export async function orgHealth(series: MonthlyRow[]): Promise<OrgHealth> {
         prisma.transaction.aggregate({
           where: {
             deletedAt: null,
+            isHistorical: false,
             type: "Expense",
             category: "Salary",
             date: { gte: FY_START, lt: FY_END },
@@ -667,6 +673,7 @@ export async function orgHealth(series: MonthlyRow[]): Promise<OrgHealth> {
             by: ["category"],
             where: {
               deletedAt: null,
+              isHistorical: false,
               type: "Expense",
               date: { gte: FY_START, lt: FY_END },
             },

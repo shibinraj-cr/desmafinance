@@ -26,6 +26,9 @@ export async function GET(req: NextRequest) {
   const rows = await prisma.transaction.findMany({
     where: {
       deletedAt: null,
+      // The export mirrors DesGro's books, with a running balance; payments
+      // from before DesGro belong to no period those books cover.
+      isHistorical: false,
       ...(range.from || range.to
         ? {
             date: {

@@ -35,6 +35,9 @@ export const GET = withApiHandler(async (req: Request, { params }: { params: { i
   const rows = await prisma.transaction.findMany({
     where: {
       deletedAt: null,
+      // Bank statements cover DesGro's own period; payments from before it
+      // are recorded for the candidate's balance only.
+      isHistorical: false,
       type: bt.direction === "CREDIT" ? "Revenue" : "Expense",
       date: { gte: lo, lt: hi },
       ...(q

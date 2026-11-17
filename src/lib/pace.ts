@@ -63,6 +63,7 @@ export async function pace(asOfDate: Date = new Date()): Promise<Pace> {
     ? await prisma.transaction.findMany({
         where: {
           deletedAt: null,
+          isHistorical: false,
           date: { gte: earliest, lt: latest },
         },
         select: { date: true, type: true, amount: true },

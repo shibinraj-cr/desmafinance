@@ -9,7 +9,12 @@ import {
   type TxType,
 } from "./catalog";
 import { verifyCategorySubItem } from "./master-data";
-import { validateCounterparty } from "./tx-counterparty";
+import { isCandidateParty, validateCounterparty } from "./tx-counterparty";
+import {
+  isBeforeHistoricalFloor,
+  isCandidatePaymentCategory,
+  isHistoricalDate,
+} from "./finance-historical";
 import type { TxProposed } from "./approval";
 
 /**
@@ -63,20 +68,32 @@ const MAX_AMOUNT = 1_000_000_000;
  *   - flow is a valid enum when supplied, else derived from type;
  *   - a counterparty (party or employee) is present and valid;
  *   - EXP/DOM is mandatory for Revenue and forced null for Expense.
+ *
+ * A date before DesGro's ledger began (1 Apr 2026) is a historical candidate
+ * payment (see `finance-historical.ts`): accepted back to 1 Apr 2023, and only
+ * as Sales/Collection revenue from a Candidate. When editing an existing row,
+ * pass `existingIsHistorical` so an edit can't move a row across that date.
  */
 export async function buildValidatedProposed(
   input: RawTxFields,
-  opts?: { allowInactiveEmployeeId?: string | null },
+  opts?: { allowInactiveEmployeeId?: string | null; existingIsHistorical?: boolean },
 ): Promise<{ error: string } | { proposed: TxProposed }> {
   // Date must parse to a real calendar date.
   const parsedDate = new Date(input.date);
   if (isNaN(parsedDate.getTime())) return { error: "invalid_date" };
 
-  // Month is derived from the date — never trusted from the client — and must
-  // fall inside the tracked reporting window.
+  // Month is derived from the date — never trusted from the client. A live
+  // row must fall inside the tracked reporting window; a historical one only
+  // has to be on or after the historical floor.
   const month = monthCodeFromDate(parsedDate);
-  if (!(MONTHS as readonly string[]).includes(month)) {
+  const historical = isHistoricalDate(parsedDate);
+  if (historical) {
+    if (isBeforeHistoricalFloor(parsedDate)) return { error: "historical_too_old" };
+  } else if (!(MONTHS as readonly string[]).includes(month)) {
     return { error: "month_out_of_range" };
+  }
+  if (opts?.existingIsHistorical !== undefined && opts.existingIsHistorical !== historical) {
+    return { error: "historical_kind_change" };
   }
 
   // Type enum.
@@ -84,6 +101,11 @@ export async function buildValidatedProposed(
     return { error: "invalid_type" };
   }
   const type = input.type as TxType;
+
+  // Before DesGro, only money received from candidates may be entered.
+  if (historical && (type !== "Revenue" || !isCandidatePaymentCategory(input.category))) {
+    return { error: "historical_payments_only" };
+  }
 
   // Payment mode enum.
   if (!(PAYMENT_MODES as readonly string[]).includes(input.paymentMode)) {
@@ -124,6 +146,9 @@ export async function buildValidatedProposed(
     allowInactiveEmployeeId: opts?.allowInactiveEmployeeId,
   });
   if (cerr) return { error: cerr };
+  if (historical && (!input.partyId || !(await isCandidateParty(input.partyId)))) {
+    return { error: "historical_candidate_only" };
+  }
 
   return {
     proposed: {

@@ -44,6 +44,7 @@ export async function GET(req: NextRequest) {
   const items = await prisma.transaction.findMany({
     where: {
       deletedAt: null,
+      isHistorical: false,
       ...(month ? { month } : {}),
       ...(type ? { type } : {}),
     },

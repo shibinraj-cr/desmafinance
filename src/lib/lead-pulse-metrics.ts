@@ -1706,6 +1706,7 @@ export async function getMetaAdSpend(start: string, end: string): Promise<number
       category: META_AD_CATEGORY,
       subItem: META_AD_SUBITEM,
       deletedAt: null,
+      isHistorical: false,
       // Half-open [start, end+1day) so a transaction at any time on the end day counts.
       date: { gte: toPrismaDate(start), lt: toPrismaDate(addDays(end, 1)) },
     },

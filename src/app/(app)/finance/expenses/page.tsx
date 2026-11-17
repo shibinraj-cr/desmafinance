@@ -43,7 +43,7 @@ export default async function ExpensesPage({
     expenseBreakdown(10, range),
     monthlySeries(range),
     prisma.transaction.findMany({
-      where: recentWhere,
+      where: { ...recentWhere, isHistorical: false },
       orderBy: [{ date: "desc" }, { createdAt: "desc" }],
       take: 10,
     }),

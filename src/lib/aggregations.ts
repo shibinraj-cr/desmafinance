@@ -25,7 +25,8 @@ function num(d: { toString(): string } | number | null | undefined): number {
 }
 
 /**
- * Shared `where` for every dashboard aggregate: live rows only, narrowed by
+ * Shared `where` for every dashboard aggregate: live rows only (not deleted,
+ * not a pre-DesGro historical payment), narrowed by
  * the period and — where the caller passes one — by the payment-mode
  * multi-select. `modes` is the raw repeated `?mode=` param, so it takes the
  * same shape the pages read out of `searchParams`; an empty list means "all
@@ -35,6 +36,8 @@ function activeWhere(range?: Range, modes?: string[]) {
   const picked = listParam(modes);
   return {
     deletedAt: null,
+    // Payments from before DesGro sit outside these books (finance-historical.ts).
+    isHistorical: false,
     ...(picked.length ? { paymentMode: oneOf(picked) } : {}),
     ...(range?.from || range?.to
       ? {

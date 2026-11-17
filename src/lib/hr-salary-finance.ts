@@ -104,6 +104,7 @@ export async function raiseSalaryDrafts(
   const booked = await tx.transaction.findMany({
     where: {
       deletedAt: null,
+      isHistorical: false,
       type: "Expense",
       category: "Salary",
       employeeId: { in: lines.map((l) => l.employeeId) },
@@ -148,7 +149,7 @@ export async function salaryAlreadyInFinance(
     date: { gte: from, lt: to },
   };
   const [ledger, drafts, pending] = await Promise.all([
-    prisma.transaction.aggregate({ where: { ...where, deletedAt: null }, _count: true, _sum: { amount: true } }),
+    prisma.transaction.aggregate({ where: { ...where, deletedAt: null, isHistorical: false }, _count: true, _sum: { amount: true } }),
     prisma.transactionDraft.aggregate({ where: { ...where, salaryRunId: null }, _count: true, _sum: { amount: true } }),
     prisma.pendingApproval.findMany({
       where: { status: "pending", kind: "create", proposed: { path: ["category"], equals: "Salary" } },
