@@ -30,6 +30,7 @@ import { TASK_TYPES } from "@/lib/crm";
 import { activeQualityReasons } from "@/lib/crm-lead-quality-data";
 import { loadLeadReferral } from "@/lib/crm-referral";
 import { siteBaseUrlFromHeaders } from "@/lib/site-url";
+import { partyViewerAccess } from "@/lib/invoices/server";
 import { LeadDetail } from "./client";
 
 export const dynamic = "force-dynamic";
@@ -240,6 +241,10 @@ export default async function LeadDetailPage({ params }: { params: { id: string 
   // this lead, if anyone.
   const referral = await loadLeadReferral(lead, siteBaseUrlFromHeaders(headers()));
 
+  // The candidate's payments and invoices: Finance, the lead's own BDE, CRM
+  // supervisors and the candidate's Ops person (src/lib/invoices/server.ts).
+  const canSeeTransactions = lead.partyId ? (await partyViewerAccess(userId, perms, lead.partyId)) !== null : false;
+
   return (
     <>
       <TopBar
@@ -283,6 +288,7 @@ export default async function LeadDetailPage({ params }: { params: { id: string 
             canAddNote: canAddNote(access, lead, userId),
             canUnenroll: access.canUnenroll,
             canSendAgreements: !!perms && canSeePage(perms, AGREEMENTS_PAGE),
+            canSeeTransactions,
             userId,
           }}
         />

@@ -128,6 +128,13 @@ export type GuideChange = { date: string; section: string; title: string; detail
  */
 export const CRM_GUIDE_CHANGES: GuideChange[] = [
   {
+    date: "2026-11-17",
+    section: "deal-enroll",
+    title: "Payments and invoices on the lead",
+    detail:
+      "Enrolled leads have a **Transactions** tab: the package, the instalment plan, the payments Finance has approved and the ones still waiting. Once Finance issues a payment's GST invoice, click its number to download the PDF. You see it on your own leads; cash, UPI and card payments don't get an invoice.",
+  },
+  {
     date: "2026-11-16",
     section: "notifications",
     title: "Some campaigns assign their leads to you directly",
@@ -1016,6 +1023,14 @@ export function crmGuideSections(f: GuideFacts, canSee: (href: string) => boolea
           title: "A second service for an enrolled candidate",
           items: [
             `On the enrolled lead, click **Reopen for another service**, pick the new service and click **Reopen for follow-up**. A new lead in ${FU} is created for you, with a follow-up task due in 2 days.`,
+          ],
+        },
+        {
+          kind: "steps",
+          title: "Payments and invoices",
+          items: [
+            "On an enrolled lead, open the **Transactions** tab: the package, the instalment plan, every payment Finance has approved, and payments still waiting for Finance.",
+            "When Finance issues the GST invoice for a payment into Axis, HDFC or Wio, its number appears beside the payment. Click it to download the PDF for the candidate.",
           ],
         },
         {

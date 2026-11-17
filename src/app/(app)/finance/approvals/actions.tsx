@@ -2,6 +2,7 @@
 
 import { useRouter } from "next/navigation";
 import { useState } from "react";
+import { txErrorMessage } from "@/lib/finance-tx-errors";
 
 export function ApprovalActions({ id }: { id: string }) {
   const router = useRouter();
@@ -24,7 +25,7 @@ export function ApprovalActions({ id }: { id: string }) {
     setBusy(false);
     if (!res.ok) {
       const data = await res.json().catch(() => ({}));
-      setError(data?.error ?? "Failed to record action.");
+      setError(txErrorMessage(data?.error, data?.error ?? "Failed to record action."));
       return;
     }
     router.refresh();

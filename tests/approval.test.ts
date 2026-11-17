@@ -39,9 +39,11 @@ const auditMock = recordAudit as unknown as ReturnType<typeof vi.fn>;
 
 // The mock interactive-transaction client handed to every $transaction(cb) call.
 let txClient: {
-  transaction: { create: ReturnType<typeof vi.fn>; update: ReturnType<typeof vi.fn> };
+  $queryRaw: ReturnType<typeof vi.fn>;
+  transaction: { create: ReturnType<typeof vi.fn>; update: ReturnType<typeof vi.fn>; findUnique: ReturnType<typeof vi.fn> };
   pendingApproval: { update: ReturnType<typeof vi.fn> };
   collectionPlanInstallment: { update: ReturnType<typeof vi.fn> };
+  invoice: { findFirst: ReturnType<typeof vi.fn> };
 };
 
 const approver: Permissions = {
@@ -89,9 +91,12 @@ beforeEach(() => {
   $transaction.mockReset();
   auditMock.mockReset();
   txClient = {
-    transaction: { create: vi.fn(), update: vi.fn() },
+    // The row lock (SELECT … FOR UPDATE) and the invoice check that guard every ledger edit.
+    $queryRaw: vi.fn().mockResolvedValue([]),
+    transaction: { create: vi.fn(), update: vi.fn(), findUnique: vi.fn().mockResolvedValue({ ...before, partyId: "party1", expDom: "DOM" }) },
     pendingApproval: { update: vi.fn() },
     collectionPlanInstallment: { update: vi.fn() },
+    invoice: { findFirst: vi.fn().mockResolvedValue(null) },
   };
   // Default: run the interactive callback with our mock tx client and return
   // whatever it resolves to (mirrors prisma's interactive-transaction contract).
@@ -293,5 +298,45 @@ describe("rejectPending", () => {
 
     expect(res).toEqual({ error: "forbidden" });
     expect($transaction).not.toHaveBeenCalled();
+  });
+});
+
+describe("approvePending — a GST invoice freezes the ledger row", () => {
+  it("refuses an edit that changes what an issued invoice printed, and leaves the pending open", async () => {
+    findUnique.mockResolvedValueOnce({ id: "p2", status: "pending", kind: "update", targetTxId: "tx1", proposed });
+    txFindUnique.mockResolvedValueOnce(before);
+    txClient.invoice.findFirst.mockResolvedValueOnce({ number: "D/DIPL/26-27/0001" });
+
+    const res = await approvePending({ pendingId: "p2", reviewerId: "mgr", reviewerPerms: approver });
+
+    expect(res).toEqual({ error: "invoiced" });
+    expect(txClient.$queryRaw).toHaveBeenCalledTimes(1);
+    expect(txClient.transaction.update).not.toHaveBeenCalled();
+    expect(txClient.pendingApproval.update).not.toHaveBeenCalled();
+    expect(auditMock).not.toHaveBeenCalled();
+  });
+
+  it("refuses a delete of an invoiced row", async () => {
+    findUnique.mockResolvedValueOnce({ id: "p3", status: "pending", kind: "delete", targetTxId: "tx1", proposed: null });
+    txFindUnique.mockResolvedValueOnce(before);
+    txClient.invoice.findFirst.mockResolvedValueOnce({ number: "D/DIPL/26-27/0001" });
+
+    const res = await approvePending({ pendingId: "p3", reviewerId: "mgr", reviewerPerms: approver });
+
+    expect(res).toEqual({ error: "invoiced" });
+    expect(txClient.transaction.update).not.toHaveBeenCalled();
+  });
+
+  it("allows an edit that leaves every printed field as it was", async () => {
+    const same = { ...proposed, date: "2026-04-01", amount: 500, paymentMode: "Bank", expDom: "DOM", description: "new words" };
+    findUnique.mockResolvedValueOnce({ id: "p4", status: "pending", kind: "update", targetTxId: "tx1", proposed: same });
+    txFindUnique.mockResolvedValueOnce(before);
+    txClient.invoice.findFirst.mockResolvedValueOnce({ number: "D/DIPL/26-27/0001" });
+    txClient.transaction.update.mockResolvedValueOnce({ id: "tx1" });
+
+    const res = await approvePending({ pendingId: "p4", reviewerId: "mgr", reviewerPerms: approver });
+
+    expect(res).toMatchObject({ applied: true, transactionId: "tx1" });
+    expect(txClient.transaction.update).toHaveBeenCalledTimes(1);
   });
 });

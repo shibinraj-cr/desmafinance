@@ -18,6 +18,8 @@ const MESSAGES: Record<string, string> = {
   historical_payments_only:
     "Before 1 Apr 2026, only payments received from candidates (Sales or Collection) can be recorded.",
   historical_candidate_only: "A payment dated before 1 Apr 2026 must be from a candidate.",
+  invoiced:
+    "This payment has a GST invoice. Cancel the invoice in Finance › Invoices before changing its date, amount, bank, candidate or EXP/DOM, or deleting it.",
   historical_kind_change:
     "This entry's date can't move across 1 Apr 2026, when DesGro's books began. Delete it and enter it again with the right date.",
 };
