@@ -1,20 +1,6 @@
 import { prisma } from "./prisma";
 import type { MasterCategory, MasterParty, MasterEmployee } from "@/components/TransactionForm";
 
-// Categories whose sub-items can be linked to a Service. Service-aware
-// reporting joins on these sub-items, so widening the set requires updating
-// the relevant aggregations as well.
-export const SERVICE_LINK_CATEGORIES = [
-  "Sales - Nursing Registrations",
-  "Collection - Nursing Registrations",
-  "Sales - Study Abroad",
-  "Collection - Study Abroad",
-] as const;
-
-export const SERVICE_LINK_CATEGORY_SET: ReadonlySet<string> = new Set(
-  SERVICE_LINK_CATEGORIES,
-);
-
 /**
  * Validate that the (category, sub-item, type) triple exists in the master.
  * Returns null on success, or an error string suitable for an API response.
