@@ -60,6 +60,10 @@ export const CRM_ACTIVITY_TYPES = [
   // (src/lib/crm-referral-reward.ts). Written on both the referred lead and the
   // referring candidate's.
   "REFERRAL_REWARD",
+  // Someone already in the CRM messaged us from a Meta click-to-WhatsApp ad
+  // (src/lib/wa/mirror.ts). Attribution evidence only: a new lead carries the
+  // ad in its `extra` instead.
+  "AD_REFERRAL",
 ] as const;
 
 export type CrmActivityType = (typeof CRM_ACTIVITY_TYPES)[number];
@@ -68,6 +72,8 @@ export type CrmActivityType = (typeof CRM_ACTIVITY_TYPES)[number];
 // merely-viewed lead look freshly worked, defeating stale-lead sorting).
 const NON_BUMPING_TYPES: ReadonlySet<CrmActivityType> = new Set<CrmActivityType>([
   "LEAD_OPENED",
+  // The inbound message itself already moves the lead's activity clock.
+  "AD_REFERRAL",
   // Finance paying a candidate is not work on their lead; it must not make a
   // neglected lead look freshly worked.
   "REFERRAL_REWARD",

@@ -204,6 +204,7 @@ const ACTIVITY_ICON: Record<string, string> = {
   UNENROLLED: "undo",
   REFERRAL_REWARD: "card_giftcard",
   REVENUE_DRAFTED: "request_quote",
+  AD_REFERRAL: "campaign",
 };
 
 function Avatar({ name }: { name: string | null }) {
