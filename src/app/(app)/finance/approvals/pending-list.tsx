@@ -4,6 +4,7 @@ import { useEffect, useMemo, useRef, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import { inrFull } from "@/lib/format";
 import { HISTORICAL_LABEL, isHistoricalDate } from "@/lib/finance-historical";
+import { txErrorMessage } from "@/lib/finance-tx-errors";
 
 /** localStorage key for in-progress approve/reject decisions. Kept
  *  scoped to this page so other surfaces (daily tracker drafts etc.)
@@ -215,8 +216,8 @@ export function PendingList({
       } else {
         setToast(
           `${data.processed} processed, ${data.errors.length} failed (${data.errors
-            .map((e) => e.error)
-            .join(", ")}).`,
+            .map((e) => txErrorMessage(e.error, e.error))
+            .join("; ")}).`,
         );
       }
       router.refresh();

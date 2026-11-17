@@ -4,6 +4,7 @@ import { prisma } from "@/lib/prisma";
 import { getCurrentUserAndPermissions } from "@/lib/permissions";
 import { getOpsAccess, canEditProject, OPS_USER_ANCHORS } from "@/lib/ops-rbac";
 import { opsProjectDetailInclude, serializeProjectDetail } from "@/lib/ops-queries";
+import { partyViewerAccess } from "@/lib/invoices/server";
 import { ProjectDetailClient } from "./client";
 
 export const dynamic = "force-dynamic";
@@ -42,6 +43,9 @@ export default async function OperationsProjectDetailPage({ params }: { params: 
       })
     : [];
 
+  // Payments and GST invoices: the candidate's Ops person, Ops managers, Finance.
+  const canSeePayments = (await partyViewerAccess(userId, perms, p.partyId)) !== null;
+
   return (
     <>
       <TopBar title={detail.candidateName} subtitle={`${detail.serviceName} · process`} />
@@ -52,6 +56,7 @@ export default async function OperationsProjectDetailPage({ params }: { params: 
           canAssign={access.canAssign}
           opsUsers={opsUsers}
           qualifications={qualifications}
+          canSeePayments={canSeePayments}
         />
       </div>
     </>

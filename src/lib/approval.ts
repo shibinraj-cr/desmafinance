@@ -3,6 +3,7 @@ import { prisma } from "./prisma";
 import { recordAudit } from "./audit";
 import { canApprove, canWorkSalaryDrafts, needsApproval, type Permissions } from "./rbac";
 import { isHistoricalDate } from "./finance-historical";
+import { guardLedgerWrite, invoiceBlocks, invoicedOrThrow, INVOICED } from "./invoices/ledger-lock";
 
 export type TxProposed = {
   date: string; // ISO date
@@ -312,26 +313,37 @@ export async function submitUpdate(opts: {
   if (!existing || existing.deletedAt) {
     return { error: "not_found" as const };
   }
+  // An issued GST invoice freezes what it printed. Checked here so an
+  // executive hears it at once, and again under the row lock when applied.
+  if (await invoiceBlocks(prisma, existing, data)) {
+    return { error: "invoiced" as const };
+  }
 
   if (canApprove(perms)) {
-    const updated = await prisma.transaction.update({
-      where: { id: txId },
-      data: {
-        date: new Date(data.date),
-        month: data.month,
-        type: data.type,
-        category: data.category,
-        subItem: data.subItem,
-        description: data.description ?? null,
-        paymentMode: data.paymentMode,
-        amount: data.amount,
-        flow: data.flow,
-        partyId: data.partyId ?? null,
-        employeeId: data.employeeId ?? null,
-        expDom: data.type === "Revenue" ? (data.expDom ?? null) : null,
-        isHistorical: isHistoricalDate(data.date),
-      },
-    });
+    const updated = await prisma
+      .$transaction(async (tx) => {
+        await guardLedgerWrite(tx, txId, data);
+        return tx.transaction.update({
+          where: { id: txId },
+          data: {
+            date: new Date(data.date),
+            month: data.month,
+            type: data.type,
+            category: data.category,
+            subItem: data.subItem,
+            description: data.description ?? null,
+            paymentMode: data.paymentMode,
+            amount: data.amount,
+            flow: data.flow,
+            partyId: data.partyId ?? null,
+            employeeId: data.employeeId ?? null,
+            expDom: data.type === "Revenue" ? (data.expDom ?? null) : null,
+            isHistorical: isHistoricalDate(data.date),
+          },
+        });
+      })
+      .catch(invoicedOrThrow);
+    if (updated === INVOICED) return { error: "invoiced" as const };
     await recordAudit({
       entityType: "Transaction",
       entityId: updated.id,
@@ -395,12 +407,21 @@ export async function submitDelete(opts: {
   if (!existing || existing.deletedAt) {
     return { error: "not_found" as const };
   }
+  if (await invoiceBlocks(prisma, existing, null)) {
+    return { error: "invoiced" as const };
+  }
 
   if (canApprove(perms)) {
-    await prisma.transaction.update({
-      where: { id: txId },
-      data: { deletedAt: new Date(), deletedById: userId },
-    });
+    const deleted = await prisma
+      .$transaction(async (tx) => {
+        await guardLedgerWrite(tx, txId, null);
+        await tx.transaction.update({
+          where: { id: txId },
+          data: { deletedAt: new Date(), deletedById: userId },
+        });
+      })
+      .catch(invoicedOrThrow);
+    if (deleted === INVOICED) return { error: "invoiced" as const };
     await recordAudit({
       entityType: "Transaction",
       entityId: txId,
@@ -523,8 +544,10 @@ export async function approvePending(opts: {
     const targetTxId = p.targetTxId;
     const before = await prisma.transaction.findUnique({ where: { id: targetTxId } });
     if (!before || before.deletedAt) return { error: "target_gone" as const };
-    // Atomic: apply the edit and resolve the pending together.
+    // Atomic: apply the edit and resolve the pending together. An invoice
+    // issued since the edit was submitted refuses it (reject it instead).
     const after = await prisma.$transaction(async (tx) => {
+      await guardLedgerWrite(tx, targetTxId, data);
       const updated = await tx.transaction.update({
         where: { id: targetTxId },
         data: {
@@ -553,7 +576,8 @@ export async function approvePending(opts: {
         },
       });
       return updated;
-    });
+    }).catch(invoicedOrThrow);
+    if (after === INVOICED) return { error: "invoiced" as const };
     await recordAudit({
       entityType: "Transaction",
       entityId: after.id,
@@ -574,7 +598,8 @@ export async function approvePending(opts: {
     const before = await prisma.transaction.findUnique({ where: { id: targetTxId } });
     if (!before || before.deletedAt) return { error: "target_gone" as const };
     // Atomic: soft-delete the row and resolve the pending together.
-    await prisma.$transaction(async (tx) => {
+    const deleted = await prisma.$transaction(async (tx) => {
+      await guardLedgerWrite(tx, targetTxId, null);
       await tx.transaction.update({
         where: { id: targetTxId },
         data: { deletedAt: new Date(), deletedById: reviewerId },
@@ -588,7 +613,8 @@ export async function approvePending(opts: {
           reviewedAt: new Date(),
         },
       });
-    });
+    }).catch(invoicedOrThrow);
+    if (deleted === INVOICED) return { error: "invoiced" as const };
     await recordAudit({
       entityType: "Transaction",
       entityId: targetTxId,

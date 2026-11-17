@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 import { ageFromDob } from "@/lib/age";
 import { COUNTRIES } from "@/lib/countries";
 import { isOtherQualification, qualificationText, QUALIFICATION_OTHER_MAX } from "@/lib/crm";
+import { TransactionsPanel } from "@/components/invoices/transactions-panel";
 
 type ActionItemDTO = {
   id: string;
@@ -77,6 +78,8 @@ type CandidateDTO = {
 };
 type ProjectDetail = {
   id: string;
+  /** The candidate (Party): their payments and invoices. */
+  partyId: string;
   candidateName: string;
   serviceName: string;
   assigneeId: string | null;
@@ -148,15 +151,18 @@ export function ProjectDetailClient({
   canAssign,
   opsUsers,
   qualifications,
+  canSeePayments = false,
 }: {
   project: ProjectDetail;
   canEdit: boolean;
   canAssign: boolean;
   opsUsers: UserLite[];
   qualifications: Option[];
+  /** The candidate's payments and GST invoices (their Ops person, Ops managers, Finance). */
+  canSeePayments?: boolean;
 }) {
   const router = useRouter();
-  const [tab, setTab] = useState<"checklist" | "history">("checklist");
+  const [tab, setTab] = useState<"checklist" | "payments" | "history">("checklist");
   const [busyId, setBusyId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
@@ -366,7 +372,7 @@ export function ProjectDetailClient({
 
       {/* Tabs */}
       <div className="flex gap-xs border-b border-outline-variant">
-        {(["checklist", "history"] as const).map((t) => (
+        {(canSeePayments ? (["checklist", "payments", "history"] as const) : (["checklist", "history"] as const)).map((t) => (
           <button
             key={t}
             onClick={() => setTab(t)}
@@ -455,6 +461,8 @@ export function ProjectDetailClient({
             </div>
           ))}
         </div>
+      ) : tab === "payments" && canSeePayments ? (
+        <TransactionsPanel url={`/api/invoices/party/${project.partyId}`} compact />
       ) : (
         <div className="rounded-xl border border-outline-variant bg-surface-container-lowest divide-y divide-outline-variant/60">
           {project.activities.length === 0 ? (

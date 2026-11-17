@@ -61,6 +61,7 @@ import {
   type CallOutcome,
 } from "@/lib/crm-outcome";
 import { dayKeyDiff, fromIstWallClock, istDayKey, toIstWallClock } from "@/lib/dates";
+import { TransactionsPanel } from "@/components/invoices/transactions-panel";
 
 export type PartyOpt = { id: string; label: string; phone: string | null };
 export type DetailMasters = {
@@ -109,6 +110,8 @@ export type DetailAccess = {
   canUnenroll: boolean;
   /** Has the Agreements grant — may send this lead an agreement for e-signature. */
   canSendAgreements: boolean;
+  /** May see the candidate's payments and download their invoices (Transactions tab). */
+  canSeeTransactions: boolean;
   userId: string;
 };
 
@@ -366,7 +369,7 @@ export function LeadDetail({
   referral: LeadReferralDTO;
 }) {
   const router = useRouter();
-  const [tab, setTab] = useState<"overview" | "tasks" | "whatsapp" | "instagram" | "history">("overview");
+  const [tab, setTab] = useState<"overview" | "tasks" | "transactions" | "whatsapp" | "instagram" | "history">("overview");
   const [comm, setComm] = useState<null | "email" | "whatsapp" | "call">(null);
   // The quality dialog: opened by the band, or forced by the rule (`required`) —
   // on arrival when the rating is overdue, or when the API refuses a stage
@@ -429,6 +432,20 @@ export function LeadDetail({
               </span>
             )}
           </button>
+          {access.canSeeTransactions && (
+            <button
+              type="button"
+              onClick={() => setTab("transactions")}
+              className={
+                "px-md h-9 text-label-sm font-semibold transition " +
+                (tab === "transactions"
+                  ? "bg-primary text-on-primary"
+                  : "bg-surface-container-lowest text-on-surface-variant hover:bg-surface-container-low")
+              }
+            >
+              Transactions
+            </button>
+          )}
           {access.canSeeWhatsApp && (
             <button
               type="button"
@@ -553,6 +570,10 @@ export function LeadDetail({
           reminders={taskReminders}
           onQualityRequired={requireQuality}
         />
+      )}
+
+      {tab === "transactions" && access.canSeeTransactions && (
+        <TransactionsPanel url={`/api/crm/leads/${lead.id}/transactions`} />
       )}
 
       {tab === "whatsapp" && access.canSeeWhatsApp && (

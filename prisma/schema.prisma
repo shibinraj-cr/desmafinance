@@ -198,6 +198,9 @@ model User {
   pcReceiptsRecorded    CommissionReceipt[]    @relation("CommissionReceiptRecordedBy")
   pcReceiptsReviewed    CommissionReceipt[]    @relation("CommissionReceiptReviewedBy")
   pcEnrollGrant         CommissionEnrollGrant? @relation("CommissionEnrollGrantUser")
+  // Candidate invoices
+  invoicesIssued        Invoice[]              @relation("InvoiceIssuedBy")
+  invoicesCancelled     Invoice[]              @relation("InvoiceCancelledBy")
 
   @@index([roleId])
 }
@@ -255,6 +258,8 @@ model Transaction {
   updatedAt   DateTime  @updatedAt
 
   pendingApprovals      PendingApproval[]          @relation("targetTransaction")
+  // GST invoices issued for this payment (a cancelled one stays, with its number).
+  invoices              Invoice[]
   collectionInstallment CollectionPlanInstallment? @relation("InstallmentTransaction")
   // Bank-statement lines reconciled against this ledger row.
   bankMatches           BankTransactionMatch[]
@@ -1295,6 +1300,15 @@ model Party {
   // conversion matrix on /marketing/lead-pulse/targets.
   assignedL2BdeId String?
   assignedL2Bde   User?            @relation(name: "PartyAssignedL2Bde", fields: [assignedL2BdeId], references: [id], onDelete: SetNull)
+  // Billing profile for candidate invoices. billingName is the name exactly
+  // as on the passport, kept apart from `name` (the working name, unique per
+  // group). billingState is an Indian state from GST_STATES and decides
+  // CGST + SGST vs IGST; billingCountry null is read as India.
+  billingName     String?
+  billingAddress  String?
+  billingPin      String?
+  billingState    String?
+  billingCountry  String?
   createdAt       DateTime         @default(now())
   updatedAt       DateTime         @updatedAt
 
@@ -1311,6 +1325,7 @@ model Party {
   opsProjects        OpsProject[]
   // Partner Commissions: the institution this party stands for, when it is one.
   commissionPartners CommissionPartner[]
+  invoices           Invoice[]
 
   @@unique([name, group])
   @@index([group])
@@ -7076,4 +7091,147 @@ model WaContactLog {
   sentAt    DateTime @default(now())
 
   @@index([phoneE164, sentAt])
+}
+
+// ── Candidate invoices ───────────────────────────────────────────────────────
+// One invoice per payment received into Axis, HDFC or Wio, issued by Finance
+// from the approved Revenue ledger row (src/lib/invoices/). Everything printed
+// about the companies (address, GSTIN, bank details, signature) is stored
+// here, never in code: the repository is public.
+
+model InvoiceEntity {
+  code          String   @id
+  /// "DESMA INTERNATIONAL PRIVATE LIMITED", printed in capitals under the logo.
+  legalName     String   @default("")
+  /// Lines under the name: address, phone/email/website, CIN/GSTN, PAN/IEC.
+  headerLines   String   @default("")
+  /// "For DESMA International Private Limited", above the signature.
+  signFor       String   @default("")
+  /// "Thank you for choosing DESMA International!"
+  thanksLine    String   @default("")
+  /// DIPL only. Its first two digits are the issuer's state for CGST/SGST vs IGST.
+  gstin         String?
+  /// SAC printed in the HSN column of domestic invoices, e.g. 998311.
+  sacCode       String   @default("")
+  /// Letter of Undertaking ARN, printed on export invoices.
+  lutArn        String?
+  /// Small print under the line: "Note: Exam Registration Fee … Payment is Non-Refundable".
+  note          String   @default("")
+  signatoryName String   @default("")
+  signaturePng  Bytes?
+  signatureMime String?
+  updatedById   String?
+  updatedAt     DateTime @updatedAt
+}
+
+/// Per invoicing bank: which company invoices its payments and the "Bank
+/// Account" block printed on them.
+model InvoiceBank {
+  /// The ledger payment mode: "Axis Bank" | "HDFC Bank" | "Wio Bank".
+  paymentMode String   @id
+  entityCode  String
+  /// Printed lines: account name, number, IFSC/IBAN, branch.
+  details     String   @default("")
+  /// Off = no invoices for payments into this bank.
+  isActive    Boolean  @default(true)
+  updatedById String?
+  updatedAt   DateTime @updatedAt
+}
+
+/// A number series: "DIPL-DOM" (D/DIPL), "DIPL-EXP" (E/DIPL), "DLLC-DOM"
+/// (D/DLLC, shared with Partner Commission invoices).
+model InvoiceSeries {
+  key         String   @id
+  /// "D/DIPL/": the year and running number follow.
+  prefix      String
+  /// "dash" → 26-27, "compact" → 2627.
+  fyStyle     String   @default("dash")
+  /// Digits in the running number: 0525 is 4.
+  padding     Int      @default(3)
+  /// The next number to use, e.g. "D/DIPL/26-27/0526", for continuing a series
+  /// raised outside DesGro. Only applies in its own financial year.
+  nextNumber  String?
+  updatedById String?
+  updatedAt   DateTime @updatedAt
+}
+
+/// One invoice per payment received. At most one live (status "issued")
+/// invoice per Transaction is enforced by the partial unique index
+/// "Invoice_transactionId_live_key".
+///
+/// WARNING: Prisma cannot express partial indexes, so it exists only in
+/// 20261117120000_candidate_invoices. `prisma migrate dev` will read it as
+/// drift and offer a migration that DROPs it. Remove that DROP and keep the
+/// index: it is the database's own guarantee against two live invoices for one
+/// payment.
+model Invoice {
+  id            String      @id @default(cuid())
+  /// "D/DIPL/26-27/0525". Unique across every series; a cancelled number is never reused.
+  number        String      @unique
+  seriesKey     String
+  /// Financial year the number belongs to, "26-27".
+  fy            String
+  seq           Int
+  /// "DOM" | "EXP".
+  kind          String
+  entityCode    String
+  /// "issued" | "cancelled".
+  status        String      @default("issued")
+  invoiceDate   DateTime    @db.Date
+  transactionId String
+  transaction   Transaction @relation(fields: [transactionId], references: [id], onDelete: Restrict)
+  partyId       String?
+  party         Party?      @relation(fields: [partyId], references: [id], onDelete: SetNull)
+  paymentMode   String
+  /// Printed currency: INR, AED, or the candidate's currency on an export invoice.
+  currency      String
+  /// In `currency`.
+  taxableAmount Decimal     @db.Decimal(14, 2)
+  cgst          Decimal     @default(0) @db.Decimal(14, 2)
+  sgst          Decimal     @default(0) @db.Decimal(14, 2)
+  igst          Decimal     @default(0) @db.Decimal(14, 2)
+  totalAmount   Decimal     @db.Decimal(14, 2)
+  /// The ledger row's amount when issued: the money received, in rupees.
+  receivedInr   Decimal     @db.Decimal(14, 2)
+  /// Rupees per one unit of `currency`; 1 for INR.
+  exchangeRate  Decimal     @default(1) @db.Decimal(14, 6)
+  billToName    String
+  billToAddress String
+  /// Domestic DIPL: "Kerala (32)". Null otherwise.
+  placeOfSupply String?
+  description   String
+  /// Everything else the PDF printed, as issued (company block, bank block,
+  /// note, signatory), so the register can show it without the PDF.
+  snapshot      Json
+  issuedById    String?
+  issuedBy      User?       @relation("InvoiceIssuedBy", fields: [issuedById], references: [id], onDelete: SetNull)
+  issuedAt      DateTime    @default(now())
+  cancelledAt   DateTime?
+  cancelledById String?
+  cancelledBy   User?       @relation("InvoiceCancelledBy", fields: [cancelledById], references: [id], onDelete: SetNull)
+  cancelReason  String?
+
+  files InvoiceFile[]
+
+  @@unique([seriesKey, fy, seq])
+  @@index([transactionId])
+  @@index([partyId])
+  @@index([invoiceDate])
+  @@index([status])
+}
+
+/// The stored PDF of an invoice. "original" is written once at issue and
+/// never changed; "cancelled" is the same file stamped CANCELLED. Kept out of
+/// the Invoice row so lists never load the bytes.
+model InvoiceFile {
+  id        String   @id @default(cuid())
+  invoiceId String
+  invoice   Invoice  @relation(fields: [invoiceId], references: [id], onDelete: Cascade)
+  /// "original" | "cancelled".
+  kind      String
+  bytes     Bytes
+  sha256    String
+  createdAt DateTime @default(now())
+
+  @@unique([invoiceId, kind])
 }

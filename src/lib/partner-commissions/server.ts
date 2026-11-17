@@ -8,6 +8,7 @@ import { verifyCategorySubItem } from "@/lib/master-data";
 import { flowFor, monthCodeFromDate } from "@/lib/catalog";
 import { todayIst } from "@/lib/lead-pulse-dates";
 import { badRequest, conflict, forbidden, notFound, unauthorized, unprocessable } from "@/lib/http-error";
+import { candidateInvoiceNumberTaken, candidateStemState, laterNumber, lockInvoiceStem, stemOfNumber } from "@/lib/invoices/numbering";
 import {
   LEDGER,
   MAX_INSTALLMENTS,
@@ -37,6 +38,7 @@ import {
   statusAfterApproval,
   statusAfterReturn,
   suggestInvoiceNumber,
+  fyLabel,
 } from "./logic";
 
 /**
@@ -414,13 +416,32 @@ export async function deleteEnrollment(a: PcAccess, id: string) {
 
 const QUEUED_WHERE = { status: "active", invoiceId: null, fullyPaidOn: { not: null } } satisfies Prisma.CommissionEnrollmentWhereInput;
 
-async function allInvoiceNumbers(): Promise<string[]> {
-  return (await prisma.commissionInvoice.findMany({ select: { number: true } })).map((i) => i.number);
+export async function suggestNumber(dateIso: string): Promise<string> {
+  return suggestNumberIn(prisma, await getSettings(), dateIso);
 }
 
-export async function suggestNumber(dateIso: string): Promise<string> {
-  const settings = await getSettings();
-  return suggestInvoiceNumber(settings.numberPrefix, dateIso, await allInvoiceNumbers(), settings.nextNumber);
+/**
+ * The next number, read through `db` (inside createInvoice's transaction, after
+ * the stem lock). D/DLLC is shared with candidate invoices for Wio payments:
+ * their numbers count as used and their series' floor applies here too.
+ */
+async function suggestNumberIn(db: Prisma.TransactionClient | typeof prisma, settings: CommissionSettings, dateIso: string): Promise<string> {
+  const stem = `${settings.numberPrefix}${fyLabel(dateIso)}/`;
+  const [own, candidate] = await Promise.all([
+    db.commissionInvoice.findMany({ select: { number: true } }).then((r) => r.map((i) => i.number)),
+    candidateStemState(db, stem),
+  ]);
+  const used = [...own, ...candidate.numbers];
+  const mine = suggestInvoiceNumber(settings.numberPrefix, dateIso, used, settings.nextNumber);
+  return candidate.floor ? laterNumber(mine, suggestInvoiceNumber(settings.numberPrefix, dateIso, used, candidate.floor)) : mine;
+}
+
+/** Inside a transaction: refuse a number a candidate invoice already holds (D/DLLC is shared). */
+async function assertNumberFreeOfCandidateInvoices(tx: Prisma.TransactionClient, number: string) {
+  await lockInvoiceStem(tx, stemOfNumber(number));
+  if (await candidateInvoiceNumberTaken(tx, number)) {
+    throw conflict(`Invoice number ${number} is already used by a candidate invoice. Pick another number.`, "number_taken");
+  }
 }
 
 /**
@@ -441,10 +462,19 @@ export async function createInvoice(opts: {
   if (ids.length === 0) throw badRequest("Pick at least one fully paid enrollment.");
   const partner = await prisma.commissionPartner.findUnique({ where: { id: opts.partnerId } });
   if (!partner) throw notFound("That partner no longer exists.");
-  const number = clean(opts.number) ?? (await suggestNumber(opts.invoiceDate));
-  if (number.length > 60) throw badRequest("That invoice number is too long.");
+  const typed = clean(opts.number);
+  if (typed && typed.length > 60) throw badRequest("That invoice number is too long.");
+  const settings = typed ? null : await getSettings();
+  // Picked inside the transaction, after the stem lock, so a candidate
+  // invoice issued in the meantime can't take the same number.
+  let number = typed ?? "";
   try {
     const invoice = await prisma.$transaction(async (tx) => {
+      if (typed) await assertNumberFreeOfCandidateInvoices(tx, typed);
+      else {
+        await lockInvoiceStem(tx, `${settings!.numberPrefix}${fyLabel(opts.invoiceDate)}/`);
+        number = await suggestNumberIn(tx, settings!, opts.invoiceDate);
+      }
       const ens = await tx.commissionEnrollment.findMany({
         where: { id: { in: ids }, partnerId: partner.id, ...QUEUED_WHERE },
         orderBy: [{ fullyPaidOn: "asc" }, { candidateName: "asc" }],
@@ -533,6 +563,7 @@ export async function updateInvoice(a: PcAccess, id: string, patch: InvoicePatch
   if (patch.amountWords !== undefined) data.amountWords = clean(patch.amountWords);
   try {
     await prisma.$transaction(async (tx) => {
+      if (typeof data.number === "string") await assertNumberFreeOfCandidateInvoices(tx, data.number);
       if (Object.keys(data).length) await tx.commissionInvoice.update({ where: { id }, data });
       for (const l of patch.lines ?? []) {
         const line = inv.lines.find((x) => x.id === l.id);
