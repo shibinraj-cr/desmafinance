@@ -169,6 +169,11 @@ describe("leadAssignedSkipReason", () => {
     expect(leadAssignedSkipReason({ ...all, isStudyAbroad: false })).toMatch(/L1 BDE/);
     expect(leadAssignedSkipReason({ ...all, isStudyAbroad: false, assigneeRole: "l2" })).toMatch(/Team Roster/);
   });
+  it("skips a lead a Study Abroad tab rule assigned, whatever service it still carries", () => {
+    expect(leadAssignedSkipReason({ ...send, studyAbroadRule: true })).toMatch(/Study Abroad campaign/);
+    expect(leadAssignedSkipReason({ ...send, studyAbroadRule: false })).toBeNull();
+    expect(leadAssignedSkipReason({ ...send, studyAbroadRule: true, candidateOptedOut: true })).toMatch(/opted out/);
+  });
   it("keeps the existing name exclusion", () => {
     expect(leadAssignedSkipReason({ ...send, agentDisplayName: "Dilna" })).toMatch(/excluded/);
   });

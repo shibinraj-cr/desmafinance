@@ -14,6 +14,7 @@ import { normalizePhone, emailKeyOf, computeDedupeKey, phoneMatchKeys } from "./
 import { resolveDefaultStatus } from "./crm-leads";
 import { getSheetLeadsDateFloor } from "./app-settings";
 import { qualificationFromForm } from "./crm-form-qualification";
+import { applySheetRoute, findSheetRoute, getSheetRoutes, type RouteOutcome, type SheetRoute } from "./crm-sheet-routes";
 import {
   recordReInquiry,
   resolveReInquiryContext,
@@ -203,12 +204,16 @@ export type IngestResult = {
   /** Rows older than the configured "import nothing before this" floor. */
   skippedBeforeFloor: number;
   errorRows: number;
+  /** Present when the tab has an auto-assign rule — what the rule did. See crm-sheet-routes.ts. */
+  routing?: RouteOutcome;
 };
 
 /**
  * Ingest a batch of spreadsheet rows for one source + campaign: map → dedupe on
  * email OR phone → create unassigned leads (source-stamped, original date
  * preserved) → write a timeline entry each. Idempotent via Lead.externalKey.
+ * When the tab has an auto-assign rule, the leads it touched then go to the
+ * rule's consultant (see applySheetRoute).
  */
 export async function ingestSheetLeads(opts: {
   sourceKey: string;
@@ -216,6 +221,8 @@ export async function ingestSheetLeads(opts: {
   rows: SheetRow[];
   /** Overrides the stored floor; omit to read it from settings. */
   dateFloor?: Date | null;
+  /** Overrides the stored tab rules; omit to read them from settings. */
+  routes?: SheetRoute[];
 }): Promise<IngestResult> {
   const config = SHEET_SOURCES[opts.sourceKey];
   if (!config) throw badRequest(`Unknown source "${opts.sourceKey}"`, "unknown_source");
@@ -381,6 +388,7 @@ export async function ingestSheetLeads(opts: {
   }
 
   let inserted = 0;
+  const createdIds: string[] = [];
   const createdByEmail = new Map<string, string>();
   const createdByPhone = new Map<string, string>();
   if (toCreate.length > 0) {
@@ -413,6 +421,7 @@ export async function ingestSheetLeads(opts: {
       });
     }
     for (const l of created) {
+      createdIds.push(l.id);
       if (l.emailKey && !createdByEmail.has(l.emailKey)) createdByEmail.set(l.emailKey, l.id);
       if (l.phoneE164 && !createdByPhone.has(l.phoneE164)) createdByPhone.set(l.phoneE164, l.id);
     }
@@ -436,6 +445,27 @@ export async function ingestSheetLeads(opts: {
     await notifySupervisorOfReInquiries(outcomes, ctx, process.env.NEXTAUTH_URL);
   }
 
+  // The tab's auto-assign rule, if it has one: new leads, and the existing leads
+  // candidates re-enquired on, go to the rule's consultant as decideRoute says.
+  // Each existing lead carries the stage it was in BEFORE this batch — its first
+  // re-enquiry outcome, since a later row for the same lead sees the revived
+  // stage. applySheetRoute never throws — a throw here would fail the batch and
+  // stall the tab.
+  let routing: RouteOutcome | undefined;
+  const route = findSheetRoute(opts.routes ?? (await getSheetRoutes()), config.key, opts.campaign);
+  if (route) {
+    const stageBefore = new Map<string, string>();
+    for (const o of outcomes) if (!stageBefore.has(o.leadId)) stageBefore.set(o.leadId, o.fromStatusCode);
+    routing = await applySheetRoute(
+      route,
+      [
+        ...createdIds.map((leadId) => ({ leadId, fromStatusCode: null })),
+        ...reInquiriesExisting.map((r) => ({ leadId: r.leadId, fromStatusCode: stageBefore.get(r.leadId) ?? null })),
+      ],
+      opts.campaign,
+    );
+  }
+
   return {
     received,
     inserted,
@@ -445,5 +475,6 @@ export async function ingestSheetLeads(opts: {
     skippedAlreadyKnown,
     skippedBeforeFloor,
     errorRows,
+    ...(routing ? { routing } : {}),
   };
 }

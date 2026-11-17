@@ -80,6 +80,7 @@ describe("buildSupervisorDigest", () => {
     ownerId: "bde1",
     revived: false,
     fromStatus: "Follow-Up",
+    fromStatusCode: "follow_up",
     inquiryCount: 2,
     source: "Meta",
     campaign: "GF | Kerala",

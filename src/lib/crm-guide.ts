@@ -117,6 +117,12 @@ export type GuideChange = { date: string; section: string; title: string; detail
  */
 export const CRM_GUIDE_CHANGES: GuideChange[] = [
   {
+    date: "2026-11-16",
+    section: "notifications",
+    title: "Some campaigns assign their leads to you directly",
+    detail: "An admin can send every lead from one Meta campaign straight to one consultant. If that's you, each lead arrives already assigned, with a **New lead assigned to you** notification and sometimes the service filled in. Contact it like any other new lead. When someone already in the CRM enquires again through that campaign, their old lead comes to you too, with a notification, if nobody was working it or it was in Re-marketing or Not Eligible. Its timeline shows the repeat enquiry and why it moved to you.",
+  },
+  {
     date: "2026-11-12",
     section: "handovers",
     title: "Instagram handovers",
@@ -618,7 +624,10 @@ export function crmGuideSections(f: GuideFacts, canSee: (href: string) => boolea
           kind: "table",
           head: ["Notification", "What to do"],
           rows: [
-            ["New lead assigned to you / Lead reassigned to you", `The lead is yours now — contact it within ${alarmAfter}.`],
+            [
+              "New lead assigned to you / Lead reassigned to you",
+              `The lead is yours now — contact it within ${alarmAfter}. It may come from a person or straight from a campaign an admin routed to you.`,
+            ],
             ["Re-marketing lead replied", `The candidate answered a re-marketing message and is back in ${FU}. Call them.`],
             ["Automated reminder sent to your candidate", "A task reminder went out because the task was still open. Follow up and complete it."],
             [`N leads moved to ${CENTRAL}`, "Leads passed a time limit and were taken off you (only when the limits are switched on)."],

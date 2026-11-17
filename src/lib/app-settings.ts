@@ -23,6 +23,13 @@ export const SHEET_LEADS_SECRET_KEY = "sheet_leads_webhook_secret";
 export const SHEET_LEADS_DATE_FLOOR_KEY = "sheet_leads_date_floor";
 
 /**
+ * JSON list of tab rules for the lead sheets: "every lead from this tab goes
+ * to this consultant". Parsed by `parseSheetRoutes` in crm-sheet-routes.ts;
+ * managed on CRM → Settings → Lead capture.
+ */
+export const SHEET_LEADS_ROUTES_KEY = "sheet_leads_routes";
+
+/**
  * User id of the CRM/marketing supervisor who is notified (and owns the
  * follow-up task for unassigned leads) whenever a re-inquiry is detected. Set on
  * the CRM → Settings page; falls back to the CRM_REINQUIRY_SUPERVISOR_USER_ID

@@ -69,6 +69,8 @@ export type ReInquiryOutcome = {
   ownerId: string | null;
   revived: boolean;
   fromStatus: string;
+  /** The stage code the lead was in before this re-inquiry (before any revive). */
+  fromStatusCode: string;
   inquiryCount: number;
   source: string | null;
   campaign: string | null;
@@ -192,7 +194,7 @@ export async function recordReInquiry(ev: ReInquiryEvent, ctx: ReInquiryContext)
 
   return {
     leadId: lead.id, leadName: lead.candidateName, ownerId: lead.assignedToId, revived,
-    fromStatus: lead.status.label, inquiryCount: newCount, source: ev.source ?? null, campaign: ev.campaign ?? null, occurredAt: when,
+    fromStatus: lead.status.label, fromStatusCode: lead.status.code, inquiryCount: newCount, source: ev.source ?? null, campaign: ev.campaign ?? null, occurredAt: when,
   };
 }
 
