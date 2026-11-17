@@ -584,7 +584,7 @@ function MetaBudgetCard({
             hero
           />
           <BudgetStat label="Qualified leads needed / mo" value={inr(meta.requiredQualifiedLeadsPerMonth)} />
-          <BudgetStat label="Cost / qualified lead" value={rupee(meta.costPerQualifiedLead ?? 0)} />
+          <BudgetStat label="Blended cost / qualified lead" value={rupee(meta.costPerQualifiedLead ?? 0)} />
           <BudgetStat
             label="vs current spend"
             value={

@@ -82,6 +82,8 @@ export const POST = withApiHandler(async (req: Request, { params }: { params: { 
     closedDate: d.closedDate ?? undefined,
     ownerUserId: d.ownerUserId ?? undefined,
     actorId: userId,
+    // Whoever may reverse an enrollment may also date one in an earlier month.
+    canBackdate: access.canUnenroll,
   });
   return NextResponse.json(result);
 });

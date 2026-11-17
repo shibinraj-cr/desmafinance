@@ -118,3 +118,54 @@ describe("enrollLead — idempotency (F-02)", () => {
     expect(statusFindFirst).toHaveBeenCalled();
   });
 });
+
+describe("enrollLead — enrollment date guard", () => {
+  // 17 Nov 2026, 11:30 IST.
+  const NOW = new Date("2026-11-17T06:00:00.000Z");
+  const followUp = () =>
+    enrolledLead({ partyId: null, pipelineId: null, status: { label: "Follow Up", code: "follow_up" } });
+
+  it("refuses a future date before any write", async () => {
+    vi.useFakeTimers({ now: NOW, toFake: ["Date"] });
+    try {
+      $transaction.mockClear();
+      draftCreate.mockClear();
+      leadFindUnique.mockResolvedValueOnce(followUp());
+      await expect(
+        enrollLead({ leadId: "lead1", actorId: "user1", closedDate: new Date("2026-11-18") }),
+      ).rejects.toMatchObject({ status: 400, code: "enroll_date_in_future" });
+      expect($transaction).not.toHaveBeenCalled();
+      expect(draftCreate).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("refuses last month's date after the first week unless the actor may back-date", async () => {
+    vi.useFakeTimers({ now: NOW, toFake: ["Date"] });
+    try {
+      leadFindUnique.mockResolvedValueOnce(followUp());
+      await expect(
+        enrollLead({ leadId: "lead1", actorId: "user1", closedDate: new Date("2026-10-31") }),
+      ).rejects.toMatchObject({ status: 400, code: "enroll_date_too_old" });
+
+      // A supervisor gets past the date check (and fails later only for lack of
+      // the full downstream mock chain, which is out of scope here).
+      leadFindUnique.mockResolvedValueOnce(followUp());
+      let rejection: unknown;
+      try {
+        await enrollLead({
+          leadId: "lead1",
+          actorId: "user1",
+          closedDate: new Date("2026-10-31"),
+          canBackdate: true,
+        });
+      } catch (e) {
+        rejection = e;
+      }
+      expect((rejection as { code?: string } | undefined)?.code).not.toMatch(/^enroll_date_/);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});
