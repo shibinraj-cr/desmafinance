@@ -40,8 +40,15 @@ export function isSameOwnerRevival(previousOwnerId: string | null, targetUserId:
 export async function assignLeadTo(
   leadId: string,
   targetUserId: string | null,
-  actorUserId: string,
-  opts: { centralPool?: boolean } = {},
+  /** Null when the system assigns (a lead sheet's tab rule), not a person. */
+  actorUserId: string | null,
+  opts: {
+    centralPool?: boolean;
+    /** Why the system made this assignment, appended to the timeline entry (e.g. a tab rule). */
+    via?: string;
+    /** Assigned by a Study Abroad tab rule: never send the nursing intro (see leadAssignedSkipReason). */
+    studyAbroadRule?: boolean;
+  } = {},
 ): Promise<LeadWithRels> {
   const existing = await prisma.lead.findUnique({
     where: { id: leadId },
@@ -142,7 +149,7 @@ export async function assignLeadTo(
     leadId: updated.id,
     actorId: actorUserId,
     type,
-    summary,
+    summary: opts.via ? `${summary} — ${opts.via}` : summary,
     metadata: {
       fromUserId: existing.assignedToId,
       toUserId: targetUserId,
@@ -176,6 +183,7 @@ export async function assignLeadTo(
       source: updated.source?.label,
       service: updated.service?.name,
       isStudyAbroad: updated.service?.isStudyAbroad,
+      studyAbroadRule: opts.studyAbroadRule,
       status: updated.status?.label,
       assignedAt: updated.assignedAt,
       agentDisplayName: updated.assignedTo?.leadPulseRole?.displayName,

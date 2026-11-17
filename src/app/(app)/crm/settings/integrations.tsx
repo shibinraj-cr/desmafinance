@@ -27,6 +27,13 @@ type Batch = {
   errorRows: number;
   createdAt: string;
 };
+type Route = { source: string; campaign: string; assigneeUserId: string; serviceId: string | null };
+type RouteOptions = {
+  bdes: { userId: string; displayName: string; role: string }[];
+  services: { id: string; name: string }[];
+  /** Tab names each source has sent, newest first. */
+  tabs: Record<string, string[]>;
+};
 type Data = {
   webhookUrl: string;
   secret: string | null;
@@ -37,6 +44,8 @@ type Data = {
   recentBatches: Batch[];
   rejected: Rejection | null;
   dateFloor: string | null;
+  routes: Route[];
+  routeOptions: RouteOptions;
 };
 
 const card = "bg-surface-container-lowest border border-outline-variant rounded-xl shadow-sm";
@@ -76,6 +85,8 @@ export function IntegrationsCard() {
   const [reveal, setReveal] = useState(false);
   const [showScript, setShowScript] = useState(false);
   const [copied, setCopied] = useState<string | null>(null);
+  const [draft, setDraft] = useState<Route>({ source: "meta", campaign: "", assigneeUserId: "", serviceId: null });
+  const [routeError, setRouteError] = useState<string | null>(null);
 
   async function load() {
     setLoading(true);
@@ -118,6 +129,48 @@ export function IntegrationsCard() {
     });
     setBusy(false);
     await load();
+  }
+
+  async function saveRoutes(routes: Route[]): Promise<boolean> {
+    setBusy(true);
+    setRouteError(null);
+    const r = await fetch("/api/crm/integrations", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ action: "set_routes", routes }),
+    });
+    setBusy(false);
+    if (!r.ok) {
+      const body = (await r.json().catch(() => null)) as { error?: string; message?: string } | null;
+      setRouteError(body?.message ?? body?.error ?? "Could not save the rule.");
+      return false;
+    }
+    await load();
+    return true;
+  }
+  async function addRoute() {
+    if (!data) return;
+    const campaign = draft.campaign.trim();
+    if (!campaign || !draft.assigneeUserId) {
+      setRouteError("Pick a tab and a consultant.");
+      return;
+    }
+    const who = data.routeOptions.bdes.find((b) => b.userId === draft.assigneeUserId)?.displayName ?? "this consultant";
+    if (
+      !confirm(
+        `From now on, every new lead from the tab "${campaign}" will be assigned to ${who}, and so will a repeat enquiry on a lead that has no active owner or was in Re-marketing or Not Eligible. Save?`,
+      )
+    )
+      return;
+    if (await saveRoutes([...data.routes, { ...draft, campaign }])) {
+      setDraft({ source: draft.source, campaign: "", assigneeUserId: "", serviceId: null });
+    }
+  }
+  async function removeRoute(i: number) {
+    if (!data) return;
+    const r = data.routes[i];
+    if (!confirm(`Stop auto-assigning leads from "${r.campaign}"? New leads from that tab will arrive unassigned.`)) return;
+    await saveRoutes(data.routes.filter((_, j) => j !== i));
   }
 
   function copy(text: string, what: string) {
@@ -295,6 +348,130 @@ export function IntegrationsCard() {
                 </button>
               )}
             </div>
+          </div>
+
+          {/* Auto-assign by tab */}
+          <div className="rounded-lg border border-outline-variant p-md space-y-sm">
+            <div>
+              <div className="text-label-sm text-on-surface font-semibold">Auto-assign by tab</div>
+              <p className="text-label-sm text-on-surface-variant mt-[2px]">
+                Every new lead from a listed tab is assigned to its consultant as soon as it arrives. If the candidate is
+                already in the CRM, their existing lead moves to the consultant when nobody owns it, when its owner is no
+                longer an active BDE, or when it was in Re-marketing or Not Eligible. Otherwise it stays with the BDE working
+                it. The service is only filled in where the lead has none.
+              </p>
+            </div>
+
+            {data.routes.length > 0 && (
+              <div className="rounded-lg border border-outline-variant overflow-x-auto">
+                <table className="w-full text-label-sm">
+                  <thead className="bg-surface-container-low text-on-surface-variant">
+                    <tr className="text-left">
+                      <th className="px-md py-xs">Source</th>
+                      <th className="px-md py-xs">Tab</th>
+                      <th className="px-md py-xs">Assign to</th>
+                      <th className="px-md py-xs">Service</th>
+                      <th className="px-md py-xs" />
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {data.routes.map((r, i) => {
+                      const bde = data.routeOptions.bdes.find((b) => b.userId === r.assigneeUserId);
+                      const svc = data.routeOptions.services.find((x) => x.id === r.serviceId);
+                      return (
+                        <tr key={r.source + "|" + r.campaign} className="border-t border-outline-variant/60">
+                          <td className="px-md py-xs font-mono">{r.source}</td>
+                          <td className="px-md py-xs break-words">{r.campaign}</td>
+                          <td className="px-md py-xs">
+                            {bde ? (
+                              bde.displayName
+                            ) : (
+                              <span className="text-error">Not an active L1/L2 any more — leads arrive unassigned</span>
+                            )}
+                          </td>
+                          <td className="px-md py-xs text-on-surface-variant">{r.serviceId ? (svc?.name ?? "Inactive service") : "—"}</td>
+                          <td className="px-md py-xs text-right">
+                            <button className={ghost} disabled={busy} onClick={() => void removeRoute(i)}>
+                              Remove
+                            </button>
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            )}
+
+            <div className="grid gap-sm sm:grid-cols-[7rem_1fr_12rem_10rem_auto] items-end">
+              <label className="text-label-sm text-on-surface-variant">
+                Source
+                <select
+                  className="mt-[2px] w-full h-9 px-xs rounded-lg border border-outline-variant bg-surface-container-lowest text-body-md"
+                  value={draft.source}
+                  onChange={(e) => setDraft({ ...draft, source: e.target.value })}
+                >
+                  {data.sources.map((s) => (
+                    <option key={s.key} value={s.key}>
+                      {s.key}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <label className="text-label-sm text-on-surface-variant">
+                Tab name
+                <input
+                  list="sheet-route-tabs"
+                  className="mt-[2px] w-full h-9 px-md rounded-lg border border-outline-variant bg-surface-container-lowest text-body-md"
+                  placeholder="Pick a tab or type its exact name"
+                  value={draft.campaign}
+                  onChange={(e) => setDraft({ ...draft, campaign: e.target.value })}
+                />
+                <datalist id="sheet-route-tabs">
+                  {(data.routeOptions.tabs[draft.source] ?? []).map((t) => (
+                    <option key={t} value={t} />
+                  ))}
+                </datalist>
+              </label>
+              <label className="text-label-sm text-on-surface-variant">
+                Assign to
+                <select
+                  className="mt-[2px] w-full h-9 px-xs rounded-lg border border-outline-variant bg-surface-container-lowest text-body-md"
+                  value={draft.assigneeUserId}
+                  onChange={(e) => setDraft({ ...draft, assigneeUserId: e.target.value })}
+                >
+                  <option value="">Choose consultant…</option>
+                  {data.routeOptions.bdes.map((b) => (
+                    <option key={b.userId} value={b.userId}>
+                      {b.displayName} ({b.role.toUpperCase()})
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <label className="text-label-sm text-on-surface-variant">
+                Service
+                <select
+                  className="mt-[2px] w-full h-9 px-xs rounded-lg border border-outline-variant bg-surface-container-lowest text-body-md"
+                  value={draft.serviceId ?? ""}
+                  onChange={(e) => setDraft({ ...draft, serviceId: e.target.value || null })}
+                >
+                  <option value="">Leave blank</option>
+                  {data.routeOptions.services.map((x) => (
+                    <option key={x.id} value={x.id}>
+                      {x.name}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <button className={primary} disabled={busy} onClick={() => void addRoute()}>
+                Add rule
+              </button>
+            </div>
+            <p className="text-label-sm text-on-surface-variant">
+              Tab names must match exactly; case and extra spaces are ignored. A rule only affects leads that arrive
+              after it is saved.
+            </p>
+            {routeError && <p className="text-label-sm text-error">{routeError}</p>}
           </div>
 
           {/* Apps Script */}

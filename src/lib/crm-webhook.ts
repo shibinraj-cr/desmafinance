@@ -272,6 +272,12 @@ export function leadAssignedSkipReason(opts: {
    */
   candidateOptedOut?: boolean | null;
   isStudyAbroad: boolean | null | undefined;
+  /**
+   * The system assigned this lead under a lead sheet's tab rule whose service is
+   * Study Abroad. The candidate enquired about study abroad even when the lead
+   * still carries an older (e.g. nursing) service, so this intro is wrong for them.
+   */
+  studyAbroadRule?: boolean | null;
   assigneeRole: string | null | undefined;
   /** `LeadPulseRole.sendAssignIntro`; only an explicit false skips. */
   assigneeIntroEnabled: boolean | null | undefined;
@@ -282,6 +288,9 @@ export function leadAssignedSkipReason(opts: {
   }
   if (opts.isStudyAbroad) {
     return "this lead's service is Study Abroad, which has its own separate intro (not this template)";
+  }
+  if (opts.studyAbroadRule) {
+    return "the candidate enquired through a Study Abroad campaign (auto-assign rule), which has its own separate intro (not this template)";
   }
   if (isIntroExcludedRole(opts.assigneeRole)) {
     return "the lead is assigned to an L1 BDE, and the automated intro only goes out for L2 consultants";
@@ -896,6 +905,8 @@ export async function enqueueLeadAssignedWebhook(opts: {
    * simply wrong, regardless of which consultant it lands on.
    */
   isStudyAbroad: boolean | null | undefined;
+  /** See `leadAssignedSkipReason`. */
+  studyAbroadRule?: boolean | null;
   status: string | null | undefined;
   assignedAt: Date | null | undefined;
   agentDisplayName: string | null | undefined;
