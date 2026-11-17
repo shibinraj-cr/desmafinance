@@ -26,6 +26,7 @@ vi.mock("@/lib/prisma", () => ({
     opsActionItem: { count: vi.fn() },
     crmLeadStatus: { findUnique: vi.fn() },
     crmReferralReward: { findUnique: vi.fn() },
+    crmEnrollment: { findFirst: vi.fn() },
     $transaction: vi.fn(),
   },
 }));
@@ -55,6 +56,7 @@ function makeTx() {
     opsProject: { delete: vi.fn(), update: vi.fn() },
     partyService: { delete: vi.fn() },
     crmReferralReward: { updateMany: vi.fn(async (_args: { where: { status: string } }) => ({ count: 0 })) },
+    crmEnrollment: { updateMany: vi.fn(async () => ({ count: 1 })) },
   };
 }
 
@@ -75,6 +77,8 @@ type Scenario = {
   close?: { id: string; entry: { id: string; closedWon: number } } | null;
   /** The referral reward this enrollment earned someone (null → not a referral). */
   reward?: { status: string; paidOn?: Date | null } | null;
+  /** The Enroll sheet's confirmation waiting for Finance (null → an older enrollment with a draft). */
+  enrollment?: { id: string; status: string; firstAmount: { toString: () => string } | null; transactionId: string | null } | null;
 };
 
 function setup(s: Scenario = {}): TxSpies {
@@ -89,7 +93,9 @@ function setup(s: Scenario = {}): TxSpies {
     opsCounts = { taskCount: 12, touched: 0, docs: 0, items: 0 },
     close = { id: "close1", entry: { id: "entry1", closedWon: 3 } },
     reward = null,
+    enrollment = null,
   } = s;
+  fn(prisma.crmEnrollment.findFirst).mockResolvedValue(enrollment);
 
   fn(prisma.lead.findUnique).mockResolvedValue({
     id: "lead1",
@@ -383,5 +389,34 @@ describe("unenrollLead — the referral reward it earned", () => {
     const res = await run();
     expect(tx.crmReferralReward.updateMany).not.toHaveBeenCalled();
     expect(res.rewardCancelled).toBe(false);
+  });
+});
+
+describe("unenrollLead — an enrollment made with the Enroll sheet", () => {
+  const PENDING = { id: "enr1", status: "pending", firstAmount: { toString: () => "34220" }, transactionId: null };
+
+  it("withdraws the enrollment waiting for Finance, and says so in the preview", async () => {
+    const tx = setup({ recordedDraftId: null, draftRow: null, enrollment: PENDING });
+    const plan = await previewUnenroll("lead1");
+    expect(plan.blockers).toEqual([]);
+    expect(plan.effects.join(" ")).toContain("waiting for Finance (first payment ₹34,220) is withdrawn");
+
+    await expect(run()).resolves.toMatchObject({ enrollmentWithdrawn: true });
+    expect(tx.crmEnrollment.updateMany).toHaveBeenCalledWith(
+      expect.objectContaining({ where: expect.objectContaining({ id: "enr1", transactionId: null }), data: { status: "withdrawn" } }),
+    );
+  });
+
+  it("refuses once Finance has verified it and posted the payment, and writes nothing", async () => {
+    const tx = setup({ recordedDraftId: null, draftRow: null, enrollment: { ...PENDING, status: "verified", transactionId: "tx1" } });
+    await expect(run()).rejects.toMatchObject({ status: 400, code: "enrollment_verified" });
+    expect(prisma.$transaction).not.toHaveBeenCalled();
+    expect(tx.crmEnrollment.updateMany).not.toHaveBeenCalled();
+  });
+
+  it("rolls back when Finance verifies it in the same moment", async () => {
+    const tx = setup({ recordedDraftId: null, draftRow: null, enrollment: PENDING });
+    tx.crmEnrollment.updateMany.mockResolvedValue({ count: 0 });
+    await expect(run()).rejects.toMatchObject({ status: 400, code: "enrollment_verified" });
   });
 });

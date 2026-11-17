@@ -21,6 +21,14 @@ const SCHEDULE_TONE: Record<string, [Tone, string]> = {
   due: ["neutral", "Due"],
   overdue: ["bad", "Overdue"],
   cancelled: ["neutral", "Cancelled"],
+  planned: ["neutral", "Planned"],
+};
+
+/** A payment not in the ledger yet: approval queue, or an enrollment Finance hasn't verified. */
+const PENDING_TONE: Record<string, [Tone, string]> = {
+  pending: ["warn", "Waiting for Finance"],
+  sent_back: ["bad", "Sent back to BDE"],
+  not_received: ["bad", "Finance: money not received"],
 };
 
 export function TransactionsPanel({ url, compact = false }: { url: string; compact?: boolean }) {
@@ -116,7 +124,7 @@ function Body({ d, compact }: { d: Loaded; compact: boolean }) {
                     <td className="px-md py-2 whitespace-nowrap">{p.paymentMode}</td>
                     {!compact && <td className="px-md py-2">—</td>}
                     <td className="px-md py-2">
-                      <Pill tone="warn">Waiting for Finance</Pill>
+                      <Pill tone={(PENDING_TONE[p.state] ?? PENDING_TONE.pending)[0]}>{(PENDING_TONE[p.state] ?? PENDING_TONE.pending)[1]}</Pill>
                     </td>
                   </tr>
                 ))}

@@ -96,6 +96,9 @@ export const MODULES: AppModule[] = [
       { href: "/finance/partner-commissions", label: "Partner Commissions", icon: "handshake", group: "MONEY IN" },
       // GST invoices for candidate payments into Axis / HDFC / Wio, issued from
       // the approved ledger row (src/lib/invoices/).
+      // New enrollments waiting for Finance to check the first payment against
+      // the bank and approve it into the ledger (src/lib/crm-enrollment.ts).
+      { href: "/finance/enrollments", label: "Verify enrollments", icon: "how_to_reg", group: "MONEY IN" },
       { href: "/finance/invoices", label: "Invoices", icon: "request_quote", group: "MONEY IN" },
       { href: "/finance/expenses", label: "Expenses", icon: "receipt_long", group: "MONEY OUT" },
       {

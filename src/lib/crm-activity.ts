@@ -46,6 +46,16 @@ export const CRM_ACTIVITY_TYPES = [
   // closed-won tick, the revenue draft and the operations project.
   "UNENROLLED",
   "REVENUE_DRAFTED",
+  // The enrollment confirmation's life with Finance (src/lib/crm-enrollment.ts):
+  // submitted, edited (by the BDE or Finance, with the changes), sent back,
+  // verified, money not received, and the sales head's call on a first payment
+  // under the minimum.
+  "ENROLLMENT_SUBMITTED",
+  "ENROLLMENT_EDITED",
+  "ENROLLMENT_SENT_BACK",
+  "ENROLLMENT_VERIFIED",
+  "ENROLLMENT_NOT_RECEIVED",
+  "ENROLLMENT_EXCEPTION",
   "OPS_PROJECT_CREATED",
   // Re-marketing nurturing campaign (src/lib/crm-remarketing.ts).
   "REMARKETING_STARTED",

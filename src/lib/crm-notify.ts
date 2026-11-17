@@ -174,3 +174,53 @@ export async function notifyUnownedBroadcastReply(opts: {
 export async function countUnreadCrmNotifications(userId: string): Promise<number> {
   return prisma.crmNotification.count({ where: { userId, readAt: null } }).catch(() => 0);
 }
+
+/**
+ * The sales heads: whoever may un-enroll a candidate and date an enrollment
+ * back (src/lib/crm-rbac.ts canUnenroll), minus system admins: active Lead
+ * Pulse supervisors and CRM admins (roles granted /crm/settings). They decide
+ * a first payment under the minimum and an enrollment Finance found no money
+ * for. With none set up, the system admins stand in, so the ask isn't lost.
+ */
+export async function salesHeadUserIds(): Promise<string[]> {
+  const heads = await prisma.user.findMany({
+    where: {
+      isActive: true,
+      OR: [{ leadPulseRole: { role: "supervisor", active: true } }, { roleRef: { pages: { has: "/crm/settings" } } }],
+    },
+    select: { id: true },
+  });
+  if (heads.length) return heads.map((u) => u.id);
+  const admins = await prisma.user.findMany({ where: { isActive: true, roleRef: { isAdmin: true } }, select: { id: true } });
+  return admins.map((u) => u.id);
+}
+
+/**
+ * Best-effort: tell people about an enrollment's progress (Finance sent it
+ * back, corrected it, verified it, found no money; a first payment needs the
+ * sales head). Never throws, and never pings the person who acted.
+ */
+export async function notifyEnrollment(opts: {
+  userIds: Array<string | null | undefined>;
+  actorUserId?: string | null;
+  leadId: string;
+  title: string;
+  body: string;
+}): Promise<void> {
+  try {
+    const to = Array.from(new Set(opts.userIds.filter((u): u is string => !!u && u !== opts.actorUserId)));
+    if (!to.length) return;
+    await prisma.crmNotification.createMany({
+      data: to.map((userId) => ({
+        userId,
+        kind: "enrollment",
+        title: opts.title,
+        body: opts.body,
+        linkUrl: `/crm/leads/${opts.leadId}`,
+        leadId: opts.leadId,
+      })),
+    });
+  } catch (e) {
+    console.error("[crm-notify] failed to write enrollment notification:", e);
+  }
+}

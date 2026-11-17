@@ -7,7 +7,12 @@
  *
  * Facts, per BDE per month:
  *   - enrolled   — closed_won pipelines they own, closedDate in the month,
- *                  summed by service weight (same as the L2 targets matrix);
+ *                  summed by service weight (same as the L2 targets matrix),
+ *                  that Finance verified by the 7th of the next month. A deal
+ *                  enrolled before verification existed has no confirmation
+ *                  and counts as it always did (crm-enroll-confirm.ts
+ *                  incentiveStanding). The rest are reported, not counted:
+ *                  awaiting Finance, verified late (an adjustment), unverified;
  *   - fastCloses — of those, Enroll clicked within 48h of the last assignment
  *                  before it (from LeadActivity ENROLLED / ASSIGNED / REASSIGNED);
  *   - referrals  — of those, source Candidate Referral on a lead they created.
@@ -17,6 +22,7 @@ import { monthBounds } from "./lead-pulse-metrics";
 import { toPrismaDate } from "./lead-pulse-dates";
 import { getMonthlyTargetByBde } from "./lead-pulse-crm-metrics";
 import { CANDIDATE_REFERRAL_SOURCE_CODE } from "./crm-rbac";
+import { incentiveCutoff, incentiveStanding } from "./crm-enroll-confirm";
 import { closedMonthLine, incentiveCard, type IncentiveCardView } from "./crm-incentive-card";
 import {
   NO_BONUSES,
@@ -94,6 +100,12 @@ export async function getBdeMonthFacts(year: number, month: number, userIds: str
         sourceId: true,
         service: { select: { weight: true } },
         leadLink: { select: { id: true, createdById: true, assignedAt: true, createdAt: true } },
+        enrollments: {
+          where: { status: { not: "withdrawn" } },
+          orderBy: { createdAt: "desc" },
+          take: 1,
+          select: { status: true, verifiedAt: true },
+        },
       },
     }),
     prisma.leadPulseSource.findUnique({ where: { code: CANDIDATE_REFERRAL_SOURCE_CODE }, select: { id: true } }),
@@ -117,10 +129,19 @@ export async function getBdeMonthFacts(year: number, month: number, userIds: str
     }
   }
 
+  const cutoff = incentiveCutoff(year, month);
+  const now = new Date();
   const out = new Map<string, BdeMonthFacts>();
   for (const p of pipelines) {
-    const f = out.get(p.userId) ?? { enrolled: 0, fastCloses: 0, referrals: 0 };
-    f.enrolled = round1(f.enrolled + (p.service?.weight ?? 1));
+    const f = out.get(p.userId) ?? { enrolled: 0, fastCloses: 0, referrals: 0, awaitingFinance: 0, verifiedLate: 0, unverified: 0 };
+    out.set(p.userId, f);
+    const weight = p.service?.weight ?? 1;
+    const standing = incentiveStanding(p.enrollments[0] ?? null, cutoff, now);
+    if (standing === "awaiting") f.awaitingFinance = round1((f.awaitingFinance ?? 0) + weight);
+    if (standing === "late") f.verifiedLate = round1((f.verifiedLate ?? 0) + weight);
+    if (standing === "missed") f.unverified = round1((f.unverified ?? 0) + weight);
+    if (standing !== "counted") continue;
+    f.enrolled = round1(f.enrolled + weight);
     const lead = p.leadLink;
     if (lead) {
       const clickedAt = enrolledAt.get(lead.id);
@@ -128,7 +149,6 @@ export async function getBdeMonthFacts(year: number, month: number, userIds: str
       if (clickedAt && isFastClose({ enrolledAt: clickedAt, assignedAts: assigned, leadCreatedAt: lead.createdAt })) f.fastCloses += 1;
       if (referralSource && p.sourceId === referralSource.id && lead.createdById === p.userId) f.referrals += 1;
     }
-    out.set(p.userId, f);
   }
   return out;
 }

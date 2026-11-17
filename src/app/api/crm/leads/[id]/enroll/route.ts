@@ -5,7 +5,8 @@ import { withApiHandler } from "@/lib/api";
 import { unauthorized, forbidden, notFound, unprocessable } from "@/lib/http-error";
 import { getCurrentUserAndPermissions } from "@/lib/permissions";
 import { getCrmAccess, canEditLead } from "@/lib/crm-rbac";
-import { enrollLead } from "@/lib/crm-enroll";
+import { enrollLead, findCandidateParty } from "@/lib/crm-enroll";
+import { EnrollConfirmSchema } from "@/lib/crm-enroll-confirm";
 import { recordLeadActivity } from "@/lib/crm-activity";
 import { QualityInputSchema, resolveQualityChange } from "@/lib/crm-lead-quality-data";
 import { QUALITY_GATE_MESSAGE, QUALITY_REQUIRED_CODE, qualityGate } from "@/lib/crm-lead-quality";
@@ -26,6 +27,11 @@ const Schema = z.object({
   // Enrolling closes the lead, so an unrated one is rated in the same step
   // (see qualityGate in crm-lead-quality.ts).
   quality: QualityInputSchema.optional(),
+  // The Enroll sheet (src/lib/crm-enroll-confirm.ts): passport name, where
+  // they live, the total, the first payment and the balance plan. Older
+  // clients don't send it; their enrollment waits for Finance without payment
+  // details.
+  confirm: EnrollConfirmSchema.optional().nullable(),
 });
 
 export const POST = withApiHandler(async (req: Request, { params }: { params: { id: string } }) => {
@@ -84,6 +90,60 @@ export const POST = withApiHandler(async (req: Request, { params }: { params: { 
     actorId: userId,
     // Whoever may reverse an enrollment may also date one in an earlier month.
     canBackdate: access.canUnenroll,
+    confirm: d.confirm ?? null,
   });
   return NextResponse.json(result);
+});
+
+// GET — what the Enroll sheet shows before submitting: the candidate record
+// this lead will be linked to (and why), so "same name, different person" is
+// caught before it happens, and that candidate's billing details to prefill.
+export const GET = withApiHandler(async (_req: Request, { params }: { params: { id: string } }) => {
+  const { userId, perms } = await getCurrentUserAndPermissions();
+  if (!userId || !perms) throw unauthorized();
+  const access = await getCrmAccess(userId, perms);
+  const lead = await prisma.lead.findUnique({
+    where: { id: params.id },
+    select: { id: true, assignedToId: true, partyId: true, email: true, phone: true, candidateName: true },
+  });
+  if (!lead) throw notFound();
+  if (!canEditLead(access, lead, userId)) throw forbidden();
+  const match = await findCandidateParty(prisma, lead);
+  const party = match
+    ? await prisma.party.findUnique({
+        where: { id: match.id },
+        select: {
+          name: true,
+          email: true,
+          phone: true,
+          billingName: true,
+          billingAddress: true,
+          billingPin: true,
+          billingState: true,
+          billingCountry: true,
+          partyServices: { select: { service: { select: { name: true } } } },
+        },
+      })
+    : null;
+  return NextResponse.json({
+    match:
+      match && party
+        ? {
+            by: match.by,
+            name: party.name,
+            email: party.email,
+            phone: party.phone,
+            services: party.partyServices.map((s) => s.service.name),
+          }
+        : null,
+    billing: party
+      ? {
+          name: party.billingName,
+          address: party.billingAddress,
+          pin: party.billingPin,
+          state: party.billingState,
+          country: party.billingCountry,
+        }
+      : null,
+  });
 });

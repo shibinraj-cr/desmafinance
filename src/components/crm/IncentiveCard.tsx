@@ -218,6 +218,15 @@ export function IncentiveCard({ view, closedLine }: { view: IncentiveCardView; c
             </p>
           )}
 
+          {view.awaiting && (
+            <p className="flex gap-sm rounded-lg bg-surface-container-low p-sm text-body-md text-on-surface">
+              <Icon name="hourglass_top" className="text-on-surface-variant" />
+              <span>
+                <Rich text={view.awaiting} />
+              </span>
+            </p>
+          )}
+
           {view.next &&
             (view.belowSlabs ? (
               <p className="flex gap-sm rounded-lg bg-amber-50 p-sm text-body-md text-on-surface">

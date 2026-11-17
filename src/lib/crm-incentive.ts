@@ -47,7 +47,18 @@ export type MonthBonuses = { targetBonus: number; fastCloseBonus: number; referr
 export const NO_BONUSES: MonthBonuses = { targetBonus: 0, fastCloseBonus: 0, referralBonus: 0 };
 
 /** One BDE's month: weighted enrolments, and the counts the bonuses pay on. */
-export type BdeMonthFacts = { enrolled: number; fastCloses: number; referrals: number };
+export type BdeMonthFacts = {
+  /** Enrolments that count: verified by Finance by the cut-off (or enrolled before verification existed), by service weight. */
+  enrolled: number;
+  fastCloses: number;
+  referrals: number;
+  /** Enrolments still waiting for Finance to verify, before the cut-off: they count once verified. */
+  awaitingFinance?: number;
+  /** Verified after the cut-off: paid as an adjustment, not in this month. */
+  verifiedLate?: number;
+  /** Still unverified after the cut-off. */
+  unverified?: number;
+};
 
 // ── Slabs ────────────────────────────────────────────────────────────────────
 

@@ -329,6 +329,17 @@ export function IncentiveSheet({
                   <td className="px-[10px] py-[6px]">{r.target || "—"}</td>
                   <td className="px-[10px] py-[6px] whitespace-nowrap">
                     {r.facts.enrolled} · <span style={{ color: "var(--lp-cyan)" }}>{rupees(pay.total)}</span>
+                    {(r.facts.awaitingFinance || r.facts.verifiedLate || r.facts.unverified) ? (
+                      <span className="block text-[11px]" style={muted}>
+                        {[
+                          r.facts.awaitingFinance ? `+${r.facts.awaitingFinance} waiting for Finance` : null,
+                          r.facts.verifiedLate ? `${r.facts.verifiedLate} verified late (adjustment)` : null,
+                          r.facts.unverified ? `${r.facts.unverified} never verified` : null,
+                        ]
+                          .filter(Boolean)
+                          .join(" · ")}
+                      </span>
+                    ) : null}
                   </td>
                   <td className="px-[10px] py-[6px]">
                     <input

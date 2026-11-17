@@ -26,6 +26,7 @@ import { UNCONTACTED_AFTER_MINUTES, UNCONTACTED_REMIND_EVERY_MINUTES } from "./c
 import { CONVERSION_TARGET_PCT, FIRST_RESPONSE_FAST_HOURS, RESPONSE_SLA_HOURS, SCORE_BANDS, SCORE_WEIGHTS } from "./crm-score";
 import { BACKDATE_DAYS } from "./lead-pulse-dates";
 import { ENROLL_PREVIOUS_MONTH_OPEN_UNTIL_DAY } from "./crm-enroll-date";
+import { ENROLL_BANKS, ENROLLMENT_STATUS_LABEL, INCENTIVE_VERIFY_BY_DAY, MIN_FIRST_PAYMENT } from "./crm-enroll-confirm";
 import { SATURDAY_CUTOFF_MINUTES, WEEKDAY_CUTOFF_MINUTES } from "./crm-cutoff";
 import { HANDOVER_REJECT_REASONS } from "./crm-handover";
 import { REFERRAL_LINK_SOURCE_LABEL, REFERRAL_REWARD_AMOUNT } from "./crm-referral-link";
@@ -135,6 +136,18 @@ export type GuideChange = { date: string; section: string; title: string; detail
  * is the GuideSection id it updates (drives the "Updated" pill).
  */
 export const CRM_GUIDE_CHANGES: GuideChange[] = [
+  {
+    date: "2026-11-17",
+    section: "deal-enroll",
+    title: "Enroll now asks for the payment",
+    detail: `**Enroll** opens a short sheet: the name as on the passport, the total, where the candidate lives, then the first payment (amount, the day it landed, the account, the UTR, who paid) and the balance plan. The enrollment date is the day the money landed. A first payment under ${rupees(MIN_FIRST_PAYMENT)} needs your sales head's approval. Finance checks the payment against the bank: until then the lead shows **${ENROLLMENT_STATUS_LABEL.pending}**. If Finance sends it back, fix it on the Deal card and send it again.`,
+  },
+  {
+    date: "2026-11-17",
+    section: "incentive",
+    title: "Your incentive counts verified enrolments",
+    detail: `An enrolment counts toward your incentive once Finance verifies its payment, by the ${ordinal(INCENTIVE_VERIFY_BY_DAY)} of the next month. My Day shows how many are still waiting. One verified later is paid as an adjustment.`,
+  },
   {
     date: "2026-11-17",
     section: "deal-enroll",
@@ -546,7 +559,7 @@ export function crmGuideSections(f: GuideFacts, canSee: (href: string) => boolea
         {
           kind: "tips",
           items: [
-            "An enrolment counts when you click **Enroll** on the lead, which you only do once payment is received. A half-weight service counts 0.5.",
+            `An enrolment counts once Finance verifies its payment, by the ${ordinal(INCENTIVE_VERIFY_BY_DAY)} of the next month. Until then My Day shows it as waiting for Finance. One verified after that is paid as an adjustment. A half-weight service counts 0.5.`,
             `When Marketing Admin sets them, there are bonuses on top: for reaching your target, for each enrolment closed within ${FAST_CLOSE_HOURS} hours of assignment, and for each of your own candidate referrals that enrols.`,
             "Everyone's enrolments count toward the team target, but you share the pool only once you reach your own minimum. For the quarter, your minimum is your three monthly minimums added up.",
           ],
@@ -1027,9 +1040,21 @@ export function crmGuideSections(f: GuideFacts, canSee: (href: string) => boolea
           kind: "steps",
           title: "Enroll",
           items: [
-            "Click **Enroll** on the Deal card.",
-            `Check **Service**, **Expected value (₹)** and **Enrollment date**. The date is the day the candidate paid, and it decides which month the enrollment counts in. It can't be in the future. You can date it back to the 1st of this month, or into last month until the ${ordinal(ENROLL_PREVIOUS_MONTH_OPEN_UNTIL_DAY)}. Rate quality if asked.`,
-            "Click **Enroll**. Finance receives a revenue draft to approve (you don't approve revenue), and an operations project starts if the service has one.",
+            "Click **Enroll** on the Deal card. A short sheet opens.",
+            "**Who and what**: the service, the **Name as on the passport** (exactly as printed: it goes on the invoice), the total the candidate pays with GST, and the country and state they live in. The sheet shows which existing candidate it will link to: if it says **same name only**, check it is the same person. Rate quality if asked.",
+            `**First payment**: the amount, the **Date the money landed**, the account it went into (${ENROLL_BANKS.join(", ")} or Other), the **UTR** from the payment screenshot, and who paid. The date is the enrollment date and decides which month it counts in. It can't be in the future. You can date it back to the 1st of this month, or into last month until the ${ordinal(ENROLL_PREVIOUS_MONTH_OPEN_UNTIL_DAY)}.`,
+            "**Balance plan**: click **1**, **2** or **3 instalments** to split the balance evenly, then change any date or amount.",
+            "Check the summary and click **Confirm and enroll**. An operations project starts if the service has one.",
+          ],
+        },
+        {
+          kind: "steps",
+          title: "Finance checks the payment",
+          items: [
+            `Until Finance has checked the payment against the bank, the Deal card shows **Enrolled · ${ENROLLMENT_STATUS_LABEL.pending}**. You can still **Edit details**.`,
+            `If Finance sends it back, the card shows **${ENROLLMENT_STATUS_LABEL.sent_back}** with Finance's note, and you get a notification. Click **Fix and send again**.`,
+            "If Finance corrects something itself, you get a notification saying what changed.",
+            `Once Finance approves it, the card shows **${ENROLLMENT_STATUS_LABEL.verified}**: the payment is in the books, the balance plan is the candidate's instalment plan, and the invoice is usually issued with it.`,
           ],
         },
         {
@@ -1051,6 +1076,8 @@ export function crmGuideSections(f: GuideFacts, canSee: (href: string) => boolea
           kind: "warn",
           items: [
             "The lead's **Source** must be set before you can set a deal or enroll.",
+            `No money, no enrollment: the first payment must be at least ${rupees(MIN_FIRST_PAYMENT)}. Below that, your sales head must approve it on the lead before Finance can verify it.`,
+            `If Finance finds no money, the card shows **${ENROLLMENT_STATUS_LABEL.not_received}** and your sales head decides whether to un-enroll. If the candidate did pay, fix the UTR, date or account and send it again.`,
             "Enrolled by mistake? You can't undo it yourself — ask an admin or supervisor to **Un-enroll** it.",
             "Need an older enrollment date? Ask an admin or your sales head to enroll the candidate.",
           ],
@@ -1539,6 +1566,20 @@ export function crmGuideQuiz(f: GuideFacts): GuideQuizQuestion[] {
         "Nothing until the month ends",
       ],
       "The highest slab you reach pays on every enrolment in the month. My Day shows it as your provisional incentive; Finance confirms it after the month ends.",
+    ),
+    q(
+      "enroll-min-first-payment",
+      `A candidate wants to enroll today but can only pay ${rupees(MIN_FIRST_PAYMENT / 2)} now. What happens?`,
+      [`You can enroll them, but your sales head must approve the smaller first payment before Finance can verify it`],
+      ["Enroll them as usual: any amount is fine", "You can't enroll them until they pay the full package", "Enroll them with a first payment of ₹0 and add the money later"],
+      `No money, no enrollment: the first payment must be at least ${rupees(MIN_FIRST_PAYMENT)}. Under that, the sales head decides.`,
+    ),
+    q(
+      "enroll-incentive-verified",
+      "When does an enrolment count towards your incentive?",
+      [`Once Finance verifies its payment, by the ${ordinal(INCENTIVE_VERIFY_BY_DAY)} of the next month`],
+      ["As soon as you click Enroll", "Only when the candidate has paid the full package", "When the operations project is finished"],
+      `The enrolment counts in your numbers from the day the money landed, but the incentive waits for Finance. One verified after the ${ordinal(INCENTIVE_VERIFY_BY_DAY)} is paid as an adjustment.`,
     ),
   ];
 }

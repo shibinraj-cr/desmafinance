@@ -20,7 +20,10 @@ import { MultiSelect } from "@/components/MultiSelect";
 import { LeadSearchPicker, type LeadPick } from "@/components/crm/LeadSearchPicker";
 import { StatusPill, TemperaturePill, type StatusOpt, type Opt, type BdeOpt } from "../client";
 import { EnrollCelebration } from "@/components/EnrollCelebration";
-import { earliestEnrollDate, enrollDateMessage, enrollDateProblem, formatEnrollDate } from "@/lib/crm-enroll-date";
+import { EnrollSheet } from "@/components/crm/EnrollSheet";
+import type { EnrollmentDTO } from "@/lib/crm-enrollment";
+import { ENROLLMENT_STATUS_LABEL, MIN_FIRST_PAYMENT } from "@/lib/crm-enroll-confirm";
+import { formatEnrollDate } from "@/lib/crm-enroll-date";
 import { NextStepDialog, type NextStepPayload } from "@/components/crm/NextStepDialog";
 import { TaskReminderFields, type TaskReminderPreviewDTO } from "@/components/crm/TaskReminderFields";
 import { reminderStatusLabel, type TaskReminderChannel } from "@/lib/crm-task-reminders";
@@ -204,6 +207,12 @@ const ACTIVITY_ICON: Record<string, string> = {
   UNENROLLED: "undo",
   REFERRAL_REWARD: "card_giftcard",
   REVENUE_DRAFTED: "request_quote",
+  ENROLLMENT_SUBMITTED: "send_money",
+  ENROLLMENT_EDITED: "edit_note",
+  ENROLLMENT_SENT_BACK: "undo",
+  ENROLLMENT_VERIFIED: "task_alt",
+  ENROLLMENT_NOT_RECEIVED: "money_off",
+  ENROLLMENT_EXCEPTION: "gavel",
   AD_REFERRAL: "campaign",
 };
 
@@ -354,6 +363,7 @@ export function LeadDetail({
   studyAbroad,
   taskReminders,
   referral,
+  enrollment = null,
 }: {
   lead: LeadRow;
   notes: NoteRow[];
@@ -369,6 +379,8 @@ export function LeadDetail({
   studyAbroad: { eligible: boolean; alreadySent: boolean };
   taskReminders: TaskReminderPreviewDTO;
   referral: LeadReferralDTO;
+  /** The enrollment confirmation and where Finance is with it (src/lib/crm-enrollment.ts). */
+  enrollment?: EnrollmentDTO | null;
 }) {
   const router = useRouter();
   const [tab, setTab] = useState<"overview" | "tasks" | "transactions" | "whatsapp" | "instagram" | "history">("overview");
@@ -543,6 +555,7 @@ export function LeadDetail({
                 canEdit={canEdit}
                 canReEnroll={access.canReEnroll}
                 canUnenroll={access.canUnenroll}
+                enrollment={enrollment}
               />
               <AssignmentCard lead={lead} masters={masters} canAssign={access.canAssign} />
               <LeadInfoCard
@@ -1708,6 +1721,7 @@ function DealCard({
   canEdit,
   canReEnroll,
   canUnenroll,
+  enrollment,
 }: {
   lead: LeadRow;
   masters: DetailMasters;
@@ -1717,9 +1731,10 @@ function DealCard({
   canReEnroll: boolean;
   /** Admin / supervisor / CRM-admin — may undo an accidental enrollment. */
   canUnenroll: boolean;
+  enrollment: EnrollmentDTO | null;
 }) {
   const router = useRouter();
-  const [modal, setModal] = useState<null | "deal" | "enroll">(null);
+  const [modal, setModal] = useState<null | "deal" | "enroll" | "fix">(null);
   const [reopenOpen, setReopenOpen] = useState(false);
   const [unenrollOpen, setUnenrollOpen] = useState(false);
   const [celebrateName, setCelebrateName] = useState<string | null>(null);
@@ -1777,7 +1792,7 @@ function DealCard({
               <span className="material-symbols-outlined" style={{ fontSize: 18 }}>
                 verified
               </span>
-              Enrolled
+              {enrollment ? `Enrolled · ${ENROLLMENT_STATUS_LABEL[enrollment.status]}` : "Enrolled"}
             </span>
           ) : (
             <button type="button" className={primaryBtn + " h-9"} onClick={() => setModal("enroll")}>
@@ -1785,6 +1800,16 @@ function DealCard({
             </button>
           )}
         </div>
+      )}
+
+      {isEnrolled && enrollment && (
+        <EnrollmentStatusPanel
+          enrollment={enrollment}
+          canEdit={canEdit}
+          canDecide={canUnenroll}
+          onFix={() => setModal("fix")}
+          onChanged={() => router.refresh()}
+        />
       )}
 
       {/* Post-enrollment actions. */}
@@ -1823,17 +1848,36 @@ function DealCard({
         </div>
       )}
 
-      {modal && (
-        <DealModal
+      {modal === "deal" && <DealModal lead={lead} masters={masters} onClose={() => setModal(null)} />}
+      {modal === "enroll" && (
+        <EnrollFlow
           lead={lead}
           masters={masters}
           userId={userId}
-          mode={modal}
           canBackdate={canUnenroll}
           onClose={() => setModal(null)}
           onEnrolled={(name) => {
             setModal(null);
             setCelebrateName(name);
+          }}
+        />
+      )}
+      {modal === "fix" && enrollment && (
+        <EnrollSheet
+          mode="edit"
+          leadId={lead.id}
+          candidateName={lead.candidateName}
+          leadCountry={lead.country}
+          services={masters.services}
+          serviceId={lead.service?.id ?? null}
+          expectedValue={lead.expectedValue}
+          canBackdate={canUnenroll}
+          initial={enrollment.fields}
+          financeNote={enrollment.status === "verified" ? null : enrollment.financeNote}
+          onClose={() => setModal(null)}
+          onDone={() => {
+            setModal(null);
+            router.refresh();
           }}
         />
       )}
@@ -2072,76 +2116,32 @@ function UnenrollModal({
   );
 }
 
-function DealModal({
-  lead,
-  masters,
-  userId,
-  mode,
-  canBackdate,
-  onClose,
-  onEnrolled,
-}: {
-  lead: LeadRow;
-  masters: DetailMasters;
-  userId: string;
-  mode: "deal" | "enroll";
-  /** May date an enrollment before the normal window (see crm-enroll-date.ts). */
-  canBackdate: boolean;
-  onClose: () => void;
-  /** Fired on a successful enroll — hands the candidate name to the celebration. */
-  onEnrolled?: (name: string) => void;
-}) {
+function DealModal({ lead, masters, onClose }: { lead: LeadRow; masters: DetailMasters; onClose: () => void }) {
   const router = useRouter();
   const l2Bdes = masters.bdes.filter((b) => b.role === "l2");
   const assigneeIsL2 = !!lead.assignedTo && l2Bdes.some((b) => b.userId === lead.assignedTo!.id);
   const [serviceId, setServiceId] = useState(lead.service?.id ?? "");
   const [value, setValue] = useState(lead.expectedValue != null ? String(lead.expectedValue) : "");
   const [closeDate, setCloseDate] = useState(lead.expectedCloseDate ? lead.expectedCloseDate.slice(0, 10) : "");
-  // Enroll: the date the close counts against in the CRM metrics. Defaults to
-  // the lead's expected close date when it's already set and inside the
-  // allowed window (a month-end deal keyed the next morning dates back to when
-  // it closed), else today (IST). Never defaults to a date the server refuses.
-  const todayIst = new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Kolkata" }).format(new Date());
-  const earliestEnroll = canBackdate ? undefined : earliestEnrollDate(todayIst);
-  const expClose = lead.expectedCloseDate ? lead.expectedCloseDate.slice(0, 10) : "";
-  const [enrollDate, setEnrollDate] = useState(
-    expClose && !enrollDateProblem(expClose, todayIst, { canBackdate }) ? expClose : todayIst,
-  );
   const [ownerId, setOwnerId] = useState(assigneeIsL2 ? lead.assignedTo!.id : "");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  // Enrolling closes the lead, so an unrated one is rated here too.
-  const [quality, setQuality] = useState<QualityDraft>(() => qualityDraftFrom(lead.quality));
-  const qualityAsk =
-    mode === "enroll"
-      ? qualityGate(qualitySubjectOf(lead), { actorId: userId, now: new Date(), nextStage: { code: "enrolled", kind: "won" } })
-      : null;
 
   async function submit() {
     setError(null);
     if (!serviceId) return setError("Pick a service.");
     if (!(Number(value) > 0)) return setError("Enter an expected value.");
-    if (mode === "deal" && !closeDate) return setError("Pick an expected close date.");
-    if (mode === "enroll" && !enrollDate) return setError("Pick the enrollment date.");
-    const dateProblem = mode === "enroll" ? enrollDateProblem(enrollDate, todayIst, { canBackdate }) : null;
-    if (dateProblem) return setError(enrollDateMessage(dateProblem, todayIst));
+    if (!closeDate) return setError("Pick an expected close date.");
     if (!assigneeIsL2 && !ownerId) return setError("Choose an L2 BDE as the deal owner.");
-    const qualityProblem = qualityAsk ? qualityDraftError(quality) : null;
-    if (qualityProblem) return setError(qualityProblem);
     setBusy(true);
-    const res = await fetch(`/api/crm/leads/${lead.id}/${mode === "enroll" ? "enroll" : "deal"}`, {
+    const res = await fetch(`/api/crm/leads/${lead.id}/deal`, {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({
         serviceId,
         expectedValue: Number(value),
-        // On enroll, the enrollment date is the actual close — send it as both
-        // the close date (drives the CRM month bucket) and the expected close so
-        // the lead's displayed deal date matches.
-        expectedCloseDate: (mode === "enroll" ? enrollDate : closeDate) || undefined,
-        ...(mode === "enroll" ? { closedDate: enrollDate || undefined } : {}),
+        expectedCloseDate: closeDate || undefined,
         ownerUserId: assigneeIsL2 ? undefined : ownerId,
-        ...(qualityAsk ? { quality: qualityPayload(quality) } : {}),
       }),
     });
     setBusy(false);
@@ -2150,24 +2150,12 @@ function DealModal({
       setError(d.message || d.error || "Could not save.");
       return;
     }
-    // Enroll → hand off to the celebration (it triggers the refresh once the
-    // party is done). Set deal → close + refresh immediately, as before.
-    if (mode === "enroll" && onEnrolled) {
-      onEnrolled(lead.candidateName);
-      return;
-    }
     onClose();
     router.refresh();
   }
 
   return (
-    <Modal title={mode === "enroll" ? "Enroll candidate" : "Set deal"} onClose={onClose} busy={busy}>
-      {mode === "enroll" && (
-        <p className="text-label-sm text-on-surface-variant">
-          Marks the lead <b>Enrolled</b>, adds the candidate to the Candidate Master (Finance can transact), and records
-          the deal as won.
-        </p>
-      )}
+    <Modal title="Set deal" onClose={onClose} busy={busy}>
       <Field label="Service">
         <select className={inputCls} value={serviceId} onChange={(e) => setServiceId(e.target.value)}>
           <option value="">Select…</option>
@@ -2181,28 +2169,60 @@ function DealModal({
       <Field label="Expected value (₹)">
         <input className={inputCls} type="number" min={0} value={value} onChange={(e) => setValue(e.target.value)} />
       </Field>
-      {mode === "enroll" ? (
-        <Field label="Enrollment date">
-          <input
-            className={inputCls}
-            type="date"
-            value={enrollDate}
-            min={earliestEnroll}
-            max={todayIst}
-            onChange={(e) => setEnrollDate(e.target.value)}
-          />
-          <p className="mt-xs text-label-sm text-on-surface-variant">
-            The day the candidate paid. It decides which month this enrollment counts in.{" "}
-            {earliestEnroll
-              ? `It can't be in the future or before ${formatEnrollDate(earliestEnroll)}. For an older date, ask an admin or your sales head.`
-              : "It can't be in the future."}
-          </p>
-        </Field>
-      ) : (
-        <Field label="Expected close date">
-          <input className={inputCls} type="date" value={closeDate} onChange={(e) => setCloseDate(e.target.value)} />
+      <Field label="Expected close date">
+        <input className={inputCls} type="date" value={closeDate} onChange={(e) => setCloseDate(e.target.value)} />
+      </Field>
+      {!assigneeIsL2 && (
+        <Field label="Deal owner (L2 BDE)">
+          <select className={inputCls} value={ownerId} onChange={(e) => setOwnerId(e.target.value)}>
+            <option value="">Select an L2 BDE…</option>
+            {l2Bdes.map((b) => (
+              <option key={b.userId} value={b.userId}>
+                {b.displayName}
+              </option>
+            ))}
+          </select>
         </Field>
       )}
+      {error && <p className="text-label-sm text-error">{error}</p>}
+      <div className="flex justify-end gap-base pt-xs">
+        <button type="button" className={secondaryBtn} disabled={busy} onClick={onClose}>
+          Cancel
+        </button>
+        <button type="button" className={primaryBtn} disabled={busy} onClick={submit}>
+          {busy ? "Saving…" : "Save deal"}
+        </button>
+      </div>
+    </Modal>
+  );
+}
+
+// Enroll: the Enroll sheet (src/components/crm/EnrollSheet.tsx), plus the two
+// things only this page knows: the deal owner when the lead's consultant isn't
+// an L2, and the lead quality rating enrolling may require.
+function EnrollFlow({
+  lead,
+  masters,
+  userId,
+  canBackdate,
+  onClose,
+  onEnrolled,
+}: {
+  lead: LeadRow;
+  masters: DetailMasters;
+  userId: string;
+  canBackdate: boolean;
+  onClose: () => void;
+  onEnrolled: (name: string) => void;
+}) {
+  const l2Bdes = masters.bdes.filter((b) => b.role === "l2");
+  const assigneeIsL2 = !!lead.assignedTo && l2Bdes.some((b) => b.userId === lead.assignedTo!.id);
+  const [ownerId, setOwnerId] = useState(assigneeIsL2 ? lead.assignedTo!.id : "");
+  // Enrolling closes the lead, so an unrated one is rated here too.
+  const [quality, setQuality] = useState<QualityDraft>(() => qualityDraftFrom(lead.quality));
+  const qualityAsk = qualityGate(qualitySubjectOf(lead), { actorId: userId, now: new Date(), nextStage: { code: "enrolled", kind: "won" } });
+  const node = (
+    <>
       {!assigneeIsL2 && (
         <Field label="Deal owner (L2 BDE)">
           <select className={inputCls} value={ownerId} onChange={(e) => setOwnerId(e.target.value)}>
@@ -2217,19 +2237,134 @@ function DealModal({
       )}
       {qualityAsk && (
         <Field label="Lead quality (required to enroll)">
-          <LeadQualityPicker value={quality} onChange={setQuality} reasons={masters.qualityReasons} disabled={busy} />
+          <LeadQualityPicker value={quality} onChange={setQuality} reasons={masters.qualityReasons} disabled={false} />
         </Field>
       )}
-      {error && <p className="text-label-sm text-error">{error}</p>}
-      <div className="flex justify-end gap-base pt-xs">
-        <button type="button" className={secondaryBtn} disabled={busy} onClick={onClose}>
-          Cancel
-        </button>
-        <button type="button" className={primaryBtn} disabled={busy} onClick={submit}>
-          {busy ? "Saving…" : mode === "enroll" ? "Enroll" : "Save deal"}
-        </button>
+    </>
+  );
+  const problem = !assigneeIsL2 && !ownerId ? "Choose an L2 BDE as the deal owner." : qualityAsk ? qualityDraftError(quality) : null;
+  return (
+    <EnrollSheet
+      mode="enroll"
+      leadId={lead.id}
+      candidateName={lead.candidateName}
+      leadCountry={lead.country}
+      services={masters.services}
+      serviceId={lead.service?.id ?? null}
+      expectedValue={lead.expectedValue}
+      canBackdate={canBackdate}
+      extra={{
+        node,
+        problem,
+        payload: { ownerUserId: assigneeIsL2 ? undefined : ownerId, ...(qualityAsk ? { quality: qualityPayload(quality) } : {}) },
+      }}
+      onClose={onClose}
+      onDone={() => onEnrolled(lead.candidateName)}
+    />
+  );
+}
+
+const inrAmount = (n: number) => `₹${n.toLocaleString("en-IN", { maximumFractionDigits: 2 })}`;
+
+// Where Finance is with this enrollment, and what the BDE or the sales head can
+// do about it: fix and resend, decide a first payment under the minimum.
+function EnrollmentStatusPanel({
+  enrollment: e,
+  canEdit,
+  canDecide,
+  onFix,
+  onChanged,
+}: {
+  enrollment: EnrollmentDTO;
+  canEdit: boolean;
+  /** The sales head: may approve a smaller first payment, and un-enroll. */
+  canDecide: boolean;
+  onFix: () => void;
+  onChanged: () => void;
+}) {
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const f = e.fields;
+  const open = e.status === "pending" || e.status === "sent_back" || e.status === "not_received";
+
+  async function decide(approve: boolean) {
+    const note = window.prompt(approve ? "Approve the smaller first payment. Note (optional):" : "Reject the smaller first payment. Why?") ;
+    if (note === null) return;
+    setBusy(true);
+    setError(null);
+    const res = await fetch(`/api/crm/leads/${e.leadId}/enrollment/exception`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ approve, note }),
+    });
+    setBusy(false);
+    if (!res.ok) {
+      const d = (await res.json().catch(() => ({}))) as { message?: string };
+      setError(d.message ?? "Couldn't save the decision.");
+      return;
+    }
+    onChanged();
+  }
+
+  const tone =
+    e.status === "verified" ? "border-green-200 bg-green-50" : e.status === "pending" ? "border-outline-variant bg-surface-container-low" : "border-red-200 bg-red-50";
+  return (
+    <div className={`rounded-lg border p-sm text-label-sm flex flex-col gap-xs ${tone}`} data-testid="enrollment-status">
+      <div className="font-semibold text-on-surface">{ENROLLMENT_STATUS_LABEL[e.status]}</div>
+      {f.firstAmount != null && f.paidOn ? (
+        <div className="text-on-surface-variant">
+          First payment {inrAmount(f.firstAmount)} into {f.paymentMode} on {formatEnrollDate(f.paidOn)}
+          {f.utr ? ` · UTR ${f.utr}` : ""}
+        </div>
+      ) : (
+        <div className="text-on-surface-variant">No payment details yet (enrolled from an older app). Add them so Finance can verify.</div>
+      )}
+      {e.status === "pending" && <div className="text-on-surface-variant">Finance is checking the payment against the bank.</div>}
+      {e.status === "verified" && (
+        <div className="text-green-800">
+          Verified{e.verifiedByName ? ` by ${e.verifiedByName}` : ""}
+          {e.verifiedAt ? ` on ${formatEnrollDate(e.verifiedAt.slice(0, 10))}` : ""}
+          {e.invoice ? ` · invoice ${e.invoice.number}` : ""}
+        </div>
+      )}
+      {(e.status === "sent_back" || e.status === "not_received") && e.financeNote && (
+        <div className="text-red-800">
+          <b>Finance:</b> {e.financeNote}
+          {e.status === "not_received" ? " An un-enroll was requested from the sales head." : ""}
+        </div>
+      )}
+      {e.exception === "pending" && (
+        <div className="text-amber-800">
+          The first payment is under {inrAmount(MIN_FIRST_PAYMENT)}: waiting for the sales head to approve it.
+        </div>
+      )}
+      {e.exception === "rejected" && (
+        <div className="text-red-800">The sales head rejected the smaller first payment{e.exceptionNote ? `: ${e.exceptionNote}` : ""}. The enrollment should be undone.</div>
+      )}
+      {e.exception === "approved" && (
+        <div className="text-on-surface-variant">
+          Smaller first payment approved{e.exceptionByName ? ` by ${e.exceptionByName}` : ""}.
+        </div>
+      )}
+      <div className="flex flex-wrap gap-xs pt-xs">
+        {open && canEdit && (
+          <button type="button" className={secondaryBtn + " h-8"} onClick={onFix} disabled={busy}>
+            {e.status === "pending" ? (f.firstAmount == null ? "Add payment details" : "Edit details") : "Fix and send again"}
+          </button>
+        )}
+        {open && canDecide && e.exception === "pending" && (
+          <>
+            <button type="button" className={primaryBtn + " h-8"} onClick={() => decide(true)} disabled={busy}>
+              Approve smaller payment
+            </button>
+            <button type="button" className={secondaryBtn + " h-8"} onClick={() => decide(false)} disabled={busy}>
+              Reject
+            </button>
+          </>
+        )}
       </div>
-    </Modal>
+      {error && <p className="text-error">{error}</p>}
+    </div>
   );
 }
 
