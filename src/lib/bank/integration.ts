@@ -22,6 +22,13 @@ export const BANK_DEFAULTS: Record<string, BankDefaults> = {
     emailSubjectPattern: "Email Account Statement of your HDFC Bank Account ***{last4} for the period",
     passwordEnvVar: "HDFC_STATEMENT_PASSWORD",
   },
+  // Excel uploads only for now: no e-mailed statement or PDF parser yet.
+  AXIS: {
+    bankName: "Axis Bank",
+    emailSender: "",
+    emailSubjectPattern: "",
+    passwordEnvVar: "AXIS_STATEMENT_PASSWORD",
+  },
 };
 
 export const STATEMENT_PASSWORD = "statement_password";
