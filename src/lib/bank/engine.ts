@@ -657,6 +657,18 @@ async function afterImport(integration: Integration, statementDate: string | nul
       ...(latest ? { lastStatementDate: toPrismaDate(statementDate!) } : {}),
     },
   });
+  // Match what can be matched without a person (exact reference + amount, and
+  // transfers whose second leg just arrived). Every account, so a transfer
+  // pairs whichever side is imported last. Never fails the import.
+  try {
+    const { autoReconcile } = await import("./reconcile-run");
+    const r = await autoReconcile();
+    if (r.matched || r.transfers) {
+      await logEvent({ integrationId: integration.id, step: "reconcile", message: `Matched automatically: ${r.matched} line(s), ${r.transfers} transfer(s) paired` });
+    }
+  } catch (e) {
+    await logEvent({ integrationId: integration.id, level: "warn", step: "reconcile", message: `Automatic matching skipped: ${e instanceof Error ? e.message : String(e)}` });
+  }
   if (integration.sheetSyncEnabled) {
     try {
       const r = await syncIntegrationToSheet(integration.id);
