@@ -441,6 +441,22 @@ function ReconcileDialog({ txn, onClose }: { txn: TxnRow; onClose: () => void })
             </button>
           </div>
         </div>
+      ) : txn.recon === "CASH" || txn.recon === "CLAIM_SETTLEMENT" ? (
+        <div className="space-y-sm">
+          <Notice tone="info">
+            {txn.recon === "CASH" ? "This line is a cash withdrawal into a cash float." : "This line repays the director's card claims."} It needs no ledger entry, and
+            is changed or undone on{" "}
+            <Link className="underline" href={txn.recon === "CASH" ? "/finance/cash-floats" : "/finance/director-card"}>
+              {txn.recon === "CASH" ? "Cash Floats" : "Director's Card"}
+            </Link>
+            .
+          </Notice>
+          <div className="flex justify-end">
+            <button type="button" className={secondaryBtn} onClick={onClose}>
+              Close
+            </button>
+          </div>
+        </div>
       ) : (
       <>
       {sugg && (sugg.ledger.length > 0 || sugg.transfers.length > 0 || sugg.testCredit) && (

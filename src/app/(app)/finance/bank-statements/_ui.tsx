@@ -49,6 +49,8 @@ const STATUS_TONE: Record<string, keyof typeof TONE> = {
   COMPLETED: "green",
   MATCHED: "green",
   TRANSFER: "blue",
+  CASH: "blue",
+  CLAIM_SETTLEMENT: "blue",
   NO_TRANSACTIONS: "grey",
   NO_NEW: "grey",
   DUPLICATE: "grey",

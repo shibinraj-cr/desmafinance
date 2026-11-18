@@ -448,8 +448,8 @@ export async function lineSuggestions(id: string): Promise<LineSuggestions> {
 
 export type CreateEntryResult = { outcome: "matched" | "pending" | "draft"; transactionId?: string; pendingId?: string; draftId?: string };
 
-/** An entry created from this line earlier, still waiting in drafts or for approval. */
-async function stillWaiting(ref: string | null): Promise<boolean> {
+/** An entry created from a bank line earlier, still waiting in drafts or for approval. */
+export async function stillWaiting(ref: string | null): Promise<boolean> {
   if (!ref) return false;
   const [draft, pending] = await Promise.all([
     prisma.transactionDraft.count({ where: { id: ref } }),
@@ -578,6 +578,10 @@ export async function setLineMatches(
     const l = await lockedLine(tx, id);
     if (!l) throw notFound("Bank transaction not found");
     if (l.reconciliationStatus === "TRANSFER") throw badRequest("This line is a transfer between DesGro's accounts — unpair it first");
+    // Cash into a float, or a repayment of the director's card claims: explained
+    // on its own page, and undone there, never also matched to the ledger.
+    if (l.reconciliationStatus === "CASH") throw badRequest("This line is a cash withdrawal — undo the tag on Cash Floats first");
+    if (l.reconciliationStatus === "CLAIM_SETTLEMENT") throw badRequest("This line repays the director's card claims — undo it on Director's Card first");
     const amount = fromDecimal(l.direction === "DEBIT" ? l.debitAmount : l.creditAmount) ?? 0;
     const now = new Date();
     const reset = { autoMatched: false, transferPairId: null, pendingEntryRef: null, reconciliationNote: body.note ?? null, reconciledById: userId, reconciledAt: now };
@@ -621,7 +625,9 @@ export type MonthStatus = {
   done: boolean;
 };
 
-const EXPLAINED = new Set(["MATCHED", "IGNORED", "TRANSFER"]);
+// CASH (into a cash float) and CLAIM_SETTLEMENT (the director's card claims
+// repaid) are explained on Cash Floats and Director's Card.
+const EXPLAINED = new Set(["MATCHED", "IGNORED", "TRANSFER", "CASH", "CLAIM_SETTLEMENT"]);
 
 function monthsBack(today: string, n: number): string {
   let [y, m] = today.slice(0, 7).split("-").map(Number);

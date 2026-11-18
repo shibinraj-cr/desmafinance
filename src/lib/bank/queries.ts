@@ -9,7 +9,7 @@ import { TRANSACTION_TYPES } from "./classify";
  * Nothing here selects a secret column.
  */
 
-export const RECON_STATUSES = ["UNMATCHED", "MATCHED", "PARTIALLY_MATCHED", "IGNORED", "MANUAL_REVIEW", "TRANSFER"] as const;
+export const RECON_STATUSES = ["UNMATCHED", "MATCHED", "PARTIALLY_MATCHED", "IGNORED", "MANUAL_REVIEW", "TRANSFER", "CASH", "CLAIM_SETTLEMENT"] as const;
 export type ReconStatus = (typeof RECON_STATUSES)[number];
 
 export type TxnFilters = {

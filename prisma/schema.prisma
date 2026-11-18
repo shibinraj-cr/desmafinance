@@ -6315,7 +6315,8 @@ model BankStatement {
 
 /// One bank transaction. Amounts are fixed-precision decimals; the raw
 /// narration is kept untouched beside the derived classification.
-/// reconciliationStatus: UNMATCHED | MATCHED | PARTIALLY_MATCHED | IGNORED | MANUAL_REVIEW | TRANSFER
+/// reconciliationStatus: UNMATCHED | MATCHED | PARTIALLY_MATCHED | IGNORED | MANUAL_REVIEW | TRANSFER |
+/// CASH (a withdrawal into a cash float) | CLAIM_SETTLEMENT (the director's card claims repaid)
 model BankTransaction {
   id                   String          @id @default(cuid())
   integrationId        String
@@ -6362,7 +6363,9 @@ model BankTransaction {
   createdAt            DateTime        @default(now())
   updatedAt            DateTime        @updatedAt
 
-  matches BankTransactionMatch[]
+  matches         BankTransactionMatch[]
+  cashWithdrawal  CashWithdrawal?
+  claimSettlement DirectorClaimSettlement?
 
   @@unique([integrationId, transactionHash])
   @@index([integrationId, txnDate])
@@ -7242,4 +7245,62 @@ model InvoiceFile {
   createdAt DateTime @default(now())
 
   @@unique([invoiceId, kind])
+}
+
+/// Cash taken out of a DesGro bank account into a cash float. Not an expense
+/// and not an outflow: money moving from the bank into a float.
+/// kind: OUTDOOR_MARKETING (held by the director, spent against vouchers — a
+/// register only, never in P&L) | PETTY_CASH (spent through ledger entries
+/// paid in Cash).
+model CashWithdrawal {
+  id                String           @id @default(cuid())
+  bankTransactionId String?          @unique
+  bankTransaction   BankTransaction? @relation(fields: [bankTransactionId], references: [id], onDelete: SetNull)
+  kind              String
+  date              DateTime         @db.Date
+  amount            Decimal          @db.Decimal(14, 2)
+  heldBy            String?
+  note              String?
+  createdById       String?
+  createdAt         DateTime         @default(now())
+  updatedAt         DateTime         @updatedAt
+
+  @@index([kind, date])
+}
+
+/// How the director spent Outdoor Marketing cash, uploaded from Excel. A
+/// register of the float only: never a ledger entry, never an expense.
+model OutdoorMarketingVoucher {
+  id          String   @id @default(cuid())
+  date        DateTime @db.Date
+  voucherNo   String?
+  paidTo      String
+  purpose     String?
+  amount      Decimal  @db.Decimal(14, 2)
+  batchId     String
+  // The same row uploaded again (same sheet, or an overlapping one) adds nothing.
+  rowHash     String   @unique
+  createdById String?
+  createdAt   DateTime @default(now())
+
+  @@index([date])
+  @@index([batchId])
+}
+
+/// A bank payment to the director repaying expenses paid on the director's
+/// personal credit card. The expenses are already in the ledger (payment mode
+/// Credit Card), so this is never a second expense: it clears the oldest
+/// outstanding claims first.
+model DirectorClaimSettlement {
+  id                String           @id @default(cuid())
+  bankTransactionId String?          @unique
+  bankTransaction   BankTransaction? @relation(fields: [bankTransactionId], references: [id], onDelete: SetNull)
+  date              DateTime         @db.Date
+  amount            Decimal          @db.Decimal(14, 2)
+  note              String?
+  createdById       String?
+  createdAt         DateTime         @default(now())
+  updatedAt         DateTime         @updatedAt
+
+  @@index([date])
 }
