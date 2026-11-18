@@ -86,7 +86,14 @@ export default async function MyAttendancePage({
       />
       <div className="p-margin space-y-lg">
         {myScore && myScore.scored && (
-          <Section title="My attendance score">
+          <Section
+            title="My attendance score"
+            action={
+              <Link href="/me/attendance/scoring" className="text-label-sm text-primary font-semibold whitespace-nowrap">
+                How is this calculated?
+              </Link>
+            }
+          >
             <p className="text-caption text-on-surface-variant mb-md">
               A rolling behaviour score over your last {ROLLING_CYCLES} cycles — presence, punctuality,
               completing your shift, and punch discipline.
@@ -122,7 +129,14 @@ export default async function MyAttendancePage({
           </Section>
         )}
         {myScore && !myScore.scored && (
-          <Section title="My attendance score">
+          <Section
+            title="My attendance score"
+            action={
+              <Link href="/me/attendance/scoring" className="text-label-sm text-primary font-semibold whitespace-nowrap">
+                How is this calculated?
+              </Link>
+            }
+          >
             <p className="text-label-sm text-on-surface-variant">
               Your score will appear once you have about a month of attendance on record.
             </p>
