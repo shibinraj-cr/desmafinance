@@ -14,6 +14,7 @@ import { PendingList, type PendingRow, type PartyLookup, type EmployeeLookup } f
 import { Tabs } from "../_tabs";
 import { ApprovalsFilterBar } from "../_filter-bar";
 import { listParam } from "@/lib/filter-params";
+import { loadCandidateTotals } from "@/lib/candidate-totals";
 
 export const dynamic = "force-dynamic";
 
@@ -326,6 +327,11 @@ export default async function ApprovalsPage({
         };
       })
     : [];
+  // The candidate's quoted total / paid / balance beside each payment, so a
+  // reviewer can sanity-check it without opening the candidate page.
+  const candidateTotals = isReviewerPending
+    ? await loadCandidateTotals(pendingRows.map((r) => r.partyId ?? ""))
+    : {};
   const totalShown = filteredItems.length;
   const tabSubtitle =
     tab === "pending"
@@ -398,7 +404,12 @@ export default async function ApprovalsPage({
         />
 
         {isReviewerPending ? (
-          <PendingList rows={pendingRows} partyById={partyLookup} employeeById={employeeLookup} />
+          <PendingList
+            rows={pendingRows}
+            partyById={partyLookup}
+            employeeById={employeeLookup}
+            candidateTotals={candidateTotals}
+          />
         ) : filteredItems.length === 0 ? (
           <Section title="">
             <div className="py-lg text-center text-on-surface-variant">
