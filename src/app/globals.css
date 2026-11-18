@@ -502,3 +502,19 @@ input.lp-date-input::-webkit-calendar-picker-indicator:hover {
     overflow-x: auto;
   }
 }
+
+/* Job-description tabs on the careers page. Yellow underline for the active
+   one — the same accent the buttons and the top rule use. */
+.careers-tab-on {
+  border-color: var(--careers-yellow);
+  color: var(--careers-grey-deep);
+}
+.careers-tab-off {
+  border-color: transparent;
+  color: var(--careers-grey);
+}
+.careers-tab-off:hover { color: var(--careers-grey-deep); }
+.careers-theme [role="tab"]:focus-visible {
+  outline: 2px solid var(--careers-grey-deep);
+  outline-offset: -2px;
+}
