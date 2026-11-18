@@ -98,7 +98,10 @@ export function coercePhoneCell(cell: unknown): string {
  */
 export function parseMetaDate(cell: unknown): Date | null {
   if (cell == null || cell === "") return null;
-  if (cell instanceof Date) return isNaN(cell.getTime()) ? null : cell;
+  // An Excel date-time is a fraction of a day, so 00:05 can come back as
+  // 00:04:59.999 and a midnight lead can slip into the day before. Meta times
+  // are whole seconds: round to the nearest one.
+  if (cell instanceof Date) return isNaN(cell.getTime()) ? null : new Date(Math.round(cell.getTime() / 1000) * 1000);
   // A bare number here is NOT a date (cellDates already converted real date
   // cells to Date objects; a leftover number is something else).
   if (typeof cell === "number") return null;

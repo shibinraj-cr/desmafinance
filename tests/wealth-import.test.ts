@@ -13,6 +13,9 @@ import {
   termYears,
 } from "../src/lib/wealth-import";
 
+// Date cells are local Dates (new Date(y, m, d)): that is how SheetJS writes and
+// hands them back, so the tests pass in any time zone.
+//
 // Every workbook here is synthetic and built in memory. The real one stays on
 // the owner's machine — this repository is public — so what is under test is
 // the reading of an ordinary, loosely-typed spreadsheet, not anyone's figures.
@@ -51,8 +54,8 @@ describe("money", () => {
 });
 
 describe("date", () => {
-  it("reads a real date cell", () => {
-    expect(date(new Date(Date.UTC(2026, 9, 10)))).toBe("2026-10-10");
+  it("reads a real date cell by its local calendar day, which is how SheetJS hands it over", () => {
+    expect(date(new Date(2026, 9, 10))).toBe("2026-10-10");
   });
 
   it("reads a written date, ordinal and all", () => {
@@ -120,7 +123,7 @@ describe("parseHoldings", () => {
     Money: [
       ["Sl No", "Plan", "Policy No", "Company", "SA", "Renewal", "Premium/investment", "Frequency", "Date", "Term", "Links", "Net Worth", "Column 1"],
       [1, "Term Insurance", "", "An Insurer", "75 L", "", 900, "Monthly", "22nd", "", "https://portal.example", "", ""],
-      [2, "A ULIP", "POL-1", "A Life Co", "", new Date(Date.UTC(2026, 9, 10)), 450000, "Yearly", "10th October", "12 Years", "https://life.example", 400000, "as on 20th Dec 2023"],
+      [2, "A ULIP", "POL-1", "A Life Co", "", new Date(2026, 9, 10), 450000, "Yearly", "10th October", "12 Years", "https://life.example", 400000, "as on 20th Dec 2023"],
       [3, "A mutual fund", "", "", "", "", "", "Monthly", "5th", "", "", 250000, "as on mar 2026"],
       [4, "Personal Bank Balance", "", "", "", "", 300000, "", "", "", "", 300000, "as on apr 2026"],
       [5, "A private advance", "", "", "", "", 500000, "", "", "", "", 500000, "as on mar 2026"],
@@ -182,7 +185,7 @@ describe("parseHoldings — a renewal date with no stated frequency", () => {
     const wb = book({
       Money: [
         ["Plan", "Renewal", "Frequency", "Net Worth"],
-        ["A policy", new Date(Date.UTC(2026, 11, 1)), "", 600000],
+        ["A policy", new Date(2026, 11, 1), "", 600000],
       ],
     });
     const [row] = parseHoldings(readSheet(wb, "Money"));
@@ -203,7 +206,7 @@ describe("parseGold", () => {
       ["Chains", null, null, null, null, null, null],
       ["Chain one", 25, null, null, null, null, null],
       ["Coins", null, null, null, null, null, null],
-      ["Scheme instalment", 15, null, "Due on", new Date(Date.UTC(2026, 5, 23)), null, null],
+      ["Scheme instalment", 15, null, "Due on", new Date(2026, 5, 23), null, null],
     ],
   });
   const { items, ratePerGram } = parseGold(wb, "Gold");

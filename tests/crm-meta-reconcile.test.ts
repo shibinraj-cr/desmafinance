@@ -74,7 +74,9 @@ describe("parseMetaDate", () => {
   });
   it("parses a Date object and dd-mm-yyyy fallback", () => {
     const d = new Date("2026-01-02T03:04:05Z");
-    expect(parseMetaDate(d)).toBe(d);
+    expect(parseMetaDate(d)).toEqual(d);
+    // An Excel date-time a hair under the minute rounds back to it.
+    expect(parseMetaDate(new Date("2026-11-01T00:04:59.999Z"))).toEqual(new Date("2026-11-01T00:05:00Z"));
     expect(parseMetaDate("24-06-2026, 2:23 pm")?.getFullYear()).toBe(2026);
     expect(parseMetaDate("24-06-2026, 2:23 pm")?.getMonth()).toBe(5); // June
   });
