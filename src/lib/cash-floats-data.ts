@@ -6,6 +6,7 @@ import { badRequest, conflict, forbidden, notFound, unauthorized } from "@/lib/h
 import { getCurrentUserAndPermissions } from "@/lib/permissions";
 import { recordAudit } from "@/lib/audit";
 import { fromDecimal, toDecimalString } from "@/lib/bank/money";
+import { stillWaiting } from "@/lib/bank/reconcile-run";
 import {
   CASH_KIND_LABEL,
   CASH_MODE,
@@ -53,6 +54,12 @@ const LINE_SELECT = {
   integration: { select: { bankName: true, accountLastFour: true } },
 } satisfies Prisma.BankTransactionSelect;
 type LineRow = Prisma.BankTransactionGetPayload<{ select: typeof LINE_SELECT }>;
+
+// A line with a ledger entry created from it on Reconciliation, still in drafts
+// or waiting for approval, is spoken for: tagging it too would count it twice.
+const WAITING = "A ledger entry for this line is waiting in drafts or for approval — reject it there first";
+// A person's tag replaces anything the reconciliation engine noted on the line.
+const PERSON_DECIDED = { autoMatched: false, pendingEntryRef: null, transferPairId: null } as const;
 
 const openLine = (l: LineRow, suggested: boolean): OpenLine => ({
   id: l.id,
@@ -116,15 +123,16 @@ export async function withdrawalsToTag(everyDebit = false): Promise<OpenLine[]> 
  * tagged after someone matched it.
  */
 export async function tagWithdrawal(bankTransactionId: string, kind: CashKind, opts: { heldBy?: string | null; note?: string | null }, userId: string) {
-  const line = await prisma.bankTransaction.findUnique({ where: { id: bankTransactionId }, select: LINE_SELECT });
+  const line = await prisma.bankTransaction.findUnique({ where: { id: bankTransactionId }, select: { ...LINE_SELECT, pendingEntryRef: true } });
   if (!line) throw notFound("Bank transaction not found");
   if (line.direction !== "DEBIT") throw badRequest("Only money leaving the bank can be a cash withdrawal");
+  if (await stillWaiting(line.pendingEntryRef)) throw conflict(WAITING, "entry_waiting");
   const heldBy = (opts.heldBy ?? "").trim() || (kind === "OUTDOOR_MARKETING" ? "Director" : null);
   const created = await prisma
     .$transaction(async (tx) => {
       const c = await tx.bankTransaction.updateMany({
         where: { id: bankTransactionId, ...OPEN_LINE },
-        data: { reconciliationStatus: "CASH", reconciliationNote: `Cash withdrawal: ${CASH_KIND_LABEL[kind]}`, reconciledById: userId, reconciledAt: new Date() },
+        data: { reconciliationStatus: "CASH", reconciliationNote: `Cash withdrawal: ${CASH_KIND_LABEL[kind]}`, ...PERSON_DECIDED, reconciledById: userId, reconciledAt: new Date() },
       });
       if (!c.count) throw conflict("This line was explained in the meantime — reload", "line_taken");
       return tx.cashWithdrawal.create({
@@ -252,14 +260,15 @@ export async function setCardSettings(startOn: string, payeeWords: string, userI
 
 /** Mark a bank payment to the director as settling card claims. */
 export async function markSettlement(bankTransactionId: string, note: string | null, userId: string) {
-  const line = await prisma.bankTransaction.findUnique({ where: { id: bankTransactionId }, select: LINE_SELECT });
+  const line = await prisma.bankTransaction.findUnique({ where: { id: bankTransactionId }, select: { ...LINE_SELECT, pendingEntryRef: true } });
   if (!line) throw notFound("Bank transaction not found");
   if (line.direction !== "DEBIT") throw badRequest("A settlement is money paid out to the director");
+  if (await stillWaiting(line.pendingEntryRef)) throw conflict(WAITING, "entry_waiting");
   const created = await prisma
     .$transaction(async (tx) => {
       const c = await tx.bankTransaction.updateMany({
         where: { id: bankTransactionId, ...OPEN_LINE },
-        data: { reconciliationStatus: "CLAIM_SETTLEMENT", reconciliationNote: "Director's card claims repaid", reconciledById: userId, reconciledAt: new Date() },
+        data: { reconciliationStatus: "CLAIM_SETTLEMENT", reconciliationNote: "Director's card claims repaid", ...PERSON_DECIDED, reconciledById: userId, reconciledAt: new Date() },
       });
       if (!c.count) throw conflict("This line was explained in the meantime — reload", "line_taken");
       return tx.directorClaimSettlement.create({

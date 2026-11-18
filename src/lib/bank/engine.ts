@@ -19,6 +19,8 @@ import { assertLooksLikePdf, extractTextItems } from "./pdf";
 import { SUPPORTED_BANKS, parserFor } from "./parsers";
 import type { ParsedRow, ParsedStatement } from "./parsers/base";
 import { validateStatement } from "./validate";
+import { continuityProblems } from "./continuity";
+import { MAX_SHEET_BYTES, parseStatementWorkbook } from "./parsers/spreadsheet";
 import { sha256Hex } from "./hash";
 import { importRows } from "./import";
 import { archivePdf, isArchiveConfigured, readArchivedPdf, statementBlobPath, statementFileName } from "./storage";
@@ -566,12 +568,21 @@ export async function processStatement(
     await ev("parse", `${rows.length} transaction row${rows.length === 1 ? "" : "s"} identified (${parsed.strategy} parser)`);
 
     await phase("Validating…");
-    const v = validateStatement(parsed, {
+    const checked = validateStatement(parsed, {
       last4: integration.accountLastFour,
       periodStart,
       periodEnd,
       today: todayIst(),
     });
+    const joined = await continuityProblems(integration.id, {
+      ...parsed,
+      periodStart: periodStart ?? parsed.periodStart,
+      periodEnd: periodEnd ?? parsed.periodEnd,
+    });
+    const v = {
+      errors: Array.from(new Set([...checked.errors, ...joined.errors])),
+      warnings: Array.from(new Set([...checked.warnings, ...joined.warnings])),
+    };
     const totals = summarize(parsed, rows);
     const statementDate = periodEnd ?? parsed.periodEnd;
     const common = {
@@ -657,6 +668,18 @@ async function afterImport(integration: Integration, statementDate: string | nul
       ...(latest ? { lastStatementDate: toPrismaDate(statementDate!) } : {}),
     },
   });
+  // Match what can be matched without a person (exact reference + amount, and
+  // transfers whose second leg just arrived). Every account, so a transfer
+  // pairs whichever side is imported last. Never fails the import.
+  try {
+    const { autoReconcile } = await import("./reconcile-run");
+    const r = await autoReconcile();
+    if (r.matched || r.transfers) {
+      await logEvent({ integrationId: integration.id, step: "reconcile", message: `Matched automatically: ${r.matched} line(s), ${r.transfers} transfer(s) paired` });
+    }
+  } catch (e) {
+    await logEvent({ integrationId: integration.id, level: "warn", step: "reconcile", message: `Automatic matching skipped: ${e instanceof Error ? e.message : String(e)}` });
+  }
   if (integration.sheetSyncEnabled) {
     try {
       const r = await syncIntegrationToSheet(integration.id);
@@ -719,8 +742,8 @@ async function recordFailure(
 export async function retryStatements(integrationId: string, statementIds: string[] | "failed", userId: string) {
   const where: Prisma.BankStatementWhereInput =
     statementIds === "failed"
-      ? { integrationId, status: { in: ["FAILED", "MANUAL_ACTION_REQUIRED"] } }
-      : { integrationId, id: { in: statementIds }, status: { in: ["FAILED", "MANUAL_ACTION_REQUIRED", "REVIEW_REQUIRED"] } };
+      ? { integrationId, source: { not: SHEET_SOURCE }, status: { in: ["FAILED", "MANUAL_ACTION_REQUIRED"] } }
+      : { integrationId, source: { not: SHEET_SOURCE }, id: { in: statementIds }, status: { in: ["FAILED", "MANUAL_ACTION_REQUIRED", "REVIEW_REQUIRED"] } };
   const targets = await prisma.bankStatement.findMany({ where, select: { id: true, blobPathname: true } });
   if (targets.length === 0) return { runId: null, count: 0 };
   const active = await prisma.bankStatementRun.findFirst({
@@ -860,44 +883,7 @@ export async function importUploadedPdf(
       : new BankAutomationError("PARSE_FAILED", "This PDF is not a statement layout DesGro can read yet");
   }
 
-  let integration = preset;
-  let createdAccount = false;
-  const digits = (parsed.accountNumber ?? "").replace(/\D/g, "");
-  if (!integration) {
-    if (digits.length < 4) {
-      throw new BankAutomationError("PARSE_FAILED", "The account number could not be read from this PDF");
-    }
-    const last4 = digits.slice(-4);
-    integration = await prisma.bankIntegration.findUnique({
-      where: { bankCode_accountLastFour: { bankCode, accountLastFour: last4 } },
-    });
-    if (!integration) {
-      const d = BANK_DEFAULTS[bankCode];
-      try {
-        integration = await prisma.bankIntegration.create({
-          data: {
-            bankCode,
-            bankName: d.bankName,
-            accountName: `${d.bankName} account`,
-            accountLastFour: last4,
-            emailSender: d.emailSender,
-            emailSubjectPattern: d.emailSubjectPattern,
-            passwordSecretRef: `env:${d.passwordEnvVar}`,
-            automationEnabled: false,
-            createdById: userId,
-            updatedById: userId,
-          },
-        });
-        createdAccount = true;
-        await logEvent({ integrationId: integration.id, step: "upload", message: "Account added from an uploaded statement", userId });
-      } catch (e) {
-        if (!(e instanceof Prisma.PrismaClientKnownRequestError && e.code === "P2002")) throw e;
-        integration = await prisma.bankIntegration.findUniqueOrThrow({
-          where: { bankCode_accountLastFour: { bankCode, accountLastFour: last4 } },
-        });
-      }
-    }
-  }
+  const { integration, createdAccount } = await resolveUploadAccount(bankCode, parsed.accountNumber, preset, userId, "PDF");
   const account = `${integration.bankName} ${maskedAccount(integration.accountLastFour)}`;
   const base = { integrationId: integration.id, account, createdAccount, periodStart: parsed.periodStart, periodEnd: parsed.periodEnd };
 
@@ -958,6 +944,182 @@ export async function importUploadedPdf(
     errors: v.errors ?? [],
     lastError: done.lastError,
   };
+}
+
+/** BankStatement.source for an uploaded .xls/.xlsx: processed once, on upload, never re-run as a PDF. */
+export const SHEET_SOURCE = "sheet";
+
+/**
+ * Import a statement spreadsheet uploaded by hand: HDFC's .xls or Axis's .xlsx
+ * net-banking download. Like a PDF upload, the file names its bank and account
+ * (an account is created on first sight) and goes through the same checks and
+ * duplicate guards, so the same days uploaded again, or already imported from
+ * a PDF, add nothing twice. On top of the PDF checks, its opening balance must
+ * equal the closing balance of the statement just before it (and its closing
+ * balance the opening of the one just after); a break holds it for review.
+ *
+ * It is processed synchronously and nothing is archived: there is no browser
+ * step and no password, and a held statement is decided from its held rows.
+ */
+export async function importUploadedSpreadsheet(
+  file: Uint8Array,
+  userId: string,
+  opts: { integrationId?: string | null; fileName?: string | null } = {},
+): Promise<UploadResult> {
+  if (file.byteLength > MAX_SHEET_BYTES) throw new BankAutomationError("PARSE_FAILED", "The spreadsheet must be under 4 MB");
+  const preset = opts.integrationId ? await prisma.bankIntegration.findUniqueOrThrow({ where: { id: opts.integrationId } }) : null;
+  const { bankCode, parsed } = parseStatementWorkbook(file, preset?.bankCode ?? null);
+  if (!BANK_DEFAULTS[bankCode]) throw new BankAutomationError("CONFIG", `Statements from ${bankCode} are not supported yet`);
+
+  const { integration, createdAccount } = await resolveUploadAccount(bankCode, parsed.accountNumber, preset, userId, "spreadsheet");
+  const account = `${integration.bankName} ${maskedAccount(integration.accountLastFour)}`;
+  const base = { integrationId: integration.id, account, createdAccount, periodStart: parsed.periodStart, periodEnd: parsed.periodEnd };
+
+  const sha = sha256Hex(file);
+  const dup = await prisma.bankStatement.findFirst({
+    where: { integrationId: integration.id, fileSha256: sha },
+    select: { id: true, status: true, transactionCount: true },
+  });
+  if (dup) {
+    return { ...base, statementId: dup.id, duplicate: true, status: dup.status, transactionCount: dup.transactionCount ?? 0, inserted: 0, duplicates: dup.transactionCount ?? 0, errors: [], lastError: null };
+  }
+
+  const v = validateStatement(parsed, {
+    last4: integration.accountLastFour,
+    periodStart: parsed.periodStart,
+    periodEnd: parsed.periodEnd,
+    today: todayIst(),
+  });
+  const c = await continuityProblems(integration.id, parsed);
+  const errors = Array.from(new Set([...v.errors, ...c.errors]));
+  const warnings = Array.from(new Set([...v.warnings, ...c.warnings]));
+  const rows = parsed.rows;
+  const ext = /\.xlsx$/i.test(opts.fileName ?? "") ? "xlsx" : "xls";
+
+  let stmt;
+  try {
+    stmt = await prisma.bankStatement.create({
+      data: {
+        integrationId: integration.id,
+        source: SHEET_SOURCE,
+        status: "PARSING",
+        fileSha256: sha,
+        fileSize: file.byteLength,
+        fileName: statementFileName(bankCode, integration.accountLastFour, parsed.periodEnd).replace(/\.pdf$/i, `.${ext}`),
+        periodStart: parsed.periodStart ? toPrismaDate(parsed.periodStart) : null,
+        periodEnd: parsed.periodEnd ? toPrismaDate(parsed.periodEnd) : null,
+        ...summarize(parsed, rows),
+        validation: { errors, warnings, strategy: parsed.strategy } as Prisma.InputJsonValue,
+        createdById: userId,
+      },
+    });
+  } catch (e) {
+    if (e instanceof Prisma.PrismaClientKnownRequestError && e.code === "P2002") {
+      return importUploadedSpreadsheet(file, userId, { ...opts, integrationId: integration.id });
+    }
+    throw e;
+  }
+  const ev = (step: string, message: string, level: "info" | "warn" | "error" = "info") =>
+    logEvent({ integrationId: integration.id, statementId: stmt.id, step, message, level, userId });
+  await ev("upload", `Statement spreadsheet uploaded by hand: ${rows.length} transaction row${rows.length === 1 ? "" : "s"} read`);
+
+  const statementDate = parsed.periodEnd;
+  let status: string;
+  let inserted = 0;
+  let duplicates = 0;
+  if (errors.length) {
+    status = "REVIEW_REQUIRED";
+    await prisma.bankStatement.update({
+      where: { id: stmt.id },
+      data: { status, reviewPayload: rows as unknown as Prisma.InputJsonValue, processedAt: new Date() },
+    });
+    await ev("validate", `Validation failed — held for review: ${errors.slice(0, 3).join("; ")}`, "warn");
+    await notifyBankAlert({
+      title: `${label(integration)} statement needs review`,
+      body: `Statement: ${fmtDay(statementDate)}. Reason: ${errors[0]}. Nothing was imported — review and approve or reject it.`,
+    });
+  } else {
+    ({ inserted, duplicates } = await importRows(rows, {
+      integrationId: integration.id,
+      statementId: stmt.id,
+      currency: integration.currency,
+      statementDate,
+      gmailMessageId: null,
+      sourceSubject: null,
+    }));
+    status = rows.length ? "PROCESSED" : "NO_TRANSACTIONS";
+    await prisma.bankStatement.update({
+      where: { id: stmt.id },
+      data: { status, insertedCount: inserted, duplicateCount: duplicates, processedAt: new Date() },
+    });
+    await ev("import", `${inserted} new transaction${inserted === 1 ? "" : "s"} inserted${duplicates ? `, ${duplicates} already known` : ""}`);
+    const full = await prisma.bankIntegration.findUniqueOrThrow({ where: { id: integration.id }, include: { mailbox: true } });
+    await afterImport(full, statementDate);
+  }
+  return {
+    ...base,
+    statementId: stmt.id,
+    duplicate: false,
+    status,
+    transactionCount: rows.length,
+    inserted,
+    duplicates,
+    errors,
+    lastError: null,
+  };
+}
+
+/**
+ * The account an uploaded statement belongs to: the one it was aimed at, or
+ * the one whose number is printed on it, created on first sight (automation
+ * off) so no account has to be set up before the first upload.
+ */
+async function resolveUploadAccount(
+  bankCode: string,
+  accountNumber: string | null,
+  preset: Prisma.BankIntegrationGetPayload<object> | null,
+  userId: string,
+  kind: "PDF" | "spreadsheet",
+) {
+  let integration = preset;
+  let createdAccount = false;
+  const digits = (accountNumber ?? "").replace(/\D/g, "");
+  if (!integration) {
+    if (digits.length < 4) {
+      throw new BankAutomationError("PARSE_FAILED", `The account number could not be read from this ${kind}`);
+    }
+    const last4 = digits.slice(-4);
+    integration = await prisma.bankIntegration.findUnique({
+      where: { bankCode_accountLastFour: { bankCode, accountLastFour: last4 } },
+    });
+    if (!integration) {
+      const d = BANK_DEFAULTS[bankCode];
+      try {
+        integration = await prisma.bankIntegration.create({
+          data: {
+            bankCode,
+            bankName: d.bankName,
+            accountName: `${d.bankName} account`,
+            accountLastFour: last4,
+            emailSender: d.emailSender,
+            emailSubjectPattern: d.emailSubjectPattern,
+            passwordSecretRef: `env:${d.passwordEnvVar}`,
+            automationEnabled: false,
+            createdById: userId,
+            updatedById: userId,
+          },
+        });
+        createdAccount = true;
+        await logEvent({ integrationId: integration.id, step: "upload", message: "Account added from an uploaded statement", userId });
+      } catch (e) {
+        if (!(e instanceof Prisma.PrismaClientKnownRequestError && e.code === "P2002")) throw e;
+        integration = await prisma.bankIntegration.findUniqueOrThrow({
+          where: { bankCode_accountLastFour: { bankCode, accountLastFour: last4 } },
+        });
+      }
+    }
+  }
+  return { integration, createdAccount };
 }
 
 // ─── Test mode ──────────────────────────────────────────────────────────────

@@ -25,10 +25,6 @@ const INCLUDES_HISTORICAL: Record<string, [number, string]> = {
   "src/app/(app)/master-data/categories/page.tsx": [1, "usage count that gates deleting a category"],
   "src/app/api/master/categories/[id]/route.ts": [1, "refuses to delete a category still in use"],
   "src/app/api/master/sub-categories/[id]/route.ts": [1, "refuses to delete a sub-item still in use"],
-  "src/app/api/finance/bank-transactions/[id]/reconcile/route.ts": [
-    1,
-    "checks the picked ids exist; the candidate list it picks from is filtered",
-  ],
 };
 
 /** `where` builders that already apply the filter themselves. */

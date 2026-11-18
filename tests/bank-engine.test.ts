@@ -97,9 +97,11 @@ vi.mock("@/lib/bank/notify", () => ({
   }),
 }));
 
-import { advanceRun, createRun, importUploadedPdf, reviewStatement } from "@/lib/bank/engine";
+import { advanceRun, createRun, importUploadedPdf, importUploadedSpreadsheet, reviewStatement } from "@/lib/bank/engine";
+import * as XLSX from "xlsx";
 import { seal } from "@/lib/bank/secrets";
 import { generateRows, hdfcFixture, type FixtureRow } from "./fixtures/hdfc-statement";
+import { parseAmount, toDecimalString } from "@/lib/bank/money";
 
 const DEADLINE = () => Date.now() + 10 * 60_000;
 let integrationId = "";
@@ -206,7 +208,13 @@ describe("bank automation engine — acceptance", () => {
   });
 
   it("TEST 3: the same backfill run twice imports zero duplicates the second time", async () => {
-    ["2026-10-01", "2026-10-02", "2026-10-03"].forEach((d, k) => addStatement(d, rowsOn(d, 4 + k, 1_00_000_00)));
+    // Back-to-back days: each opens at the day before's closing balance.
+    let open = 1_00_000_00;
+    ["2026-10-01", "2026-10-02", "2026-10-03"].forEach((d, k) => {
+      const rows = rowsOn(d, 4 + k, open);
+      addStatement(d, rows);
+      open = parseAmount(rows[rows.length - 1].balance!)!;
+    });
     const first = await run("BACKFILL", "2026-10-01", "2026-10-03");
     expect(first.status).toBe("COMPLETED");
     expect(table("bankTransaction")).toHaveLength(15);
@@ -216,6 +224,17 @@ describe("bank automation engine — acceptance", () => {
     const second = await run("BACKFILL", "2026-10-01", "2026-10-03");
     expect(second.transactionsCreated).toBe(0);
     expect(table("bankTransaction")).toHaveLength(15);
+  });
+
+  it("a day that doesn't open at the day before's closing balance is held for review", async () => {
+    addStatement("2026-10-01", rowsOn("2026-10-01", 3, 1_00_000_00));
+    addStatement("2026-10-02", rowsOn("2026-10-02", 3, 2_00_000_00));
+    await run("BACKFILL", "2026-10-01", "2026-10-02");
+    const [day1, day2] = table("bankStatement");
+    expect(day1.status).toBe("PROCESSED");
+    expect(day2.status).toBe("REVIEW_REQUIRED");
+    expect((day2.validation as { errors: string[] }).errors[0]).toMatch(/^Opening balance ₹2,00,000\.00 does not match the .* closing balance of the statement to 2026-10-01/);
+    expect(table("bankTransaction")).toHaveLength(3);
   });
 
   it("a re-sent statement (same PDF, new e-mail) is a DUPLICATE and imports nothing", async () => {
@@ -361,6 +380,75 @@ describe("manual upload → consolidated statement", () => {
   it("refuses an unreadable PDF without creating anything", async () => {
     h.items.junk = [{ str: "Not a bank statement", x: 10, y: 10, w: 80, page: 1 }];
     await expect(importUploadedPdf(pdf("junk"), "user-1")).rejects.toMatchObject({ code: "PARSE_FAILED" });
+    expect(table("bankStatement")).toHaveLength(0);
+  });
+});
+
+describe("manual upload of an Excel statement", () => {
+  const pdf = (key: string) => new Uint8Array(Buffer.from(`%PDF-1.4 ${key}`));
+  const ACCOUNT = "50100000005678";
+  const all = () => generateRows(10, 2_00_000_00).map((r, i) => ({ ...r, date: i < 7 ? "05/10/26" : "06/10/26" }));
+  const paise = (s?: string) => (s ? parseAmount(s)! : 0);
+
+  /** HDFC's .xls layout for `rows`, its summary worked out from them. */
+  function hdfcXls(rows: FixtureRow[], from: string, to: string, opening: number, narration = (r: FixtureRow) => r.narration.join(" ")): Uint8Array {
+    const dr = rows.reduce((n, r) => n + paise(r.debit), 0);
+    const cr = rows.reduce((n, r) => n + paise(r.credit), 0);
+    const closing = paise(rows[rows.length - 1].balance);
+    const aoa = [
+      ["HDFC BANK Ltd."],
+      ["", "", "", "", `Account No :${ACCOUNT}`],
+      [`Statement From  :  ${from}  To : ${to}`, "", "", "", "RTGS/NEFT IFSC :HDFC0000001"],
+      [],
+      ["Date", "Narration", "Chq./Ref.No.", "Value Dt", "Withdrawal Amt.", "Deposit Amt.", "Closing Balance"],
+      ["********"],
+      ...rows.map((r) => [r.date, narration(r), r.ref ?? "", r.date, r.debit ?? "", r.credit ?? "", r.balance]),
+      [],
+      ["STATEMENT SUMMARY  :-"],
+      ["Opening Balance", "", "", "", "Debits", "Credits", "Closing Bal"],
+      [toDecimalString(opening), "", "", "", toDecimalString(dr), toDecimalString(cr), toDecimalString(closing)],
+      [],
+      ["", "", "", "", "Dr Count", "Cr Count"],
+      ["", "", "", "", rows.filter((r) => r.debit).length, rows.filter((r) => r.credit).length],
+    ];
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(aoa), "Sheet 1");
+    return new Uint8Array(XLSX.write(wb, { type: "array", bookType: "biff8" }) as ArrayBuffer);
+  }
+
+  it("reads the bank and account off the file, creates the account and imports every row", async () => {
+    const r = await importUploadedSpreadsheet(hdfcXls(all(), "05/10/2026", "06/10/2026", 2_00_000_00), "user-1", { fileName: "statement.xls" });
+    expect(r).toMatchObject({ createdAccount: true, status: "PROCESSED", inserted: 10, duplicates: 0, periodStart: "2026-10-05", periodEnd: "2026-10-06" });
+    const stmt = table("bankStatement")[0];
+    expect(stmt).toMatchObject({ source: "sheet", fileName: expect.stringMatching(/\.xls$/), transactionCount: 10, blobPathname: null });
+    expect(table("bankIntegration").find((i) => i.accountLastFour === "5678")).toMatchObject({ bankCode: "HDFC", automationEnabled: false });
+  });
+
+  it("the same file again is a duplicate; the PDF of the same days adds nothing, though worded differently", async () => {
+    const file = hdfcXls(all(), "05/10/2026", "06/10/2026", 2_00_000_00, (r) => `${r.narration.join(" ")} (EXCEL WORDING)`);
+    await importUploadedSpreadsheet(file, "user-1");
+    expect(await importUploadedSpreadsheet(file, "user-1")).toMatchObject({ duplicate: true, inserted: 0 });
+    h.items.month = hdfcFixture({ account: ACCOUNT, rows: all(), from: "05/10/2026", to: "06/10/2026" });
+    expect(await importUploadedPdf(pdf("month"), "user-1")).toMatchObject({ status: "PROCESSED", inserted: 0, duplicates: 10 });
+    expect(table("bankTransaction")).toHaveLength(10);
+  });
+
+  it("holds a statement that doesn't open at the previous statement's closing balance", async () => {
+    const first = all().slice(0, 7);
+    await importUploadedSpreadsheet(hdfcXls(first, "05/10/2026", "05/10/2026", 2_00_000_00), "user-1");
+    // The next day, but opening 1 rupee off the 5 Oct closing balance.
+    const next = generateRows(3, paise(first[6].balance) + 100).map((r) => ({ ...r, date: "06/10/26" }));
+    const r = await importUploadedSpreadsheet(hdfcXls(next, "06/10/2026", "06/10/2026", paise(first[6].balance) + 100), "user-1");
+    expect(r.status).toBe("REVIEW_REQUIRED");
+    expect(r.errors[0]).toMatch(/^Opening balance .* does not match the .* closing balance of the statement to 2026-10-05/);
+    expect(table("bankTransaction")).toHaveLength(7);
+    // Approving the held rows imports them.
+    await reviewStatement(r.statementId, "approve", "user-1", "bank confirmed");
+    expect(table("bankTransaction")).toHaveLength(10);
+  });
+
+  it("refuses a file that isn't an Excel statement without creating anything", async () => {
+    await expect(importUploadedSpreadsheet(new TextEncoder().encode("Date,Narration\n"), "user-1")).rejects.toMatchObject({ code: "PARSE_FAILED" });
     expect(table("bankStatement")).toHaveLength(0);
   });
 });
