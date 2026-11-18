@@ -21,6 +21,10 @@ const INCLUDES_HISTORICAL: Record<string, [number, string]> = {
     1,
     "the candidate's own ledger: old payments are what its balance needs",
   ],
+  "src/lib/candidate-totals.ts": [
+    1,
+    "a candidate's paid-so-far beside the Approvals queue; same balance as the candidate page",
+  ],
   "src/app/(app)/master-data/services/page.tsx": [1, "usage count that gates deleting a service"],
   "src/app/(app)/master-data/categories/page.tsx": [1, "usage count that gates deleting a category"],
   "src/app/api/master/categories/[id]/route.ts": [1, "refuses to delete a category still in use"],
