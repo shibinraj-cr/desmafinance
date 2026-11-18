@@ -78,6 +78,41 @@ references, so the same day read from a daily e-mail and a monthly net-banking P
 | Worker cron (every 5 min) | `src/app/api/cron/bank-statements/route.ts` |
 | UI | `src/app/(app)/finance/bank-statements/` |
 
+## Reconciliation
+
+Bank Statements → **Reconciliation** ties each bank line to the Finance ledger
+(`src/lib/bank/reconcile.ts` rules, `reconcile-run.ts` against the DB).
+
+- **Automatic, only when certain**: a line is matched without a person only when one ledger
+  entry carries its payment reference (UTR / UPI RRN / NEFT ref, compared without punctuation or
+  leading zeros) **and** exactly its open amount, and no other bank line carries that reference.
+  Only payment ids count: phone numbers, masked accounts, loan numbers, PAN, GSTIN and IFSC never do. It runs after every statement import and on
+  **Match now**, over unmatched lines of the last 120 days. The line is marked *auto*.
+- **Suggestions** (Reconcile dialog): every candidate is scored from named signals — exact
+  amount 40, reference 40, same day 15 / 1 day 10 / ≤3 days 5, the payee's name in the
+  narration 15, booked against this bank 10 (another bank −30) — and the reasons are shown.
+  One click on **Match** ties it.
+- **One payment, two transfers**: a ledger entry can be tied to several bank lines; the
+  second transfer is offered as "exactly what is still open". No entry can be matched for more
+  than its amount across bank lines.
+- **Transfers between DesGro's accounts** (HDFC ↔ Axis): a debit in one account and a credit
+  of the same amount in another within 3 days. Paired automatically when both legs carry the
+  same reference; otherwise suggested ("Pair as transfer"). Status `TRANSFER`, each leg points
+  at the other (`transferPairId`); **Unpair** frees both. Transfers need no ledger entry.
+- **Test credits**: "Ignore N test credits" sets aside every unmatched credit of ₹10 or less.
+- **Create entry from this line**: for EPFO, ESIC, TDS, salaries, charges, a loan EMI. Date,
+  amount and bank come from the line; category, sub-item and payee are prefilled from how the
+  same kind of line (same narration shape) was booked before. It goes through the Daily
+  Tracker's validation and approval routing; posted at once, it is matched to the line.
+- **Months**: per account and month, explained lines (matched in full, ignored, transfer) out of
+  all lines and the bank's closing balance. A month with every line explained reads
+  *Reconciled*.
+
+A person's decision always stands: the engine only touches `UNMATCHED` lines no person has
+touched (`reconciledById` null), so an unmatch or unpair is never redone. Writes take locks in one
+order — the bank line, then ledger entries by id — and the manual reconcile route runs as one
+transaction under those locks.
+
 ## Duplicate protection
 
 1. **E-mail** — `@@unique([integrationId, gmailMessageId])`. A message already processed is skipped before anything is downloaded.
