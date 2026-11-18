@@ -32,9 +32,13 @@ export const POST = withApiHandler(async (req: Request, { params }: { params: { 
   const body = Schema.parse(await req.json());
   const bt = await prisma.bankTransaction.findUnique({
     where: { id: params.id },
-    select: { id: true, integrationId: true, direction: true, debitAmount: true, creditAmount: true },
+    select: { id: true, integrationId: true, direction: true, debitAmount: true, creditAmount: true, reconciliationStatus: true },
   });
   if (!bt) throw notFound("Bank transaction not found");
+  // Cash into a float, or a repayment of the director's card claims: explained
+  // on its own page, and undone there, never also matched to the ledger.
+  if (bt.reconciliationStatus === "CASH") throw badRequest("This line is a cash withdrawal — undo the tag on Cash Floats first");
+  if (bt.reconciliationStatus === "CLAIM_SETTLEMENT") throw badRequest("This line repays the director's card claims — undo it on Director's Card first");
   const amount = Number((bt.direction === "DEBIT" ? bt.debitAmount : bt.creditAmount).toString());
 
   let status: string;

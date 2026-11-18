@@ -78,6 +78,15 @@ or `REVIEW_REQUIRED` (validation failed — rows held, not imported), `FAILED`,
 
 Run: `QUEUED → RUNNING → COMPLETED | COMPLETED_WITH_ERRORS | NO_NEW | FAILED`.
 
+Bank line (reconciliation): `UNMATCHED | MATCHED | PARTIALLY_MATCHED | IGNORED | MANUAL_REVIEW`, plus two
+that need no ledger entry, set and undone on their own pages:
+- `CASH` — a withdrawal tagged into the Outdoor Marketing or Petty Cash float (Finance → Cash Floats,
+  `CashWithdrawal`). Not an expense, not an outflow.
+- `CLAIM_SETTLEMENT` — a payment to the director repaying expenses on the director's personal card
+  (Finance → Director's Card, `DirectorClaimSettlement`). The expenses are already in the ledger
+  (payment mode Credit Card); repayments clear the oldest first.
+The bank reconcile route refuses both; undo them where they were set.
+
 ## Retry policy
 
 | Failure | Behaviour |

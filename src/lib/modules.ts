@@ -111,6 +111,13 @@ export const MODULES: AppModule[] = [
       // paid drafts the expense (src/lib/crm-referral-reward.ts).
       { href: "/finance/referral-rewards", label: "Referral Rewards", icon: "card_giftcard", group: "MONEY OUT" },
       { href: "/finance/cashflow", label: "Cash Flow", icon: "account_balance", group: "MONEY OUT" },
+      // Bank data again: granted deliberately (the migration grants the
+      // Finance roles), never by default. Cash withdrawn into the Outdoor
+      // Marketing / Petty Cash floats — not an expense, not an outflow.
+      { href: "/finance/cash-floats", label: "Cash Floats", icon: "payments", group: "MONEY OUT", adminOnly: true },
+      // What DesGro owes the director for expenses on the director's personal
+      // card, and the bank payments that repay it. Finance Manager only.
+      { href: "/finance/director-card", label: "Director's Card", icon: "credit_card", group: "MONEY OUT", adminOnly: true },
       // Bank data: granted to a role deliberately, never by default (the New
       // Role form leaves it unticked). Approver roles with the grant also get
       // the manage actions — see src/lib/bank/access.ts.
