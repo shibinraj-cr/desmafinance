@@ -123,3 +123,33 @@ export function claimMonths(claims: Claim[], settlements: Settlement[], until: s
   }
   return rows;
 }
+
+// ─── Page data (explicit, so the pages don't make the type checker infer them through Prisma) ──
+
+export type OpenLine = { id: string; date: string; account: string; description: string; amount: number; suggested: boolean };
+export type FloatMonthRupees = { month: string; opening: number; in: number; out: number; closing: number };
+
+export type CashFloatsData = {
+  toTag: OpenLine[];
+  withdrawals: Array<{ id: string; kind: CashKind; date: string; amount: number; heldBy: string | null; note: string | null; line: string | null }>;
+  petty: {
+    start: { on: string; balance: number };
+    months: FloatMonthRupees[];
+    spend: Array<{ id: string; date: string; amount: number; what: string; description: string | null }>;
+  };
+  om: {
+    start: { on: string; balance: number };
+    months: FloatMonthRupees[];
+    vouchers: Array<{ id: string; date: string; voucherNo: string | null; paidTo: string; purpose: string | null; amount: number }>;
+  };
+};
+
+export type DirectorCardData = {
+  settings: { startOn: string; payeeWords: string };
+  totals: { claimed: number; repaid: number; outstanding: number; unapplied: number };
+  months: Array<{ month: string; claimed: number; repaid: number; outstanding: number }>;
+  claims: Array<{ id: string; date: string; amount: number; settled: number; outstanding: number; settledOn: string | null; what: string; paidTo: string | null; description: string | null }>;
+  settlements: Array<{ id: string; date: string; amount: number; note: string | null; line: string | null }>;
+  candidates: OpenLine[];
+};
+

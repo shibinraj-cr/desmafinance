@@ -4,11 +4,10 @@ import { useRef, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { Section } from "@/components/Cards";
-import type { cashFloatsView } from "@/lib/cash-floats-data";
-import { CASH_KIND_LABEL, type CashKind } from "@/lib/cash-floats";
+import { CASH_KIND_LABEL, type CashFloatsData, type CashKind } from "@/lib/cash-floats";
 import { Notice, api, day, inputCls, money, primaryBtn, secondaryBtn, td, th } from "../bank-statements/_ui";
 
-type Data = Awaited<ReturnType<typeof cashFloatsView>>;
+type Data = CashFloatsData;
 type Msg = { tone: "ok" | "error"; text: string } | null;
 
 const monthName = (ym: string) => new Date(`${ym}-01T00:00:00Z`).toLocaleDateString("en-IN", { month: "long", year: "numeric", timeZone: "UTC" });

@@ -15,7 +15,10 @@ import {
   floatMonths,
   looksLikeCashWithdrawal,
   namesPayee,
+  type CashFloatsData,
   type CashKind,
+  type DirectorCardData,
+  type OpenLine,
 } from "./cash-floats";
 import { parseVoucherSheet, voucherHashes } from "./cash-floats-vouchers";
 
@@ -38,7 +41,7 @@ export async function requireFloat(page: string, cap: keyof FloatCaps) {
 }
 
 /** Bank lines nobody has explained yet: no ledger link, not set aside. */
-const OPEN_LINE = { reconciliationStatus: { in: ["UNMATCHED", "MANUAL_REVIEW"] }, matches: { none: {} }, direction: "DEBIT" } satisfies Prisma.BankTransactionWhereInput;
+const OPEN_LINE: Prisma.BankTransactionWhereInput = { reconciliationStatus: { in: ["UNMATCHED", "MANUAL_REVIEW"] }, matches: { none: {} }, direction: "DEBIT" };
 
 const LINE_SELECT = {
   id: true,
@@ -51,7 +54,6 @@ const LINE_SELECT = {
 } satisfies Prisma.BankTransactionSelect;
 type LineRow = Prisma.BankTransactionGetPayload<{ select: typeof LINE_SELECT }>;
 
-export type OpenLine = { id: string; date: string; account: string; description: string; amount: number; suggested: boolean };
 const openLine = (l: LineRow, suggested: boolean): OpenLine => ({
   id: l.id,
   date: fromPrismaDate(l.txnDate),
@@ -191,7 +193,7 @@ const paise = (d: { toString(): string }) => fromDecimal(d) ?? 0;
 const day = (d: Date) => d.toISOString().slice(0, 10);
 
 /** The Cash Floats page: what to tag, petty cash month by month, the Outdoor Marketing register. */
-export async function cashFloatsView(everyDebit = false) {
+export async function cashFloatsView(everyDebit = false): Promise<CashFloatsData> {
   const today = todayIst();
   const [toTag, withdrawals, cashSpend, vouchers, pettyStart, omStart] = await Promise.all([
     withdrawalsToTag(everyDebit),
@@ -288,7 +290,7 @@ export async function unmarkSettlement(id: string, userId: string) {
 }
 
 /** The Director's Card page: claims (oldest settled first), settlements, the monthly statement, and debits that may be settlements. */
-export async function directorCardView(everyDebit = false) {
+export async function directorCardView(everyDebit = false): Promise<DirectorCardData> {
   const today = todayIst();
   const startOn = (await readSetting(CARD_START)) ?? DEFAULT_START;
   const words = ((await readSetting(CARD_PAYEE)) ?? "").split(",").map((w) => w.trim()).filter(Boolean);

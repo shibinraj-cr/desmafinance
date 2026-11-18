@@ -4,10 +4,10 @@ import { useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { Section } from "@/components/Cards";
-import type { directorCardView } from "@/lib/cash-floats-data";
+import type { DirectorCardData } from "@/lib/cash-floats";
 import { Notice, api, day, inputCls, money, secondaryBtn, td, th } from "../bank-statements/_ui";
 
-type Data = Awaited<ReturnType<typeof directorCardView>>;
+type Data = DirectorCardData;
 
 const monthName = (ym: string) => new Date(`${ym}-01T00:00:00Z`).toLocaleDateString("en-IN", { month: "long", year: "numeric", timeZone: "UTC" });
 

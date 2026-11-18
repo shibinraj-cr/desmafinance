@@ -27,6 +27,11 @@ jobs:
         run: npx prisma generate
 
       - name: Typecheck
+        # A full check of this codebase (Prisma's generated types included) sits
+        # near Node's default ~2 GB heap; each new model pushes it closer. The
+        # runner has far more memory than that.
+        env:
+          NODE_OPTIONS: --max-old-space-size=6144
         run: npx tsc --noEmit
 
       - name: Lint
