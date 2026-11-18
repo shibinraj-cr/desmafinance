@@ -181,18 +181,3 @@ export function meetingMatches(m: MeetingRow, query: string): boolean {
     .toLowerCase();
   return q.split(/\s+/).every((word) => hay.includes(word));
 }
-
-/**
- * Who a non-admin editor may name as an action owner: people who can already
- * read the meeting (its shares), themselves, and anyone already owning an item
- * on it. Naming an owner lets that person read the meeting, so an editor
- * picking freely would be re-sharing by the back door — which stays admin-only.
- */
-export function editorOwnerChoices(m: Pick<MeetingRow, "sharedWith" | "actions">, self: ShareUser): ShareUser[] {
-  const byId = new Map<string, string>([[self.id, self.username]]);
-  for (const u of m.sharedWith) byId.set(u.id, u.username);
-  for (const a of m.actions) if (a.ownerUserId && a.ownerName) byId.set(a.ownerUserId, a.ownerName);
-  return Array.from(byId, ([id, username]) => ({ id, username })).sort((a, b) =>
-    a.username.localeCompare(b.username),
-  );
-}

@@ -1,8 +1,7 @@
 import { redirect } from "next/navigation";
-import { prisma } from "@/lib/prisma";
 import { getCurrentUserAndPermissions } from "@/lib/permissions";
 import { todayIst } from "@/lib/lead-pulse-dates";
-import { listMeetingsSharedWith } from "@/lib/meeting-notes";
+import { listMeetingsSharedWith, listShareableUsers } from "@/lib/meeting-notes";
 import { MyMeetingsClient } from "./client";
 
 export const dynamic = "force-dynamic";
@@ -18,15 +17,16 @@ export default async function MyMeetingsPage({ searchParams }: { searchParams?: 
   const { userId } = await getCurrentUserAndPermissions();
   if (!userId) redirect("/login");
 
-  const [meetings, self] = await Promise.all([
-    listMeetingsSharedWith(userId),
-    prisma.user.findUnique({ where: { id: userId }, select: { id: true, username: true } }),
-  ]);
+  const meetings = await listMeetingsSharedWith(userId);
+  // The action-owner picker for editors lists every active login, as it does
+  // for admins. Only fetched when the viewer can edit something.
+  const users = meetings.some((m) => m.canEdit) ? await listShareableUsers() : [];
   return (
     <MyMeetingsClient
       meetings={meetings}
       today={todayIst()}
-      self={self ?? { id: userId, username: "Me" }}
+      userId={userId}
+      users={users}
       initialSelectedId={searchParams?.m ?? null}
     />
   );
