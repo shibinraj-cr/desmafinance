@@ -57,6 +57,12 @@ export type InboxScope = {
    * ANDs on top. Empty/undefined = no campaign narrowing.
    */
   campaign?: string | null;
+  /**
+   * Lead-stage narrowing — CrmLeadStatus ids, and/or the `"no_lead"` sentinel
+   * for threads not yet linked to a lead. Independent of `filter`/`owner`/
+   * `campaign`, so it ANDs on top.
+   */
+  stage?: string | string[] | null;
 };
 
 /** The `status` constraint a filter implies — exported so the chip counts agree with the list. */
@@ -82,6 +88,26 @@ export function inboxOwnerWhere(
     return { OR: [{ assignedToId: null }, { assignedToId: oneOf(userIds) }] };
   }
   return { assignedToId: unassigned ? null : oneOf(userIds) };
+}
+
+/**
+ * The lead-stage narrowing, shared by the conversation list and the badge
+ * counts for the same reason as inboxOwnerWhere. Several stages union; the
+ * "no_lead" sentinel ORs in threads with no linked lead (a stranger's first
+ * message), which no stage id could ever match. Returns null when nothing is
+ * picked.
+ */
+export function inboxStageWhere(
+  stage: string | string[] | null | undefined,
+): Prisma.WaConversationWhereInput | null {
+  const stages = listParam(stage);
+  if (stages.length === 0) return null;
+  const noLead = stages.includes("no_lead");
+  const statusIds = stages.filter((s) => s !== "no_lead");
+  if (noLead && statusIds.length > 0) {
+    return { OR: [{ leadId: null }, { lead: { statusId: oneOf(statusIds) } }] };
+  }
+  return noLead ? { leadId: null } : { lead: { statusId: oneOf(statusIds) } };
 }
 
 /**
@@ -117,6 +143,9 @@ export function buildInboxWhere(filter: WaInboxFilter, scope: InboxScope, search
   // campaign by name.
   if (scope.campaign === "__any__") and.push({ sourceCampaign: { not: null } });
   else if (scope.campaign) and.push({ sourceCampaign: scope.campaign });
+
+  const stageWhere = inboxStageWhere(scope.stage);
+  if (stageWhere) and.push(stageWhere);
 
   switch (filter) {
     case "mine":
