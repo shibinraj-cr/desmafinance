@@ -3,7 +3,8 @@ import { withApiHandler } from "@/lib/api";
 import { badRequest } from "@/lib/http-error";
 import { recordAudit } from "@/lib/audit";
 import { requireBank } from "@/lib/bank/access";
-import { importUploadedPdf } from "@/lib/bank/engine";
+import { importUploadedPdf, importUploadedSpreadsheet } from "@/lib/bank/engine";
+import { looksLikeSpreadsheet } from "@/lib/bank/parsers/spreadsheet";
 import { BankAutomationError, ERROR_LABEL } from "@/lib/bank/errors";
 import { redact } from "@/lib/bank/secrets";
 
@@ -15,10 +16,13 @@ const MAX_BYTES = 4 * 1024 * 1024;
 
 /**
  * POST /api/finance/bank-statements/upload (multipart: file, optional
- * integrationId, optional password) — import one statement PDF now and say
- * what happened: which account it belongs to (read off the PDF, created on
- * first sight), its period, how many transactions were new and how many were
- * already known. One file per request, so the page can report file by file.
+ * integrationId, optional password) — import one statement now and say what
+ * happened: which account it belongs to (read off the file, created on first
+ * sight), its period, how many transactions were new and how many were already
+ * known. One file per request, so the page can report file by file.
+ *
+ * A PDF (any supported bank) or a net-banking Excel download: HDFC .xls or
+ * Axis .xlsx. The bytes decide which, not the file name.
  *
  * `password` opens an encrypted PDF for this request only; it is not stored,
  * logged or echoed back.
@@ -29,10 +33,13 @@ export const POST = withApiHandler(async (req: Request) => {
   const file = form.get("file");
   const integrationId = String(form.get("integrationId") ?? "") || null;
   const password = String(form.get("password") ?? "") || null;
-  if (!(file instanceof File)) throw badRequest("Choose a statement PDF");
-  if (file.size > MAX_BYTES) throw badRequest("The PDF must be under 4 MB");
+  if (!(file instanceof File)) throw badRequest("Choose a statement PDF or Excel file");
+  if (file.size > MAX_BYTES) throw badRequest("The file must be under 4 MB");
   try {
-    const res = await importUploadedPdf(new Uint8Array(await file.arrayBuffer()), userId, { integrationId, password });
+    const bytes = new Uint8Array(await file.arrayBuffer());
+    const res = looksLikeSpreadsheet(bytes)
+      ? await importUploadedSpreadsheet(bytes, userId, { integrationId, fileName: file.name })
+      : await importUploadedPdf(bytes, userId, { integrationId, password });
     await recordAudit({
       entityType: "BankStatement",
       entityId: res.statementId,

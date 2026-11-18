@@ -38,6 +38,22 @@ same duplicate guards as the daily run. Each file reports *N new · M already pr
 password-protected PDF asks for its password, which is used for that upload only and never
 stored.
 
+**Excel downloads.** The net-banking Excel downloads go in the same drop zone: HDFC's
+**.xls** and Axis's **.xlsx**, as downloaded. The bytes decide the format (not the file name);
+`src/lib/bank/parsers/spreadsheet.ts` finds the table by its header words (ignoring hints such
+as "(dd/mm/yyyy)" and "(INR)"), reads the account and period from the header block, and takes
+the opening/closing balance and totals from the statement's own summary (HDFC's STATEMENT
+SUMMARY block; Axis's OPENING BALANCE / TRANSACTION TOTAL DR/CR / CLOSING BALANCE rows). An
+Axis account is created on its first upload (Excel only: there is no Axis e-mail automation or
+PDF parser). Excel statements are processed once, on upload (`source = "sheet"`, nothing
+archived); a held one is decided from its held rows, and Retry / Re-parse don't apply.
+
+**Continuity.** Every statement (PDF or Excel) must open at the closing balance of the
+imported statement for the days just before it, and close at the opening of the one just
+after (an older month uploaded late). A break between back-to-back statements holds the
+statement for review; days no statement covers are only a warning
+(`src/lib/bank/continuity.ts`).
+
 The consolidated statement is every imported transaction for the account in date order, with
 opening balance, total credits/debits, closing balance, Excel/CSV download and print. It also
 says whether the ledger is complete: **coverage gaps** (days no uploaded statement covers) and
@@ -67,6 +83,8 @@ references, so the same day read from a daily e-mail and a monthly net-banking P
 1. **E-mail** — `@@unique([integrationId, gmailMessageId])`. A message already processed is skipped before anything is downloaded.
 2. **Statement** — `@@unique([integrationId, fileSha256])`. A byte-identical PDF (re-sent e-mail) is marked `DUPLICATE`.
 3. **Transaction** — `@@unique([integrationId, transactionHash])`, SHA-256 of account + dates + normalised narration + reference + debit + credit + **running balance**; inserts use `skipDuplicates`. The balance keeps two genuine same-amount payments apart while the same line read twice collides.
+
+4. **Same line, other file** — a line already in the account from *another* statement with the same day, amount and running balance is the same line even if its narration is worded differently (a PDF and an Excel download of the same days). Each existing line accounts for one incoming row at most (`knownLines` in `src/lib/bank/import.ts`).
 
 Running the same run or backfill again creates **zero** new rows.
 
@@ -234,7 +252,7 @@ net banking and use **Upload PDF**). `REVIEW_REQUIRED`: open **Review** → chec
 - Bank holidays are not modelled beyond Sundays and 2nd/4th Saturdays; the alert threshold absorbs single holidays.
 - Gmail search is day-granular; the 3-day lookback covers late e-mails.
 - Reconciliation is manual in v1 (suggestions by amount and date; no automatic matching).
-- A manual PDF upload is limited to 4 MB (Vercel request cap).
+- A manual upload (PDF or Excel) is limited to 4 MB (Vercel request cap).
 
 ## Future improvements
 

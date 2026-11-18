@@ -52,16 +52,19 @@ export function classifyNarration(narration: string): TransactionType {
 
 /**
  * Best-effort counterparty and references from common Indian narrations:
- *   UPI-NAME-VPA@BANK-IFSC-123456789012-NOTE
- *   NEFT CR-IFSC0001234-NAME-REF / IMPS-123456789012-NAME-BANK
+ *   UPI-NAME-VPA@BANK-IFSC-123456789012-NOTE                       (HDFC)
+ *   NEFT CR-IFSC0001234-NAME-REF / IMPS-123456789012-NAME-BANK     (HDFC)
+ *   UPI/P2A/123456789012/NAME/BANK/NOTE, IMPS/P2A/123456789012/NAME/BANK,
+ *   NEFT/UTR/NAME/BANK                                             (Axis)
  * Anything unrecognised yields nulls — never a guess dressed as fact.
  */
 export function extractCounterparty(
   narration: string,
   type: TransactionType,
 ): { counterpartyName: string | null; upiReference: string | null; bankReference: string | null } {
-  const parts = narration.split("-").map((p) => p.trim()).filter(Boolean);
   const none = { counterpartyName: null, upiReference: null, bankReference: null };
+  if (/^\s*[A-Z]{2,5}\/[^-]*\//i.test(narration)) return slashForm(narration, type) ?? none;
+  const parts = narration.split("-").map((p) => p.trim()).filter(Boolean);
   if (parts.length < 2) return none;
 
   if (type === "UPI") {
@@ -75,6 +78,25 @@ export function extractCounterparty(
     return { counterpartyName: cleanName(name), upiReference: null, bankReference: ref };
   }
   return none;
+}
+
+const IFSC = /^[A-Z]{4}0[A-Z0-9]{6}$/;
+const ROUTING = /^(P2A|P2M|CR|DR|D|C|INB|MOB|IMPS|NEFT|RTGS|UPI|BRN|TPFT)$/i;
+
+/** Axis-style "RAIL/…/REF/NAME/BANK/NOTE": the name is the first word part after the reference. */
+function slashForm(narration: string, type: TransactionType) {
+  const parts = narration.split("/").map((p) => p.trim()).filter(Boolean);
+  if (parts.length < 3) return null;
+  const nameAfter = (i: number) => parts.slice(i + 1).find((p) => /[A-Za-z]{3,}/.test(p) && !ROUTING.test(p) && !IFSC.test(p)) ?? null;
+  if (type === "UPI") {
+    const i = parts.findIndex((p) => /^\d{12}$/.test(p));
+    return i < 0 ? null : { counterpartyName: cleanName(nameAfter(i)), upiReference: parts[i], bankReference: null };
+  }
+  if (type === "NEFT" || type === "RTGS" || type === "IMPS") {
+    const i = parts.findIndex((p) => (/^\d{10,}$/.test(p) || /^[A-Z]{4}[A-Z0-9]{8,}$/.test(p)) && !IFSC.test(p));
+    return i < 0 ? null : { counterpartyName: cleanName(nameAfter(i)), upiReference: null, bankReference: parts[i] };
+  }
+  return null;
 }
 
 function cleanName(s: string | null): string | null {

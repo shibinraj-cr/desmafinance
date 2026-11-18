@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 
 vi.mock("@/lib/prisma", () => ({
-  prisma: { bankTransaction: { createMany: vi.fn() } },
+  prisma: { bankTransaction: { createMany: vi.fn(), findMany: vi.fn(async () => []) } },
 }));
 
 import { prisma } from "@/lib/prisma";

@@ -12,10 +12,14 @@ type FileState =
   | { name: string; state: "done"; result: UploadResult }
   | { name: string; state: "error"; code: string; message: string };
 
+const isPdf = (name: string) => /\.pdf$/i.test(name);
+const STATEMENT_FILE = /\.(pdf|xlsx?)$/i;
+
 /**
- * Drop one or many statement PDFs. Each is read for its bank and account,
- * imported, and reported on — new transactions vs ones already in DesGro —
- * one request per file so a bad file never sinks the rest.
+ * Drop one or many statements: PDFs, or the Excel downloads from net banking
+ * (HDFC .xls, Axis .xlsx). Each is read for its bank and account, imported,
+ * and reported on — new transactions vs ones already in DesGro — one request
+ * per file so a bad file never sinks the rest.
  */
 export function StatementUploader({ integrationId }: { integrationId: string | null }) {
   const router = useRouter();
@@ -29,7 +33,7 @@ export function StatementUploader({ integrationId }: { integrationId: string | n
   const [drag, setDrag] = useState(false);
 
   const upload = async (list: File[]) => {
-    const pdfs = list.filter((f) => f.type === "application/pdf" || /\.pdf$/i.test(f.name));
+    const pdfs = list.filter((f) => f.type === "application/pdf" || STATEMENT_FILE.test(f.name));
     if (!pdfs.length) return;
     setBusy(true);
     setPending([]);
@@ -89,19 +93,20 @@ export function StatementUploader({ integrationId }: { integrationId: string | n
       >
         <span className="material-symbols-outlined text-[36px] text-on-surface-variant">upload_file</span>
         <p className="text-body-md">
-          Drop statement PDFs here, or{" "}
+          Drop statements here (PDF, or Excel from net banking), or{" "}
           <button type="button" className="text-primary font-semibold underline" disabled={busy} onClick={() => input.current?.click()}>
             choose files
           </button>
         </p>
         <p className="text-caption text-on-surface-variant max-w-xl">
-          Daily, monthly or any period — upload as many as you like, in any order, even overlapping. The account is read from each PDF, and a
-          transaction already in DesGro is never added twice.
+          Daily, monthly or any period — upload as many as you like, in any order, even overlapping. HDFC .xls and Axis .xlsx downloads work
+          as they are. The account is read from each file, and a transaction already in DesGro is never added twice, even if it came in from the
+          PDF of the same days. Each statement must pick up from the closing balance of the one before it.
         </p>
         <input
           ref={input}
           type="file"
-          accept="application/pdf,.pdf"
+          accept="application/pdf,.pdf,.xls,.xlsx,application/vnd.ms-excel,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
           multiple
           className="hidden"
           onChange={(e) => {
@@ -142,7 +147,7 @@ export function StatementUploader({ integrationId }: { integrationId: string | n
           <ul className="divide-y divide-outline-variant border border-outline-variant rounded-lg">
             {files.map((f) => (
               <li key={f.name} className="flex flex-wrap items-center gap-sm px-md py-sm text-body-md">
-                <span className="material-symbols-outlined text-[18px] text-on-surface-variant">picture_as_pdf</span>
+                <span className="material-symbols-outlined text-[18px] text-on-surface-variant">{isPdf(f.name) ? "picture_as_pdf" : "table_view"}</span>
                 <span className="font-semibold truncate max-w-[260px]" title={f.name}>
                   {f.name}
                 </span>
