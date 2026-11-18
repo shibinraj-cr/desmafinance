@@ -19,7 +19,9 @@ import { automationStatus } from "@/lib/bank/status";
 import { BankTabs } from "./_ui";
 import { TABS, type TabKey } from "./tabs";
 import { AccountPicker, SetupIntegration } from "./setup";
-import { TransactionsView } from "./transactions";
+import { ReconcileToolbar, TransactionsView } from "./transactions";
+import { monthStatuses } from "@/lib/bank/reconcile-run";
+import { TEST_CREDIT_MAX } from "@/lib/bank/reconcile";
 import { StatementsView } from "./statements";
 import { AutomationView } from "./automation";
 import { AuditView } from "./audit";
@@ -87,11 +89,15 @@ export default async function BankStatementsPage({ searchParams }: { searchParam
   } else if (tab === "transactions" || tab === "reconciliation") {
     const filters = parseTxnFilters({ ...searchParams, account: integration.id });
     if (tab === "reconciliation" && filters.recon.length === 0) filters.recon = ["UNMATCHED", "MANUAL_REVIEW", "PARTIALLY_MATCHED"];
-    const [list, recon] = await Promise.all([
+    const [list, recon, months, testCredits] = await Promise.all([
       listTransactions(filters, page),
       tab === "reconciliation"
         ? prisma.bankTransaction.groupBy({ by: ["reconciliationStatus"], where: { integrationId: integration.id }, _count: true })
         : Promise.resolve([]),
+      tab === "reconciliation" ? monthStatuses() : Promise.resolve([]),
+      tab === "reconciliation"
+        ? prisma.bankTransaction.count({ where: { reconciliationStatus: "UNMATCHED", direction: "CREDIT", creditAmount: { gt: 0, lte: TEST_CREDIT_MAX } } })
+        : Promise.resolve(0),
     ]);
     const count = (s: string) => recon.find((r) => r.reconciliationStatus === s)?._count ?? 0;
     body = (
@@ -102,9 +108,10 @@ export default async function BankStatementsPage({ searchParams }: { searchParam
             <KpiCard label="Manual review" value={count("MANUAL_REVIEW").toLocaleString("en-IN")} tone={count("MANUAL_REVIEW") ? "danger" : "default"} />
             <KpiCard label="Partially matched" value={count("PARTIALLY_MATCHED").toLocaleString("en-IN")} />
             <KpiCard label="Matched" value={count("MATCHED").toLocaleString("en-IN")} tone="success" />
-            <KpiCard label="Ignored" value={count("IGNORED").toLocaleString("en-IN")} />
+            <KpiCard label="Ignored · transfers" value={`${count("IGNORED").toLocaleString("en-IN")} · ${count("TRANSFER").toLocaleString("en-IN")}`} />
           </section>
         )}
+        {tab === "reconciliation" && <ReconcileToolbar months={months} testCredits={testCredits} canReconcile={caps.reconcile} />}
         <TransactionsView
           tab={tab}
           rows={list.rows}

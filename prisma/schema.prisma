@@ -6319,7 +6319,7 @@ model BankStatement {
 
 /// One bank transaction. Amounts are fixed-precision decimals; the raw
 /// narration is kept untouched beside the derived classification.
-/// reconciliationStatus: UNMATCHED | MATCHED | PARTIALLY_MATCHED | IGNORED | MANUAL_REVIEW
+/// reconciliationStatus: UNMATCHED | MATCHED | PARTIALLY_MATCHED | IGNORED | MANUAL_REVIEW | TRANSFER
 model BankTransaction {
   id                   String          @id @default(cuid())
   integrationId        String
@@ -6355,6 +6355,13 @@ model BankTransaction {
   reconciliationNote   String?
   reconciledById       String?
   reconciledAt         DateTime?
+  // Matched by the engine (exact reference + amount), not a person.
+  autoMatched          Boolean         @default(false)
+  // TRANSFER: the other leg, a line of another DesGro account.
+  transferPairId       String?
+  // "Create entry from this line" sent the entry to drafts / approval: its id,
+  // so a second one is never created while it waits.
+  pendingEntryRef      String?
   sheetSyncedAt        DateTime?
   createdAt            DateTime        @default(now())
   updatedAt            DateTime        @updatedAt
@@ -6367,6 +6374,7 @@ model BankTransaction {
   @@index([txnDate])
   @@index([reconciliationStatus])
   @@index([transactionType])
+  @@index([transferPairId])
 }
 
 /// A bank transaction associated with a ledger Transaction. Several matches

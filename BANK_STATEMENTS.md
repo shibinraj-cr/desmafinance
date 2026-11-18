@@ -38,6 +38,22 @@ same duplicate guards as the daily run. Each file reports *N new · M already pr
 password-protected PDF asks for its password, which is used for that upload only and never
 stored.
 
+**Excel downloads.** The net-banking Excel downloads go in the same drop zone: HDFC's
+**.xls** and Axis's **.xlsx**, as downloaded. The bytes decide the format (not the file name);
+`src/lib/bank/parsers/spreadsheet.ts` finds the table by its header words (ignoring hints such
+as "(dd/mm/yyyy)" and "(INR)"), reads the account and period from the header block, and takes
+the opening/closing balance and totals from the statement's own summary (HDFC's STATEMENT
+SUMMARY block; Axis's OPENING BALANCE / TRANSACTION TOTAL DR/CR / CLOSING BALANCE rows). An
+Axis account is created on its first upload (Excel only: there is no Axis e-mail automation or
+PDF parser). Excel statements are processed once, on upload (`source = "sheet"`, nothing
+archived); a held one is decided from its held rows, and Retry / Re-parse don't apply.
+
+**Continuity.** Every statement (PDF or Excel) must open at the closing balance of the
+imported statement for the days just before it, and close at the opening of the one just
+after (an older month uploaded late). A break between back-to-back statements holds the
+statement for review; days no statement covers are only a warning
+(`src/lib/bank/continuity.ts`).
+
 The consolidated statement is every imported transaction for the account in date order, with
 opening balance, total credits/debits, closing balance, Excel/CSV download and print. It also
 says whether the ledger is complete: **coverage gaps** (days no uploaded statement covers) and
@@ -62,11 +78,48 @@ references, so the same day read from a daily e-mail and a monthly net-banking P
 | Worker cron (every 5 min) | `src/app/api/cron/bank-statements/route.ts` |
 | UI | `src/app/(app)/finance/bank-statements/` |
 
+## Reconciliation
+
+Bank Statements → **Reconciliation** ties each bank line to the Finance ledger
+(`src/lib/bank/reconcile.ts` rules, `reconcile-run.ts` against the DB).
+
+- **Automatic, only when certain**: a line is matched without a person only when one ledger
+  entry carries its payment reference (UTR / UPI RRN / NEFT ref, compared without punctuation or
+  leading zeros) **and** exactly its open amount, and no other bank line carries that reference.
+  Only payment ids count: phone numbers, masked accounts, loan numbers, PAN, GSTIN and IFSC never do. It runs after every statement import and on
+  **Match now**, over unmatched lines of the last 120 days. The line is marked *auto*.
+- **Suggestions** (Reconcile dialog): every candidate is scored from named signals — exact
+  amount 40, reference 40, same day 15 / 1 day 10 / ≤3 days 5, the payee's name in the
+  narration 15, booked against this bank 10 (another bank −30) — and the reasons are shown.
+  One click on **Match** ties it.
+- **One payment, two transfers**: a ledger entry can be tied to several bank lines; the
+  second transfer is offered as "exactly what is still open". No entry can be matched for more
+  than its amount across bank lines.
+- **Transfers between DesGro's accounts** (HDFC ↔ Axis): a debit in one account and a credit
+  of the same amount in another within 3 days. Paired automatically when both legs carry the
+  same reference; otherwise suggested ("Pair as transfer"). Status `TRANSFER`, each leg points
+  at the other (`transferPairId`); **Unpair** frees both. Transfers need no ledger entry.
+- **Test credits**: "Ignore N test credits" sets aside every unmatched credit of ₹10 or less.
+- **Create entry from this line**: for EPFO, ESIC, TDS, salaries, charges, a loan EMI. Date,
+  amount and bank come from the line; category, sub-item and payee are prefilled from how the
+  same kind of line (same narration shape) was booked before. It goes through the Daily
+  Tracker's validation and approval routing; posted at once, it is matched to the line.
+- **Months**: per account and month, explained lines (matched in full, ignored, transfer) out of
+  all lines and the bank's closing balance. A month with every line explained reads
+  *Reconciled*.
+
+A person's decision always stands: the engine only touches `UNMATCHED` lines no person has
+touched (`reconciledById` null), so an unmatch or unpair is never redone. Writes take locks in one
+order — the bank line, then ledger entries by id — and the manual reconcile route runs as one
+transaction under those locks.
+
 ## Duplicate protection
 
 1. **E-mail** — `@@unique([integrationId, gmailMessageId])`. A message already processed is skipped before anything is downloaded.
 2. **Statement** — `@@unique([integrationId, fileSha256])`. A byte-identical PDF (re-sent e-mail) is marked `DUPLICATE`.
 3. **Transaction** — `@@unique([integrationId, transactionHash])`, SHA-256 of account + dates + normalised narration + reference + debit + credit + **running balance**; inserts use `skipDuplicates`. The balance keeps two genuine same-amount payments apart while the same line read twice collides.
+
+4. **Same line, other file** — a line already in the account from *another* statement with the same day, amount and running balance is the same line even if its narration is worded differently (a PDF and an Excel download of the same days). Each existing line accounts for one incoming row at most (`knownLines` in `src/lib/bank/import.ts`).
 
 Running the same run or backfill again creates **zero** new rows.
 
@@ -234,7 +287,7 @@ net banking and use **Upload PDF**). `REVIEW_REQUIRED`: open **Review** → chec
 - Bank holidays are not modelled beyond Sundays and 2nd/4th Saturdays; the alert threshold absorbs single holidays.
 - Gmail search is day-granular; the 3-day lookback covers late e-mails.
 - Reconciliation is manual in v1 (suggestions by amount and date; no automatic matching).
-- A manual PDF upload is limited to 4 MB (Vercel request cap).
+- A manual upload (PDF or Excel) is limited to 4 MB (Vercel request cap).
 
 ## Future improvements
 

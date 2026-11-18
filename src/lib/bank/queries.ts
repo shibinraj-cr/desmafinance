@@ -9,7 +9,7 @@ import { TRANSACTION_TYPES } from "./classify";
  * Nothing here selects a secret column.
  */
 
-export const RECON_STATUSES = ["UNMATCHED", "MATCHED", "PARTIALLY_MATCHED", "IGNORED", "MANUAL_REVIEW"] as const;
+export const RECON_STATUSES = ["UNMATCHED", "MATCHED", "PARTIALLY_MATCHED", "IGNORED", "MANUAL_REVIEW", "TRANSFER"] as const;
 export type ReconStatus = (typeof RECON_STATUSES)[number];
 
 export type TxnFilters = {
@@ -102,6 +102,8 @@ export const TXN_SELECT = {
   upiReference: true,
   reconciliationStatus: true,
   reconciliationNote: true,
+  autoMatched: true,
+  transferPairId: true,
   statementId: true,
   statementDate: true,
   transactionHash: true,
@@ -124,6 +126,9 @@ export type TxnRow = {
   recon: string;
   reconNote: string | null;
   matches: number;
+  /** Matched or paired by the engine, not a person. */
+  auto: boolean;
+  transferPairId: string | null;
   account: string;
   statementId: string;
   statementDate: string | null;
@@ -146,6 +151,8 @@ export function serializeTxn(t: Prisma.BankTransactionGetPayload<{ select: typeo
     recon: t.reconciliationStatus,
     reconNote: t.reconciliationNote,
     matches: t._count.matches,
+    auto: t.autoMatched,
+    transferPairId: t.transferPairId,
     account: `${t.integration.bankName} ••••${t.integration.accountLastFour}`,
     statementId: t.statementId,
     statementDate: t.statementDate ? fromPrismaDate(t.statementDate) : null,

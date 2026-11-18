@@ -77,7 +77,10 @@ export async function POST(req: Request) {
   const wb = XLSX.read(buf, { cellDates: true });
   const sheetName = wb.SheetNames[0];
   const ws = wb.Sheets[sheetName];
-  const rows: unknown[][] = XLSX.utils.sheet_to_json(ws, { header: 1, raw: false, defval: "" });
+  // Dates arrive as shown (formatted text); numbers as the number itself, so a
+  // phone, Aadhaar or account number in General format isn't read as Excel's
+  // "1.23457E+11" display.
+  const rows: unknown[][] = XLSX.utils.sheet_to_json(ws, { header: 1, raw: false, rawNumbers: true, defval: "" });
 
   if (rows.length < 2) return NextResponse.json({ error: "empty sheet" }, { status: 400 });
   const headerRow = rows[0] as string[];
