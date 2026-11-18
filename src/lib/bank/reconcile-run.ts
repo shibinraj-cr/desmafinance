@@ -4,6 +4,7 @@ import { fromPrismaDate, todayIst, addDays, toPrismaDate } from "@/lib/lead-puls
 import { submitCreate } from "@/lib/approval";
 import { buildValidatedProposed, type RawTxFields } from "@/lib/finance-tx-validation";
 import { isHistoricalDate } from "@/lib/finance-historical";
+import { gstInAmount } from "@/lib/finance-gst";
 import { canApprove, needsApproval, type Permissions } from "@/lib/rbac";
 import { badRequest, conflict, forbidden, notFound } from "@/lib/http-error";
 import { recordAudit } from "@/lib/audit";
@@ -528,6 +529,7 @@ export async function createEntryFromLine(
             partyId: data.partyId ?? null,
             employeeId: data.employeeId ?? null,
             expDom: data.type === "Revenue" ? (data.expDom ?? null) : null,
+            gstAmount: gstInAmount({ ...data, expDom: data.type === "Revenue" ? (data.expDom ?? null) : null }),
             isHistorical: false,
             createdById: userId,
           },
