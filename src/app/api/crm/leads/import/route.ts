@@ -83,7 +83,10 @@ export const POST = withApiHandler(async (req: Request) => {
   const wb = XLSX.read(buf, { cellDates: true });
   const ws = wb.Sheets[wb.SheetNames[0]];
   if (!ws) throw badRequest("The spreadsheet has no sheets", "empty_file");
-  const rows = XLSX.utils.sheet_to_json<unknown[]>(ws, { header: 1, raw: false, defval: "" });
+  // Dates arrive as shown in the sheet (formatted text); numbers arrive as the
+  // number itself (`rawNumbers`). A 12-digit phone shown as "9.19877E+11" in
+  // General format would otherwise be read as that text and the number lost.
+  const rows = XLSX.utils.sheet_to_json<unknown[]>(ws, { header: 1, raw: false, rawNumbers: true, defval: "" });
   if (rows.length < 2) throw badRequest("The sheet has no data rows", "empty_sheet");
 
   // Header → canonical-key index map, and a list of unmapped headers (→ extra).

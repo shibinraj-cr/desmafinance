@@ -25,9 +25,18 @@ const MONTHS: Record<string, number> = {
   jul: 7, aug: 8, sep: 9, oct: 10, nov: 11, dec: 12,
 };
 
+/** A date cell's calendar day. SheetJS hands date cells over as Dates whose
+ *  LOCAL reading is the day typed in the sheet, so read the local parts:
+ *  `toISOString()` would give the day before on a machine east of UTC (IST),
+ *  which is where this import runs. */
+function cellDay(d: Date): string | null {
+  if (Number.isNaN(d.getTime())) return null;
+  return iso(d.getFullYear(), d.getMonth() + 1, d.getDate());
+}
+
 export function text(v: Cell): string {
   if (v === null || v === undefined) return "";
-  if (v instanceof Date) return v.toISOString().slice(0, 10);
+  if (v instanceof Date) return cellDay(v) ?? "";
   return String(v).trim();
 }
 
@@ -59,7 +68,7 @@ export function money(v: Cell): number | null {
  *  "mar 2026" (a bare month resolves to its last day). */
 export function date(v: Cell): string | null {
   if (v === null || v === undefined || v === "") return null;
-  if (v instanceof Date) return v.toISOString().slice(0, 10);
+  if (v instanceof Date) return cellDay(v);
 
   // A workbook read without `cellDates` hands dates over as Excel serials.
   // Accept them inside a range that can only be a date (roughly 1954–2119), so
