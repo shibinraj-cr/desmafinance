@@ -78,11 +78,17 @@ export default async function SignPage({ params }: { params: { token: string } }
   const session = cookies().get(sessionCookieName(signer.id))?.value;
   if (!verifySession(session, signer.id, signer.tokenHash ?? "", new Date())) {
     const channels = await otpChannels(request, signer);
+    // A code is already out (the page was reopened, e.g. after switching to the
+    // email app on a phone): go straight to typing it instead of sending another.
+    const waitingAt =
+      signer.otpHash && signer.otpExpiresAt && signer.otpExpiresAt > new Date()
+        ? (channels.find((c) => c.channel === (signer.otpChannel ?? "email"))?.to ?? null)
+        : null;
     return (
       <Shell title={`Your ${name}`}>
         <p>Hello {signer.name}. Before you can read and sign it, confirm it is you with a one-time code.</p>
         {channels.length ? (
-          <OtpStep token={params.token} channels={channels} />
+          <OtpStep token={params.token} channels={channels} alreadySentTo={waitingAt} />
         ) : (
           <p className="rounded-lg border border-amber-300 bg-amber-50 p-3">
             We have no email address on file to send your code to. Contact DESMA to add one.
