@@ -8,6 +8,9 @@ import { resolvePeriod } from "@/lib/sales-analysis";
 import { loadSalesAnalysis } from "@/lib/sales-analysis-data";
 import { SalesAnalysisView } from "./client";
 import { LeadQualityView } from "./quality";
+import { MetaRoiView } from "./meta-roi";
+import { buildMetaRoi } from "@/lib/meta-roi";
+import { loadMetaRoi } from "@/lib/meta-roi-data";
 
 export const dynamic = "force-dynamic";
 
@@ -38,21 +41,23 @@ export default async function SalesAnalysisPage({
     return Array.isArray(v) ? v[0] : v;
   };
   const range = resolvePeriod(one("period"), todayIst(), { from: one("from"), to: one("to") });
-  const view = one("view") === "quality" ? "quality" : "sales";
+  const view = one("view") === "quality" ? "quality" : one("view") === "meta" ? "meta" : "sales";
   // Switching tab keeps the period; each view keeps its own cut in the URL.
-  const tabHref = (v: "sales" | "quality") => {
+  const tabHref = (v: "sales" | "quality" | "meta") => {
     const p = new URLSearchParams();
     for (const k of ["period", "from", "to"]) {
       const val = one(k);
       if (val) p.set(k, val);
     }
-    if (v === "quality") p.set("view", "quality");
+    if (v !== "sales") p.set("view", v);
     const qs = p.toString();
     return `/executive/sales-analysis${qs ? `?${qs}` : ""}`;
   };
   // One query window covers the period and the equal-length one before it, so
   // every "vs previous" delta is computed client-side from the same facts.
-  const payload = await loadSalesAnalysis({ from: range.prevFrom, to: range.to });
+  // Meta ROI reads its own months and ships only the summary to the browser.
+  const payload = view === "meta" ? null : await loadSalesAnalysis({ from: range.prevFrom, to: range.to });
+  const metaRoi = view === "meta" ? buildMetaRoi(await loadMetaRoi(todayIst())) : null;
 
   return (
     <>
@@ -61,7 +66,9 @@ export default async function SalesAnalysisPage({
         subtitle={
           view === "quality"
             ? "Lead quality as rated by the BDEs — by source, campaign and consultant"
-            : "Enrollments, booked value, collections and conversion — cut by any dimension"
+            : view === "meta"
+              ? "Meta ad spend against what Meta candidates paid — by month, by intake month and by campaign"
+              : "Enrollments, booked value, collections and conversion — cut by any dimension"
         }
         action={
           <Link href="/executive/dashboard" className="text-accent text-label-sm font-semibold hover:underline">
@@ -75,6 +82,7 @@ export default async function SalesAnalysisPage({
             [
               { key: "sales", label: "Sales", icon: "query_stats" },
               { key: "quality", label: "Lead Quality", icon: "grade" },
+              { key: "meta", label: "Meta ROI", icon: "campaign" },
             ] as const
           ).map((t) => (
             <Link
@@ -97,7 +105,9 @@ export default async function SalesAnalysisPage({
           ))}
         </div>
       </div>
-      {view === "quality" ? (
+      {metaRoi ? (
+        <MetaRoiView report={metaRoi} />
+      ) : !payload ? null : view === "quality" ? (
         <LeadQualityView payload={payload} range={range} />
       ) : (
         <SalesAnalysisView payload={payload} range={range} />
