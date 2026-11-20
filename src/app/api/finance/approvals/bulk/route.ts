@@ -5,8 +5,14 @@ import { getCurrentUserAndPermissions } from "@/lib/permissions";
 import { canApprove, canSeePage } from "@/lib/rbac";
 
 export const dynamic = "force-dynamic";
+// Rows are posted one at a time, each in its own DB transaction, so a big
+// batch needs more than the platform default. BATCH_BUDGET_MS stops starting
+// new rows well before this, so the reply always arrives.
+export const maxDuration = 300;
 
 const PAGE = "/finance/approvals";
+/** Stop starting new rows after this long; the rest come back "not_reached". */
+const BATCH_BUDGET_MS = 240_000;
 
 const ItemSchema = z.object({
   id: z.string().min(1),
@@ -27,7 +33,19 @@ const BulkSchema = z.object({
  * the failures without losing the rest of the work.
  */
 export async function POST(req: NextRequest) {
-  const { perms, userId } = await getCurrentUserAndPermissions();
+  const started = Date.now();
+  let auth: Awaited<ReturnType<typeof getCurrentUserAndPermissions>>;
+  try {
+    auth = await getCurrentUserAndPermissions();
+  } catch (err) {
+    // The user lookup is the first DB call; if the database is waking up or
+    // unreachable, say so instead of a bare 500.
+    console.error("[approvals/bulk] permission lookup failed", {
+      error: err instanceof Error ? err.message : String(err),
+    });
+    return NextResponse.json({ error: "db_unavailable" }, { status: 503 });
+  }
+  const { perms, userId } = auth;
   if (!perms || !userId) {
     return NextResponse.json({ error: "unauthorized" }, { status: 401 });
   }
@@ -44,6 +62,10 @@ export async function POST(req: NextRequest) {
   let processed = 0;
   const errors: Array<{ id: string; error: string }> = [];
   for (const item of parsed.data.items) {
+    if (Date.now() - started > BATCH_BUDGET_MS) {
+      errors.push({ id: item.id, error: "not_reached" });
+      continue;
+    }
     try {
       const result =
         item.action === "approve"
