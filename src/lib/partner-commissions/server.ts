@@ -9,7 +9,7 @@ import { flowFor, monthCodeFromDate } from "@/lib/catalog";
 import { todayIst } from "@/lib/lead-pulse-dates";
 import { badRequest, conflict, forbidden, notFound, unauthorized, unprocessable } from "@/lib/http-error";
 import { gstInAmount } from "@/lib/finance-gst";
-import { candidateInvoiceNumberTaken, candidateStemState, laterNumber, lockInvoiceStem, stemOfNumber } from "@/lib/invoices/numbering";
+import { advisoryLock, candidateInvoiceNumberTaken, candidateStemState, laterNumber, lockInvoiceStem, stemOfNumber } from "@/lib/invoices/numbering";
 import {
   LEDGER,
   MAX_INSTALLMENTS,
@@ -40,6 +40,15 @@ import {
   statusAfterReturn,
   suggestInvoiceNumber,
   fyLabel,
+  assignVolume,
+  checkVolumeTiers,
+  isVolumeFy,
+  parseVolumeOpening,
+  parseVolumeTiers,
+  volumeFyMonths,
+  volumeFyOf,
+  type VolumeAssignment,
+  type VolumeTier,
 } from "./logic";
 
 /**
@@ -446,6 +455,52 @@ async function assertNumberFreeOfCandidateInvoices(tx: Prisma.TransactionClient,
 }
 
 /**
+ * Number enrollments about to be billed within the partner's financial year and
+ * pick each one's volume bonus (see assignVolume). The count is everything
+ * already on a DesGro invoice for that year plus what was billed outside
+ * DesGro; it runs under a per-partner lock so two invoices drafted at once
+ * can't hand out the same number. Partners without tiers get nothing.
+ */
+async function volumeForBatch(
+  tx: Prisma.TransactionClient,
+  partner: { id: string; volumeTiers: Prisma.JsonValue; volumeOpening: Prisma.JsonValue },
+  items: Array<{ id: string; intakeMonth: string; commissionFlat: Prisma.Decimal | null }>,
+): Promise<Map<string, VolumeAssignment>> {
+  const tiers = parseVolumeTiers(partner.volumeTiers);
+  if (tiers.length === 0 || items.length === 0) return new Map();
+  await advisoryLock(tx, `pc-volume:${partner.id}`);
+  const ids = items.map((i) => i.id);
+  const billed: Record<string, number> = {};
+  for (const fy of new Set(items.map((i) => volumeFyOf(i.intakeMonth)).filter((x): x is string => !!x))) {
+    billed[fy] = await tx.commissionEnrollment.count({
+      where: { partnerId: partner.id, intakeMonth: { in: volumeFyMonths(fy) }, invoiceId: { not: null }, id: { notIn: ids } },
+    });
+  }
+  return assignVolume({
+    tiers,
+    opening: parseVolumeOpening(partner.volumeOpening),
+    billed,
+    items: items.map((i) => ({ id: i.id, intakeMonth: i.intakeMonth, flat: i.commissionFlat != null })),
+  });
+}
+
+/** An invoice line's commission for an enrollment: its own rate plus any volume bonus. */
+function lineTerms(e: { id: string; courseFee: Prisma.Decimal; commissionPct: Prisma.Decimal; commissionFlat: Prisma.Decimal | null }, vol: Map<string, VolumeAssignment>) {
+  const v = vol.get(e.id);
+  const flat = flatOf(e.commissionFlat);
+  const bonus = v && flat == null ? v.extraPct : 0;
+  const pct = round2(num(e.commissionPct) + bonus);
+  return {
+    commissionPct: pct,
+    commissionFlat: flat,
+    amount: commissionOf(num(e.courseFee), pct, flat),
+    volumeBonusPct: bonus > 0 ? bonus : null,
+    volumeSeq: v?.seq ?? null,
+    volumeFy: v?.fy ?? null,
+  };
+}
+
+/**
  * Draft one invoice for a partner from fully paid, un-invoiced enrollments.
  * Used by "Generate now" (Finance picks the enrollments) and by the monthly run
  * (every queued enrollment). The claim on each enrollment is checked inside the
@@ -481,6 +536,7 @@ export async function createInvoice(opts: {
         orderBy: [{ fullyPaidOn: "asc" }, { candidateName: "asc" }],
       });
       if (ens.length !== ids.length) throw conflict("Some of those enrollments are no longer waiting to be invoiced. Reload and try again.");
+      const vol = await volumeForBatch(tx, partner, ens);
       const inv = await tx.commissionInvoice.create({
         data: {
           number,
@@ -507,9 +563,7 @@ export async function createInvoice(opts: {
           courseName: e.courseName,
           intakeMonth: e.intakeMonth,
           courseFee: e.courseFee,
-          commissionPct: e.commissionPct,
-          commissionFlat: e.commissionFlat,
-          amount: commissionOf(num(e.courseFee), num(e.commissionPct), flatOf(e.commissionFlat)),
+          ...lineTerms(e, vol),
         })),
       });
       return inv;
@@ -584,7 +638,9 @@ export async function updateInvoice(a: PcAccess, id: string, patch: InvoicePatch
           lineData.commissionFlat = flat;
           lineData.amount = commissionOf(num(line.courseFee), pct, flat);
           // Keep the enrollment's terms in step, so a line removed later queues at the agreed commission.
-          if (line.enrollmentId) await tx.commissionEnrollment.update({ where: { id: line.enrollmentId }, data: { commissionPct: pct, commissionFlat: flat } });
+          // A volume bonus belongs to the line, not the enrollment: the enrollment keeps the rate without it.
+          const base = Math.max(0, round2(pct - num(line.volumeBonusPct)));
+          if (line.enrollmentId) await tx.commissionEnrollment.update({ where: { id: line.enrollmentId }, data: { commissionPct: base, commissionFlat: flat } });
         }
         await tx.commissionInvoiceLine.update({ where: { id: l.id }, data: lineData });
       }
@@ -616,6 +672,7 @@ export async function addInvoiceLine(a: PcAccess, id: string, enrollmentId: stri
   await prisma.$transaction(async (tx) => {
     const e = await tx.commissionEnrollment.findFirst({ where: { id: enrollmentId, partnerId: inv.partnerId, ...QUEUED_WHERE } });
     if (!e) throw conflict("That enrollment isn't waiting to be invoiced for this partner.");
+    const vol = await volumeForBatch(tx, inv.partner, [e]);
     const claimed = await tx.commissionEnrollment.updateMany({ where: { id: e.id, invoiceId: null }, data: { invoiceId: id } });
     if (claimed.count !== 1) throw conflict("That enrollment was just invoiced elsewhere.");
     await tx.commissionInvoiceLine.create({
@@ -629,9 +686,7 @@ export async function addInvoiceLine(a: PcAccess, id: string, enrollmentId: stri
         courseName: e.courseName,
         intakeMonth: e.intakeMonth,
         courseFee: e.courseFee,
-        commissionPct: e.commissionPct,
-        commissionFlat: e.commissionFlat,
-        amount: commissionOf(num(e.courseFee), num(e.commissionPct), flatOf(e.commissionFlat)),
+        ...lineTerms(e, vol),
       },
     });
   });
@@ -1043,14 +1098,47 @@ export async function saveSignature(a: PcAccess, bytes: Uint8Array | null, mime:
   await recordAudit({ entityType: "CommissionSettings", entityId: "default", action: "UPDATE", userId: a.userId, changes: { signature: bytes ? "replaced" : "removed" } });
 }
 
-export type PartnerInput = { name: string; address: string; email?: string | null; forLine?: string | null; layout: string; isActive?: boolean };
+export type PartnerInput = {
+  name: string;
+  address: string;
+  email?: string | null;
+  forLine?: string | null;
+  layout: string;
+  isActive?: boolean;
+  /** Volume bonus tiers; omitted = unchanged, [] = none. */
+  volumeTiers?: VolumeTier[];
+  /** Enrollments billed outside DesGro per financial year ("2025-26" → 71); omitted = unchanged. */
+  volumeOpening?: Record<string, number>;
+};
 
 export async function savePartner(a: PcAccess, id: string | null, p: PartnerInput) {
   if (!a.canApprove) throw forbidden();
   const name = p.name.trim();
   if (!name || name.length > 120) throw badRequest("Enter the partner's name.");
   if (p.layout !== "compact" && p.layout !== "detailed") throw badRequest("Pick an invoice layout.");
-  const data = { name, address: p.address.slice(0, 500), email: clean(p.email), forLine: clean(p.forLine), layout: p.layout, isActive: p.isActive ?? true };
+  const data: Prisma.CommissionPartnerUpdateInput & Prisma.CommissionPartnerCreateInput = {
+    name,
+    address: p.address.slice(0, 500),
+    email: clean(p.email),
+    forLine: clean(p.forLine),
+    layout: p.layout,
+    isActive: p.isActive ?? true,
+  };
+  if (p.volumeTiers !== undefined) {
+    const tiers = [...p.volumeTiers].sort((x, y) => x.from - y.from).map((t) => ({ from: t.from, extraPct: round2(t.extraPct) }));
+    const err = checkVolumeTiers(tiers);
+    if (err) throw badRequest(err);
+    data.volumeTiers = tiers;
+  }
+  if (p.volumeOpening !== undefined) {
+    const opening: Record<string, number> = {};
+    for (const [fy, n] of Object.entries(p.volumeOpening)) {
+      if (!isVolumeFy(fy)) throw badRequest(`"${fy}" isn't a financial year like 2025-26.`);
+      if (!Number.isInteger(n) || n < 0 || n > 100_000) throw badRequest("Enrollments billed outside DesGro must be a whole number.");
+      if (n > 0) opening[fy] = n;
+    }
+    data.volumeOpening = opening;
+  }
   try {
     const saved = id ? await prisma.commissionPartner.update({ where: { id }, data }) : await prisma.commissionPartner.create({ data });
     await recordAudit({ entityType: "CommissionPartner", entityId: saved.id, action: id ? "UPDATE" : "CREATE", userId: a.userId, changes: data });

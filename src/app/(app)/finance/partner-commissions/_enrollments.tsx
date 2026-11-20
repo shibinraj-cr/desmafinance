@@ -24,7 +24,7 @@ import {
 import { FeeBar, InstallmentSlots } from "@/components/partner-commissions/installments";
 import { ENROLLMENT_STATE_LABEL, PROGRAM_CODES, type EnrollmentState } from "@/lib/partner-commissions/constants";
 import { commissionOf, fmtMoney, installmentCap, intakeMonthOptions } from "@/lib/partner-commissions/logic";
-import { stateOf, type EnrollmentDTO, type PcPageData } from "./_types";
+import { commissionViews, stateOf, type CommissionView, type EnrollmentDTO, type PcPageData } from "./_types";
 import type { PcCtx } from "./client";
 
 const RANK: Record<EnrollmentState, number> = { fullypaid: 0, paying: 1, notstarted: 2, invoiced: 3, received: 4, withdrawn: 5 };
@@ -39,8 +39,16 @@ export function programOptions(data: PcPageData, allowed?: string[]): ProgramOpt
     .filter((p) => p.partnerName);
 }
 
+/** "20%", "25% incl. 5% volume", "20% + 5% volume" (projected) or "flat". */
+function termsText(e: EnrollmentDTO, v: CommissionView | undefined): string {
+  if (e.commissionFlat != null) return "flat";
+  if (!v || !v.bonus) return `${fmtMoney(v?.pct ?? e.commissionPct)}%`;
+  return v.billed ? `${fmtMoney(v.pct)}% incl. ${fmtMoney(v.bonus)}% volume` : `${fmtMoney(e.commissionPct)}% + ${fmtMoney(v.bonus)}% volume`;
+}
+
 export function EnrollmentsTab({ ctx }: { ctx: PcCtx }) {
   const { data } = ctx;
+  const views = useMemo(() => commissionViews(data), [data]);
   const [progs, setProgs] = useState<string[]>([]);
   const [partners, setPartners] = useState<string[]>([]);
   const [states, setStates] = useState<string[]>([]);
@@ -101,7 +109,10 @@ export function EnrollmentsTab({ ctx }: { ctx: PcCtx }) {
                       <div className="text-caption text-on-surface-variant tabular-nums mt-1">{fmtMoney(e.courseFee - e.balance)} of {fmtMoney(e.courseFee)} · {e.payments.length} of {installmentCap(e.installmentPlan)} installments</div>
                     </td>
                     <td className={`px-sm py-2.5 text-right tabular-nums ${e.balance ? "font-semibold" : "text-on-surface-variant"}`}>{e.balance ? AUD(e.balance) : "—"}</td>
-                    <td className="px-sm py-2.5 text-right tabular-nums">{AUD(commissionOf(e.courseFee, e.commissionPct, e.commissionFlat))} <span className="text-caption text-on-surface-variant">{e.commissionFlat != null ? "flat" : `${fmtMoney(e.commissionPct)}%`}</span></td>
+                    <td className="px-sm py-2.5 text-right tabular-nums">
+                      {AUD(views.get(e.id)?.amount ?? commissionOf(e.courseFee, e.commissionPct, e.commissionFlat))}{" "}
+                      <span className="text-caption text-on-surface-variant">{termsText(e, views.get(e.id))}</span>
+                    </td>
                     <td className="px-sm py-2.5">
                       <EnrollmentPill state={st} />
                       {e.invoice ? <div className="text-caption text-on-surface-variant mt-0.5">{e.invoice.number}</div> : null}
@@ -135,6 +146,7 @@ export function EnrollmentsTab({ ctx }: { ctx: PcCtx }) {
 
 function EnrollmentDrawer({ ctx, e, onClose }: { ctx: PcCtx; e: EnrollmentDTO; onClose: () => void }) {
   const { data } = ctx;
+  const view = useMemo(() => commissionViews(data).get(e.id), [data, e.id]);
   const st = stateOf(e);
   const locked = !!e.invoice || e.status === "withdrawn";
   const paid = e.courseFee - e.balance;
@@ -195,9 +207,21 @@ function EnrollmentDrawer({ ctx, e, onClose }: { ctx: PcCtx; e: EnrollmentDTO; o
         <section className="flex flex-col gap-2">
           <h4 className="text-label-sm uppercase tracking-wider text-on-surface-variant">Commission</h4>
           <p>
-            <b className="tabular-nums">{AUD(commissionOf(e.courseFee, e.commissionPct, e.commissionFlat))}</b>{" "}
-            <span className="text-on-surface-variant">{e.commissionFlat != null ? "flat per enrollment, whatever the course fee" : `= ${fmtMoney(e.commissionPct)}% of ${AUD(e.courseFee)}`}</span>
+            <b className="tabular-nums">{AUD(view?.amount ?? commissionOf(e.courseFee, e.commissionPct, e.commissionFlat))}</b>{" "}
+            <span className="text-on-surface-variant">
+              {e.commissionFlat != null
+                ? "flat per enrollment, whatever the course fee"
+                : view?.bonus
+                  ? `= ${fmtMoney(e.commissionPct)}% + ${fmtMoney(view.bonus)}% volume bonus of ${AUD(e.courseFee)}`
+                  : `= ${fmtMoney(view?.pct ?? e.commissionPct)}% of ${AUD(e.courseFee)}`}
+            </span>
           </p>
+          {view?.seq != null ? (
+            <p className="text-caption text-on-surface-variant">
+              {view.billed ? "Billed" : "If billed now, it would be"} enrollment #{view.seq} of FY {view.fy} with {e.partnerName}
+              {view.bonus ? `, which earns the ${fmtMoney(view.bonus)}% volume bonus` : ""}.
+            </p>
+          ) : null}
           {locked ? <p className="text-caption text-on-surface-variant">{e.invoice ? "Locked because it's on an invoice. Change the % on the invoice while it's a draft or sent." : ""}</p> : null}
         </section>
 

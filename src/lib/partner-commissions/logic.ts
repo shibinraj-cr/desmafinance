@@ -366,3 +366,127 @@ export function enrollablePrograms(opts: {
   opts.grantPrograms.forEach((p) => set.add(p));
   return opts.allPrograms.filter((p) => set.has(p));
 }
+
+// ── volume bonus ─────────────────────────────────────────────────────────────
+
+/**
+ * A partner's volume bonus: from the `from`-th enrollment billed in an
+ * Australian financial year, the commission is `extraPct` percentage points
+ * higher (e.g. 20% → 25%). The highest tier reached applies — tiers don't add up.
+ */
+export type VolumeTier = { from: number; extraPct: number };
+
+const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+
+/**
+ * The Australian financial year (July–June) an intake month falls in:
+ * "Nov-25" → "2025-26", "Mar-26" → "2025-26", "Jul-26" → "2026-27". Null when
+ * the month isn't in "MMM-YY" form.
+ */
+export function volumeFyOf(intakeMonth: string): string | null {
+  if (!isIntakeMonth(intakeMonth)) return null;
+  const m = MONTHS.indexOf(intakeMonth.slice(0, 3)) + 1;
+  const y = 2000 + Number(intakeMonth.slice(4));
+  const start = m >= 7 ? y : y - 1;
+  return `${start}-${String(start + 1).slice(-2)}`;
+}
+
+/** The financial year a date falls in ("2026-11-20" → "2026-27"). */
+export function volumeFyOfDate(isoDate: string): string {
+  return volumeFyOf(monthCodeOf(isoDate))!;
+}
+
+/** The twelve intake months of a financial year: "2025-26" → Jul-25 … Jun-26. */
+export function volumeFyMonths(fy: string): string[] {
+  const start = Number(fy.slice(0, 4));
+  return Array.from({ length: 12 }, (_, i) => {
+    const m = (6 + i) % 12;
+    const y = start + (i >= 6 ? 1 : 0);
+    return `${MONTHS[m]}-${String(y).slice(-2)}`;
+  });
+}
+
+export function isVolumeFy(v: string): boolean {
+  const m = /^(\d{4})-(\d{2})$/.exec(v);
+  return !!m && (Number(m[1]) + 1) % 100 === Number(m[2]);
+}
+
+/** Tiers as stored (JSON) → a clean list sorted by `from`; anything malformed is dropped. */
+export function parseVolumeTiers(v: unknown): VolumeTier[] {
+  if (!Array.isArray(v)) return [];
+  return v
+    .filter((t): t is VolumeTier => !!t && typeof t === "object" && Number.isInteger((t as VolumeTier).from) && typeof (t as VolumeTier).extraPct === "number")
+    .filter((t) => t.from >= 1 && t.extraPct > 0)
+    .sort((a, b) => a.from - b.from);
+}
+
+/** Per-year counts billed outside DesGro, as stored (JSON) → { "2025-26": 71 }; malformed entries dropped. */
+export function parseVolumeOpening(v: unknown): Record<string, number> {
+  if (!v || typeof v !== "object" || Array.isArray(v)) return {};
+  const out: Record<string, number> = {};
+  for (const [fy, n] of Object.entries(v as Record<string, unknown>)) {
+    if (isVolumeFy(fy) && Number.isInteger(n) && (n as number) > 0) out[fy] = n as number;
+  }
+  return out;
+}
+
+/** Why a set of tiers can't be saved, or null when it can. */
+export function checkVolumeTiers(tiers: VolumeTier[]): string | null {
+  if (tiers.length > 5) return "Up to 5 volume tiers.";
+  for (const t of tiers) {
+    if (!Number.isInteger(t.from) || t.from < 2 || t.from > 100_000) return "A tier starts at a whole enrollment number from 2 up.";
+    if (!(t.extraPct > 0 && t.extraPct <= 100)) return "A tier's extra commission must be more than 0% and at most 100%.";
+  }
+  if (new Set(tiers.map((t) => t.from)).size !== tiers.length) return "Two tiers start at the same enrollment.";
+  return null;
+}
+
+/** Extra percentage points for the `seq`-th enrollment of the year (0 below the first tier). */
+export function volumeExtraPct(tiers: VolumeTier[], seq: number): number {
+  let extra = 0;
+  for (const t of parseVolumeTiers(tiers)) if (seq >= t.from) extra = t.extraPct;
+  return extra;
+}
+
+/** "+5% from #51 · +10% from #101" */
+export function volumeTiersLabel(tiers: VolumeTier[]): string {
+  return parseVolumeTiers(tiers).map((t) => `+${fmtMoney(t.extraPct)}% from #${t.from}`).join(" · ");
+}
+
+export type VolumeAssignment = { fy: string; seq: number; extraPct: number };
+
+/**
+ * Number a batch of enrollments about to be billed, in billing order, within
+ * their financial year, and pick each one's bonus.
+ *   - `opening`: billed outside DesGro, per year.
+ *   - `billed`: already on a DesGro invoice, per year (excluding this batch).
+ * Every enrollment counts toward the year; a flat-commission one never gets a
+ * percentage bonus. Enrollments without a readable intake month are skipped.
+ * No tiers = nothing assigned.
+ */
+export function assignVolume(opts: {
+  tiers: VolumeTier[];
+  opening: Record<string, number>;
+  billed: Record<string, number>;
+  items: Array<{ id: string; intakeMonth: string; flat: boolean }>;
+}): Map<string, VolumeAssignment> {
+  const out = new Map<string, VolumeAssignment>();
+  const tiers = parseVolumeTiers(opts.tiers);
+  if (tiers.length === 0) return out;
+  const count = new Map<string, number>();
+  for (const it of opts.items) {
+    const fy = volumeFyOf(it.intakeMonth);
+    if (!fy) continue;
+    const seq = (count.get(fy) ?? (opts.opening[fy] ?? 0) + (opts.billed[fy] ?? 0)) + 1;
+    count.set(fy, seq);
+    out.set(it.id, { fy, seq, extraPct: it.flat ? 0 : volumeExtraPct(tiers, seq) });
+  }
+  return out;
+}
+
+/** "#72 · FY 2025-26 · +5% volume" — how a billed line's volume reads. */
+export function volumeLineLabel(v: { volumeSeq: number | null; volumeFy: string | null; volumeBonusPct: number | null }): string | null {
+  if (v.volumeSeq == null || !v.volumeFy) return null;
+  const bonus = v.volumeBonusPct ? ` · +${fmtMoney(v.volumeBonusPct)}% volume` : "";
+  return `#${v.volumeSeq} · FY ${v.volumeFy}${bonus}`;
+}

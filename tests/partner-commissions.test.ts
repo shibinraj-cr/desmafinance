@@ -30,6 +30,17 @@ import {
   statusAfterApproval,
   statusAfterReturn,
   suggestInvoiceNumber,
+  assignVolume,
+  checkVolumeTiers,
+  isVolumeFy,
+  parseVolumeOpening,
+  parseVolumeTiers,
+  volumeExtraPct,
+  volumeFyMonths,
+  volumeFyOf,
+  volumeFyOfDate,
+  volumeLineLabel,
+  volumeTiersLabel,
 } from "@/lib/partner-commissions/logic";
 import { PROGRAM_CODES } from "@/lib/partner-commissions/constants";
 import { buildInvoicePdf, type InvoicePdfData } from "@/lib/partner-commissions/pdf";
@@ -276,5 +287,125 @@ describe("who records fee installments", () => {
     expect(canTrackEnrollment(bde, e("GCAN", "u_fe", "u_bde"))).toBe(true);
     expect(canTrackEnrollment(bde, e("GCAN", "other_bde", "other_bde"))).toBe(false);
     expect(canTrackEnrollment(bde, e("OSCE", "u_bde"))).toBe(false);
+  });
+});
+
+describe("volume bonus (per Australian financial year)", () => {
+  const NAI = [
+    { from: 51, extraPct: 5 },
+    { from: 101, extraPct: 10 },
+  ];
+  const items = (n: number, intakeMonth = "Mar-26", flat = false) =>
+    Array.from({ length: n }, (_, i) => ({ id: `e${i + 1}`, intakeMonth, flat }));
+
+  it("puts an intake month in its July–June year", () => {
+    expect(volumeFyOf("Jul-25")).toBe("2025-26");
+    expect(volumeFyOf("Nov-25")).toBe("2025-26");
+    expect(volumeFyOf("Jun-26")).toBe("2025-26");
+    expect(volumeFyOf("Jul-26")).toBe("2026-27");
+    expect(volumeFyOf("Jan-27")).toBe("2026-27");
+    expect(volumeFyOf("March 2026")).toBeNull();
+    expect(volumeFyOfDate("2026-11-20")).toBe("2026-27");
+    expect(volumeFyOfDate("2026-06-30")).toBe("2025-26");
+  });
+
+  it("lists a year's twelve intake months, each mapping back to it", () => {
+    const months = volumeFyMonths("2025-26");
+    expect(months).toHaveLength(12);
+    expect(months[0]).toBe("Jul-25");
+    expect(months[11]).toBe("Jun-26");
+    expect(months.every((m) => volumeFyOf(m) === "2025-26")).toBe(true);
+    expect(volumeFyMonths("2099-00")[11]).toBe("Jun-00");
+  });
+
+  it("recognises a financial-year key", () => {
+    expect(isVolumeFy("2025-26")).toBe(true);
+    expect(isVolumeFy("2099-00")).toBe(true);
+    expect(isVolumeFy("2025-27")).toBe(false);
+    expect(isVolumeFy("25-26")).toBe(false);
+  });
+
+  it("applies the highest tier reached, not the sum", () => {
+    expect(volumeExtraPct(NAI, 1)).toBe(0);
+    expect(volumeExtraPct(NAI, 50)).toBe(0);
+    expect(volumeExtraPct(NAI, 51)).toBe(5);
+    expect(volumeExtraPct(NAI, 100)).toBe(5);
+    expect(volumeExtraPct(NAI, 101)).toBe(10);
+    expect(volumeExtraPct(NAI, 900)).toBe(10);
+    expect(volumeExtraPct([...NAI].reverse(), 101)).toBe(10);
+    expect(volumeExtraPct([], 500)).toBe(0);
+  });
+
+  it("validates tiers", () => {
+    expect(checkVolumeTiers(NAI)).toBeNull();
+    expect(checkVolumeTiers([])).toBeNull();
+    expect(checkVolumeTiers([{ from: 1, extraPct: 5 }])).toMatch(/from 2/);
+    expect(checkVolumeTiers([{ from: 51, extraPct: 0 }])).toMatch(/more than 0/);
+    expect(checkVolumeTiers([{ from: 51, extraPct: 5 }, { from: 51, extraPct: 10 }])).toMatch(/same enrollment/);
+    expect(checkVolumeTiers(Array.from({ length: 6 }, (_, i) => ({ from: 10 * (i + 2), extraPct: 1 })))).toMatch(/Up to 5/);
+  });
+
+  it("reads stored JSON defensively", () => {
+    expect(parseVolumeTiers([{ from: 101, extraPct: 10 }, { from: 51, extraPct: 5 }, { from: "x" }, null, 3])).toEqual(NAI);
+    expect(parseVolumeTiers({})).toEqual([]);
+    expect(parseVolumeOpening({ "2025-26": 71, "2026-27": 0, bad: 4, "2024-25": 1.5 })).toEqual({ "2025-26": 71 });
+    expect(parseVolumeOpening([])).toEqual({});
+  });
+
+  it("numbers the 8 late FY 2025-26 enrollments #72–79 at +5% after 71 billed outside DesGro", () => {
+    const v = assignVolume({ tiers: NAI, opening: { "2025-26": 71 }, billed: {}, items: items(8) });
+    expect([...v.values()].map((x) => x.seq)).toEqual([72, 73, 74, 75, 76, 77, 78, 79]);
+    expect([...v.values()].every((x) => x.extraPct === 5 && x.fy === "2025-26")).toBe(true);
+  });
+
+  it("starts the bonus exactly at the 51st and steps up at the 101st", () => {
+    const a = assignVolume({ tiers: NAI, opening: { "2026-27": 40 }, billed: { "2026-27": 9 }, items: items(3, "Aug-26") });
+    expect([...a.values()].map((x) => [x.seq, x.extraPct])).toEqual([[50, 0], [51, 5], [52, 5]]);
+    const b = assignVolume({ tiers: NAI, opening: {}, billed: { "2026-27": 99 }, items: items(3, "Aug-26") });
+    expect([...b.values()].map((x) => [x.seq, x.extraPct])).toEqual([[100, 5], [101, 10], [102, 10]]);
+  });
+
+  it("counts each financial year separately within one invoice", () => {
+    const v = assignVolume({
+      tiers: NAI,
+      opening: { "2025-26": 71 },
+      billed: { "2026-27": 3 },
+      items: [
+        { id: "old", intakeMonth: "Apr-26", flat: false },
+        { id: "new", intakeMonth: "Sep-26", flat: false },
+        { id: "old2", intakeMonth: "Jun-26", flat: false },
+      ],
+    });
+    expect(v.get("old")).toEqual({ fy: "2025-26", seq: 72, extraPct: 5 });
+    expect(v.get("new")).toEqual({ fy: "2026-27", seq: 4, extraPct: 0 });
+    expect(v.get("old2")).toEqual({ fy: "2025-26", seq: 73, extraPct: 5 });
+  });
+
+  it("counts a flat-commission enrollment but gives it no % bonus; skips an unreadable intake", () => {
+    const v = assignVolume({
+      tiers: NAI,
+      opening: { "2026-27": 50 },
+      billed: {},
+      items: [
+        { id: "flat", intakeMonth: "Oct-26", flat: true },
+        { id: "bad", intakeMonth: "??", flat: false },
+        { id: "pct", intakeMonth: "Oct-26", flat: false },
+      ],
+    });
+    expect(v.get("flat")).toEqual({ fy: "2026-27", seq: 51, extraPct: 0 });
+    expect(v.has("bad")).toBe(false);
+    expect(v.get("pct")).toEqual({ fy: "2026-27", seq: 52, extraPct: 5 });
+  });
+
+  it("assigns nothing for a partner without tiers", () => {
+    expect(assignVolume({ tiers: [], opening: { "2025-26": 71 }, billed: {}, items: items(3) }).size).toBe(0);
+  });
+
+  it("labels tiers and billed lines", () => {
+    expect(volumeTiersLabel(NAI)).toBe("+5% from #51 · +10% from #101");
+    expect(volumeLineLabel({ volumeSeq: 72, volumeFy: "2025-26", volumeBonusPct: 5 })).toBe("#72 · FY 2025-26 · +5% volume");
+    expect(volumeLineLabel({ volumeSeq: 12, volumeFy: "2026-27", volumeBonusPct: null })).toBe("#12 · FY 2026-27");
+    expect(volumeLineLabel({ volumeSeq: null, volumeFy: null, volumeBonusPct: null })).toBeNull();
+    expect(commissionOf(2500, 20 + volumeExtraPct(NAI, 72))).toBe(625);
   });
 });

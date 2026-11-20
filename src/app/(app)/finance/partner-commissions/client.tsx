@@ -4,7 +4,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { usePathname, useRouter } from "next/navigation";
 import { AUD, INR, Icon, fmtDate, useToast } from "@/components/partner-commissions/ui";
 import { commissionOf } from "@/lib/partner-commissions/logic";
-import { approvedAud, setupGaps, stateOf, totalOf, type PcPageData } from "./_types";
+import { approvedAud, commissionViews, setupGaps, stateOf, totalOf, type PcPageData } from "./_types";
 import { EnrollmentsTab } from "./_enrollments";
 import { InvoicesTab } from "./_invoices";
 import { PaymentsTab } from "./_payments";
@@ -64,7 +64,10 @@ export function PartnerCommissionsClient({ data, initialTab, initialInvoice, pag
       paying: paying.length,
       payingAud: paying.reduce((s, e) => s + e.balance, 0),
       queued: queued.length,
-      queuedAud: queued.reduce((s, e) => s + commissionOf(e.courseFee, e.commissionPct, e.commissionFlat), 0),
+      queuedAud: (() => {
+        const views = commissionViews(data);
+        return queued.reduce((s, e) => s + (views.get(e.id)?.amount ?? commissionOf(e.courseFee, e.commissionPct, e.commissionFlat)), 0);
+      })(),
       openAud: open.reduce((s, i) => s + Math.max(0, totalOf(i) - approvedAud(i)), 0),
       drafts: data.invoices.filter((i) => i.status === "draft").length,
       awaiting: receipts.filter((r) => r.status === "awaiting").length,
