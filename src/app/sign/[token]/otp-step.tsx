@@ -2,11 +2,24 @@
 
 import { useState } from "react";
 import { useRouter } from "next/navigation";
+import { codeFromInput } from "@/lib/esign/otp-input";
 
-/** Send a one-time code, then check it. A correct code reloads into the signing view. */
-export function OtpStep({ token, channels }: { token: string; channels: Array<{ channel: "email" | "whatsapp"; to: string }> }) {
+/**
+ * Send a one-time code, then check it. A correct code reloads into the signing view.
+ * `alreadySentTo`: a code is still live from an earlier visit, so start at typing it.
+ */
+export function OtpStep({
+  token,
+  channels,
+  alreadySentTo = null,
+}: {
+  token: string;
+  channels: Array<{ channel: "email" | "whatsapp"; to: string }>;
+  alreadySentTo?: string | null;
+}) {
   const router = useRouter();
-  const [sentTo, setSentTo] = useState<string | null>(null);
+  const [sentTo, setSentTo] = useState<string | null>(alreadySentTo);
+  const [resumed, setResumed] = useState(alreadySentTo !== null);
   const [code, setCode] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -24,6 +37,7 @@ export function OtpStep({ token, channels }: { token: string; channels: Array<{ 
     try {
       const { to } = await call("otp", { channel });
       setSentTo(to);
+      setResumed(false);
     } catch (e) {
       setError(e instanceof Error ? e.message : "The code could not be sent.");
     } finally {
@@ -57,12 +71,18 @@ export function OtpStep({ token, channels }: { token: string; channels: Array<{ 
         </>
       ) : (
         <form onSubmit={verify} className="space-y-3">
-          <p>
-            We sent a 6-digit code to <b>{sentTo}</b>. It works for 10 minutes.
-          </p>
+          {resumed ? (
+            <p>
+              We already sent a 6-digit code to <b>{sentTo}</b>. Type it below; there is no need to ask for another.
+            </p>
+          ) : (
+            <p>
+              We sent a 6-digit code to <b>{sentTo}</b>. It works for 10 minutes.
+            </p>
+          )}
           <input
             value={code}
-            onChange={(e) => setCode(e.target.value.replace(/\D/g, "").slice(0, 6))}
+            onChange={(e) => setCode(codeFromInput(e.target.value))}
             inputMode="numeric"
             autoComplete="one-time-code"
             className="w-full rounded-lg border border-gray-300 px-4 py-3 text-center text-2xl tracking-[0.5em]"
@@ -72,7 +92,8 @@ export function OtpStep({ token, channels }: { token: string; channels: Array<{ 
           <button type="submit" disabled={busy || code.length !== 6} className="w-full rounded-lg bg-[#F5C518] py-3 font-bold text-[#1A1A1A] disabled:opacity-40">
             {busy ? "Checking…" : "Continue"}
           </button>
-          <button type="button" onClick={() => { setSentTo(null); setCode(""); }} className="text-sm text-gray-600 underline">
+          <p className="text-sm text-gray-600">Asked more than once? A code from any of our messages in the last 10 minutes works.</p>
+          <button type="button" onClick={() => { setSentTo(null); setCode(""); setError(null); }} className="text-sm text-gray-600 underline">
             Send a new code
           </button>
         </form>

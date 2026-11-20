@@ -5,13 +5,18 @@ import { extractText } from "unpdf";
 import {
   OTP_LOCK_MS,
   OTP_MAX_ATTEMPTS,
+  OTP_MAX_LIVE,
+  OTP_TTL_MS,
+  addOtpCode,
   checkOtp,
   hashOtp,
   mintSession,
   newOtpCode,
+  readStoredCodes,
   sessionCookieName,
   verifySession,
 } from "@/lib/esign/otp";
+import { codeFromInput } from "@/lib/esign/otp-input";
 import { checkSubmission, decodePng, signerFields } from "@/lib/esign/submission";
 import { appendCertificate } from "@/lib/esign/certificate";
 import { openForStamping } from "@/lib/esign/stamp";
@@ -65,6 +70,81 @@ describe("one-time codes", () => {
   it("expire after ten minutes and need one to exist", () => {
     expect(checkOtp({ ...fresh("123456"), otpExpiresAt: new Date(now.getTime() - 1) }, signerId, "123456", now).result).toMatchObject({ reason: "expired" });
     expect(checkOtp({ ...fresh("123456"), otpHash: null }, signerId, "123456", now).result).toMatchObject({ reason: "none" });
+  });
+});
+
+describe("asking for another code (the mobile loop)", () => {
+  const signerId = "signer_1";
+  const at = (ms: number) => new Date(now.getTime() + ms);
+  type State = { otpHash: string | null; otpExpiresAt: Date | null; otpAttempts: number; otpLockedUntil: Date | null };
+  const blank: State = { otpHash: null, otpExpiresAt: null, otpAttempts: 0, otpLockedUntil: null };
+  const send = (state: State, code: string, when: Date): State => ({ ...state, ...addOtpCode(state, signerId, code, when), otpAttempts: 0 });
+
+  it("keeps the earlier code working after a resend", () => {
+    // Code A sent; the client leaves to read it, the page reloads, they ask again (B), then type A.
+    const state = send(send(blank, "111111", now), "222222", at(90_000));
+    expect(checkOtp(state, signerId, "111111", at(120_000)).result.ok).toBe(true);
+    expect(checkOtp(state, signerId, "222222", at(120_000)).result.ok).toBe(true);
+    expect(state.otpExpiresAt?.getTime()).toBe(at(90_000).getTime() + OTP_TTL_MS);
+  });
+
+  it("spends every outstanding code once one is used", () => {
+    const state = send(send(blank, "111111", now), "222222", at(60_000));
+    const r = checkOtp(state, signerId, "222222", at(70_000));
+    expect(r.nextState.otpHash).toBeNull();
+    expect(checkOtp({ ...state, ...r.nextState }, signerId, "111111", at(80_000)).result).toMatchObject({ reason: "none" });
+  });
+
+  it("still gives each code only its own 10 minutes, without using a try", () => {
+    const state = send(send(blank, "111111", now), "222222", at(8 * 60_000));
+    const r = checkOtp(state, signerId, "111111", at(OTP_TTL_MS + 1));
+    expect(r.result).toMatchObject({ ok: false, reason: "expired" });
+    expect(r.nextState.otpAttempts).toBeUndefined();
+    expect(checkOtp(state, signerId, "222222", at(OTP_TTL_MS + 1)).result.ok).toBe(true);
+    // Once the last one is past its time too, nothing is left.
+    expect(checkOtp(state, signerId, "222222", at(18 * 60_000 + 1)).result).toMatchObject({ reason: "expired" });
+  });
+
+  it("keeps only the newest few and drops expired ones when sending", () => {
+    let state = blank;
+    for (let i = 0; i < OTP_MAX_LIVE + 2; i++) state = send(state, String(100000 + i), at(i * 30_000));
+    expect(readStoredCodes(state.otpHash, state.otpExpiresAt)).toHaveLength(OTP_MAX_LIVE);
+    expect(checkOtp(state, signerId, "100000", at(4 * 60_000)).result).toMatchObject({ reason: "wrong" });
+    expect(checkOtp(state, signerId, String(100000 + OTP_MAX_LIVE + 1), at(4 * 60_000)).result.ok).toBe(true);
+
+    const later = send(state, "999999", at(30 * 60_000));
+    expect(readStoredCodes(later.otpHash, later.otpExpiresAt)).toHaveLength(1);
+  });
+
+  it("reads a code stored before codes could overlap", () => {
+    const legacy = { ...blank, otpHash: hashOtp(signerId, "123456"), otpExpiresAt: at(5 * 60_000) };
+    expect(checkOtp(legacy, signerId, "123456", now).result.ok).toBe(true);
+    const next = send(legacy, "654321", at(60_000));
+    expect(checkOtp(next, signerId, "123456", at(2 * 60_000)).result.ok).toBe(true);
+    expect(checkOtp(next, signerId, "654321", at(2 * 60_000)).result.ok).toBe(true);
+  });
+
+  it("does not accept a wrong code because more codes are live, and still locks after five", () => {
+    let state = send(send(blank, "111111", now), "222222", at(30_000));
+    for (let i = 1; i <= OTP_MAX_ATTEMPTS; i++) {
+      const r = checkOtp(state, signerId, "333333", at(60_000));
+      expect(r.result).toMatchObject({ ok: false, reason: "wrong" });
+      state = { ...state, ...r.nextState };
+    }
+    expect(state.otpLockedUntil).not.toBeNull();
+    expect(state.otpHash).toBeNull();
+  });
+});
+
+describe("the code box", () => {
+  it("keeps digits only while typing", () => {
+    expect(codeFromInput("12 34")).toBe("1234");
+    expect(codeFromInput("1234567")).toBe("123456");
+  });
+
+  it("takes the six-digit number from a pasted sentence", () => {
+    expect(codeFromInput("Your code to sign your Agreement 2026 is: 482913")).toBe("482913");
+    expect(codeFromInput("482913 is your DESMA signing code")).toBe("482913");
   });
 });
 

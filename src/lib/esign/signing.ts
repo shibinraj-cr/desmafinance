@@ -16,7 +16,7 @@ import { loadStampFont } from "@/lib/esign/font";
 import { activateSigners, deliverActivated, type Activated, type SignerDelivery } from "@/lib/esign/handoff";
 import { onAgreementSigned } from "@/lib/esign/hooks";
 import { sendOtpEmail, sendSignedCopies, type ChannelResult } from "@/lib/esign/notify";
-import { OTP_TTL_MS, checkOtp, hashOtp, mintSession, newOtpCode } from "@/lib/esign/otp";
+import { OTP_TTL_MS, addOtpCode, checkOtp, mintSession, newOtpCode } from "@/lib/esign/otp";
 import { sha256Hex } from "@/lib/esign/pdf";
 import { activeSigners, maskEmail, maskPhone } from "@/lib/esign/requests";
 import { getOtpWhatsAppTemplate, signedCopyRecipients } from "@/lib/esign/settings";
@@ -147,9 +147,12 @@ export async function sendOtp(request: LoadedRequest, signer: EsignSigner, chann
     if (!res.ok) throw new HttpError(502, "WhatsApp did not accept the code message. Try email instead.", "otp_send_failed");
   }
   await prisma.$transaction(async (tx) => {
+    // Earlier codes stay valid (see otp.ts). Lock the row so two sends at once cannot drop each other's code.
+    const [current] = await tx.$queryRaw<Array<{ otpHash: string | null; otpExpiresAt: Date | null }>>`
+      SELECT "otpHash", "otpExpiresAt" FROM "EsignSigner" WHERE id = ${signer.id} FOR UPDATE`;
     await tx.esignSigner.update({
       where: { id: signer.id },
-      data: { otpHash: hashOtp(signer.id, code), otpExpiresAt: new Date(now.getTime() + OTP_TTL_MS), otpAttempts: 0, otpChannel: channel },
+      data: { ...addOtpCode(current ?? signer, signer.id, code, new Date()), otpAttempts: 0, otpChannel: channel },
     });
     await recordEsignEvent(tx, { requestId: request.id, signerId: signer.id, action: "otp_sent", actor: signer.name, ...origin, meta: { channel, to: target.to } });
   });
@@ -178,7 +181,10 @@ export async function verifyOtp(request: LoadedRequest, signer: EsignSigner, cod
   if (result.reason === "wrong") {
     throw unprocessable(`That code is not right. ${result.attemptsLeft} ${result.attemptsLeft === 1 ? "try" : "tries"} left.`, "otp_wrong");
   }
-  throw unprocessable("That code has expired. Ask for a new one.", "otp_expired");
+  if (result.reason === "none") {
+    throw unprocessable("There is no code waiting for you. Tap “Send a new code” to get one.", "otp_none");
+  }
+  throw unprocessable("That code is more than 10 minutes old. Tap “Send a new code” to get a fresh one.", "otp_expired");
 }
 
 let logo: Promise<Uint8Array | null> | null = null;
