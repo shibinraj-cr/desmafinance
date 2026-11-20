@@ -45,8 +45,8 @@ import {
   isVolumeFy,
   parseVolumeOpening,
   parseVolumeTiers,
-  volumeFyMonths,
-  volumeFyOf,
+  volumeFyOfDate,
+  volumeFyRange,
   type VolumeAssignment,
   type VolumeTier,
 } from "./logic";
@@ -464,23 +464,24 @@ async function assertNumberFreeOfCandidateInvoices(tx: Prisma.TransactionClient,
 async function volumeForBatch(
   tx: Prisma.TransactionClient,
   partner: { id: string; volumeTiers: Prisma.JsonValue; volumeOpening: Prisma.JsonValue },
-  items: Array<{ id: string; intakeMonth: string; commissionFlat: Prisma.Decimal | null }>,
+  items: Array<{ id: string; fullyPaidOn: Date | null; commissionFlat: Prisma.Decimal | null }>,
 ): Promise<Map<string, VolumeAssignment>> {
   const tiers = parseVolumeTiers(partner.volumeTiers);
   if (tiers.length === 0 || items.length === 0) return new Map();
   await advisoryLock(tx, `pc-volume:${partner.id}`);
   const ids = items.map((i) => i.id);
   const billed: Record<string, number> = {};
-  for (const fy of new Set(items.map((i) => volumeFyOf(i.intakeMonth)).filter((x): x is string => !!x))) {
+  for (const fy of new Set(items.map((i) => volumeFyOfDate(isoDate(i.fullyPaidOn))).filter((x): x is string => !!x))) {
+    const { from, to } = volumeFyRange(fy);
     billed[fy] = await tx.commissionEnrollment.count({
-      where: { partnerId: partner.id, intakeMonth: { in: volumeFyMonths(fy) }, invoiceId: { not: null }, id: { notIn: ids } },
+      where: { partnerId: partner.id, fullyPaidOn: { gte: toDate(from), lte: toDate(to) }, invoiceId: { not: null }, id: { notIn: ids } },
     });
   }
   return assignVolume({
     tiers,
     opening: parseVolumeOpening(partner.volumeOpening),
     billed,
-    items: items.map((i) => ({ id: i.id, intakeMonth: i.intakeMonth, flat: i.commissionFlat != null })),
+    items: items.map((i) => ({ id: i.id, fullyPaidOn: isoDate(i.fullyPaidOn), flat: i.commissionFlat != null })),
   });
 }
 

@@ -141,7 +141,7 @@ function PartnerForm({ ctx, partner, onDone }: { ctx: PcCtx; partner: PartnerDTO
 
 /** Financial years worth showing: the current one and the two before it ("2026-27", "2025-26", "2024-25"). */
 function recentFys(today: string): string[] {
-  const cur = Number(volumeFyOfDate(today).slice(0, 4));
+  const cur = Number(volumeFyOfDate(today)!.slice(0, 4));
   return [cur, cur - 1, cur - 2].map((y) => `${y}-${String(y + 1).slice(-2)}`);
 }
 
@@ -156,7 +156,7 @@ function VolumeSummary({ ctx, partner }: { ctx: PcCtx; partner: PartnerDTO }) {
     .filter((r) => r.current || r.total > 0);
   return (
     <div className="mt-1.5 text-caption">
-      <div><b>Volume bonus</b> {volumeTiersLabel(partner.volumeTiers)} <span className="text-on-surface-variant">(per financial year, July–June, by intake month)</span></div>
+      <div><b>Volume bonus</b> {volumeTiersLabel(partner.volumeTiers)} <span className="text-on-surface-variant">(per financial year, July–June, by final payment date)</span></div>
       {rows.map((r) => {
         const extra = volumeExtraPct(partner.volumeTiers, r.total + 1);
         return (
@@ -195,8 +195,8 @@ function VolumeEditor({
       <div>
         <h5 className="font-semibold text-body-md">Volume bonus</h5>
         <p className="text-caption text-on-surface-variant">
-          Extra commission once enough enrollments are billed in an Australian financial year (July–June, by intake month). Each program enrollment counts once, so one
-          candidate in NCLEX and OSCE counts twice. The highest tier reached applies, added to the enrollment&apos;s own rate (20% + 5% = 25%). Leave empty for none.
+          Extra commission once enough enrollments are fully paid in an Australian financial year (July–June, by the date of the final payment). Only fully paid
+          enrollments count, and each program enrollment counts once, so one candidate in NCLEX and OSCE counts twice. The highest tier reached applies, added to the enrollment&apos;s own rate (20% + 5% = 25%). Leave empty for none.
         </p>
       </div>
       {tiers.map((t, i) => (

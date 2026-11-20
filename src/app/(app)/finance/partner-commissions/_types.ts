@@ -1,5 +1,5 @@
 import type { EnrollmentDTO } from "@/lib/partner-commissions/server";
-import { assignVolume, commissionOf, enrollmentState, invoiceTotal, volumeFyMonths, volumeFyOf, type VolumeAssignment, type VolumeTier } from "@/lib/partner-commissions/logic";
+import { assignVolume, commissionOf, enrollmentState, invoiceTotal, volumeFyOfDate, type VolumeAssignment, type VolumeTier } from "@/lib/partner-commissions/logic";
 import type { EnrollmentState } from "@/lib/partner-commissions/constants";
 
 export type { EnrollmentDTO };
@@ -131,10 +131,9 @@ export function setupGaps(s: SettingsDTO, partners: PartnerDTO[], programs: Prog
   return gaps;
 }
 
-/** Enrollments of a partner already on a DesGro invoice, for one financial year. */
+/** Enrollments of a partner fully paid in a financial year and already on a DesGro invoice. */
 export function billedInFy(enrollments: EnrollmentDTO[], partnerId: string, fy: string): number {
-  const months = new Set(volumeFyMonths(fy));
-  return enrollments.filter((e) => e.partnerId === partnerId && e.invoice && months.has(e.intakeMonth)).length;
+  return enrollments.filter((e) => e.partnerId === partnerId && e.invoice && volumeFyOfDate(e.fullyPaidOn) === fy).length;
 }
 
 /**
@@ -149,12 +148,12 @@ export function projectVolume(data: PcPageData, partnerId: string, items: Enroll
   const ids = new Set(items.map((i) => i.id));
   const others = data.enrollments.filter((e) => !ids.has(e.id));
   const billed: Record<string, number> = {};
-  for (const fy of new Set(items.map((i) => volumeFyOf(i.intakeMonth)).filter((x): x is string => !!x))) billed[fy] = billedInFy(others, partnerId, fy);
+  for (const fy of new Set(items.map((i) => volumeFyOfDate(i.fullyPaidOn)).filter((x): x is string => !!x))) billed[fy] = billedInFy(others, partnerId, fy);
   return assignVolume({
     tiers: partner.volumeTiers,
     opening: partner.volumeOpening,
     billed,
-    items: items.map((i) => ({ id: i.id, intakeMonth: i.intakeMonth, flat: i.commissionFlat != null })),
+    items: items.map((i) => ({ id: i.id, fullyPaidOn: i.fullyPaidOn, flat: i.commissionFlat != null })),
   });
 }
 

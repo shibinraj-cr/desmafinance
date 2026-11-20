@@ -83,11 +83,11 @@ export function EnrollmentsTab({ ctx }: { ctx: PcCtx }) {
         </div>
       ) : (
         <div className="overflow-x-auto bg-surface-container-lowest border border-outline-variant rounded-xl">
-          <table className="w-full min-w-[960px] text-body-md">
+          <table className="w-full min-w-[1040px] text-body-md">
             <thead>
               <tr className="bg-surface-container-low text-left text-[11px] uppercase tracking-wider text-on-surface-variant">
-                {["Candidate", "Program", "Partner", "Intake", "Course fee", "Fee paid", "Balance", "Commission", "Status"].map((h, i) => (
-                  <th key={h} className={`px-sm py-2.5 font-semibold whitespace-nowrap ${[4, 6, 7].includes(i) ? "text-right" : ""}`}>{h}</th>
+                {["Candidate", "Program", "Partner", "Intake", "Course fee", "Fee paid", "Fully paid", "Balance", "Commission", "Status"].map((h, i) => (
+                  <th key={h} className={`px-sm py-2.5 font-semibold whitespace-nowrap ${[4, 7, 8].includes(i) ? "text-right" : ""}`}>{h}</th>
                 ))}
               </tr>
             </thead>
@@ -108,6 +108,7 @@ export function EnrollmentsTab({ ctx }: { ctx: PcCtx }) {
                       <FeeBar e={e} />
                       <div className="text-caption text-on-surface-variant tabular-nums mt-1">{fmtMoney(e.courseFee - e.balance)} of {fmtMoney(e.courseFee)} · {e.payments.length} of {installmentCap(e.installmentPlan)} installments</div>
                     </td>
+                    <td className="px-sm py-2.5 tabular-nums whitespace-nowrap" title={e.fullyPaidOn ? "Date of the final payment" : undefined}>{e.fullyPaidOn ? fmtDate(e.fullyPaidOn) : <span className="text-on-surface-variant">—</span>}</td>
                     <td className={`px-sm py-2.5 text-right tabular-nums ${e.balance ? "font-semibold" : "text-on-surface-variant"}`}>{e.balance ? AUD(e.balance) : "—"}</td>
                     <td className="px-sm py-2.5 text-right tabular-nums">
                       {AUD(views.get(e.id)?.amount ?? commissionOf(e.courseFee, e.commissionPct, e.commissionFlat))}{" "}
@@ -237,6 +238,7 @@ function EnrollmentDrawer({ ctx, e, onClose }: { ctx: PcCtx; e: EnrollmentDTO; o
               <dt className="text-on-surface-variant">Partner</dt><dd>{e.partnerName}</dd>
               <dt className="text-on-surface-variant">Course</dt><dd>{e.courseName}</dd>
               <dt className="text-on-surface-variant">Intake</dt><dd>{e.intakeMonth}</dd>
+              <dt className="text-on-surface-variant">Fully paid</dt><dd>{e.fullyPaidOn ? `${fmtDate(e.fullyPaidOn)} (final payment)` : "Not yet"}</dd>
               <dt className="text-on-surface-variant">Student ID</dt><dd>{e.studentId ?? "—"}</dd>
               <dt className="text-on-surface-variant">CRM lead</dt><dd>{e.leadId ? <a className={linkBtnCls} href={`/crm/leads/${e.leadId}`}>{e.leadName ?? "Open lead"}</a> : "Not linked"}</dd>
               <dt className="text-on-surface-variant">Added</dt><dd>{fmtDate(e.createdAt)}{e.createdBy ? ` by ${e.createdBy}` : ""}</dd>
