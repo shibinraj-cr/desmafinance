@@ -201,6 +201,11 @@ model User {
   // Candidate invoices
   invoicesIssued        Invoice[]              @relation("InvoiceIssuedBy")
   invoicesCancelled     Invoice[]              @relation("InvoiceCancelledBy")
+  // CRM enrollment confirmations (src/lib/crm-enrollment.ts)
+  crmEnrollOwned        CrmEnrollment[]        @relation("CrmEnrollmentOwner")
+  crmEnrollSubmitted    CrmEnrollment[]        @relation("CrmEnrollmentSubmittedBy")
+  crmEnrollVerified     CrmEnrollment[]        @relation("CrmEnrollmentVerifiedBy")
+  crmEnrollExceptions   CrmEnrollment[]        @relation("CrmEnrollmentExceptionBy")
 
   @@index([roleId])
 }
@@ -269,6 +274,8 @@ model Transaction {
   bankMatches           BankTransactionMatch[]
   // Marketing Planner: the campaign this Marketing expense row paid for.
   mktSpendTag           MktSpendTag?
+  // The CRM enrollment whose first payment Finance posted as this row.
+  crmEnrollment         CrmEnrollment?         @relation("CrmEnrollmentPayment")
 
   @@index([date])
   @@index([month])
@@ -354,6 +361,7 @@ model Service {
   leads             Lead[]
   processTemplates  ProcessTemplate[]
   opsProjects       OpsProject[]
+  crmEnrollments    CrmEnrollment[]
 
   @@index([isActive])
   @@index([groupId])
@@ -730,6 +738,9 @@ model LeadPulsePipeline {
   dailyCloseId String?              @unique
   dailyClose   LeadPulseDailyClose? @relation("PipelineDailyClose", fields: [dailyCloseId], references: [id], onDelete: SetNull)
   notes        String?
+  // CRM enrollment confirmations for this deal: the incentive counts a won
+  // deal only once Finance has verified its enrollment.
+  enrollments  CrmEnrollment[]
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -1330,6 +1341,7 @@ model Party {
   // Partner Commissions: the institution this party stands for, when it is one.
   commissionPartners CommissionPartner[]
   invoices           Invoice[]
+  crmEnrollments     CrmEnrollment[]
 
   @@unique([name, group])
   @@index([group])
@@ -1609,6 +1621,8 @@ model CollectionPlan {
   updatedAt   DateTime @updatedAt
 
   installments CollectionPlanInstallment[]
+  /// Set when the plan was made from a verified CRM enrollment.
+  crmEnrollment CrmEnrollment? @relation("CrmEnrollmentPlan")
 
   @@index([partyId])
   @@index([serviceId])
@@ -1648,6 +1662,84 @@ model CollectionPlanInstallment {
   @@index([planId])
   @@index([status])
   @@index([expectedDate])
+}
+
+/// A BDE's enrollment confirmation (the Enroll sheet) and Finance's check of
+/// it. The first payment waits here, outside the ledger, until Finance
+/// approves it: approving posts it, makes the collection plan from `plan`, and
+/// can issue the invoice (src/lib/crm-enrollment.ts). The enrollment itself
+/// counts from submit (the pipeline is closed_won, dated to `paidOn`); the
+/// incentive counts it only once verified (src/lib/crm-incentive-data.ts).
+model CrmEnrollment {
+  id               String             @id @default(cuid())
+  leadId           String
+  lead             Lead               @relation(fields: [leadId], references: [id], onDelete: Cascade)
+  partyId          String
+  party            Party              @relation(fields: [partyId], references: [id], onDelete: Restrict)
+  serviceId        String
+  service          Service            @relation(fields: [serviceId], references: [id], onDelete: Restrict)
+  pipelineId       String?
+  pipeline         LeadPulsePipeline? @relation(fields: [pipelineId], references: [id], onDelete: SetNull)
+  /// The L2 BDE credited with the enrollment.
+  ownerUserId      String?
+  owner            User?              @relation("CrmEnrollmentOwner", fields: [ownerUserId], references: [id], onDelete: SetNull)
+  submittedById    String?
+  submittedBy      User?              @relation("CrmEnrollmentSubmittedBy", fields: [submittedById], references: [id], onDelete: SetNull)
+  /// "pending" (with Finance) | "sent_back" (BDE to fix) | "verified" |
+  /// "not_received" (Finance found no money; the sales head decides) |
+  /// "withdrawn" (un-enrolled before verification).
+  status           String             @default("pending")
+  /// A first payment under the minimum needs the sales head: "pending" |
+  /// "approved" | "rejected". Null when the payment meets the minimum.
+  exception        String?
+  exceptionById    String?
+  exceptionBy      User?              @relation("CrmEnrollmentExceptionBy", fields: [exceptionById], references: [id], onDelete: SetNull)
+  exceptionAt      DateTime?
+  exceptionNote    String?
+  /// Name exactly as on the passport, and where the candidate lives: the
+  /// invoice's bill-to. The state decides CGST + SGST or IGST.
+  billingName      String
+  billingCountry   String
+  billingState     String?
+  billingAddress   String?
+  billingPin       String?
+  /// Total the candidate pays for the service, GST included.
+  totalAmount      Decimal            @db.Decimal(14, 2)
+  /// The first payment. Null only on an enrollment from an older app that
+  /// sent no payment details: Finance fills them in or sends it back.
+  firstAmount      Decimal?           @db.Decimal(14, 2)
+  paidOn           DateTime?          @db.Date
+  paymentMode      String?
+  /// The payment's bank reference.
+  utr              String?
+  /// "candidate" | "parent" | "spouse" | "other"
+  payerRelation    String?
+  payerName        String?
+  /// The balance plan: [{ "date": "YYYY-MM-DD", "amount": 30000 }, ...].
+  plan             Json               @default("[]")
+  /// Finance's ledger classification and EXP/DOM for the first payment.
+  category         String?
+  subItem          String?
+  expDom           String?
+  /// The details as the BDE last submitted them, for "BDE said X → Finance set Y".
+  submitted        Json
+  /// Finance's reason when sending back or reporting no money.
+  financeNote      String?
+  transactionId    String?            @unique
+  transaction      Transaction?       @relation("CrmEnrollmentPayment", fields: [transactionId], references: [id], onDelete: SetNull)
+  collectionPlanId String?            @unique
+  collectionPlan   CollectionPlan?    @relation("CrmEnrollmentPlan", fields: [collectionPlanId], references: [id], onDelete: SetNull)
+  verifiedById     String?
+  verifiedBy       User?              @relation("CrmEnrollmentVerifiedBy", fields: [verifiedById], references: [id], onDelete: SetNull)
+  verifiedAt       DateTime?
+  createdAt        DateTime           @default(now())
+  updatedAt        DateTime           @updatedAt
+
+  @@index([leadId])
+  @@index([partyId])
+  @@index([pipelineId])
+  @@index([status, createdAt])
+  @@index([ownerUserId])
 }
 
 // ──────────────────────────────────────────────────────────────────────
@@ -3209,6 +3301,7 @@ model Lead {
   referralRewardEarned CrmReferralReward?     @relation("ReferralRewardReferred")
   /// Rewards this lead (as the referring candidate) is owed or was paid.
   referralRewards      CrmReferralReward[]    @relation("ReferralRewardReferrer")
+  enrollments CrmEnrollment[]
 
   @@index([assignedToId])
   @@index([assignedAt])

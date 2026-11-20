@@ -46,7 +46,7 @@ export async function PATCH(
     return NextResponse.json({ error: "forbidden" }, { status: 403 });
   }
   // A CRM-owned deal is won by ENROLLING the lead — that is what creates the
-  // candidate in the Party master, raises the revenue draft for Finance and
+  // candidate in the Party master, sends the enrollment to Finance to verify and
   // opens the Operations project. Winning it here would mark the deal closed in
   // Marketing with none of that behind it, and lose it likewise. Both belong on
   // the lead: Enroll, or set a lost status.

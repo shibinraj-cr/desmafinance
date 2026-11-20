@@ -108,11 +108,12 @@ export default async function ExecutiveDashboardPage() {
               headline.currentMonthRevenue +
               headline.expectedCollections +
               headline.myDraftsRevenue +
-              headline.pendingApprovalRevenue
+              headline.pendingApprovalRevenue +
+              headline.pendingEnrollmentRevenue
             }
             tone="success"
             hero
-            hint={`Net of GST: ${inr(headline.currentMonthRevenue)} realised + ${inr(headline.expectedCollections)} expected + ${inr(headline.myDraftsRevenue)} drafts + ${inr(headline.pendingApprovalRevenue)} awaiting approval`}
+            hint={`Net of GST: ${inr(headline.currentMonthRevenue)} realised + ${inr(headline.expectedCollections)} expected + ${inr(headline.myDraftsRevenue)} drafts + ${inr(headline.pendingApprovalRevenue)} awaiting approval${headline.pendingEnrollmentCount ? ` + ${inr(headline.pendingEnrollmentRevenue)} from ${headline.pendingEnrollmentCount} enrollment${headline.pendingEnrollmentCount === 1 ? "" : "s"} awaiting Finance` : ""}`}
           />
           {/* CRM pipeline — leads in the "Pipeline" stage, by expected close
               date. Information only: deliberately NOT in the Forecast. */}

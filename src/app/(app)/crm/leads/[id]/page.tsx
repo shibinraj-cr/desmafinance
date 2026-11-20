@@ -31,6 +31,7 @@ import { activeQualityReasons } from "@/lib/crm-lead-quality-data";
 import { loadLeadReferral } from "@/lib/crm-referral";
 import { siteBaseUrlFromHeaders } from "@/lib/site-url";
 import { partyViewerAccess } from "@/lib/invoices/server";
+import { leadEnrollment } from "@/lib/crm-enrollment";
 import { LeadDetail } from "./client";
 
 export const dynamic = "force-dynamic";
@@ -245,6 +246,9 @@ export default async function LeadDetailPage({ params }: { params: { id: string 
   // supervisors and the candidate's Ops person (src/lib/invoices/server.ts).
   const canSeeTransactions = lead.partyId ? (await partyViewerAccess(userId, perms, lead.partyId)) !== null : false;
 
+  // Where Finance is with the enrollment (Pending Finance, sent back, verified).
+  const enrollment = lead.status.code === "enrolled" ? await leadEnrollment(lead.id) : null;
+
   return (
     <>
       <TopBar
@@ -277,6 +281,7 @@ export default async function LeadDetailPage({ params }: { params: { id: string 
           studyAbroad={studyAbroad}
           taskReminders={taskReminders}
           referral={referral}
+          enrollment={enrollment}
           access={{
             isAdmin: access.isAdmin,
             canAssign: access.canAssign,

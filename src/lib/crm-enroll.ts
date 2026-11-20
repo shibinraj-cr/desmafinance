@@ -10,29 +10,42 @@ import { recordOpsActivity } from "./ops-activity";
 import { getActiveTemplateForService } from "./ops-templates";
 import { createProjectForEnrollment, resolveDefaultOpsAssignee } from "./ops-projects";
 import { loadHolidaySet } from "./ops-dates";
-import { monthCodeFromDate, flowFor } from "./catalog";
 import { toPrismaDate, fromPrismaDate, todayIst } from "./lead-pulse-dates";
 import { isLostStatusCode } from "./crm-reinquiry";
-import { enrollDateMessage, enrollDateProblem } from "./crm-enroll-date";
+import { enrollDateMessage, enrollDateProblem, formatEnrollDate } from "./crm-enroll-date";
 import { noteRewardRaised, raiseReferralReward } from "./crm-referral-reward";
+import {
+  MIN_FIRST_PAYMENT,
+  belowMinimum,
+  confirmProblems,
+  type EnrollConfirm,
+  type EnrollmentFields,
+} from "./crm-enroll-confirm";
+import { notifyEnrollment, salesHeadUserIds } from "./crm-notify";
 
 /**
- * Resolve a finance (category, subItem) for a revenue draft from the enrolled
- * service: prefer a SubCategory explicitly mapped to the service, else the
- * first active Revenue category + sub-item. Ganga can re-classify on review.
+ * Resolve a finance (category, subItem) for a candidate payment from the
+ * service: a SubCategory mapped to the service, preferring a "Sales …"
+ * category for the first payment and a "Collection …" one for the balance;
+ * else any mapped one; else the first active Revenue category + sub-item.
+ * Finance can re-classify while verifying.
  */
-async function resolveRevenueClassification(
+export async function resolveRevenueClassification(
   serviceId: string,
+  kind: "sale" | "collection" = "sale",
 ): Promise<{ category: string; subItem: string }> {
-  const mapped = await prisma.subCategory.findFirst({
+  const mapped = await prisma.subCategory.findMany({
     where: {
       serviceId,
       isActive: true,
       category: { isActive: true, OR: [{ type: "Revenue" }, { type: "Both" }] },
     },
+    orderBy: { name: "asc" },
     select: { name: true, category: { select: { name: true } } },
   });
-  if (mapped) return { category: mapped.category.name, subItem: mapped.name };
+  const want = kind === "sale" ? /^sales\b/i : /^collection\b/i;
+  const pick = mapped.find((m) => want.test(m.category.name)) ?? mapped[0];
+  if (pick) return { category: pick.category.name, subItem: pick.name };
   const cat = await prisma.category.findFirst({
     where: { isActive: true, OR: [{ type: "Revenue" }, { type: "Both" }] },
     orderBy: { name: "asc" },
@@ -146,6 +159,38 @@ export async function syncDailyClose(
   return close.id;
 }
 
+/**
+ * Move a won deal to a new enrollment date: its daily close leaves the old
+ * day's entry and lands on the new day's, the same reversal re-opening a deal
+ * performs, so the month counts follow. Finance correcting the payment date
+ * (or the BDE fixing it) moves the enrollment with it. No-op when the deal
+ * isn't won or the date is unchanged.
+ */
+export async function moveEnrollmentClose(tx: Prisma.TransactionClient, pipelineId: string, newDate: string): Promise<void> {
+  const p = await tx.leadPulsePipeline.findUnique({
+    where: { id: pipelineId },
+    select: { status: true, closedDate: true, dailyCloseId: true, userId: true, sourceId: true, serviceId: true },
+  });
+  if (!p || p.status !== "closed_won") return;
+  if (p.closedDate && fromPrismaDate(p.closedDate) === newDate) return;
+  if (p.dailyCloseId) {
+    const close = await tx.leadPulseDailyClose.findUnique({
+      where: { id: p.dailyCloseId },
+      select: { id: true, entry: { select: { id: true, closedWon: true } } },
+    });
+    if (close) {
+      await tx.leadPulseDailyClose.delete({ where: { id: close.id } });
+      await tx.leadPulseDailyEntry.update({
+        where: { id: close.entry.id },
+        data: { closedWon: Math.max(0, (close.entry.closedWon ?? 0) - 1) },
+      });
+    }
+  }
+  const date = toPrismaDate(newDate);
+  const dailyCloseId = await syncDailyClose(tx, { userId: p.userId, sourceId: p.sourceId, serviceId: p.serviceId }, date);
+  await tx.leadPulsePipeline.update({ where: { id: pipelineId }, data: { closedDate: date, dailyCloseId } });
+}
+
 async function upsertPipeline(
   tx: Prisma.TransactionClient,
   lead: LeadCore,
@@ -240,19 +285,42 @@ async function upsertPipeline(
   return created.id;
 }
 
-/** Find a candidate Party by explicit link → email → phone → name, else create one. */
-async function findOrCreateParty(tx: Prisma.TransactionClient, lead: LeadCore, ownerUserId: string): Promise<string> {
-  let found: { id: string } | null = null;
+export type PartyMatch = { id: string; by: "linked" | "email" | "phone" | "name" };
+
+/**
+ * The candidate Party a lead would enroll into: its explicit link, else the
+ * Candidate with the same email, phone or name. The Enroll sheet shows this
+ * before submitting, to catch "same name, different person".
+ */
+export async function findCandidateParty(
+  db: Prisma.TransactionClient | typeof prisma,
+  lead: { partyId: string | null; email: string | null; phone: string | null; candidateName: string },
+): Promise<PartyMatch | null> {
   // An explicit partyId (e.g. a re-enrollment lead pre-linked to the candidate)
   // is authoritative — it pins the second service to the intended candidate even
   // when email/phone are absent or ambiguous.
-  if (lead.partyId) found = await tx.party.findUnique({ where: { id: lead.partyId }, select: { id: true } });
+  if (lead.partyId) {
+    const p = await db.party.findUnique({ where: { id: lead.partyId }, select: { id: true } });
+    if (p) return { id: p.id, by: "linked" };
+  }
   // Email/phone/name lookups MUST stay within group "Candidate": the Party master
   // also holds Vendors, and email/phone are non-unique, so a candidate that shares a
   // contact value with a vendor would otherwise resolve to (and mutate) the vendor row.
-  if (!found && lead.email) found = await tx.party.findFirst({ where: { email: lead.email, group: "Candidate" }, select: { id: true } });
-  if (!found && lead.phone) found = await tx.party.findFirst({ where: { phone: lead.phone, group: "Candidate" }, select: { id: true } });
-  if (!found) found = await tx.party.findFirst({ where: { name: lead.candidateName, group: "Candidate" }, select: { id: true } });
+  if (lead.email) {
+    const p = await db.party.findFirst({ where: { email: lead.email, group: "Candidate" }, select: { id: true } });
+    if (p) return { id: p.id, by: "email" };
+  }
+  if (lead.phone) {
+    const p = await db.party.findFirst({ where: { phone: lead.phone, group: "Candidate" }, select: { id: true } });
+    if (p) return { id: p.id, by: "phone" };
+  }
+  const p = await db.party.findFirst({ where: { name: lead.candidateName, group: "Candidate" }, select: { id: true } });
+  return p ? { id: p.id, by: "name" } : null;
+}
+
+/** Find a candidate Party by explicit link → email → phone → name, else create one. */
+async function findOrCreateParty(tx: Prisma.TransactionClient, lead: LeadCore, ownerUserId: string): Promise<string> {
+  const found = await findCandidateParty(tx, lead);
 
   if (found) {
     await tx.party.update({
@@ -349,6 +417,15 @@ export async function applyLeadDeal(args: DealArgs): Promise<{ pipelineId: strin
   // Setting a deal moves the lead to the action-only "Pipeline" stage — unless
   // it's already enrolled (a won lead must not be downgraded).
   const alreadyEnrolled = lead.status.code === "enrolled";
+  // Enrolled with the Enroll sheet: the deal is the enrollment's now. Its total
+  // and date change through the enrollment (logged, and checked by Finance);
+  // the service doesn't change at all. Older enrollments keep Edit deal.
+  if (alreadyEnrolled) {
+    const enrollment = await prisma.crmEnrollment.findFirst({ where: { leadId: lead.id, status: { not: "withdrawn" } }, select: { id: true } });
+    if (enrollment) {
+      throw badRequest("This enrollment is with Finance. Change the total or the payment date with Edit details on the Deal card, or ask Finance.", "deal_locked_by_enrollment");
+    }
+  }
   const pipelineStatus = alreadyEnrolled
     ? null
     : await prisma.crmLeadStatus.findFirst({ where: { code: "pipeline", active: true }, select: { id: true } });
@@ -401,19 +478,54 @@ type EnrollArgs = {
   // month the enrollment counts in across every CRM metric. Defaults to now
   // when omitted (e.g. an older client that doesn't send it). Never in the
   // future; limited back-dating unless `canBackdate` (see crm-enroll-date.ts).
+  // With `confirm`, the first payment's date is the enrollment date instead.
   closedDate?: Date | null;
   ownerUserId?: string | null;
   actorId: string;
   /** May date the enrollment before the normal window (admin / supervisor /
    *  CRM manager — the same people who may un-enroll). */
   canBackdate?: boolean;
+  /**
+   * The Enroll sheet: passport name, where they live, the total, the first
+   * payment and the balance plan (src/lib/crm-enroll-confirm.ts). Absent from
+   * an older client (the mobile app before its update): the enrollment then
+   * waits for Finance with no payment details, to be filled in or sent back.
+   */
+  confirm?: EnrollConfirm | null;
 };
 
+const inr = (n: number) => `₹${n.toLocaleString("en-IN", { maximumFractionDigits: 2 })}`;
+
+/** What the BDE confirmed, as the enrollment's comparable fields. */
+function confirmFields(c: EnrollConfirm): EnrollmentFields {
+  return {
+    billingName: c.billingName,
+    billingCountry: c.billingCountry,
+    billingState: c.billingState,
+    billingAddress: c.billingAddress,
+    billingPin: c.billingPin,
+    totalAmount: c.totalAmount,
+    firstAmount: c.firstAmount,
+    paidOn: c.paidOn,
+    paymentMode: c.paymentMode,
+    utr: c.utr,
+    payerRelation: c.payerRelation,
+    payerName: c.payerRelation === "candidate" ? null : c.payerName,
+    plan: c.plan.map((r) => ({ date: r.date, amount: r.amount })),
+  };
+}
+
 /** Enroll: status → Enrolled, create/link the candidate (Party) for Finance,
- *  and flip the pipeline to closed_won. Returns the linked party + pipeline. */
-export async function enrollLead(
-  args: EnrollArgs,
-): Promise<{ partyId: string; pipelineId: string; draftId: string | null; opsProjectId: string | null }> {
+ *  flip the pipeline to closed_won, and hand the enrollment to Finance to
+ *  verify. Returns the linked party + pipeline. */
+export async function enrollLead(args: EnrollArgs): Promise<{
+  partyId: string;
+  pipelineId: string;
+  /** Always null now: the first payment waits on the enrollment, not as a draft. Kept for older clients. */
+  draftId: null;
+  enrollmentId: string;
+  opsProjectId: string | null;
+}> {
   const lead = await prisma.lead.findUnique({
     where: { id: args.leadId },
     select: {
@@ -422,6 +534,7 @@ export async function enrollLead(
       expectedValue: true,
       expectedCloseDate: true,
       referredByLeadId: true,
+      country: true,
     },
   });
   if (!lead) throw new HttpError(404, "Lead not found", "not_found");
@@ -433,10 +546,16 @@ export async function enrollLead(
     throw badRequest("This lead is already enrolled.", "already_enrolled");
   }
 
-  // The date decides which month this enrollment counts in (Lead Pulse,
-  // targets, incentive), so it is checked here rather than only in the dialog.
-  if (args.closedDate) {
-    const today = todayIst();
+  const today = todayIst();
+  const confirm = args.confirm ?? null;
+  if (confirm) {
+    // The sheet's own date window applies to the payment date: it is the
+    // enrollment date, so it decides the month the enrollment counts in.
+    const problems = confirmProblems(confirm, { today, canBackdate: !!args.canBackdate, dateWindow: true });
+    if (problems.length) throw badRequest(problems[0].message, `enroll_${problems[0].field}`);
+  } else if (args.closedDate) {
+    // The date decides which month this enrollment counts in (Lead Pulse,
+    // targets, incentive), so it is checked here rather than only in the dialog.
     const problem = enrollDateProblem(fromPrismaDate(args.closedDate), today, {
       canBackdate: !!args.canBackdate,
     });
@@ -444,8 +563,11 @@ export async function enrollLead(
   }
 
   const serviceId = args.serviceId ?? lead.serviceId;
-  const expectedValue = args.expectedValue ?? (lead.expectedValue ? Number(lead.expectedValue) : null);
-  const expectedCloseDate = args.expectedCloseDate ?? lead.expectedCloseDate ?? new Date();
+  const expectedValue = confirm
+    ? confirm.totalAmount
+    : args.expectedValue ?? (lead.expectedValue ? Number(lead.expectedValue) : null);
+  const closedDate = confirm ? toPrismaDate(confirm.paidOn) : args.closedDate ?? null;
+  const expectedCloseDate = confirm ? toPrismaDate(confirm.paidOn) : args.expectedCloseDate ?? lead.expectedCloseDate ?? new Date();
 
   if (!serviceId) throw badRequest("Pick the enrolled service.", "service_required");
   if (!lead.sourceId) throw badRequest("Set the lead's source before enrolling.", "source_required");
@@ -456,32 +578,48 @@ export async function enrollLead(
   const enrolled = await prisma.crmLeadStatus.findFirst({ where: { code: "enrolled", active: true }, select: { id: true } });
   if (!enrolled) throw badRequest("No active 'Enrolled' status configured — run db:seed-crm.", "no_enrolled_status");
 
-  // Revenue draft target: the lone draft-first reviewer (Ganga). Resolved up
-  // front (read-only) so the draft is created atomically with the enrollment.
-  const reviewer = await prisma.user.findFirst({ where: { draftFirst: true }, select: { id: true, username: true } });
-  const classification = await resolveRevenueClassification(serviceId);
-  // Service name for the draft description (helps Finance tell apart a
-  // candidate's multiple services / re-enrollments in their review queue).
+  // The first payment's ledger classification, suggested for Finance.
+  const classification = await resolveRevenueClassification(serviceId, "sale");
   const service = await prisma.service.findUnique({ where: { id: serviceId }, select: { name: true } });
-  const draftDate = new Date();
 
   // Operations: resolve the service's active process template (+ holiday
-  // calendar and default assignee) up front, read-only — like the reviewer
-  // above — so the project is built atomically inside the enroll transaction.
-  // A missing template is a soft no-op: enrollment must never fail because
-  // Operations hasn't authored the process yet.
+  // calendar and default assignee) up front, read-only, so the project is
+  // built atomically inside the enroll transaction. A missing template is a
+  // soft no-op: enrollment must never fail because Operations hasn't authored
+  // the process yet.
   const opsTemplate = await getActiveTemplateForService(prisma, serviceId);
   const opsHolidays = opsTemplate ? await loadHolidaySet(prisma) : new Set<string>();
   const opsAssigneeId = opsTemplate ? await resolveDefaultOpsAssignee(prisma) : null;
 
   const deal = { serviceId, sourceId: lead.sourceId, ownerUserId, expectedValue, expectedCloseDate };
 
+  // What goes to Finance. Without the sheet (an older client) the payment is
+  // blank: Finance fills it in from the bank, or sends it back to the BDE.
+  const fields: EnrollmentFields = confirm
+    ? confirmFields(confirm)
+    : {
+        billingName: lead.candidateName,
+        billingCountry: lead.country?.trim() || "India",
+        billingState: null,
+        billingAddress: null,
+        billingPin: null,
+        totalAmount: expectedValue,
+        firstAmount: null,
+        paidOn: null,
+        paymentMode: null,
+        utr: null,
+        payerRelation: null,
+        payerName: null,
+        plan: [],
+      };
+  const needsException = belowMinimum(fields.firstAmount);
+
   const result = await prisma.$transaction(async (tx) => {
     // The idempotency check above reads outside this transaction, so two
     // near-simultaneous calls (a double-click, two tabs) can both pass it. This
     // conditional write is the real guard: the first transaction to flip the
     // stage holds the row lock, the second re-evaluates `statusId` once it is
-    // released, matches nothing, and rolls back — so revenue is drafted once.
+    // released, matches nothing, and rolls back — so it is enrolled once.
     const claimed = await tx.lead.updateMany({
       where: { id: lead.id, statusId: { not: enrolled.id } },
       data: { statusId: enrolled.id },
@@ -495,11 +633,7 @@ export async function enrollLead(
       update: { totalAmount: expectedValue },
       select: { id: true },
     });
-    // Repeat business: the candidate already holds another (different) service —
-    // this enrollment is a re-enrollment. Drives the finance draft wording.
-    const priorServices = await tx.partyService.count({ where: { partyId, serviceId: { not: serviceId } } });
-    const isRepeat = priorServices > 0;
-    const pipelineId = await upsertPipeline(tx, lead, deal, "closed_won", partyId, args.closedDate ?? null);
+    const pipelineId = await upsertPipeline(tx, lead, deal, "closed_won", partyId, closedDate);
     await tx.lead.update({
       where: { id: lead.id },
       data: {
@@ -511,29 +645,40 @@ export async function enrollLead(
         expectedCloseDate,
       },
     });
-    // Hand the enrolled value to Finance as a Revenue draft in the reviewer's
-    // (Ganga's) My-Drafts queue. She completes the classification + EXP/DOM and
-    // submits it to the approval queue for the finance manager (Vishnu).
-    let draftId: string | null = null;
-    if (reviewer) {
-      const draft = await tx.transactionDraft.create({
-        data: {
-          submittedById: reviewer.id,
-          date: draftDate,
-          month: monthCodeFromDate(draftDate),
-          type: "Revenue",
-          category: classification.category,
-          subItem: classification.subItem,
-          description: `${isRepeat ? "Re-enrollment" : "Enrollment"} — ${lead.candidateName}${service?.name ? ` · ${service.name}` : ""} (review & complete)`,
-          paymentMode: "HDFC Bank",
-          amount: expectedValue,
-          flow: flowFor("Revenue"),
-          partyId,
-          expDom: null,
-        },
-      });
-      draftId = draft.id;
-    }
+
+    // Hand the enrollment to Finance: the first payment waits here, outside
+    // the ledger, until Finance checks it against the bank and approves it
+    // (src/lib/crm-enrollment.ts). No revenue draft any more: a draft was the
+    // full deal value, always "HDFC Bank", dated the day of the click.
+    const enrollment = await tx.crmEnrollment.create({
+      data: {
+        leadId: lead.id,
+        partyId,
+        serviceId,
+        pipelineId,
+        ownerUserId,
+        submittedById: args.actorId,
+        status: "pending",
+        exception: needsException ? "pending" : null,
+        billingName: fields.billingName,
+        billingCountry: fields.billingCountry,
+        billingState: fields.billingState,
+        billingAddress: fields.billingAddress,
+        billingPin: fields.billingPin,
+        totalAmount: fields.totalAmount,
+        firstAmount: fields.firstAmount,
+        paidOn: fields.paidOn ? toPrismaDate(fields.paidOn) : null,
+        paymentMode: fields.paymentMode,
+        utr: fields.utr,
+        payerRelation: fields.payerRelation,
+        payerName: fields.payerName,
+        plan: fields.plan,
+        category: classification.category,
+        subItem: classification.subItem,
+        submitted: fields as unknown as Prisma.InputJsonValue,
+      },
+      select: { id: true },
+    });
 
     // Auto-create the operations project + tasks for this enrollment. Inside
     // the transaction so a candidate is never enrolled without their project;
@@ -562,7 +707,8 @@ export async function enrollLead(
     return {
       partyId,
       pipelineId,
-      draftId,
+      draftId: null,
+      enrollmentId: enrollment.id,
       opsProjectId: opsProject?.projectId ?? null,
       opsCreated: opsProject?.created ?? false,
       opsTaskCount: opsProject?.taskCount ?? 0,
@@ -588,18 +734,38 @@ export async function enrollLead(
     leadId: lead.id,
     actorId: args.actorId,
     type: "ENROLLED",
-    summary: `Enrolled — ₹${expectedValue.toLocaleString("en-IN")}`,
-    metadata: { partyId: result.partyId, pipelineId: result.pipelineId, expectedValue, serviceId },
+    summary: `Enrolled — ${inr(expectedValue)}`,
+    metadata: { partyId: result.partyId, pipelineId: result.pipelineId, expectedValue, serviceId, enrollmentId: result.enrollmentId },
   });
   await recordLeadActivity({
     leadId: lead.id,
     actorId: args.actorId,
-    type: "REVENUE_DRAFTED",
-    summary: result.draftId
-      ? `Revenue draft ₹${expectedValue.toLocaleString("en-IN")} sent to ${reviewer?.username ?? "finance"} for review & approval`
-      : `Enrolled value ₹${expectedValue.toLocaleString("en-IN")} — no draft-review user configured; record the revenue transaction manually.`,
-    metadata: { draftId: result.draftId, amount: expectedValue, partyId: result.partyId, serviceId },
+    type: "ENROLLMENT_SUBMITTED",
+    summary:
+      fields.firstAmount != null && fields.paidOn
+        ? `Sent to Finance to verify: first payment ${inr(fields.firstAmount)} into ${fields.paymentMode} on ${formatEnrollDate(fields.paidOn)}` +
+          (fields.utr ? ` (UTR ${fields.utr})` : "") +
+          (fields.plan.length ? `, balance in ${fields.plan.length} instalment${fields.plan.length === 1 ? "" : "s"}` : ", paid in full")
+        : "Sent to Finance to verify, without payment details (enrolled from an older app). Finance will fill them in or send it back.",
+    metadata: { enrollmentId: result.enrollmentId, firstAmount: fields.firstAmount, paymentMode: fields.paymentMode, paidOn: fields.paidOn },
   });
+
+  if (needsException && fields.firstAmount != null) {
+    await recordLeadActivity({
+      leadId: lead.id,
+      actorId: args.actorId,
+      type: "ENROLLMENT_EXCEPTION",
+      summary: `First payment ${inr(fields.firstAmount)} is under ${inr(MIN_FIRST_PAYMENT)}: waiting for the sales head to approve`,
+      metadata: { enrollmentId: result.enrollmentId, decision: "requested" },
+    });
+    await notifyEnrollment({
+      userIds: await salesHeadUserIds(),
+      actorUserId: args.actorId,
+      leadId: lead.id,
+      title: "First payment under the minimum",
+      body: `${lead.candidateName} enrolled in ${service?.name ?? "a service"} with a first payment of ${inr(fields.firstAmount)}, under ${inr(MIN_FIRST_PAYMENT)}. Approve or reject the exception on the lead.`,
+    });
+  }
 
   if (result.reward && lead.referredByLeadId) {
     await noteRewardRaised(result.reward, {
@@ -629,5 +795,11 @@ export async function enrollLead(
     });
   }
 
-  return result;
+  return {
+    partyId: result.partyId,
+    pipelineId: result.pipelineId,
+    draftId: null,
+    enrollmentId: result.enrollmentId,
+    opsProjectId: result.opsProjectId,
+  };
 }

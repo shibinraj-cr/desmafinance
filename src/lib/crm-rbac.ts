@@ -195,7 +195,7 @@ export type CrmAccess = {
   canManageSettings: boolean;
   /**
    * Undo an enrollment (src/lib/crm-unenroll.ts). A tier above `canEditLead`:
-   * un-enrolling discards a Finance revenue draft, removes a BDE's closed-won
+   * un-enrolling withdraws the enrollment from Finance, removes a BDE's closed-won
    * tick from the month's Actual, and removes or cancels an Operations project —
    * so the owning consultant must not be able to quietly reverse their own
    * numbers. System admins, Lead Pulse supervisors and the CRM-admin tier only.

@@ -48,6 +48,30 @@ function createdByThisEnroll(createdAt: Date, enrolledAt: Date | null): boolean 
   return Math.abs(createdAt.getTime() - enrolledAt.getTime()) <= CREATED_BY_ENROLL_WINDOW_MS;
 }
 
+/**
+ * The enrollment confirmation the Enroll sheet created (src/lib/crm-enrollment.ts):
+ * the latest one not withdrawn, and whether Finance has already posted its
+ * first payment to the ledger.
+ */
+async function enrollmentForUnenroll(leadId: string) {
+  const e = await prisma.crmEnrollment.findFirst({
+    where: { leadId, status: { not: "withdrawn" } },
+    orderBy: { createdAt: "desc" },
+    select: { id: true, status: true, firstAmount: true, transactionId: true, collectionPlanId: true, transaction: { select: { deletedAt: true } } },
+  });
+  return e
+    ? {
+        id: e.id,
+        status: e.status,
+        firstAmount: e.firstAmount == null ? null : Number(e.firstAmount.toString()),
+        // In the books while its ledger row is live. Once Finance deletes that
+        // row (the reversal), the enrollment can be undone like any other.
+        posted: !!e.transactionId && !!e.transaction && e.transaction.deletedAt === null,
+        collectionPlanId: e.collectionPlanId,
+      }
+    : null;
+}
+
 export type UnenrollBlocker = { code: string; message: string };
 export type UnenrollWarning = { code: string; message: string };
 
@@ -90,6 +114,12 @@ type ResolvedState = {
   draft: { id: string; amount: number; submittedByName: string | null } | null;
   /** Recorded draft id whose row is gone AND was never discarded → money moved on. */
   committedDraftId: string | null;
+  /**
+   * The enrollment confirmation waiting for Finance (src/lib/crm-enrollment.ts),
+   * on enrollments made with the Enroll sheet. `posted` once Finance verified
+   * it: its first payment is in the ledger.
+   */
+  enrollment: Awaited<ReturnType<typeof enrollmentForUnenroll>>;
   partyService: { id: string; createdAt: Date } | null;
   opsProject: { id: string; status: string; taskCount: number; touched: number; docs: number; items: number } | null;
   /** The referral reward this enrollment earned the candidate who referred them. */
@@ -224,6 +254,7 @@ async function resolveState(leadId: string): Promise<ResolvedState> {
     pipeline,
     draft,
     committedDraftId,
+    enrollment: await enrollmentForUnenroll(lead.id),
     partyService,
     opsProject,
     reward: await rewardForUnenroll(lead.id),
@@ -255,17 +286,31 @@ function buildPlan(s: ResolvedState): UnenrollPlan {
     });
   }
 
+  if (s.enrollment?.posted) {
+    blockers.push({
+      code: "enrollment_verified",
+      message:
+        `Finance has verified this enrollment and posted its first payment${s.enrollment.firstAmount ? ` (${inr(s.enrollment.firstAmount)})` : ""} to the ledger. ` +
+        "Finance must delete that payment in the ledger first; un-enrolling will not delete a recorded payment.",
+    });
+  }
+
   if (s.pipeline?.status === "closed_won") {
     effects.push("Marketing pipeline entry goes from Won back to In forecast (open), and its close date is cleared.");
   }
   if (s.pipeline?.dailyCloseId) {
     effects.push("The closed-won tick is removed from the owning BDE's daily entry, so the month's Actual drops by one.");
   }
+  if (s.enrollment && !s.enrollment.posted) {
+    effects.push(
+      `The enrollment waiting for Finance${s.enrollment.firstAmount ? ` (first payment ${inr(s.enrollment.firstAmount)})` : ""} is withdrawn; nothing was posted to the ledger.`,
+    );
+  }
   if (s.draft) {
     effects.push(
       `The ${inr(s.draft.amount)} Revenue draft${s.draft.submittedByName ? ` in ${s.draft.submittedByName}'s My Drafts` : ""} is discarded.`,
     );
-  } else if (!s.committedDraftId) {
+  } else if (!s.committedDraftId && !s.enrollment) {
     retained.push("No revenue draft is pending for this enrollment — nothing to discard on the Finance side.");
   }
 
@@ -349,6 +394,7 @@ export type UnenrollResult = {
   pipelineReopened: boolean;
   dailyCloseReversed: boolean;
   draftDiscarded: boolean;
+  enrollmentWithdrawn: boolean;
   opsProjectDeleted: boolean;
   opsProjectCancelled: boolean;
   partyServiceDeleted: boolean;
@@ -411,9 +457,13 @@ export async function unenrollLead(args: UnenrollArgs): Promise<UnenrollResult> 
     let pipelineReopened = false;
     let dailyCloseReversed = false;
     if (state.pipeline) {
-      if (state.pipeline.dailyCloseId) {
+      // Re-read inside the transaction: a payment-date correction may have
+      // moved the close since the preview read it.
+      const live = await tx.leadPulsePipeline.findUnique({ where: { id: state.pipeline.id }, select: { dailyCloseId: true } });
+      const dailyCloseId = live ? live.dailyCloseId : state.pipeline.dailyCloseId;
+      if (dailyCloseId) {
         const close = await tx.leadPulseDailyClose.findUnique({
-          where: { id: state.pipeline.dailyCloseId },
+          where: { id: dailyCloseId },
           select: { id: true, entry: { select: { id: true, closedWon: true } } },
         });
         if (close) {
@@ -444,6 +494,32 @@ export async function unenrollLead(args: UnenrollArgs): Promise<UnenrollResult> 
       if (still) {
         await tx.transactionDraft.delete({ where: { id: state.draft.id } });
         draftDiscarded = true;
+      }
+    }
+
+    // The enrollment waiting for Finance is withdrawn. Claimed by status: if
+    // Finance verified it a moment ago, the payment is in the ledger and the
+    // whole un-enroll rolls back (Finance must reverse that payment first).
+    let enrollmentWithdrawn = false;
+    if (state.enrollment) {
+      const res = await tx.crmEnrollment.updateMany({
+        where: {
+          id: state.enrollment.id,
+          OR: [
+            { status: { in: ["pending", "sent_back", "not_received"] }, transactionId: null },
+            // Verified, but Finance has since deleted the payment.
+            { status: "verified", transaction: { deletedAt: { not: null } } },
+          ],
+        },
+        data: { status: "withdrawn" },
+      });
+      if (res.count !== 1) {
+        throw badRequest("Finance has just verified this enrollment, so its payment is in the ledger. Finance must delete it first.", "enrollment_verified");
+      }
+      enrollmentWithdrawn = true;
+      // A plan made on verification goes with it.
+      if (state.enrollment.collectionPlanId) {
+        await tx.collectionPlan.update({ where: { id: state.enrollment.collectionPlanId }, data: { status: "cancelled" } });
       }
     }
 
@@ -505,6 +581,7 @@ export async function unenrollLead(args: UnenrollArgs): Promise<UnenrollResult> 
       pipelineReopened,
       dailyCloseReversed,
       draftDiscarded,
+      enrollmentWithdrawn,
       opsProjectDeleted,
       opsProjectCancelled,
       partyServiceDeleted,
@@ -521,6 +598,7 @@ export async function unenrollLead(args: UnenrollArgs): Promise<UnenrollResult> 
     outcome.pipelineReopened ? "pipeline re-opened" : null,
     outcome.dailyCloseReversed ? "closed-won reversed" : null,
     outcome.draftDiscarded ? "revenue draft discarded" : null,
+    outcome.enrollmentWithdrawn ? "enrollment withdrawn from Finance" : null,
     outcome.opsProjectDeleted ? "operations project removed" : null,
     outcome.opsProjectCancelled ? "operations project cancelled" : null,
     outcome.partyServiceDeleted ? "package amount removed" : null,
@@ -605,6 +683,7 @@ export async function unenrollLead(args: UnenrollArgs): Promise<UnenrollResult> 
     pipelineReopened: outcome.pipelineReopened,
     dailyCloseReversed: outcome.dailyCloseReversed,
     draftDiscarded: outcome.draftDiscarded,
+    enrollmentWithdrawn: outcome.enrollmentWithdrawn,
     opsProjectDeleted: outcome.opsProjectDeleted,
     opsProjectCancelled: outcome.opsProjectCancelled,
     partyServiceDeleted: outcome.partyServiceDeleted,

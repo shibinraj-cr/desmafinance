@@ -39,6 +39,7 @@ import {
   type InvoiceEntityCode,
   type InvoiceKind,
 } from "./core";
+import { parsePlan } from "@/lib/crm-enroll-confirm";
 import { gstStateByName, gstStateOfGstin, placeOfSupplyLabel } from "./gst-states";
 import { buildCandidateInvoicePdf, stampWatermark, type InvoicePdfInput } from "./pdf";
 import { lockLedgerRow } from "./ledger-lock";
@@ -917,7 +918,7 @@ export async function partyTransactions(userId: string, perms: Permissions, part
   if (!partyId) return { via: null as null, partyId: null, empty: true as const };
   const via = await partyViewerAccess(userId, perms, partyId);
   if (!via) return { via: null as null, partyId, empty: true as const };
-  const [services, payments, pending, plans, startsOn] = await Promise.all([
+  const [services, payments, pending, plans, startsOn, enrollments] = await Promise.all([
     prisma.partyService.findMany({
       where: { partyId },
       select: { id: true, totalAmount: true, service: { select: { name: true } } },
@@ -960,6 +961,13 @@ export async function partyTransactions(userId: string, perms: Permissions, part
       orderBy: { createdAt: "asc" },
     }),
     getStartsOn(),
+    // Enrollments Finance hasn't verified yet: their first payment and balance
+    // plan aren't in the ledger or a collection plan until it does.
+    prisma.crmEnrollment.findMany({
+      where: { partyId, status: { in: ["pending", "sent_back", "not_received"] } },
+      select: { id: true, status: true, firstAmount: true, paidOn: true, paymentMode: true, plan: true, service: { select: { name: true } } },
+      orderBy: { createdAt: "asc" },
+    }),
   ]);
   const today = todayIst();
   const packageTotal = round(services.reduce((s, x) => s + Number(x.totalAmount), 0));
@@ -985,16 +993,29 @@ export async function partyTransactions(userId: string, perms: Permissions, part
       isHistorical: p.isHistorical,
       invoices: p.invoices.map((i) => ({ id: i.id, number: i.number, status: i.status, invoiceDate: fromPrismaDate(i.invoiceDate) })),
     })),
-    pending: pending
-      .map((p) => p.proposed as { type?: string; date?: string; amount?: number; paymentMode?: string } | null)
-      .map((d, i) => ({ id: pending[i].id, ...d }))
-      .filter((d) => d.type === "Revenue")
-      .map((d) => ({
-        id: d.id,
-        date: String(d.date ?? "").slice(0, 10),
-        amount: Number(d.amount ?? 0),
-        paymentMode: d.paymentMode ?? "",
-      })),
+    pending: [
+      ...pending
+        .map((p) => p.proposed as { type?: string; date?: string; amount?: number; paymentMode?: string } | null)
+        .map((d, i) => ({ id: pending[i].id, ...d }))
+        .filter((d) => d.type === "Revenue")
+        .map((d) => ({
+          id: d.id,
+          date: String(d.date ?? "").slice(0, 10),
+          amount: Number(d.amount ?? 0),
+          paymentMode: d.paymentMode ?? "",
+          state: "pending" as string,
+        })),
+      ...enrollments
+        .filter((e) => e.firstAmount != null)
+        .map((e) => ({
+          id: `enr_${e.id}`,
+          date: e.paidOn ? fromPrismaDate(e.paidOn) : "",
+          amount: Number(e.firstAmount),
+          paymentMode: e.paymentMode ?? "",
+          // The enrollment's own status: Pending Finance / Sent back / Money not received.
+          state: e.status,
+        })),
+    ],
     schedule: plans.flatMap((plan) =>
       plan.installments.map((i) => {
         const due = fromPrismaDate(i.expectedDate);
@@ -1010,6 +1031,18 @@ export async function partyTransactions(userId: string, perms: Permissions, part
                   : "due";
         return { id: i.id, plan: plan.label, seq: i.seq, due, amount: Number(i.amount), state };
       }),
+    ).concat(
+      // A plan the BDE proposed on enrolling, until Finance verifies it.
+      enrollments.flatMap((e) =>
+        parsePlan(e.plan).map((p, n) => ({
+          id: `enr_${e.id}_${n}`,
+          plan: `${e.service.name} (waiting for Finance)`,
+          seq: n + 2,
+          due: p.date,
+          amount: p.amount,
+          state: "planned",
+        })),
+      ),
     ),
   };
 }

@@ -78,6 +78,11 @@ export type CeoHeadline = {
    *  deletes are left out: an edit's amount is already in revenue. */
   pendingApprovalRevenue: number;
   pendingApprovalRevenueCount: number;
+  /** First payments of enrollments waiting for Finance to verify (pending or
+   *  sent back to the BDE): money the BDE says landed, not yet in the ledger.
+   *  Counted into the Forecast like a pending approval. */
+  pendingEnrollmentRevenue: number;
+  pendingEnrollmentCount: number;
   /** The part of pendingApprovalRevenue dated outside the running month
    *  (once approved it posts to that month, not this one). */
   pendingApprovalRevenueOtherMonths: number;
@@ -257,6 +262,24 @@ export async function ceoHeadline(): Promise<CeoHeadline> {
     }
   }
 
+  // Enrollments waiting for Finance: the first payment is money in hand, like
+  // a pending approval, until Finance verifies it into the ledger. Not the
+  // ones Finance found no money for. Net of GST, by the rule the ledger row
+  // will get when Finance approves it.
+  const enrolling = await safe(
+    "crmEnrollment.findMany(pendingEnrollmentRevenue)",
+    () =>
+      prisma.crmEnrollment.findMany({
+        where: { status: { in: ["pending", "sent_back"] }, firstAmount: { not: null } },
+        select: { firstAmount: true, paymentMode: true, expDom: true },
+      }),
+    [] as Array<{ firstAmount: { toString(): string } | null; paymentMode: string | null; expDom: string | null }>,
+  );
+  const pendingEnrollmentRevenue = enrolling.reduce(
+    (sum, e) => sum + num(e.firstAmount) - gstInAmount({ type: "Revenue", paymentMode: e.paymentMode ?? "", expDom: e.expDom, amount: num(e.firstAmount) }),
+    0,
+  );
+
   return {
     currentMonthLabel: now.toLocaleString("en-US", { month: "long", year: "numeric" }),
     currentMonthRevenue,
@@ -277,6 +300,8 @@ export async function ceoHeadline(): Promise<CeoHeadline> {
     pendingApprovalRevenue,
     pendingApprovalRevenueCount,
     pendingApprovalRevenueOtherMonths,
+    pendingEnrollmentRevenue,
+    pendingEnrollmentCount: enrolling.length,
   };
 }
 

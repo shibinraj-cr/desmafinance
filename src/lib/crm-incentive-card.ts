@@ -9,6 +9,7 @@
  */
 import { FAST_CLOSE_HOURS, isTeamEligible, nextPayingMilestone, quarterMonths, type Milestone, type MonthBonuses } from "./crm-incentive";
 import type { BdeStanding, TeamPoolForMember } from "./crm-incentive-data";
+import { INCENTIVE_VERIFY_BY_DAY } from "./crm-enroll-confirm";
 
 const MONTHS = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"];
 const SHORT = MONTHS.map((m) => m.slice(0, 3));
@@ -50,6 +51,8 @@ export type IncentiveCardView = {
   /** False when neither a target nor slabs are set for the month. */
   setUp: boolean;
   notice: string | null;
+  /** Enrolments still waiting for Finance to verify: "**2 more** are waiting for Finance…". Null when none. */
+  awaiting: string | null;
   next: string | null;
   /** The next step is unlocking slab 1 — shown as a locked prize. */
   belowSlabs: boolean;
@@ -281,6 +284,13 @@ export function incentiveCard(input: CardInput & { today: string }): IncentiveCa
       ? `Your ${monthName} incentive slabs aren't set yet — until Marketing Admin sets them, only the bonuses count.`
       : null;
 
+  const waiting = bde.facts.awaitingFinance ?? 0;
+  const verifyBy = `${INCENTIVE_VERIFY_BY_DAY} ${SHORT[month % 12]}`;
+  const awaiting =
+    waiting > 0
+      ? `**${count(waiting)} more** enrolment${waiting === 1 ? " is" : "s are"} waiting for Finance to verify. ${waiting === 1 ? "It counts" : "They count"} here once verified, by ${verifyBy}.`
+      : null;
+
   let team: IncentiveCardView["team"] = null;
   if (bde.team) {
     const minimum = bde.minimum ?? 0;
@@ -305,7 +315,7 @@ export function incentiveCard(input: CardInput & { today: string }): IncentiveCa
     bonuses.referralBonus > 0 ? `each own referral enrolled adds ${rupees(bonuses.referralBonus)}` : null,
   ].filter(Boolean);
   const explain =
-    "Counts your CRM enrolments live — a half-weight service counts 0.5. The highest slab you reach pays on every enrolment in the month" +
+    `Counts your CRM enrolments once Finance verifies them (by the ${INCENTIVE_VERIFY_BY_DAY}th of the next month; later ones are paid as an adjustment) — a half-weight service counts 0.5. The highest slab you reach pays on every enrolment in the month` +
     (extras.length ? `; ${extras.join("; ")}` : "") +
     ". Team pools are split by enrolments among members who reach their minimum. Marketing Admin sets your target, slabs, bonuses and team; Finance confirms the final payout after the month ends.";
 
@@ -317,6 +327,7 @@ export function incentiveCard(input: CardInput & { today: string }): IncentiveCa
     pace: pace(enrolled, bde.target, Math.max(day, 1), dim),
     setUp,
     notice,
+    awaiting,
     next,
     belowSlabs,
     bar: setUp ? bar(bde) : null,
