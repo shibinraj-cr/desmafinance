@@ -202,9 +202,10 @@ export default async function WeeklyPnlPage({
             </table>
           </div>
           <p className="text-caption text-on-surface-variant mt-md">
-            Net Sales = all revenue − refunds. Net Profit = net sales − operating expenses
-            (everything except refunds, asset purchases and loan repayments). Net Cash Flow = all
-            money in − all money out, the same figure as the Cash Flow page. Weeks are cut at the
+            Net Sales = revenue net of GST − refunds. Net Profit = net sales − operating expenses
+            (everything except refunds, asset purchases, loan repayments and GST paid to the
+            government). Net Cash Flow = all money in − all money out, GST included, the same figure
+            as the Cash Flow page. Weeks are cut at the
             fiscal-year boundary, so the first and last weeks of a year can be part weeks.
           </p>
         </Section>

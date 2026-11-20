@@ -6,14 +6,16 @@
  * reads. The ledger is cash-basis, so the three differ only by which rows each
  * one leaves out — and they reconcile exactly:
  *
- *   Net Sales     = all Revenue − Refunds
+ *   Net Sales     = Revenue net of GST − Refunds (src/lib/finance-gst.ts)
  *   Net Profit    = Net Sales − operating expenses
- *                   (every Expense except Refund, Buying Assets and Loan
- *                   Repayment: a refund is already netted off sales, and an
- *                   asset purchase or a loan repayment is not a cost of the
- *                   week's trading)
- *   Net Cash Flow = all Revenue − all Expense
+ *                   (every Expense except Refund, Buying Assets, Loan
+ *                   Repayment and GST paid to the government: a refund is
+ *                   already netted off sales, an asset purchase or a loan
+ *                   repayment is not a cost of the week's trading, and GST
+ *                   paid settles the GST collected, which never was revenue)
+ *   Net Cash Flow = all money in − all money out (GST included both ways)
  *                 = Net Profit − Buying Assets − Loan Repayment
+ *                   + GST collected − GST paid
  *
  * Net Cash Flow is the same "Net Cash" the Finance → Cash Flow page reports,
  * so a fiscal year's weeks sum to that page's figure for the same year.
@@ -31,6 +33,7 @@
  */
 import { prisma } from "./prisma";
 import { fyEnd, fyStart } from "./fiscal-year";
+import { isGstRemittance } from "./finance-gst";
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 const IST_OFFSET_MS = 5.5 * 60 * 60 * 1000;
@@ -44,7 +47,16 @@ export const NON_OPERATING_EXPENSES = ["Buying Assets", "Loan Repayment"] as con
 /** The Expense category that is netted off sales rather than counted as cost. */
 export const REFUND_CATEGORY = "Refund";
 
-export type LedgerRow = { date: Date; type: string; category: string; amount: number };
+export type LedgerRow = {
+  date: Date;
+  type: string;
+  category: string;
+  amount: number;
+  /** Picks out GST paid to the government (Expense › Taxes › GST). */
+  subItem?: string;
+  /** GST inside a revenue row's amount. */
+  gstAmount?: number;
+};
 
 export type WeekRow = {
   /** First day in the row (a Saturday, unless clipped by the FY start). */
@@ -73,6 +85,10 @@ export type WeekRow = {
 
   /** Buying Assets + Loan Repayment. */
   nonOperating: number;
+  /** GST inside the week's revenue: received, owed to the government. */
+  gstCollected: number;
+  /** GST paid to the government (Expense › Taxes › GST). */
+  gstPaid: number;
   netCashFlow: number;
 };
 
@@ -135,17 +151,23 @@ function emptySums(): Sums {
     netProfit: 0,
     marginPct: null,
     nonOperating: 0,
+    gstCollected: 0,
+    gstPaid: 0,
     netCashFlow: 0,
   };
 }
 
 function addRow(s: Sums, r: LedgerRow) {
   if (r.type === "Revenue") {
-    if (/^Sales\b/i.test(r.category)) s.sales += r.amount;
-    else if (/^Collection\b/i.test(r.category)) s.collections += r.amount;
-    else s.otherIncome += r.amount;
+    const gst = r.gstAmount ?? 0;
+    const net = r.amount - gst;
+    s.gstCollected += gst;
+    if (/^Sales\b/i.test(r.category)) s.sales += net;
+    else if (/^Collection\b/i.test(r.category)) s.collections += net;
+    else s.otherIncome += net;
   } else if (r.type === "Expense") {
-    if (r.category === REFUND_CATEGORY) s.refunds += r.amount;
+    if (isGstRemittance(r)) s.gstPaid += r.amount;
+    else if (r.category === REFUND_CATEGORY) s.refunds += r.amount;
     else if ((NON_OPERATING_EXPENSES as readonly string[]).includes(r.category))
       s.nonOperating += r.amount;
     else s.operatingExpense += r.amount;
@@ -160,9 +182,11 @@ function finish<T extends Sums>(s: T): T {
   s.refunds = round2(s.refunds);
   s.operatingExpense = round2(s.operatingExpense);
   s.nonOperating = round2(s.nonOperating);
+  s.gstCollected = round2(s.gstCollected);
+  s.gstPaid = round2(s.gstPaid);
   s.netSales = round2(s.sales + s.collections + s.otherIncome - s.refunds);
   s.netProfit = round2(s.netSales - s.operatingExpense);
-  s.netCashFlow = round2(s.netProfit - s.nonOperating);
+  s.netCashFlow = round2(s.netProfit - s.nonOperating + s.gstCollected - s.gstPaid);
   s.marginPct = s.netSales > 0 ? round2((s.netProfit / s.netSales) * 100) : null;
   return s;
 }
@@ -236,7 +260,7 @@ export function buildWeeklyPnl({
 export async function weeklyPnl(fy: number, now: Date = new Date()): Promise<WeeklyPnl> {
   const rows = await prisma.transaction.findMany({
     where: { deletedAt: null, isHistorical: false, date: { gte: fyStart(fy), lt: fyEnd(fy) } },
-    select: { date: true, type: true, category: true, amount: true },
+    select: { date: true, type: true, category: true, subItem: true, amount: true, gstAmount: true },
   });
   return buildWeeklyPnl({
     fy,
@@ -245,7 +269,9 @@ export async function weeklyPnl(fy: number, now: Date = new Date()): Promise<Wee
       date: r.date,
       type: r.type,
       category: r.category,
+      subItem: r.subItem,
       amount: Number(r.amount.toString()),
+      gstAmount: Number(r.gstAmount.toString()),
     })),
   });
 }

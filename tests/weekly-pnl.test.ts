@@ -18,6 +18,30 @@ describe("weekStart", () => {
 });
 
 describe("buildWeeklyPnl", () => {
+  it("reports sales net of GST, keeps GST paid out of profit, and still reconciles cash", () => {
+    const pnl = buildWeeklyPnl({
+      fy: 2026,
+      today: d("2026-04-10"),
+      rows: [
+        { ...row("2026-04-04", "Revenue", "Sales - Nursing Registrations", 118_000), gstAmount: 18_000 },
+        row("2026-04-05", "Revenue", "Collection - Study Abroad", 50_000), // export: no GST
+        row("2026-04-06", "Expense", "Rent", 20_000),
+        { ...row("2026-04-07", "Expense", "Taxes", 18_000), subItem: "GST" },
+        row("2026-04-08", "Expense", "Loan Repayment", 10_000),
+      ],
+    });
+    const w = pnl.weeks[0];
+    expect(w.sales).toBe(100_000);
+    expect(w.netSales).toBe(150_000);
+    expect(w.operatingExpense).toBe(20_000); // GST paid isn't a cost
+    expect(w.netProfit).toBe(130_000);
+    expect(w.gstCollected).toBe(18_000);
+    expect(w.gstPaid).toBe(18_000);
+    // All money in (168,000) − all money out (48,000).
+    expect(w.netCashFlow).toBe(120_000);
+  });
+
+
   it("clips the first week to 1 April and flags it partial", () => {
     const pnl = buildWeeklyPnl({ fy: 2026, rows: [], today: d("2026-04-10") });
     const oldest = pnl.weeks[pnl.weeks.length - 1];

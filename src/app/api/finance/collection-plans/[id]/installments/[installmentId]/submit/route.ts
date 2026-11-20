@@ -8,6 +8,7 @@ import { canApprove, canSeePage } from "@/lib/rbac";
 import { recordAudit } from "@/lib/audit";
 import type { TxProposed } from "@/lib/approval";
 import { isHistoricalDate } from "@/lib/finance-historical";
+import { gstInAmount } from "@/lib/finance-gst";
 
 export const dynamic = "force-dynamic";
 
@@ -205,6 +206,7 @@ export async function POST(
           partyId: plan.partyId,
           expDom: proposed.expDom ?? null,
           isHistorical: isHistoricalDate(expectedDate),
+          gstAmount: gstInAmount({ type: "Revenue", paymentMode, expDom: proposed.expDom ?? null, amount: amountNum }),
           createdById: userId,
         },
       });

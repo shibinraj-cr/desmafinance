@@ -301,7 +301,7 @@ export const MEASURE_META: Record<MeasureKey, { label: string; short: string; fo
   weighted: { label: "Weighted enrollments", short: "Weighted", format: "decimal", hint: "Enrollments × service weight (the target-matrix count)" },
   booked: { label: "Booked value", short: "Booked", format: "inr", hint: "Package amount on the candidate's finance record; deal value when none" },
   avgTicket: { label: "Avg ticket", short: "Avg ticket", format: "inr", hint: "Booked value ÷ enrollments" },
-  collected: { label: "Collected revenue", short: "Collected", format: "inr", hint: "Finance Revenue transactions dated in the period" },
+  collected: { label: "Collected revenue", short: "Collected", format: "inr", hint: "Finance Revenue transactions dated in the period, net of GST" },
   leads: { label: "Leads created", short: "Leads", format: "count", hint: "CRM leads created in the period, duplicates excluded" },
   conversion: { label: "Conversion", short: "Conv.", format: "pct", hint: "Enrollments ÷ leads created, same period" },
 };

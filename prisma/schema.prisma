@@ -238,6 +238,10 @@ model Transaction {
   /// calc on the Revenue Analysis page: only DOM revenue carries
   /// the 18% GST line.
   expDom      String?
+  /// GST inside `amount` (src/lib/finance-gst.ts): set at every write, 0 on
+  /// rows that carry none. `amount` stays the money that moved; revenue is
+  /// reported net, `amount − gstAmount`.
+  gstAmount   Decimal   @default(0) @db.Decimal(14, 2)
   /// A candidate payment received before DesGro's ledger began (dated
   /// before 1 Apr 2026). Set from the date at every write. Such rows count
   /// towards the candidate's "paid so far" but are kept out of every finance
