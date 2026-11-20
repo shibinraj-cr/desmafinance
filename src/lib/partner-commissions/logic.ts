@@ -370,40 +370,29 @@ export function enrollablePrograms(opts: {
 // ── volume bonus ─────────────────────────────────────────────────────────────
 
 /**
- * A partner's volume bonus: from the `from`-th enrollment billed in an
- * Australian financial year, the commission is `extraPct` percentage points
- * higher (e.g. 20% → 25%). The highest tier reached applies — tiers don't add up.
+ * A partner's volume bonus: from the `from`-th enrollment fully paid in an
+ * Australian financial year (July–June, by the date of the final payment), the
+ * commission is `extraPct` percentage points higher (e.g. 20% → 25%). The
+ * highest tier reached applies — tiers don't add up.
  */
 export type VolumeTier = { from: number; extraPct: number };
 
-const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
-
 /**
- * The Australian financial year (July–June) an intake month falls in:
- * "Nov-25" → "2025-26", "Mar-26" → "2025-26", "Jul-26" → "2026-27". Null when
- * the month isn't in "MMM-YY" form.
+ * The Australian financial year (July–June) a date falls in: "2026-06-30" →
+ * "2025-26", "2026-07-01" → "2026-27". Null for anything that isn't a date.
  */
-export function volumeFyOf(intakeMonth: string): string | null {
-  if (!isIntakeMonth(intakeMonth)) return null;
-  const m = MONTHS.indexOf(intakeMonth.slice(0, 3)) + 1;
-  const y = 2000 + Number(intakeMonth.slice(4));
-  const start = m >= 7 ? y : y - 1;
+export function volumeFyOfDate(isoDate: string | null | undefined): string | null {
+  const m = /^(\d{4})-(\d{2})-\d{2}/.exec(isoDate ?? "");
+  if (!m || Number(m[2]) < 1 || Number(m[2]) > 12) return null;
+  const y = Number(m[1]);
+  const start = Number(m[2]) >= 7 ? y : y - 1;
   return `${start}-${String(start + 1).slice(-2)}`;
 }
 
-/** The financial year a date falls in ("2026-11-20" → "2026-27"). */
-export function volumeFyOfDate(isoDate: string): string {
-  return volumeFyOf(monthCodeOf(isoDate))!;
-}
-
-/** The twelve intake months of a financial year: "2025-26" → Jul-25 … Jun-26. */
-export function volumeFyMonths(fy: string): string[] {
+/** First and last day of a financial year: "2025-26" → 2025-07-01 … 2026-06-30. */
+export function volumeFyRange(fy: string): { from: string; to: string } {
   const start = Number(fy.slice(0, 4));
-  return Array.from({ length: 12 }, (_, i) => {
-    const m = (6 + i) % 12;
-    const y = start + (i >= 6 ? 1 : 0);
-    return `${MONTHS[m]}-${String(y).slice(-2)}`;
-  });
+  return { from: `${start}-07-01`, to: `${start + 1}-06-30` };
 }
 
 export function isVolumeFy(v: string): boolean {
@@ -457,25 +446,25 @@ export type VolumeAssignment = { fy: string; seq: number; extraPct: number };
 
 /**
  * Number a batch of enrollments about to be billed, in billing order, within
- * their financial year, and pick each one's bonus.
- *   - `opening`: billed outside DesGro, per year.
- *   - `billed`: already on a DesGro invoice, per year (excluding this batch).
- * Every enrollment counts toward the year; a flat-commission one never gets a
- * percentage bonus. Enrollments without a readable intake month are skipped.
+ * the financial year of their final payment, and pick each one's bonus.
+ *   - `opening`: fully paid that year but billed outside DesGro.
+ *   - `billed`: fully paid that year and already on a DesGro invoice (excluding this batch).
+ * Only fully paid enrollments count; one that isn't (no `fullyPaidOn`) is
+ * skipped. A flat-commission one counts but never gets a percentage bonus.
  * No tiers = nothing assigned.
  */
 export function assignVolume(opts: {
   tiers: VolumeTier[];
   opening: Record<string, number>;
   billed: Record<string, number>;
-  items: Array<{ id: string; intakeMonth: string; flat: boolean }>;
+  items: Array<{ id: string; fullyPaidOn: string | null; flat: boolean }>;
 }): Map<string, VolumeAssignment> {
   const out = new Map<string, VolumeAssignment>();
   const tiers = parseVolumeTiers(opts.tiers);
   if (tiers.length === 0) return out;
   const count = new Map<string, number>();
   for (const it of opts.items) {
-    const fy = volumeFyOf(it.intakeMonth);
+    const fy = volumeFyOfDate(it.fullyPaidOn);
     if (!fy) continue;
     const seq = (count.get(fy) ?? (opts.opening[fy] ?? 0) + (opts.billed[fy] ?? 0)) + 1;
     count.set(fy, seq);

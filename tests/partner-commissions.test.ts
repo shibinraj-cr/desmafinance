@@ -36,9 +36,8 @@ import {
   parseVolumeOpening,
   parseVolumeTiers,
   volumeExtraPct,
-  volumeFyMonths,
-  volumeFyOf,
   volumeFyOfDate,
+  volumeFyRange,
   volumeLineLabel,
   volumeTiersLabel,
 } from "@/lib/partner-commissions/logic";
@@ -290,32 +289,30 @@ describe("who records fee installments", () => {
   });
 });
 
-describe("volume bonus (per Australian financial year)", () => {
+describe("volume bonus (per Australian financial year, by final payment date)", () => {
   const NAI = [
     { from: 51, extraPct: 5 },
     { from: 101, extraPct: 10 },
   ];
-  const items = (n: number, intakeMonth = "Mar-26", flat = false) =>
-    Array.from({ length: n }, (_, i) => ({ id: `e${i + 1}`, intakeMonth, flat }));
+  const items = (n: number, fullyPaidOn: string | null = "2026-03-15", flat = false) =>
+    Array.from({ length: n }, (_, i) => ({ id: `e${i + 1}`, fullyPaidOn, flat }));
 
-  it("puts an intake month in its July–June year", () => {
-    expect(volumeFyOf("Jul-25")).toBe("2025-26");
-    expect(volumeFyOf("Nov-25")).toBe("2025-26");
-    expect(volumeFyOf("Jun-26")).toBe("2025-26");
-    expect(volumeFyOf("Jul-26")).toBe("2026-27");
-    expect(volumeFyOf("Jan-27")).toBe("2026-27");
-    expect(volumeFyOf("March 2026")).toBeNull();
-    expect(volumeFyOfDate("2026-11-20")).toBe("2026-27");
+  it("puts a final-payment date in its July–June year", () => {
+    expect(volumeFyOfDate("2025-07-01")).toBe("2025-26");
+    expect(volumeFyOfDate("2025-11-21")).toBe("2025-26");
     expect(volumeFyOfDate("2026-06-30")).toBe("2025-26");
+    expect(volumeFyOfDate("2026-07-01")).toBe("2026-27");
+    expect(volumeFyOfDate("2026-11-20")).toBe("2026-27");
+    expect(volumeFyOfDate("2027-01-05")).toBe("2026-27");
+    expect(volumeFyOfDate(null)).toBeNull();
+    expect(volumeFyOfDate("Jun-26")).toBeNull();
+    expect(volumeFyOfDate("2026-13-01")).toBeNull();
   });
 
-  it("lists a year's twelve intake months, each mapping back to it", () => {
-    const months = volumeFyMonths("2025-26");
-    expect(months).toHaveLength(12);
-    expect(months[0]).toBe("Jul-25");
-    expect(months[11]).toBe("Jun-26");
-    expect(months.every((m) => volumeFyOf(m) === "2025-26")).toBe(true);
-    expect(volumeFyMonths("2099-00")[11]).toBe("Jun-00");
+  it("gives a year's first and last day, each mapping back to it", () => {
+    expect(volumeFyRange("2025-26")).toEqual({ from: "2025-07-01", to: "2026-06-30" });
+    const r = volumeFyRange("2026-27");
+    expect([volumeFyOfDate(r.from), volumeFyOfDate(r.to)]).toEqual(["2026-27", "2026-27"]);
   });
 
   it("recognises a financial-year key", () => {
@@ -359,41 +356,41 @@ describe("volume bonus (per Australian financial year)", () => {
   });
 
   it("starts the bonus exactly at the 51st and steps up at the 101st", () => {
-    const a = assignVolume({ tiers: NAI, opening: { "2026-27": 40 }, billed: { "2026-27": 9 }, items: items(3, "Aug-26") });
+    const a = assignVolume({ tiers: NAI, opening: { "2026-27": 40 }, billed: { "2026-27": 9 }, items: items(3, "2026-08-10") });
     expect([...a.values()].map((x) => [x.seq, x.extraPct])).toEqual([[50, 0], [51, 5], [52, 5]]);
-    const b = assignVolume({ tiers: NAI, opening: {}, billed: { "2026-27": 99 }, items: items(3, "Aug-26") });
+    const b = assignVolume({ tiers: NAI, opening: {}, billed: { "2026-27": 99 }, items: items(3, "2026-08-10") });
     expect([...b.values()].map((x) => [x.seq, x.extraPct])).toEqual([[100, 5], [101, 10], [102, 10]]);
   });
 
-  it("counts each financial year separately within one invoice", () => {
+  it("counts each financial year separately within one invoice, by the final payment date", () => {
     const v = assignVolume({
       tiers: NAI,
       opening: { "2025-26": 71 },
       billed: { "2026-27": 3 },
       items: [
-        { id: "old", intakeMonth: "Apr-26", flat: false },
-        { id: "new", intakeMonth: "Sep-26", flat: false },
-        { id: "old2", intakeMonth: "Jun-26", flat: false },
+        { id: "june", fullyPaidOn: "2026-06-20", flat: false }, // June intake, paid in June → last year
+        { id: "july", fullyPaidOn: "2026-07-15", flat: false }, // June intake, paid in July → this year
+        { id: "lastDay", fullyPaidOn: "2026-06-30", flat: false },
       ],
     });
-    expect(v.get("old")).toEqual({ fy: "2025-26", seq: 72, extraPct: 5 });
-    expect(v.get("new")).toEqual({ fy: "2026-27", seq: 4, extraPct: 0 });
-    expect(v.get("old2")).toEqual({ fy: "2025-26", seq: 73, extraPct: 5 });
+    expect(v.get("june")).toEqual({ fy: "2025-26", seq: 72, extraPct: 5 });
+    expect(v.get("july")).toEqual({ fy: "2026-27", seq: 4, extraPct: 0 });
+    expect(v.get("lastDay")).toEqual({ fy: "2025-26", seq: 73, extraPct: 5 });
   });
 
-  it("counts a flat-commission enrollment but gives it no % bonus; skips an unreadable intake", () => {
+  it("counts a flat-commission enrollment but gives it no % bonus; skips one not fully paid", () => {
     const v = assignVolume({
       tiers: NAI,
       opening: { "2026-27": 50 },
       billed: {},
       items: [
-        { id: "flat", intakeMonth: "Oct-26", flat: true },
-        { id: "bad", intakeMonth: "??", flat: false },
-        { id: "pct", intakeMonth: "Oct-26", flat: false },
+        { id: "flat", fullyPaidOn: "2026-10-03", flat: true },
+        { id: "unpaid", fullyPaidOn: null, flat: false },
+        { id: "pct", fullyPaidOn: "2026-10-04", flat: false },
       ],
     });
     expect(v.get("flat")).toEqual({ fy: "2026-27", seq: 51, extraPct: 0 });
-    expect(v.has("bad")).toBe(false);
+    expect(v.has("unpaid")).toBe(false);
     expect(v.get("pct")).toEqual({ fy: "2026-27", seq: 52, extraPct: 5 });
   });
 
