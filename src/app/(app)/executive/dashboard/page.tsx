@@ -72,7 +72,7 @@ export default async function ExecutiveDashboardPage() {
             tone="primary"
             hero
             trendPct={headline.currentMonthRevenueTrendPct}
-            hint={`vs ${inr(headline.previousMonthRevenue)} last month`}
+            hint={`Net of GST · vs ${inr(headline.previousMonthRevenue)} last month`}
           />
           <KpiCard
             label="Expected Collections"
@@ -113,7 +113,7 @@ export default async function ExecutiveDashboardPage() {
             }
             tone="success"
             hero
-            hint={`${inr(headline.currentMonthRevenue)} realised + ${inr(headline.expectedCollections)} expected + ${inr(headline.myDraftsRevenue)} drafts + ${inr(headline.pendingApprovalRevenue)} awaiting approval${headline.pendingEnrollmentCount ? ` + ${inr(headline.pendingEnrollmentRevenue)} from ${headline.pendingEnrollmentCount} enrollment${headline.pendingEnrollmentCount === 1 ? "" : "s"} awaiting Finance` : ""}`}
+            hint={`Net of GST: ${inr(headline.currentMonthRevenue)} realised + ${inr(headline.expectedCollections)} expected + ${inr(headline.myDraftsRevenue)} drafts + ${inr(headline.pendingApprovalRevenue)} awaiting approval${headline.pendingEnrollmentCount ? ` + ${inr(headline.pendingEnrollmentRevenue)} from ${headline.pendingEnrollmentCount} enrollment${headline.pendingEnrollmentCount === 1 ? "" : "s"} awaiting Finance` : ""}`}
           />
           {/* CRM pipeline — leads in the "Pipeline" stage, by expected close
               date. Information only: deliberately NOT in the Forecast. */}

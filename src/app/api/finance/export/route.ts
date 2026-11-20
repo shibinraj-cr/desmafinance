@@ -55,7 +55,12 @@ export async function GET(req: NextRequest) {
       "Sub-Item": t.subItem,
       "Description / Narration": t.description ?? "",
       "Payment Mode": t.paymentMode,
+      "EXP/DOM": t.expDom ?? "",
       "Amount (₹)": v,
+      // Revenue is reported net of GST; the amount (and the running balance)
+      // stay the money that moved (src/lib/finance-gst.ts).
+      "GST (₹)": Number(t.gstAmount.toString()),
+      "Net of GST (₹)": t.type === "Revenue" ? v - Number(t.gstAmount.toString()) : v,
       Flow: t.flow,
       "Running Balance (₹)": running,
     };
@@ -71,6 +76,9 @@ export async function GET(req: NextRequest) {
     { wch: 32 },
     { wch: 32 },
     { wch: 32 },
+    { wch: 12 },
+    { wch: 8 },
+    { wch: 14 },
     { wch: 12 },
     { wch: 14 },
     { wch: 9 },

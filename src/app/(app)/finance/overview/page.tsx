@@ -76,8 +76,9 @@ export default async function OverviewPage({
     prev && prev.revenue > 0 ? ((last.revenue - prev.revenue) / prev.revenue) * 100 : null;
   const expenseTrend =
     prev && prev.expense > 0 ? ((last.expense - prev.expense) / prev.expense) * 100 : null;
+  // Net Position is the cash position: money in minus money out, GST included.
   const netTrend =
-    prev && prev.net !== 0 ? ((last.net - prev.net) / Math.abs(prev.net)) * 100 : null;
+    prev && prev.cashNet !== 0 ? ((last.cashNet - prev.cashNet) / Math.abs(prev.cashNet)) * 100 : null;
 
   const prevMargin = prev?.revenue ? (prev.net / prev.revenue) * 100 : 0;
   const lastMargin = last?.revenue ? (last.net / last.revenue) * 100 : 0;
@@ -86,7 +87,7 @@ export default async function OverviewPage({
 
   const sparkRevenue = activeSeries.map((s) => s.revenue);
   const sparkExpense = activeSeries.map((s) => s.expense);
-  const sparkNet = activeSeries.map((s) => s.net);
+  const sparkNet = activeSeries.map((s) => s.cashNet);
   const sparkMargin = activeSeries.map((s) => (s.revenue ? (s.net / s.revenue) * 100 : 0));
 
   // Build the AI Insights highlights for the elevated strip.
@@ -135,16 +136,16 @@ export default async function OverviewPage({
             tone="primary"
             hero
             trendPct={currentMonthRevenueTrend}
-            hint="Calendar month — independent of the period filter above"
+            hint="Net of GST · calendar month, independent of the period filter above"
           />
           <KpiCard
             label="Net Position"
-            value={totals.net}
-            tone={totals.net >= 0 ? "success" : "danger"}
+            value={totals.cashNet}
+            tone={totals.cashNet >= 0 ? "success" : "danger"}
             hero
             trendPct={netTrend}
             sparkline={sparkNet}
-            hint={totals.net >= 0 ? "Strong liquidity state" : "Negative cash position"}
+            hint={`${totals.cashNet >= 0 ? "Strong liquidity state" : "Negative cash position"} · money in minus money out, GST included`}
           />
           <KpiCard
             label="Total Revenue"
@@ -152,6 +153,7 @@ export default async function OverviewPage({
             tone="primary"
             trendPct={revenueTrend}
             sparkline={sparkRevenue}
+            hint={`Net of GST · ₹${Math.round(totals.gst).toLocaleString("en-IN")} GST collected on top`}
           />
           <KpiCard
             label="Total Expenses"
@@ -160,6 +162,7 @@ export default async function OverviewPage({
             trendPct={expenseTrend}
             trendInverted
             sparkline={sparkExpense}
+            hint={totals.gstPaid ? `GST paid to the government (₹${Math.round(totals.gstPaid).toLocaleString("en-IN")}) is not an expense` : undefined}
           />
           <KpiCard
             label="Profit Margin"

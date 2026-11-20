@@ -10,6 +10,7 @@ import { prisma } from "./prisma";
 import { FY_START, FY_END, MONTH_LABELS } from "./period";
 import { getMetricsSource } from "./lead-pulse-crm-metrics";
 import { effectiveDesignation, isOwnerDesignation } from "./hr-salary-engine";
+import { gstInAmount, isGstRemittance } from "./finance-gst";
 
 function num(d: { toString(): string } | number | null | undefined): number {
   if (d === null || d === undefined) return 0;
@@ -146,9 +147,9 @@ export async function ceoHeadline(): Promise<CeoHeadline> {
             type: "Revenue",
             date: { gte: currentMonthStart, lt: nextMonthStart },
           },
-          _sum: { amount: true },
+          _sum: { amount: true, gstAmount: true },
         }),
-      { _sum: { amount: null as null | { toString(): string } } },
+      { _sum: { amount: null as null | { toString(): string }, gstAmount: null as null | { toString(): string } } },
     ),
     safe(
       "transaction.aggregate(previousMonthRevenue)",
@@ -160,26 +161,23 @@ export async function ceoHeadline(): Promise<CeoHeadline> {
             type: "Revenue",
             date: { gte: prevMonthStart, lt: currentMonthStart },
           },
-          _sum: { amount: true },
+          _sum: { amount: true, gstAmount: true },
         }),
-      { _sum: { amount: null as null | { toString(): string } } },
+      { _sum: { amount: null as null | { toString(): string }, gstAmount: null as null | { toString(): string } } },
     ),
     safe(
-      "collectionPlanInstallment.aggregate(expectedCollections)",
+      "collectionPlanInstallment.findMany(expectedCollections)",
       () =>
-        prisma.collectionPlanInstallment.aggregate({
-          // Pending Submission, due in the running calendar month.
+        prisma.collectionPlanInstallment.findMany({
+          // Pending Submission, due in the running calendar month. Bank and
+          // EXP/DOM decide the GST inside each amount (installment, else plan).
           where: {
             status: "pending",
             expectedDate: { gte: currentMonthStart, lt: nextMonthStart },
           },
-          _sum: { amount: true },
-          _count: { _all: true },
+          select: { amount: true, paymentMode: true, plan: { select: { paymentMode: true, expDom: true } } },
         }),
-      {
-        _sum: { amount: null as null | { toString(): string } },
-        _count: { _all: 0 },
-      },
+      [] as Array<{ amount: { toString(): string }; paymentMode: string | null; plan: { paymentMode: string | null; expDom: string | null } }>,
     ),
     safe(
       "pendingApproval.count",
@@ -189,20 +187,16 @@ export async function ceoHeadline(): Promise<CeoHeadline> {
     // Unsubmitted Revenue drafts (all users) dated this month — captured
     // but not yet in the approval queue or the ledger.
     safe(
-      "transactionDraft.aggregate(myDraftsRevenue)",
+      "transactionDraft.findMany(myDraftsRevenue)",
       () =>
-        prisma.transactionDraft.aggregate({
+        prisma.transactionDraft.findMany({
           where: {
             type: "Revenue",
             date: { gte: currentMonthStart, lt: nextMonthStart },
           },
-          _sum: { amount: true },
-          _count: { _all: true },
+          select: { amount: true, paymentMode: true, expDom: true },
         }),
-      {
-        _sum: { amount: null as null | { toString(): string } },
-        _count: { _all: 0 },
-      },
+      [] as Array<{ amount: { toString(): string }; paymentMode: string; expDom: string | null }>,
     ),
     // Pending CREATE approvals — proposed Revenue values live in the
     // `proposed` JSON blob, so we fetch the rows and sum in JS (filtering
@@ -234,15 +228,21 @@ export async function ceoHeadline(): Promise<CeoHeadline> {
     ),
   ]);
 
-  const currentMonthRevenue = num(cur._sum.amount);
-  const previousMonthRevenue = num(prev._sum.amount);
+  // Revenue is net of GST (src/lib/finance-gst.ts), and so is every forecast
+  // piece added to it below, by the same rule.
+  const currentMonthRevenue = num(cur._sum.amount) - num(cur._sum.gstAmount);
+  const previousMonthRevenue = num(prev._sum.amount) - num(prev._sum.gstAmount);
   const currentMonthRevenueTrendPct =
     previousMonthRevenue > 0
       ? ((currentMonthRevenue - previousMonthRevenue) / previousMonthRevenue) * 100
       : null;
-  const expectedCollections = num(plans._sum.amount);
+  const expectedCollections = plans.reduce((sum, i) => {
+    const amount = num(i.amount);
+    const gst = gstInAmount({ type: "Revenue", paymentMode: i.paymentMode ?? i.plan.paymentMode ?? "", expDom: i.plan.expDom, amount });
+    return sum + amount - gst;
+  }, 0);
   const pipeline = bucketPipeline(pipelineLeads, currentMonthStart, nextMonthStart);
-  const myDraftsRevenue = num(drafts._sum.amount);
+  const myDraftsRevenue = drafts.reduce((sum, d) => sum + num(d.amount) - gstInAmount({ type: "Revenue", paymentMode: d.paymentMode, expDom: d.expDom, amount: d.amount }), 0);
 
   // Sum every proposed Revenue amount sitting in the pending-approval queue —
   // the same rows Finance → Approvals → Pending lists under Revenue, whatever
@@ -251,9 +251,9 @@ export async function ceoHeadline(): Promise<CeoHeadline> {
   let pendingApprovalRevenueCount = 0;
   let pendingApprovalRevenueOtherMonths = 0;
   for (const row of pendingApprovalRows) {
-    const p = row.proposed as { type?: string; amount?: number; date?: string } | null;
+    const p = row.proposed as { type?: string; amount?: number; date?: string; paymentMode?: string; expDom?: string | null } | null;
     if (!p || p.type !== "Revenue") continue;
-    const amount = num(p.amount);
+    const amount = num(p.amount) - gstInAmount({ type: "Revenue", paymentMode: p.paymentMode ?? "", expDom: p.expDom, amount: num(p.amount) });
     pendingApprovalRevenue += amount;
     pendingApprovalRevenueCount += 1;
     const when = p.date ? new Date(p.date) : null;
@@ -264,16 +264,20 @@ export async function ceoHeadline(): Promise<CeoHeadline> {
 
   // Enrollments waiting for Finance: the first payment is money in hand, like
   // a pending approval, until Finance verifies it into the ledger. Not the
-  // ones Finance found no money for.
+  // ones Finance found no money for. Net of GST, by the rule the ledger row
+  // will get when Finance approves it.
   const enrolling = await safe(
-    "crmEnrollment.aggregate(pendingEnrollmentRevenue)",
+    "crmEnrollment.findMany(pendingEnrollmentRevenue)",
     () =>
-      prisma.crmEnrollment.aggregate({
+      prisma.crmEnrollment.findMany({
         where: { status: { in: ["pending", "sent_back"] }, firstAmount: { not: null } },
-        _sum: { firstAmount: true },
-        _count: { _all: true },
+        select: { firstAmount: true, paymentMode: true, expDom: true },
       }),
-    { _sum: { firstAmount: null as null | { toString(): string } }, _count: { _all: 0 } },
+    [] as Array<{ firstAmount: { toString(): string } | null; paymentMode: string | null; expDom: string | null }>,
+  );
+  const pendingEnrollmentRevenue = enrolling.reduce(
+    (sum, e) => sum + num(e.firstAmount) - gstInAmount({ type: "Revenue", paymentMode: e.paymentMode ?? "", expDom: e.expDom, amount: num(e.firstAmount) }),
+    0,
   );
 
   return {
@@ -282,7 +286,7 @@ export async function ceoHeadline(): Promise<CeoHeadline> {
     previousMonthRevenue,
     currentMonthRevenueTrendPct,
     expectedCollections,
-    expectedCollectionsCount: plans._count._all,
+    expectedCollectionsCount: plans.length,
     pipelineValue: pipeline.current.value,
     pipelineCount: pipeline.current.count,
     pipelineValueBeyond: pipeline.beyond.value,
@@ -292,12 +296,12 @@ export async function ceoHeadline(): Promise<CeoHeadline> {
     pipelineStageId: pipelineStage?.id ?? null,
     pendingApprovalsCount: approvals,
     myDraftsRevenue,
-    myDraftsRevenueCount: drafts._count._all,
+    myDraftsRevenueCount: drafts.length,
     pendingApprovalRevenue,
     pendingApprovalRevenueCount,
     pendingApprovalRevenueOtherMonths,
-    pendingEnrollmentRevenue: num(enrolling._sum.firstAmount),
-    pendingEnrollmentCount: enrolling._count._all,
+    pendingEnrollmentRevenue,
+    pendingEnrollmentCount: enrolling.length,
   };
 }
 
@@ -307,6 +311,8 @@ export type ProfitRow = {
   category: string;
   subItem: string;
   amount: number;
+  /** GST inside a revenue row's amount; income counts the rest. */
+  gstAmount?: number;
   /** Designation of the employee the row pays, when it pays one. */
   employeeDesignation?: string | null;
 };
@@ -354,7 +360,10 @@ export function buildProfitStatement(rows: ProfitRow[], from: Date, to: Date): P
   let directorSalary = 0;
   for (const r of rows) {
     if (r.date < from || r.date >= to) continue;
-    if (r.type === "Revenue") income += r.amount;
+    // Income is net of GST; GST paid to the government settles that
+    // liability and is no expense (src/lib/finance-gst.ts).
+    if (r.type === "Revenue") income += r.amount - (r.gstAmount ?? 0);
+    else if (isGstRemittance(r)) continue;
     else if (isDirectorSalary(r)) directorSalary += r.amount;
     else if (r.type === "Expense") expenses += r.amount;
   }
@@ -386,6 +395,7 @@ export async function ceoProfit(): Promise<CeoProfit> {
           category: true,
           subItem: true,
           amount: true,
+          gstAmount: true,
           employee: { select: { designation: true, designationRef: { select: { name: true } } } },
         },
       }),
@@ -398,6 +408,7 @@ export async function ceoProfit(): Promise<CeoProfit> {
     category: r.category,
     subItem: r.subItem,
     amount: num(r.amount),
+    gstAmount: num(r.gstAmount),
     employeeDesignation: r.employee ? effectiveDesignation(r.employee) : null,
   }));
 
@@ -465,15 +476,22 @@ export async function fyMonthlySeries(): Promise<MonthlyRow[]> {
       "transaction.groupBy(monthly)",
       () =>
         prisma.transaction.groupBy({
-          by: ["month", "type"],
+          // Category and sub-item pick out GST paid to the government.
+          by: ["month", "type", "category", "subItem"],
           where: {
             deletedAt: null,
             isHistorical: false,
             date: { gte: FY_START, lt: FY_END },
           },
-          _sum: { amount: true },
+          _sum: { amount: true, gstAmount: true },
         }),
-      [] as Array<{ month: string; type: string; _sum: { amount: { toString(): string } | null } }>,
+      [] as Array<{
+        month: string;
+        type: string;
+        category: string;
+        subItem: string;
+        _sum: { amount: { toString(): string } | null; gstAmount: { toString(): string } | null };
+      }>,
     ),
     metricsSource === "crm"
       ? safe(
@@ -507,8 +525,9 @@ export async function fyMonthlySeries(): Promise<MonthlyRow[]> {
     const b = byMonth.get(r.month);
     if (!b) continue;
     const v = num(r._sum.amount);
-    if (r.type === "Revenue") b.revenue += v;
-    else if (r.type === "Expense") b.expense += v;
+    // The P&L view: revenue net of GST, GST paid to the government left out.
+    if (r.type === "Revenue") b.revenue += v - num(r._sum.gstAmount);
+    else if (r.type === "Expense" && !isGstRemittance(r)) b.expense += v;
     b.net = b.revenue - b.expense;
   }
   for (const d of enrollmentDates) {

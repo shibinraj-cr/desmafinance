@@ -8,6 +8,7 @@ import { verifyCategorySubItem } from "@/lib/master-data";
 import { flowFor, monthCodeFromDate } from "@/lib/catalog";
 import { todayIst } from "@/lib/lead-pulse-dates";
 import { badRequest, conflict, forbidden, notFound, unauthorized, unprocessable } from "@/lib/http-error";
+import { gstInAmount } from "@/lib/finance-gst";
 import { candidateInvoiceNumberTaken, candidateStemState, laterNumber, lockInvoiceStem, stemOfNumber } from "@/lib/invoices/numbering";
 import {
   LEDGER,
@@ -818,6 +819,7 @@ export async function approveReceipt(a: PcAccess, id: string, edits: Partial<Rec
             amount: p.inr,
             flow: flowFor("Revenue"),
             expDom: LEDGER.expDom,
+            gstAmount: gstInAmount({ type: LEDGER.type, paymentMode: LEDGER.paymentMode, expDom: LEDGER.expDom, amount: p.inr }),
             partyId,
             createdById: a.userId,
           },

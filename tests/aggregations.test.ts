@@ -18,6 +18,7 @@ vi.mock("@/lib/prisma", () => ({
 
 import { prisma } from "@/lib/prisma";
 import {
+  asCashSeries,
   totalsByType,
   monthlySeries,
   expenseBreakdown,
@@ -46,7 +47,27 @@ describe("totalsByType", () => {
 
   it("returns zeros when there are no rows", async () => {
     mockedGroupBy.mockResolvedValueOnce([]);
-    expect(await totalsByType()).toEqual({ revenue: 0, expense: 0, net: 0 });
+    expect(await totalsByType()).toEqual({ revenue: 0, expense: 0, net: 0, gst: 0, gstPaid: 0, inflow: 0, outflow: 0, cashNet: 0 });
+  });
+
+  it("reports revenue net of GST and leaves GST paid out of expenses, while cash keeps both", async () => {
+    mockedGroupBy.mockResolvedValueOnce([
+      { type: "Revenue", category: "Sales - Nursing Registrations", subItem: "AHPRA (Sales)", _sum: { amount: 34220, gstAmount: 5220 } },
+      { type: "Revenue", category: "Collection - Nursing Registrations", subItem: "AHPRA (Collection)", _sum: { amount: 10000, gstAmount: 0 } },
+      { type: "Expense", category: "Rent", subItem: "Office Rent", _sum: { amount: 8000, gstAmount: 0 } },
+      { type: "Expense", category: "Taxes", subItem: "GST", _sum: { amount: 5220, gstAmount: 0 } },
+      { type: "Expense", category: "Taxes", subItem: "TDS", _sum: { amount: 1000, gstAmount: 0 } },
+    ]);
+    expect(await totalsByType()).toEqual({
+      revenue: 39000, // 34,220 − 5,220 GST + 10,000
+      expense: 9000, // rent + TDS; GST paid isn't a cost
+      net: 30000,
+      gst: 5220,
+      gstPaid: 5220,
+      inflow: 44220,
+      outflow: 14220,
+      cashNet: 30000,
+    });
   });
 
   it("only counts non-deleted rows (deletedAt: null is in the where clause)", async () => {
@@ -81,11 +102,21 @@ describe("monthlySeries", () => {
       "Mar-27",
     ]);
     const apr = s.find((b) => b.month === "Apr-26")!;
-    expect(apr).toEqual({ month: "Apr-26", revenue: 100, expense: 30, net: 70 });
+    expect(apr).toEqual({ month: "Apr-26", revenue: 100, expense: 30, net: 70, inflow: 100, outflow: 30, cashNet: 70 });
     const may = s.find((b) => b.month === "May-26")!;
-    expect(may).toEqual({ month: "May-26", revenue: 0, expense: 0, net: 0 });
+    expect(may).toEqual({ month: "May-26", revenue: 0, expense: 0, net: 0, inflow: 0, outflow: 0, cashNet: 0 });
     const jul = s.find((b) => b.month === "Jul-26")!;
-    expect(jul).toEqual({ month: "Jul-26", revenue: 200, expense: 0, net: 200 });
+    expect(jul).toEqual({ month: "Jul-26", revenue: 200, expense: 0, net: 200, inflow: 200, outflow: 0, cashNet: 200 });
+  });
+
+  it("splits each month into the P&L (net of GST) and the cash it moved", async () => {
+    mockedGroupBy.mockResolvedValueOnce([
+      { month: "Nov-26", type: "Revenue", category: "Sales - X", subItem: "X (Sales)", _sum: { amount: 118, gstAmount: 18 } },
+      { month: "Nov-26", type: "Expense", category: "Taxes", subItem: "GST", _sum: { amount: 18, gstAmount: 0 } },
+    ]);
+    const nov = (await monthlySeries()).find((b) => b.month === "Nov-26")!;
+    expect(nov).toEqual({ month: "Nov-26", revenue: 100, expense: 0, net: 100, inflow: 118, outflow: 18, cashNet: 100 });
+    expect(asCashSeries([nov])[0]).toMatchObject({ revenue: 118, expense: 18, net: 100 });
   });
 });
 

@@ -136,7 +136,7 @@ export async function loadSalesAnalysis(opts: { from: string; to: string }): Pro
     }),
     prisma.transaction.findMany({
       where: { type: "Revenue", deletedAt: null, isHistorical: false, date: { gte: fromDate, lt: toExclusive } },
-      select: { date: true, category: true, subItem: true, paymentMode: true, expDom: true, amount: true, partyId: true },
+      select: { date: true, category: true, subItem: true, paymentMode: true, expDom: true, amount: true, gstAmount: true, partyId: true },
     }),
     prisma.lead.findMany({
       where: { createdAt: { gte: istFrom, lt: istTo }, status: { code: { not: "duplicate" } } },
@@ -270,7 +270,8 @@ export async function loadSalesAnalysis(opts: { from: string; to: string }): Pro
     dims[slot("revenueCategory")] = dict.id("revenueCategory", revenueCategory(r.category));
     dims[slot("paymentMode")] = dict.id("paymentMode", r.paymentMode);
     dims[slot("market")] = dict.id("market", market(r.expDom));
-    facts.push(encodeFact({ kind: FACT_COLLECTION, day: utcDay(r.date), dims, weight: 0, booked: 0, amount: Number(r.amount) }));
+    // Collected revenue is net of GST, like every revenue figure (src/lib/finance-gst.ts).
+    facts.push(encodeFact({ kind: FACT_COLLECTION, day: utcDay(r.date), dims, weight: 0, booked: 0, amount: Number(r.amount) - Number(r.gstAmount) }));
   }
 
   // ── Leads ──

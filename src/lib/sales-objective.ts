@@ -15,9 +15,14 @@
 //                     prisma/seed-sales-objective-archive.ts. Never recomputes.
 //                     It lives in the database and NOT in this file on purpose:
 //                     the repo is public and these are real collections.
-//   Apr-26 → today    live: summed off Transaction rows the same way the CEO
-//                     Dashboard's revenue tile sums them, so the two screens
-//                     cannot disagree.
+//   Apr-26 → today    live: summed off the Revenue Transaction rows.
+//
+// COLLECTIONS INCLUDE GST. Everywhere else revenue is reported net of GST
+// (src/lib/finance-gst.ts), but this page measures money collected, GST
+// included: the archive and every target chained from it were set on that
+// basis, and netting only the live months would score them against targets
+// built from gross figures. So this page and the CEO Dashboard's revenue tile
+// differ by exactly the GST inside the month's Axis/HDFC domestic receipts.
 //
 // The archive normally stops where the ledger starts, so the two never overlap
 // and there is nothing to reconcile. The seed can optionally load the overlap

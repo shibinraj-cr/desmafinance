@@ -26,6 +26,7 @@ import { recordLeadActivity } from "./crm-activity";
 import { recordAudit } from "./audit";
 import { MONTHS, flowFor, monthCodeFromDate } from "./catalog";
 import { isHistoricalDate } from "./finance-historical";
+import { gstInAmount } from "./finance-gst";
 import { fromPrismaDate, toPrismaDate, todayIst } from "./lead-pulse-dates";
 import { verifyCategorySubItem } from "./master-data";
 import { formatEnrollDate } from "./crm-enroll-date";
@@ -613,6 +614,7 @@ export async function approveEnrollment(a: EnrollmentAccess, id: string, patch: 
           flow: flowFor("Revenue"),
           partyId: e.partyId,
           expDom: f.expDom,
+          gstAmount: gstInAmount({ type: "Revenue", paymentMode: f.paymentMode!, expDom: f.expDom, amount: f.firstAmount! }),
           isHistorical: isHistoricalDate(f.paidOn!),
           createdById: a.userId,
         },

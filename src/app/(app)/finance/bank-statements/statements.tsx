@@ -56,7 +56,7 @@ export function StatementsView({
       if (!res.ok) throw new Error(data.message ?? "Upload failed");
       setMsg(
         data.duplicate
-          ? { tone: "ok", text: "This PDF was already imported — nothing added." }
+          ? { tone: "ok", text: "This file was already imported — nothing added." }
           : data.status === "REVIEW_REQUIRED"
             ? { tone: "error", text: "Imported for review — validation found a problem. Open Review on the statement." }
             : { tone: "ok", text: `Imported — ${data.inserted ?? 0} new transaction(s), ${data.duplicates ?? 0} already present.` },
@@ -91,12 +91,12 @@ export function StatementsView({
                 </button>
               )}
               <button type="button" className={secondaryBtn} disabled={busy} onClick={() => fileRef.current?.click()}>
-                <span className="material-symbols-outlined text-[18px]">upload_file</span>Upload PDF
+                <span className="material-symbols-outlined text-[18px]">upload_file</span>Upload PDF or Excel
               </button>
               <input
                 ref={fileRef}
                 type="file"
-                accept="application/pdf,.pdf"
+                accept="application/pdf,.pdf,.xls,.xlsx,application/vnd.ms-excel,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
                 className="hidden"
                 onChange={(e) => e.target.files?.[0] && upload(e.target.files[0])}
               />
@@ -132,7 +132,7 @@ export function StatementsView({
                     <td className={`${td} whitespace-nowrap hidden lg:table-cell text-on-surface-variant`}>
                       {s.periodStart === s.periodEnd ? "1 day" : `${day(s.periodStart)} → ${day(s.periodEnd)}`}
                     </td>
-                    <td className={`${td} whitespace-nowrap hidden md:table-cell`}>{s.source === "upload" ? "Uploaded" : when(s.receivedAt)}</td>
+                    <td className={`${td} whitespace-nowrap hidden md:table-cell`}>{s.source === "upload" ? "Uploaded" : s.source === "sheet" ? "Uploaded (Excel)" : when(s.receivedAt)}</td>
                     <td className={`${td} hidden xl:table-cell text-data-mono text-caption`}>{s.gmailMessageId ?? "—"}</td>
                     <td className={`${td} text-right`}>
                       {s.transactionCount ?? "—"}
@@ -158,7 +158,7 @@ export function StatementsView({
                         <button type="button" className="text-primary font-semibold hover:underline" onClick={() => setOpen(s)}>
                           {s.status === "REVIEW_REQUIRED" && canManage ? "Review" : "Details"}
                         </button>
-                        {canManage && RETRYABLE.has(s.status) && s.status !== "REVIEW_REQUIRED" && (
+                        {canManage && RETRYABLE.has(s.status) && s.status !== "REVIEW_REQUIRED" && s.source !== "sheet" && (
                           <button type="button" className="text-primary font-semibold hover:underline" disabled={busy} onClick={() => retry([s.id])}>
                             Retry
                           </button>
@@ -275,9 +275,11 @@ function StatementDetail({ statement: s, canManage, onClose, onRetry }: { statem
         <div className="space-y-sm">
           <input className="w-full h-10 px-md rounded-lg border border-outline-variant bg-surface-container-lowest text-body-md" placeholder="Decision note (optional)" value={note} onChange={(e) => setNote(e.target.value)} maxLength={500} />
           <div className="flex flex-wrap justify-end gap-sm">
-            <button type="button" className={secondaryBtn} disabled={busy} onClick={onRetry}>
-              Re-parse
-            </button>
+            {s.source !== "sheet" && (
+              <button type="button" className={secondaryBtn} disabled={busy} onClick={onRetry}>
+                Re-parse
+              </button>
+            )}
             <button type="button" className={secondaryBtn} disabled={busy} onClick={() => decide("reject")}>
               Reject
             </button>

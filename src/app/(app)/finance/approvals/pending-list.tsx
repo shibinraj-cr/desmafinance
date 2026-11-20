@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 import { inrFull } from "@/lib/format";
 import { HISTORICAL_LABEL, isHistoricalDate } from "@/lib/finance-historical";
 import { txErrorMessage } from "@/lib/finance-tx-errors";
+import type { CandidateTotals } from "@/lib/candidate-totals";
 
 /** localStorage key for in-progress approve/reject decisions. Kept
  *  scoped to this page so other surfaces (daily tracker drafts etc.)
@@ -49,10 +50,13 @@ export function PendingList({
   rows,
   partyById,
   employeeById,
+  candidateTotals = {},
 }: {
   rows: PendingRow[];
   partyById: PartyLookup;
   employeeById: EmployeeLookup;
+  /** Keyed by party id; only Candidates are present. */
+  candidateTotals?: Record<string, CandidateTotals>;
 }) {
   const router = useRouter();
   // Hydrate from localStorage on first paint so refreshes / nav-aways
@@ -274,7 +278,7 @@ export function PendingList({
       )}
 
       <div className="overflow-auto rounded-xl border border-outline-variant max-h-[calc(100vh-260px)]">
-        <table className="w-full text-body-md min-w-[1400px]">
+        <table className="w-full text-body-md min-w-[1540px]">
           <thead className="bg-surface-container-low text-on-surface-variant sticky top-0 z-10 shadow-[0_1px_0_0_var(--lp-outline-variant)]">
             <tr className="text-left">
               <Th>Date</Th>
@@ -287,6 +291,7 @@ export function PendingList({
               <Th>Payment</Th>
               <Th>Flow</Th>
               <Th align="right">Amount</Th>
+              <Th align="right">Candidate total</Th>
               <Th>Submitted</Th>
               <Th>Kind</Th>
               <Th align="center">Approve</Th>
@@ -336,6 +341,9 @@ export function PendingList({
                   <td className="px-md py-sm">{r.paymentMode}</td>
                   <td className="px-md py-sm">{r.flow}</td>
                   <td className="px-md py-sm text-right font-mono font-semibold">{inrFull(r.amount)}</td>
+                  <td className="px-md py-sm text-right whitespace-nowrap">
+                    <CandidateTotalCell totals={r.partyId ? candidateTotals[r.partyId] : undefined} />
+                  </td>
                   <td className="px-md py-sm text-caption whitespace-nowrap">
                     <div className="text-on-surface">{r.submittedBy}</div>
                     <div className="text-on-surface-variant">{fmtDDMMYY(r.createdAt)}</div>
@@ -395,7 +403,7 @@ export function PendingList({
             {rows.length === 0 && (
               <tr>
                 <td
-                  colSpan={15}
+                  colSpan={16}
                   className="px-md py-lg text-center text-on-surface-variant"
                 >
                   No pending approvals.
@@ -462,6 +470,40 @@ function ExpDomBadge({ value }: { value: string | null }) {
     >
       {value}
     </span>
+  );
+}
+
+/** What the candidate owes in all (sum of their services), with approved
+ *  payments and the balance beneath. Same figures as the candidate page. */
+function CandidateTotalCell({ totals }: { totals: CandidateTotals | undefined }) {
+  if (!totals) return <span className="text-on-surface-variant">—</span>;
+  if (totals.quoted <= 0) {
+    return (
+      <span
+        title="No service amount is set on this candidate's page, so there is no total to check against."
+        className="text-caption font-semibold text-amber-700"
+      >
+        Not set
+        {totals.paid > 0 && (
+          <span className="block font-normal text-on-surface-variant">
+            Paid <span className="font-mono">{inrFull(totals.paid)}</span>
+          </span>
+        )}
+      </span>
+    );
+  }
+  const over = totals.balance < 0;
+  return (
+    <div title="Total of the candidate's services. Paid counts approved payments only, not rows waiting here.">
+      <div className="font-mono font-semibold text-on-surface">{inrFull(totals.quoted)}</div>
+      <div className="text-caption text-on-surface-variant">
+        Paid <span className="font-mono">{inrFull(totals.paid)}</span>
+      </div>
+      <div className={"text-caption font-semibold " + (over ? "text-error" : "text-on-surface-variant")}>
+        {over ? "Over by " : "Bal "}
+        <span className="font-mono">{inrFull(Math.abs(totals.balance))}</span>
+      </div>
+    </div>
   );
 }
 

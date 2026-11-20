@@ -243,6 +243,10 @@ model Transaction {
   /// calc on the Revenue Analysis page: only DOM revenue carries
   /// the 18% GST line.
   expDom      String?
+  /// GST inside `amount` (src/lib/finance-gst.ts): set at every write, 0 on
+  /// rows that carry none. `amount` stays the money that moved; revenue is
+  /// reported net, `amount − gstAmount`.
+  gstAmount   Decimal   @default(0) @db.Decimal(14, 2)
   /// A candidate payment received before DesGro's ledger began (dated
   /// before 1 Apr 2026). Set from the date at every write. Such rows count
   /// towards the candidate's "paid so far" but are kept out of every finance
@@ -6408,7 +6412,8 @@ model BankStatement {
 
 /// One bank transaction. Amounts are fixed-precision decimals; the raw
 /// narration is kept untouched beside the derived classification.
-/// reconciliationStatus: UNMATCHED | MATCHED | PARTIALLY_MATCHED | IGNORED | MANUAL_REVIEW
+/// reconciliationStatus: UNMATCHED | MATCHED | PARTIALLY_MATCHED | IGNORED | MANUAL_REVIEW | TRANSFER |
+/// CASH (a withdrawal into a cash float) | CLAIM_SETTLEMENT (the director's card claims repaid)
 model BankTransaction {
   id                   String          @id @default(cuid())
   integrationId        String
@@ -6444,11 +6449,20 @@ model BankTransaction {
   reconciliationNote   String?
   reconciledById       String?
   reconciledAt         DateTime?
+  // Matched by the engine (exact reference + amount), not a person.
+  autoMatched          Boolean         @default(false)
+  // TRANSFER: the other leg, a line of another DesGro account.
+  transferPairId       String?
+  // "Create entry from this line" sent the entry to drafts / approval: its id,
+  // so a second one is never created while it waits.
+  pendingEntryRef      String?
   sheetSyncedAt        DateTime?
   createdAt            DateTime        @default(now())
   updatedAt            DateTime        @updatedAt
 
-  matches BankTransactionMatch[]
+  matches         BankTransactionMatch[]
+  cashWithdrawal  CashWithdrawal?
+  claimSettlement DirectorClaimSettlement?
 
   @@unique([integrationId, transactionHash])
   @@index([integrationId, txnDate])
@@ -6456,6 +6470,7 @@ model BankTransaction {
   @@index([txnDate])
   @@index([reconciliationStatus])
   @@index([transactionType])
+  @@index([transferPairId])
 }
 
 /// A bank transaction associated with a ledger Transaction. Several matches
@@ -7327,4 +7342,62 @@ model InvoiceFile {
   createdAt DateTime @default(now())
 
   @@unique([invoiceId, kind])
+}
+
+/// Cash taken out of a DesGro bank account into a cash float. Not an expense
+/// and not an outflow: money moving from the bank into a float.
+/// kind: OUTDOOR_MARKETING (held by the director, spent against vouchers — a
+/// register only, never in P&L) | PETTY_CASH (spent through ledger entries
+/// paid in Cash).
+model CashWithdrawal {
+  id                String           @id @default(cuid())
+  bankTransactionId String?          @unique
+  bankTransaction   BankTransaction? @relation(fields: [bankTransactionId], references: [id], onDelete: SetNull)
+  kind              String
+  date              DateTime         @db.Date
+  amount            Decimal          @db.Decimal(14, 2)
+  heldBy            String?
+  note              String?
+  createdById       String?
+  createdAt         DateTime         @default(now())
+  updatedAt         DateTime         @updatedAt
+
+  @@index([kind, date])
+}
+
+/// How the director spent Outdoor Marketing cash, uploaded from Excel. A
+/// register of the float only: never a ledger entry, never an expense.
+model OutdoorMarketingVoucher {
+  id          String   @id @default(cuid())
+  date        DateTime @db.Date
+  voucherNo   String?
+  paidTo      String
+  purpose     String?
+  amount      Decimal  @db.Decimal(14, 2)
+  batchId     String
+  // The same row uploaded again (same sheet, or an overlapping one) adds nothing.
+  rowHash     String   @unique
+  createdById String?
+  createdAt   DateTime @default(now())
+
+  @@index([date])
+  @@index([batchId])
+}
+
+/// A bank payment to the director repaying expenses paid on the director's
+/// personal credit card. The expenses are already in the ledger (payment mode
+/// Credit Card), so this is never a second expense: it clears the oldest
+/// outstanding claims first.
+model DirectorClaimSettlement {
+  id                String           @id @default(cuid())
+  bankTransactionId String?          @unique
+  bankTransaction   BankTransaction? @relation(fields: [bankTransactionId], references: [id], onDelete: SetNull)
+  date              DateTime         @db.Date
+  amount            Decimal          @db.Decimal(14, 2)
+  note              String?
+  createdById       String?
+  createdAt         DateTime         @default(now())
+  updatedAt         DateTime         @updatedAt
+
+  @@index([date])
 }

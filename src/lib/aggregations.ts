@@ -1,8 +1,67 @@
 import { prisma } from "./prisma";
 import type { Range } from "./period";
 import { listParam, oneOf } from "./filter-params";
+import { isGstRemittance } from "./finance-gst";
 
-export type MonthBucket = { month: string; revenue: number; expense: number; net: number };
+/**
+ * Two views of the same rows (src/lib/finance-gst.ts):
+ *   - revenue / expense / net: the P&L. Revenue NET of GST, expenses without
+ *     GST paid over to the government.
+ *   - inflow / outflow / cashNet: the money. Every rupee in and out.
+ */
+export type MonthBucket = {
+  month: string;
+  revenue: number;
+  expense: number;
+  net: number;
+  inflow: number;
+  outflow: number;
+  cashNet: number;
+};
+
+export type Totals = {
+  /** Revenue net of GST. */
+  revenue: number;
+  /** Expenses, leaving out GST paid to the government. */
+  expense: number;
+  /** revenue − expense: the profit figure. */
+  net: number;
+  /** GST inside the period's revenue. */
+  gst: number;
+  /** GST paid to the government in the period (Expense › Taxes › GST). */
+  gstPaid: number;
+  /** Money received, GST included. */
+  inflow: number;
+  /** Money paid out, GST paid included. */
+  outflow: number;
+  cashNet: number;
+};
+
+type Row = {
+  type: string;
+  category?: string | null;
+  subItem?: string | null;
+  _sum: { amount?: { toString(): string } | number | null; gstAmount?: { toString(): string } | number | null };
+};
+
+/** Fold grouped ledger rows into both views. */
+function fold(rows: Row[], into: Omit<Totals, "net" | "cashNet">) {
+  for (const r of rows) {
+    const amount = num(r._sum.amount);
+    if (r.type === "Revenue") {
+      const gst = num(r._sum.gstAmount);
+      into.inflow += amount;
+      into.gst += gst;
+      into.revenue += amount - gst;
+    } else if (r.type === "Expense") {
+      into.outflow += amount;
+      if (isGstRemittance(r)) into.gstPaid += amount;
+      else into.expense += amount;
+    }
+  }
+}
+
+const r2 = (n: number) => Math.round(n * 100) / 100;
 
 const MONTH_ORDER = [
   "Apr-26",
@@ -50,48 +109,65 @@ function activeWhere(range?: Range, modes?: string[]) {
   };
 }
 
-export async function totalsByType(range?: Range, modes?: string[]) {
+export async function totalsByType(range?: Range, modes?: string[]): Promise<Totals> {
   const rows = await prisma.transaction.groupBy({
-    by: ["type"],
+    // Category and sub-item pick out GST paid to the government.
+    by: ["type", "category", "subItem"],
     where: activeWhere(range, modes),
-    _sum: { amount: true },
+    _sum: { amount: true, gstAmount: true },
   });
-  let revenue = 0;
-  let expense = 0;
-  for (const r of rows) {
-    const v = num(r._sum.amount);
-    if (r.type === "Revenue") revenue += v;
-    else if (r.type === "Expense") expense += v;
-  }
-  return { revenue, expense, net: revenue - expense };
+  const t = { revenue: 0, expense: 0, gst: 0, gstPaid: 0, inflow: 0, outflow: 0 };
+  fold(rows, t);
+  return {
+    revenue: r2(t.revenue),
+    expense: r2(t.expense),
+    net: r2(t.revenue - t.expense),
+    gst: r2(t.gst),
+    gstPaid: r2(t.gstPaid),
+    inflow: r2(t.inflow),
+    outflow: r2(t.outflow),
+    cashNet: r2(t.inflow - t.outflow),
+  };
 }
 
 export async function monthlySeries(range?: Range, modes?: string[]): Promise<MonthBucket[]> {
   const rows = await prisma.transaction.groupBy({
-    by: ["month", "type"],
+    by: ["month", "type", "category", "subItem"],
     where: activeWhere(range, modes),
-    _sum: { amount: true },
+    _sum: { amount: true, gstAmount: true },
   });
-  const map = new Map<string, MonthBucket>();
-  for (const m of MONTH_ORDER) map.set(m, { month: m, revenue: 0, expense: 0, net: 0 });
+  const empty = (month: string) => ({ month, revenue: 0, expense: 0, gst: 0, gstPaid: 0, inflow: 0, outflow: 0 });
+  const map = new Map<string, ReturnType<typeof empty>>();
+  for (const m of MONTH_ORDER) map.set(m, empty(m));
   for (const r of rows) {
-    const bucket = map.get(r.month) ?? { month: r.month, revenue: 0, expense: 0, net: 0 };
-    if (r.type === "Revenue") bucket.revenue += num(r._sum.amount);
-    else if (r.type === "Expense") bucket.expense += num(r._sum.amount);
-    bucket.net = bucket.revenue - bucket.expense;
+    const bucket = map.get(r.month) ?? empty(r.month);
+    fold([r], bucket);
     map.set(r.month, bucket);
   }
-  return Array.from(map.values());
+  return Array.from(map.values()).map((b) => ({
+    month: b.month,
+    revenue: r2(b.revenue),
+    expense: r2(b.expense),
+    net: r2(b.revenue - b.expense),
+    inflow: r2(b.inflow),
+    outflow: r2(b.outflow),
+    cashNet: r2(b.inflow - b.outflow),
+  }));
+}
+
+/** A series in the shape the cash charts read: revenue/expense/net = money in/out/net. */
+export function asCashSeries(series: MonthBucket[]): MonthBucket[] {
+  return series.map((b) => ({ ...b, revenue: b.inflow, expense: b.outflow, net: b.cashNet }));
 }
 
 export async function topRevenueServices(limit = 6, range?: Range, modes?: string[]) {
   const rows = await prisma.transaction.groupBy({
     by: ["subItem"],
     where: { ...activeWhere(range, modes), type: "Revenue" },
-    _sum: { amount: true },
+    _sum: { amount: true, gstAmount: true },
   });
   return rows
-    .map((r) => ({ name: r.subItem, value: num(r._sum.amount) }))
+    .map((r) => ({ name: r.subItem, value: num(r._sum.amount) - num(r._sum.gstAmount) }))
     .sort((a, b) => b.value - a.value)
     .slice(0, limit);
 }
@@ -105,12 +181,12 @@ export async function topRevenueServicesSplit(limit = 6, range?: Range) {
   const rows = await prisma.transaction.groupBy({
     by: ["subItem", "category"],
     where: { ...activeWhere(range), type: "Revenue" },
-    _sum: { amount: true },
+    _sum: { amount: true, gstAmount: true },
   });
   const sales: { name: string; value: number }[] = [];
   const collections: { name: string; value: number }[] = [];
   for (const r of rows) {
-    const v = num(r._sum.amount);
+    const v = num(r._sum.amount) - num(r._sum.gstAmount);
     const name = r.subItem;
     const isCollection =
       /\(Collection\)/i.test(name) || /Collection -/i.test(r.category ?? "");
@@ -127,10 +203,11 @@ export async function topRevenueServicesSplit(limit = 6, range?: Range) {
   };
 }
 
+/** Expenses by category for the P&L: GST paid to the government is left out. */
 export async function expenseBreakdown(limit = 8, range?: Range) {
   const rows = await prisma.transaction.groupBy({
     by: ["category"],
-    where: { ...activeWhere(range), type: "Expense" },
+    where: { ...activeWhere(range), type: "Expense", NOT: { category: "Taxes", subItem: "GST" } },
     _sum: { amount: true },
   });
   return rows
@@ -143,13 +220,14 @@ export async function revenueByCategory(range?: Range, modes?: string[]) {
   const rows = await prisma.transaction.groupBy({
     by: ["category"],
     where: { ...activeWhere(range, modes), type: "Revenue" },
-    _sum: { amount: true },
+    _sum: { amount: true, gstAmount: true },
   });
   return rows
-    .map((r) => ({ name: r.category, value: num(r._sum.amount) }))
+    .map((r) => ({ name: r.category, value: num(r._sum.amount) - num(r._sum.gstAmount) }))
     .sort((a, b) => b.value - a.value);
 }
 
+/** Money in and out per payment mode: cash, so GST stays in. */
 export async function paymentModeMix(range?: Range) {
   const rows = await prisma.transaction.groupBy({
     by: ["paymentMode", "type"],
@@ -174,7 +252,8 @@ export async function recentTransactions(limit = 10, range?: Range) {
   });
 }
 
+/** Money in minus money out: a balance follows the cash, GST included. */
 export async function currentBalance(range?: Range): Promise<number> {
   const t = await totalsByType(range);
-  return t.net;
+  return t.cashNet;
 }
