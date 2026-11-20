@@ -4,7 +4,7 @@ import { TopBar } from "@/components/TopBar";
 import { todayIst } from "@/lib/lead-pulse-dates";
 import { PC_FINANCE_PAGE, PROGRAM_CODES } from "@/lib/partner-commissions/constants";
 import { nextRunDate, parseVolumeOpening, parseVolumeTiers } from "@/lib/partner-commissions/logic";
-import { ENROLLMENT_INCLUDE, getAccess, getSettings, isoDate, serializeEnrollment } from "@/lib/partner-commissions/server";
+import { ENROLLMENT_INCLUDE, getAccess, getSettings, isoDate, serializeEnrollment, suggestNumber } from "@/lib/partner-commissions/server";
 import { PartnerCommissionsClient, type PcPageData } from "./client";
 
 export const dynamic = "force-dynamic";
@@ -18,7 +18,7 @@ export default async function PartnerCommissionsPage({ searchParams }: { searchP
 
   const today = todayIst();
   const month = today.slice(0, 7);
-  const [settings, partners, programs, enrollments, invoices, run, lastRun] = await Promise.all([
+  const [settings, partners, programs, enrollments, invoices, run, lastRun, suggestedNumber] = await Promise.all([
     getSettings(),
     prisma.commissionPartner.findMany({ orderBy: { name: "asc" } }),
     prisma.commissionProgram.findMany(),
@@ -37,6 +37,8 @@ export default async function PartnerCommissionsPage({ searchParams }: { searchP
     }),
     prisma.commissionRun.findUnique({ where: { month } }),
     prisma.commissionRun.findFirst({ orderBy: { ranAt: "desc" } }),
+    // The shared D/DLLC series (with Wio's candidate invoices), in its format.
+    suggestNumber(today),
   ]);
 
   // Settings-tab extras only an approver can use.
@@ -50,6 +52,7 @@ export default async function PartnerCommissionsPage({ searchParams }: { searchP
 
   const data: PcPageData = {
     today,
+    suggestedNumber,
     userId: access.userId,
     canApprove: access.canApprove,
     settings: {

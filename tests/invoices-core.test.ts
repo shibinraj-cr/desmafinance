@@ -18,6 +18,12 @@ import {
   setupGaps,
   splitGst,
   wholeInWords,
+  intoStem,
+  runningNumber,
+  sameInvoiceNumber,
+  stemKey,
+  stemOfNumber,
+  stemVariants,
 } from "@/lib/invoices/core";
 import { gstStateByName, gstStateOfGstin, placeOfSupplyLabel } from "@/lib/invoices/gst-states";
 
@@ -135,6 +141,34 @@ describe("numbering", () => {
     expect(seriesKeyFor("DIPL", "DOM")).toBe("DIPL-DOM");
     expect(seriesKeyFor("DIPL", "EXP")).toBe("DIPL-EXP");
     expect(seriesKeyFor("DLLC", "EXP")).toBe("DLLC-DOM");
+  });
+});
+
+describe("one series, either year style", () => {
+  it("treats 26-27 and 2627 as the same series", () => {
+    expect(stemKey("D/DLLC/26-27/")).toBe(stemKey("d/dllc/2627/"));
+    expect(stemKey("D/DLLC/26-27/")).not.toBe(stemKey("D/DIPL/26-27/"));
+    expect(stemVariants("D/DLLC/26-27/")).toEqual(["D/DLLC/26-27/", "D/DLLC/2627/"]);
+    expect(stemVariants("D/DLLC/2627/")).toEqual(["D/DLLC/2627/", "D/DLLC/26-27/"]);
+    expect(stemVariants("INV/")).toEqual(["INV/"]);
+  });
+  it("reads a number's stem and running number", () => {
+    expect(stemOfNumber("D/DLLC/2627/030")).toBe("D/DLLC/2627/");
+    expect(runningNumber("D/DLLC/2627/030")).toBe(30);
+    expect(runningNumber("D/DLLC/2627/03A")).toBeNull();
+  });
+  it("matches one number however it's written", () => {
+    expect(sameInvoiceNumber("D/DLLC/26-27/030", "D/DLLC/2627/030")).toBe(true);
+    expect(sameInvoiceNumber("D/DLLC/2627/30", "d/dllc/26-27/030")).toBe(true);
+    expect(sameInvoiceNumber("D/DLLC/2627/030", "D/DLLC/2627/031")).toBe(false);
+    expect(sameInvoiceNumber("D/DLLC/2627/030", "D/DIPL/2627/030")).toBe(false);
+    expect(sameInvoiceNumber("D/DLLC/2627/030", "D/DLLC/2728/030")).toBe(false);
+  });
+  it("rewrites a series' numbers into one stem and drops the rest", () => {
+    expect(intoStem("D/DLLC/2627/", ["D/DLLC/26-27/030", "D/DLLC/2627/029", "D/DLLC/27-28/001", "D/DIPL/26-27/500", null, "junk"])).toEqual([
+      "D/DLLC/2627/030",
+      "D/DLLC/2627/029",
+    ]);
   });
 });
 

@@ -31,7 +31,7 @@ import {
   openAud,
   round2,
   splitByProgram,
-  suggestInvoiceNumber,
+  bumpInvoiceNumber,
   volumeLineLabel,
 } from "@/lib/partner-commissions/logic";
 import { LEDGER } from "@/lib/partner-commissions/constants";
@@ -132,14 +132,13 @@ function GenerateModal({ ctx, onClose }: { ctx: PcCtx; onClose: () => void }) {
   const partnerIds = [...new Set(queued.map((e) => e.partnerId))];
   const [picked, setPicked] = useState<Set<string>>(new Set(queued.map((e) => e.id)));
   const [date, setDate] = useState(data.today);
-  const existing = data.invoices.map((i) => i.number);
   const initialNumbers = useMemo(() => {
-    const taken = [...existing];
+    // The server's next number in the shared series (Wio invoices included), then one up per partner.
     const out: Record<string, string> = {};
+    let n = data.suggestedNumber;
     for (const pid of partnerIds) {
-      const n = suggestInvoiceNumber(data.settings.numberPrefix, data.today, taken, data.settings.nextNumber);
       out[pid] = n;
-      taken.push(n);
+      n = bumpInvoiceNumber(n);
     }
     return out;
     // eslint-disable-next-line react-hooks/exhaustive-deps

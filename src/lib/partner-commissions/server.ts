@@ -10,6 +10,7 @@ import { todayIst } from "@/lib/lead-pulse-dates";
 import { badRequest, conflict, forbidden, notFound, unauthorized, unprocessable } from "@/lib/http-error";
 import { gstInAmount } from "@/lib/finance-gst";
 import { advisoryLock, candidateInvoiceNumberTaken, candidateStemState, laterNumber, lockInvoiceStem, stemOfNumber } from "@/lib/invoices/numbering";
+import { sameInvoiceNumber, stemVariants } from "@/lib/invoices/core";
 import {
   LEDGER,
   MAX_INSTALLMENTS,
@@ -39,6 +40,8 @@ import {
   statusAfterApproval,
   statusAfterReturn,
   suggestInvoiceNumber,
+  invoiceStem,
+  type NumberStyle,
   fyLabel,
   assignVolume,
   checkVolumeTiers,
@@ -431,27 +434,50 @@ export async function suggestNumber(dateIso: string): Promise<string> {
 }
 
 /**
+ * How the shared series writes numbers: the candidate invoice series with the
+ * same prefix (e.g. Wio's D/DLLC/ series written "2627" with 3 digits), so
+ * both modules number alike. Dash year, 3 digits when there's no such series.
+ */
+async function numberStyle(db: Prisma.TransactionClient | typeof prisma, prefix: string): Promise<NumberStyle> {
+  const s = await db.invoiceSeries.findFirst({ where: { prefix: { equals: prefix, mode: "insensitive" } }, select: { fyStyle: true, padding: true } });
+  return { fyStyle: s?.fyStyle === "compact" ? "compact" : "dash", padding: s?.padding ?? 3 };
+}
+
+/**
  * The next number, read through `db` (inside createInvoice's transaction, after
  * the stem lock). D/DLLC is shared with candidate invoices for Wio payments:
- * their numbers count as used and their series' floor applies here too.
+ * their numbers count as used and their series' floor applies here too, and
+ * the number is written in that series' format. Numbers count whether their
+ * year is written 26-27 or 2627.
  */
 async function suggestNumberIn(db: Prisma.TransactionClient | typeof prisma, settings: CommissionSettings, dateIso: string): Promise<string> {
-  const stem = `${settings.numberPrefix}${fyLabel(dateIso)}/`;
+  const style = await numberStyle(db, settings.numberPrefix);
+  const stem = invoiceStem(settings.numberPrefix, dateIso, style);
   const [own, candidate] = await Promise.all([
     db.commissionInvoice.findMany({ select: { number: true } }).then((r) => r.map((i) => i.number)),
     candidateStemState(db, stem),
   ]);
   const used = [...own, ...candidate.numbers];
-  const mine = suggestInvoiceNumber(settings.numberPrefix, dateIso, used, settings.nextNumber);
-  return candidate.floor ? laterNumber(mine, suggestInvoiceNumber(settings.numberPrefix, dateIso, used, candidate.floor)) : mine;
+  const mine = suggestInvoiceNumber(settings.numberPrefix, dateIso, used, settings.nextNumber, style);
+  return candidate.floor ? laterNumber(mine, suggestInvoiceNumber(settings.numberPrefix, dateIso, used, candidate.floor, style)) : mine;
 }
 
-/** Inside a transaction: refuse a number a candidate invoice already holds (D/DLLC is shared). */
-async function assertNumberFreeOfCandidateInvoices(tx: Prisma.TransactionClient, number: string) {
+/**
+ * Inside a transaction: refuse a number already held — by a candidate invoice
+ * (D/DLLC is shared) or by another Partner Commission invoice written with the
+ * year the other way (D/DLLC/26-27/030 = D/DLLC/2627/030).
+ */
+async function assertNumberFree(tx: Prisma.TransactionClient, number: string, exceptId?: string) {
   await lockInvoiceStem(tx, stemOfNumber(number));
   if (await candidateInvoiceNumberTaken(tx, number)) {
     throw conflict(`Invoice number ${number} is already used by a candidate invoice. Pick another number.`, "number_taken");
   }
+  const own = await tx.commissionInvoice.findMany({
+    where: { OR: stemVariants(stemOfNumber(number)).map((s) => ({ number: { startsWith: s, mode: "insensitive" as const } })), ...(exceptId ? { id: { not: exceptId } } : {}) },
+    select: { number: true },
+  });
+  const clash = own.find((r) => sameInvoiceNumber(r.number, number));
+  if (clash) throw conflict(`Invoice number ${number} is already used${clash.number === number ? "" : ` (as ${clash.number})`}. Pick another number.`, "number_taken");
 }
 
 /**
@@ -527,7 +553,7 @@ export async function createInvoice(opts: {
   let number = typed ?? "";
   try {
     const invoice = await prisma.$transaction(async (tx) => {
-      if (typed) await assertNumberFreeOfCandidateInvoices(tx, typed);
+      if (typed) await assertNumberFree(tx, typed);
       else {
         await lockInvoiceStem(tx, `${settings!.numberPrefix}${fyLabel(opts.invoiceDate)}/`);
         number = await suggestNumberIn(tx, settings!, opts.invoiceDate);
@@ -619,7 +645,7 @@ export async function updateInvoice(a: PcAccess, id: string, patch: InvoicePatch
   if (patch.amountWords !== undefined) data.amountWords = clean(patch.amountWords);
   try {
     await prisma.$transaction(async (tx) => {
-      if (typeof data.number === "string") await assertNumberFreeOfCandidateInvoices(tx, data.number);
+      if (typeof data.number === "string") await assertNumberFree(tx, data.number, id);
       if (Object.keys(data).length) await tx.commissionInvoice.update({ where: { id }, data });
       for (const l of patch.lines ?? []) {
         const line = inv.lines.find((x) => x.id === l.id);

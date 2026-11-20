@@ -1,4 +1,5 @@
 import { MAX_INSTALLMENTS, type EnrollmentState, type InvoiceLayout, type InvoiceStatus } from "./constants";
+import { runningNumber, stemKey, stemOfNumber } from "@/lib/invoices/core";
 
 /**
  * Pure rules for Partner Commissions — no database, no dates from the clock.
@@ -208,11 +209,27 @@ export function isIntakeMonth(v: string): boolean {
   return /^(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)-\d{2}$/.test(v);
 }
 
-/** The running number of `number` within `series` ("D/DLLC/26-27/"), or null when it isn't in it. */
+/** How the shared series writes its numbers — taken from the candidate invoice series with the same prefix. */
+export type NumberStyle = { fyStyle: "dash" | "compact"; padding: number };
+
+/** "D/DLLC/26-27/" (dash) or "D/DLLC/2627/" (compact) for the invoice date's financial year. */
+export function invoiceStem(prefix: string, isoDate: string, style?: NumberStyle | null): string {
+  const fy = fyLabel(isoDate);
+  return `${prefix}${style?.fyStyle === "compact" ? fy.replace("-", "") : fy}/`;
+}
+
+/** The running number of `number` in `series`, whichever way its year is written; null when it's another series. */
 function seqIn(series: string, number: string): number | null {
-  if (!number.startsWith(series)) return null;
-  const tail = number.slice(series.length);
-  return /^\d+$/.test(tail) ? Number(tail) : null;
+  const n = number.trim();
+  return stemKey(stemOfNumber(n)) === stemKey(series) ? runningNumber(n) : null;
+}
+
+/** The number after `n`, same series and digits: "D/DLLC/2627/030" → "D/DLLC/2627/031". */
+export function bumpInvoiceNumber(n: string): string {
+  const seq = runningNumber(n);
+  if (seq == null) return n;
+  const stem = stemOfNumber(n);
+  return `${stem}${String(seq + 1).padStart(n.length - stem.length, "0")}`;
 }
 
 /**
@@ -223,10 +240,11 @@ function seqIn(series: string, number: string): number | null {
  * see — so `floor` (the "Next invoice number" setting) sets the lowest number
  * it may suggest. It only applies within its own financial year: once the
  * invoice date reaches the next April, numbering starts again at 001. Finance
- * can still change any number before payment.
+ * can still change any number before payment. `style` writes the year the way
+ * the shared series does (26-27 or 2627); numbers in either style count.
  */
-export function suggestInvoiceNumber(prefix: string, isoDate: string, existing: string[], floor?: string | null): string {
-  const series = `${prefix}${fyLabel(isoDate)}/`;
+export function suggestInvoiceNumber(prefix: string, isoDate: string, existing: string[], floor?: string | null, style?: NumberStyle | null): string {
+  const series = invoiceStem(prefix, isoDate, style);
   let next = 1;
   for (const n of existing) {
     const seq = seqIn(series, n);
@@ -234,13 +252,13 @@ export function suggestInvoiceNumber(prefix: string, isoDate: string, existing: 
   }
   const min = floor ? seqIn(series, floor.trim()) : null;
   if (min != null) next = Math.max(next, min);
-  return `${series}${String(next).padStart(3, "0")}`;
+  return `${series}${String(next).padStart(Math.min(Math.max(style?.padding ?? 3, 1), 8), "0")}`;
 }
 
-/** True when the number follows the series shape, e.g. D/DLLC/26-27/012. */
+/** True when the number follows the series shape, e.g. D/DLLC/26-27/012 or D/DLLC/2627/012. */
 export function looksLikeSeries(prefix: string, number: string): boolean {
   const esc = prefix.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-  return new RegExp(`^${esc}\\d{2}-\\d{2}/\\d{3,}$`).test(number);
+  return new RegExp(`^${esc}\\d{2}-?\\d{2}/\\d{3,}$`).test(number);
 }
 
 /**

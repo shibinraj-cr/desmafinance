@@ -197,6 +197,57 @@ export function nextSeq(stem: string, used: Array<string | null | undefined>, fl
   return next;
 }
 
+/** "D/DLLC/26-27/025" → "D/DLLC/26-27/". */
+export function stemOfNumber(number: string): string {
+  const i = number.lastIndexOf("/");
+  return i >= 0 ? number.slice(0, i + 1) : number;
+}
+
+/** The running number at the end of a number ("…/031" → 31), or null. */
+export function runningNumber(number: string): number | null {
+  const tail = number.slice(stemOfNumber(number).length);
+  return /^\d+$/.test(tail) ? Number(tail) : null;
+}
+
+/**
+ * A series as a person reads it, ignoring how the year is written and case:
+ * "D/DLLC/26-27/" and "D/DLLC/2627/" are the same series.
+ */
+export function stemKey(stem: string): string {
+  return stem.toUpperCase().replace(/[^A-Z0-9]/g, "");
+}
+
+/** Both ways of writing a stem's year, for prefix searches: "D/DLLC/26-27/" → also "D/DLLC/2627/". */
+export function stemVariants(stem: string): string[] {
+  const m = /^(.*?)(\d{2})-?(\d{2})\/$/.exec(stem);
+  return m ? [...new Set([stem, `${m[1]}${m[2]}-${m[3]}/`, `${m[1]}${m[2]}${m[3]}/`])] : [stem];
+}
+
+/** One number, however it's written: same series (any year style, any case) and same running number (leading zeros ignored). */
+export function sameInvoiceNumber(a: string, b: string): boolean {
+  const x = a.trim();
+  const y = b.trim();
+  if (x.toUpperCase() === y.toUpperCase()) return true;
+  const sx = runningNumber(x);
+  return sx != null && sx === runningNumber(y) && stemKey(stemOfNumber(x)) === stemKey(stemOfNumber(y));
+}
+
+/**
+ * The numbers that belong to `stem`'s series, rewritten into `stem` so they
+ * count there whatever year style they were written in
+ * ("D/DLLC/26-27/030" → "D/DLLC/2627/030"). Numbers from other series are dropped.
+ */
+export function intoStem(stem: string, numbers: Array<string | null | undefined>): string[] {
+  const key = stemKey(stem);
+  const out: string[] = [];
+  for (const raw of numbers) {
+    const n = (raw ?? "").trim();
+    const s = stemOfNumber(n);
+    if (n && stemKey(s) === key && runningNumber(n) != null) out.push(`${stem}${n.slice(s.length)}`);
+  }
+  return out;
+}
+
 export function formatInvoiceNo(stem: string, seq: number, padding: number): string {
   return `${stem}${String(seq).padStart(Math.min(Math.max(padding, 1), 8), "0")}`;
 }

@@ -30,6 +30,8 @@ import {
   statusAfterApproval,
   statusAfterReturn,
   suggestInvoiceNumber,
+  bumpInvoiceNumber,
+  invoiceStem,
   assignVolume,
   checkVolumeTiers,
   isVolumeFy,
@@ -160,9 +162,27 @@ describe("invoice numbering", () => {
     // A floor from another series is ignored.
     expect(suggestInvoiceNumber("D/DLLC/", "2026-10-20", [], "INV/26-27/900")).toBe("D/DLLC/26-27/001");
   });
-  it("recognises the series shape", () => {
+  it("recognises the series shape, with the year either way", () => {
     expect(looksLikeSeries("D/DLLC/", "D/DLLC/26-27/012")).toBe(true);
+    expect(looksLikeSeries("D/DLLC/", "D/DLLC/2627/030")).toBe(true);
     expect(looksLikeSeries("D/DLLC/", "INV-12")).toBe(false);
+  });
+  it("writes the number the way the shared (Wio) series does, counting both year styles", () => {
+    const compact = { fyStyle: "compact" as const, padding: 3 };
+    expect(invoiceStem("D/DLLC/", "2026-11-20", compact)).toBe("D/DLLC/2627/");
+    expect(invoiceStem("D/DLLC/", "2026-11-20")).toBe("D/DLLC/26-27/");
+    // 012 and 019 were written 26-27; 030 was renamed to Wio's 2627 style → next is 031 in Wio's style.
+    const existing = ["D/DLLC/26-27/012", "D/DLLC/26-27/019", "D/DLLC/2627/030"];
+    expect(suggestInvoiceNumber("D/DLLC/", "2026-11-20", existing, "D/DLLC/26-27/025", compact)).toBe("D/DLLC/2627/031");
+    // Without the style the old dash format is kept, but 030 still counts — never 025 again.
+    expect(suggestInvoiceNumber("D/DLLC/", "2026-11-20", existing, "D/DLLC/26-27/025")).toBe("D/DLLC/26-27/031");
+    // A floor written in the other style still applies; padding follows the series.
+    expect(suggestInvoiceNumber("D/DLLC/", "2026-11-20", [], "d/dllc/26-27/040", { fyStyle: "compact", padding: 4 })).toBe("D/DLLC/2627/0040");
+  });
+  it("steps a number on, keeping its series and digits", () => {
+    expect(bumpInvoiceNumber("D/DLLC/2627/030")).toBe("D/DLLC/2627/031");
+    expect(bumpInvoiceNumber("D/DLLC/26-27/099")).toBe("D/DLLC/26-27/100");
+    expect(bumpInvoiceNumber("custom")).toBe("custom");
   });
 });
 
