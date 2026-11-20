@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 import { inrFull } from "@/lib/format";
 import { HISTORICAL_LABEL, isHistoricalDate } from "@/lib/finance-historical";
 import { txErrorMessage } from "@/lib/finance-tx-errors";
+import { bulkFailure } from "@/lib/finance-bulk-errors";
 import type { CandidateTotals } from "@/lib/candidate-totals";
 
 /** localStorage key for in-progress approve/reject decisions. Kept
@@ -90,6 +91,7 @@ export function PendingList({
     return fresh;
   });
   const [serverError, setServerError] = useState<string | null>(null);
+  const [signInNeeded, setSignInNeeded] = useState(false);
   const [toast, setToast] = useState<string | null>(null);
   const [busy, startTransition] = useTransition();
   const justHydrated = useRef(true);
@@ -196,20 +198,27 @@ export function PendingList({
       }));
     if (items.length === 0) return;
     startTransition(async () => {
-      const res = await fetch("/api/finance/approvals/bulk", {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ items }),
-      });
-      if (!res.ok) {
-        const d = await res.json().catch(() => ({}));
-        setServerError(
-          (d as { error?: string }).error === "forbidden"
-            ? "You don't have permission to approve / reject."
-            : "Could not process the batch — try again.",
-        );
+      let res: Response | null = null;
+      try {
+        res = await fetch("/api/finance/approvals/bulk", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ items }),
+        });
+      } catch {
+        res = null; // offline / connection dropped
+      }
+      if (!res || !res.ok) {
+        const d = res ? ((await res.json().catch(() => ({}))) as { error?: string }) : {};
+        const failure = bulkFailure(res?.status ?? 0, d.error);
+        setServerError(failure.message);
+        setSignInNeeded(failure.signIn);
+        // Some rows may have gone through before the failure: reload so they
+        // drop off. Ticks on the rest are kept.
+        if (failure.refresh) router.refresh();
         return;
       }
+      setSignInNeeded(false);
       const data = (await res.json()) as {
         ok: true;
         processed: number;
@@ -272,8 +281,16 @@ export function PendingList({
         </div>
       )}
       {serverError && (
-        <div className="rounded-lg bg-error-container text-on-error-container px-md py-sm text-body-md">
-          {serverError}
+        <div className="rounded-lg bg-error-container text-on-error-container px-md py-sm text-body-md flex flex-wrap items-center gap-md">
+          <span>{serverError}</span>
+          {signInNeeded && (
+            <a
+              href={`/login?callbackUrl=${encodeURIComponent("/finance/approvals/pending")}`}
+              className="font-semibold underline"
+            >
+              Sign in again
+            </a>
+          )}
         </div>
       )}
 
