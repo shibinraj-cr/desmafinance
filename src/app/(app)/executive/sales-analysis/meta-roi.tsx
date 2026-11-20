@@ -199,8 +199,9 @@ export function MetaRoiView({ report }: { report: MetaRoiReport }) {
           </table>
         </div>
         <p className="text-caption text-on-surface-variant mt-sm">
-          Each candidate&apos;s money belongs to the month of their first lead, so a candidate who asked twice is counted once. Cohorts are compared
-          at the same age: a month shows &ldquo;too young&rdquo; until every lead in it is that many days old.
+          Each candidate&apos;s money belongs to the month of their first lead, so a candidate who asked twice is counted once, and only money paid
+          from the lead&apos;s day on counts. Cohorts are compared at the same age: a month shows &ldquo;too young&rdquo; until every lead in it is
+          that many days old.
         </p>
       </Section>
 
@@ -250,6 +251,10 @@ export function MetaRoiView({ report }: { report: MetaRoiReport }) {
             WA API leads count as Meta. {n(report.waApiWithoutAd)} of this period&apos;s Meta leads came in on WhatsApp with no ad recorded.
           </li>
           <li>Spend is as paid, GST included where Meta charged it. If the GST on ads is claimed back, every ROAS here is slightly understated.</li>
+          <li>
+            Leads added by file upload count on Meta&apos;s own date when the upload kept one (Meta Reconcile); otherwise they aren&apos;t counted as
+            leads, as in Lead Pulse, because their date is only the upload&apos;s. Refunds come off net of GST, at the candidate&apos;s own rate.
+          </li>
         </ul>
       </Section>
     </div>

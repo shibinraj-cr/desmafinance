@@ -266,3 +266,87 @@ describe("by campaign", () => {
     ]);
   });
 });
+
+describe("review fixes", () => {
+  const nov = (r: ReturnType<typeof buildMetaRoi>) => r.months.find((m) => m.month === "2026-11")!;
+
+  it("an uploaded lead with no date of its own isn't a lead that month, but still decides the candidate's channel", () => {
+    const r = buildMetaRoi(
+      input({
+        leads: [lead({ id: "u1", partyId: "pu", day: "2026-11-15", counted: false })],
+        payments: [{ id: "1", partyId: "pu", day: "2026-11-16", kind: "sale", net: 12_000 }],
+        spend: [{ day: "2026-11-01", amount: 6_000 }],
+      }),
+    );
+    expect(nov(r).leads).toBe(0);
+    expect(nov(r).costPerLead).toBeNull();
+    expect(nov(r).newSales).toBe(12_000);
+    expect(r.cohorts.find((c) => c.month === "2026-11")!.leads).toBe(0);
+  });
+
+  it("a cohort counts only money paid on or after the lead", () => {
+    const r = buildMetaRoi(
+      input({
+        leads: [lead({ id: "c1", partyId: "pc", day: "2026-06-20" })],
+        payments: [
+          { id: "1", partyId: "pc", day: "2026-06-10", kind: "sale", net: 40_000 }, // before the lead
+          { id: "2", partyId: "pc", day: "2026-06-25", kind: "collection", net: 5_000 },
+        ],
+      }),
+    );
+    const jun = r.cohorts.find((c) => c.month === "2026-06")!;
+    expect(jun.cashAt[30]).toBe(5_000);
+    expect(jun.cashToDate).toBe(5_000);
+    expect(r.months.find((m) => m.month === "2026-06")!.newSales).toBe(40_000); // the month still has it
+  });
+
+  it("a candidate who bought before DesGro makes a repeat sale and a repeat enrollment, without counting the old money", () => {
+    const r = buildMetaRoi(
+      input({
+        priorSaleParties: ["pp"],
+        leads: [lead({ id: "p1", partyId: "pp", day: "2026-09-01" })],
+        payments: [{ id: "1", partyId: "pp", day: "2026-09-05", kind: "sale", net: 50_000 }],
+        enrollments: [{ day: "2026-09-05", sourceCode: "meta", originalSourceCode: null, adEvidence: false, verification: "verified", partyId: "pp" }],
+      }),
+    );
+    const sep = r.months.find((m) => m.month === "2026-09")!;
+    expect(sep.newSales).toBe(0);
+    expect(sep.repeatSales).toBe(50_000);
+    expect(sep.newEnrollments).toBe(0);
+    expect(sep.repeatEnrollments).toBe(1);
+  });
+
+  it("a refund is taken off net of GST at the candidate's own rate", () => {
+    const r = buildMetaRoi(
+      input({
+        leads: [lead({ id: "g1", partyId: "pg", day: "2026-11-02" })],
+        payments: [{ id: "1", partyId: "pg", day: "2026-11-03", kind: "sale", net: 100_000, gross: 118_000 }],
+        refunds: [{ partyId: "pg", day: "2026-11-10", amount: 118_000 }],
+      }),
+    );
+    expect(nov(r).refunds).toBe(100_000);
+    expect(nov(r).cash).toBe(0);
+    expect(r.cohorts.find((c) => c.month === "2026-11")!.cashToDate).toBe(0);
+  });
+
+  it("an enrollment follows the candidate's first lead, and an earlier won deal makes it a repeat", () => {
+    const r = buildMetaRoi(
+      input({
+        leads: [
+          lead({ id: "w1", partyId: "pw", day: "2026-06-01", sourceCode: "website" }),
+          lead({ id: "w2", partyId: "pw", day: "2026-08-01", sourceCode: "meta" }),
+          lead({ id: "m1", partyId: "pm", day: "2026-06-01", sourceCode: "meta" }),
+        ],
+        enrollments: [
+          // A fresh Meta lead, but the candidate first came from the website.
+          { day: "2026-08-05", sourceCode: "meta", originalSourceCode: null, adEvidence: false, verification: "none", partyId: "pw" },
+          // A Meta candidate's second service through a lead that wasn't flagged as a re-enrollment.
+          { day: "2026-08-06", sourceCode: "meta", originalSourceCode: null, adEvidence: false, verification: "none", partyId: "pm", earlierWin: true },
+        ],
+      }),
+    );
+    const aug = r.months.find((m) => m.month === "2026-08")!;
+    expect(aug.newEnrollments).toBe(0);
+    expect(aug.repeatEnrollments).toBe(1);
+  });
+});

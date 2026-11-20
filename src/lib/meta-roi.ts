@@ -22,10 +22,18 @@
  * candidates. Partner commissions are left out (only "Sales …" and
  * "Collection …" categories count). A candidate's first "Sales" payment is
  * the new sale; a later "Sales" payment is a repeat service; "Collection"
- * payments are collections. Refunds booked against a Meta candidate come off.
+ * payments are collections. Refunds booked against a Meta candidate come off,
+ * net of GST at the candidate's own rate (a refund is booked gross).
  *
  * Enrollments. Closed-won deals on their enrollment date (they count at
- * submit); a repeat enrollment never counts as a new one.
+ * submit), credited to the candidate's first lead like their money. A repeat
+ * enrollment (a re-enrollment lead, an earlier won deal, or a sale before
+ * DesGro) never counts as a new one.
+ *
+ * Leads. Counted on the day they came in. A lead added by file upload is
+ * dated by Meta's own date when the upload kept one (Meta Reconcile), and
+ * otherwise left out of the lead counts, as in Lead Pulse: its date is only
+ * the upload's.
  */
 
 export const META_SOURCE_CODES = ["meta", "insta_fb", "wabis"] as const;
@@ -75,12 +83,22 @@ export type RoiLead = AcquisitionFacts & {
   campaign: string;
   /** The lead is enrolled. */
   won: boolean;
+  /** False for an uploaded lead with no enquiry date of its own: kept for the candidate's channel, left out of lead counts. */
+  counted?: boolean;
 };
-export type RoiPayment = { id: string; partyId: string; day: string; kind: "sale" | "collection"; net: number };
+/** `gross` defaults to `net` (no GST). */
+export type RoiPayment = { id: string; partyId: string; day: string; kind: "sale" | "collection"; net: number; gross?: number };
 export type RoiRefund = { partyId: string; day: string; amount: number };
 export type RoiSpend = { day: string; amount: number };
 export type Verification = "verified" | "pending" | "none";
-export type RoiEnrollment = AcquisitionFacts & { day: string; verification: Verification };
+export type RoiEnrollment = AcquisitionFacts & {
+  day: string;
+  verification: Verification;
+  /** The candidate, when known: the enrollment then follows their first lead's channel. */
+  partyId?: string | null;
+  /** The candidate already had a won deal before this one. */
+  earlierWin?: boolean;
+};
 
 export type MetaRoiInput = {
   /** IST today, YYYY-MM-DD. */
@@ -92,6 +110,8 @@ export type MetaRoiInput = {
   manualSpend: Record<string, number>;
   /** Every candidate payment since the ledger began (to tell a first sale from a repeat). */
   payments: RoiPayment[];
+  /** Candidates with a "Sales" payment from before DesGro: any sale since is a repeat. No money is counted from these. */
+  priorSaleParties?: string[];
   refunds: RoiRefund[];
   /** The window's Meta-ish leads, plus every lead of a candidate who paid. */
   leads: RoiLead[];
@@ -223,8 +243,10 @@ export function buildMetaRoi(input: MetaRoiInput): MetaRoiReport {
     return channelOf({ sourceCode: input.partySourceCode[partyId] ?? null, originalSourceCode: null, adEvidence: false });
   };
 
-  // A candidate's first "Sales" payment is the new sale; later ones are repeat services.
-  const sawSale = new Set<string>();
+  // A candidate's first "Sales" payment is the new sale; later ones (and any
+  // after a sale before DesGro) are repeat services.
+  const priorSales = new Set(input.priorSaleParties ?? []);
+  const sawSale = new Set(priorSales);
   const classified = [...input.payments].sort(byDayThenId).map((p) => {
     let kind: "new" | "repeat" | "collection" = "collection";
     if (p.kind === "sale") {
@@ -233,7 +255,19 @@ export function buildMetaRoi(input: MetaRoiInput): MetaRoiReport {
     }
     return { ...p, cls: kind, channel: partyChannel(p.partyId) };
   });
-  const refunds = input.refunds.map((r) => ({ ...r, channel: partyChannel(r.partyId) }));
+  // A refund is booked gross; take it off at the candidate's own net-of-GST rate.
+  const paid = new Map<string, { net: number; gross: number }>();
+  for (const p of input.payments) {
+    const t = paid.get(p.partyId) ?? { net: 0, gross: 0 };
+    t.net += p.net;
+    t.gross += p.gross ?? p.net;
+    paid.set(p.partyId, t);
+  }
+  const refunds = input.refunds.map((r) => {
+    const t = paid.get(r.partyId);
+    const amount = t && t.gross > 0 ? r2((r.amount * t.net) / t.gross) : r.amount;
+    return { ...r, amount, channel: partyChannel(r.partyId) };
+  });
 
   // ── by calendar month ──
   const blank = (): Omit<MonthRow, "month" | "manualSpend"> => ({
@@ -277,14 +311,17 @@ export function buildMetaRoi(input: MetaRoiInput): MetaRoiReport {
     if (f.channel === "possible") both(monthOf(f.day), (r) => (r.possibleCash -= f.amount));
     if (f.channel === "meta") both(monthOf(f.day), (r) => (r.refunds += f.amount));
   }
-  const windowLeads = input.leads.filter((l) => inWindow.has(monthOf(l.day)) && channelOf(l) === "meta" && !isRepeat(l));
+  const windowLeads = input.leads.filter((l) => l.counted !== false && inWindow.has(monthOf(l.day)) && channelOf(l) === "meta" && !isRepeat(l));
   for (const l of windowLeads) both(monthOf(l.day), (r) => (r.leads += 1));
   for (const e of input.enrollments) {
-    const ch = channelOf(e);
+    // Credited like the candidate's money: to their first lead.
+    const first = e.partyId ? acquisition.get(e.partyId) : undefined;
+    const ch = first ? channelOf(first) : channelOf(e);
+    const repeat = isRepeat(e) || !!e.earlierWin || (!!e.partyId && priorSales.has(e.partyId));
     both(monthOf(e.day), (r) => {
-      if (ch === "possible" && !isRepeat(e)) r.possibleEnrollments += 1;
+      if (ch === "possible" && !repeat) r.possibleEnrollments += 1;
       if (ch !== "meta") return;
-      if (isRepeat(e)) r.repeatEnrollments += 1;
+      if (repeat) r.repeatEnrollments += 1;
       else {
         r.newEnrollments += 1;
         if (e.verification === "verified") r.verifiedEnrollments += 1;
@@ -312,11 +349,12 @@ export function buildMetaRoi(input: MetaRoiInput): MetaRoiReport {
     cashByParty.set(partyId, list);
   };
   for (const p of classified) addCash(p.partyId, p.day, p.net);
-  for (const f of input.refunds) addCash(f.partyId, f.day, -f.amount);
+  for (const f of refunds) addCash(f.partyId, f.day, -f.amount);
   const acquiredBy = new Map<string, string>(); // lead id → party id
   for (const [partyId, l] of acquisition) acquiredBy.set(l.id, partyId);
-  const cashOf = (leadId: string, upTo?: string) =>
-    (cashByParty.get(acquiredBy.get(leadId) ?? "") ?? []).reduce((s, c) => (upTo === undefined || c.day <= upTo ? s + c.amount : s), 0);
+  // Only money from the lead's day on: a payment before the lead isn't its doing.
+  const cashOf = (l: RoiLead, upTo?: string) =>
+    (cashByParty.get(acquiredBy.get(l.id) ?? "") ?? []).reduce((s, c) => (c.day >= l.day && (upTo === undefined || c.day <= upTo) ? s + c.amount : s), 0);
 
   const todayMonth = monthOf(today);
   const cohorts: CohortRow[] = months.map((month) => {
@@ -326,16 +364,16 @@ export function buildMetaRoi(input: MetaRoiInput): MetaRoiReport {
     const roasAt = {} as Record<CohortDay, number | null>;
     for (const d of COHORT_DAYS) {
       const old = plusDays(monthEnd(month), d) <= today;
-      cashAt[d] = old ? r2(members.reduce((s, l) => s + cashOf(l.id, plusDays(l.day, d)), 0)) : null;
+      cashAt[d] = old ? r2(members.reduce((s, l) => s + cashOf(l, plusDays(l.day, d)), 0)) : null;
       roasAt[d] = cashAt[d] === null ? null : ratio(cashAt[d]!, spend);
     }
-    const cashToDate = r2(members.reduce((s, l) => s + cashOf(l.id), 0));
+    const cashToDate = r2(members.reduce((s, l) => s + cashOf(l), 0));
     let payback: Payback = null;
     if (spend > 0) {
       payback = { kind: "not_yet", recoveredPct: Math.round((cashToDate / spend) * 100) };
       for (let k = 0, m = month; m <= todayMonth; k++, m = addMonths(month, k)) {
         const end = monthEnd(m);
-        if (members.reduce((s, l) => s + cashOf(l.id, end), 0) >= spend) {
+        if (members.reduce((s, l) => s + cashOf(l, end), 0) >= spend) {
           payback = { kind: "paid_back", month: m, months: k };
           break;
         }
@@ -350,7 +388,7 @@ export function buildMetaRoi(input: MetaRoiInput): MetaRoiReport {
     const g = groups.get(l.campaign) ?? { campaign: l.campaign, leads: 0, enrolled: 0, cash: 0, cashPerEnrollment: null };
     g.leads += 1;
     if (l.won) g.enrolled += 1;
-    g.cash += cashOf(l.id);
+    g.cash += cashOf(l);
     groups.set(l.campaign, g);
   }
   const campaigns = [...groups.values()]
