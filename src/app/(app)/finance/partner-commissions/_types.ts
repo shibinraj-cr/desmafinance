@@ -1,5 +1,5 @@
 import type { EnrollmentDTO } from "@/lib/partner-commissions/server";
-import { enrollmentState, invoiceTotal } from "@/lib/partner-commissions/logic";
+import { assignVolume, commissionOf, enrollmentState, invoiceTotal, volumeFyMonths, volumeFyOf, type VolumeAssignment, type VolumeTier } from "@/lib/partner-commissions/logic";
 import type { EnrollmentState } from "@/lib/partner-commissions/constants";
 
 export type { EnrollmentDTO };
@@ -17,6 +17,10 @@ export type InvoiceLineDTO = {
   /** Set when the line is a flat commission (printed as "Flat"). */
   commissionFlat: number | null;
   amount: number;
+  /** Volume bonus included in commissionPct, and the enrollment's place in that financial year. */
+  volumeBonusPct: number | null;
+  volumeSeq: number | null;
+  volumeFy: string | null;
 };
 
 export type ReceiptDTO = {
@@ -80,7 +84,18 @@ export type SettingsDTO = {
   bdePrograms: string[];
 };
 
-export type PartnerDTO = { id: string; name: string; address: string; email: string | null; forLine: string | null; layout: string; isActive: boolean };
+export type PartnerDTO = {
+  id: string;
+  name: string;
+  address: string;
+  email: string | null;
+  forLine: string | null;
+  layout: string;
+  isActive: boolean;
+  volumeTiers: VolumeTier[];
+  /** Enrollments billed outside DesGro, per financial year. */
+  volumeOpening: Record<string, number>;
+};
 export type ProgramDTO = { code: string; configured: boolean; partnerId: string | null; courseName: string; defaultFee: number | null; defaultPct: number | null; defaultFlat: number | null; installmentPlans: number[]; isActive: boolean };
 
 export type PcPageData = {
@@ -114,4 +129,63 @@ export function setupGaps(s: SettingsDTO, partners: PartnerDTO[], programs: Prog
   if (!s.bankIban && !s.bankAccountNo) gaps.push("add the bank account");
   if (!s.signatoryName) gaps.push("name the signatory");
   return gaps;
+}
+
+/** Enrollments of a partner already on a DesGro invoice, for one financial year. */
+export function billedInFy(enrollments: EnrollmentDTO[], partnerId: string, fy: string): number {
+  const months = new Set(volumeFyMonths(fy));
+  return enrollments.filter((e) => e.partnerId === partnerId && e.invoice && months.has(e.intakeMonth)).length;
+}
+
+/**
+ * The volume numbers and bonus these enrollments would get if billed now, in
+ * this order — the same rule the server applies when it drafts the invoice.
+ */
+export function projectVolume(data: PcPageData, partnerId: string, items: EnrollmentDTO[]): Map<string, VolumeAssignment> {
+  const partner = data.partners.find((p) => p.id === partnerId);
+  if (!partner || partner.volumeTiers.length === 0) return new Map();
+  // The server bills in this order (fully paid date, then name).
+  items = [...items].sort((a, b) => (a.fullyPaidOn ?? "").localeCompare(b.fullyPaidOn ?? "") || (a.candidateName < b.candidateName ? -1 : a.candidateName > b.candidateName ? 1 : 0));
+  const ids = new Set(items.map((i) => i.id));
+  const others = data.enrollments.filter((e) => !ids.has(e.id));
+  const billed: Record<string, number> = {};
+  for (const fy of new Set(items.map((i) => volumeFyOf(i.intakeMonth)).filter((x): x is string => !!x))) billed[fy] = billedInFy(others, partnerId, fy);
+  return assignVolume({
+    tiers: partner.volumeTiers,
+    opening: partner.volumeOpening,
+    billed,
+    items: items.map((i) => ({ id: i.id, intakeMonth: i.intakeMonth, flat: i.commissionFlat != null })),
+  });
+}
+
+export type CommissionView = { amount: number; pct: number; flat: number | null; bonus: number; seq: number | null; fy: string | null; billed: boolean };
+
+/**
+ * What each enrollment is billed at (its invoice line), or would be if billed
+ * now (its own rate plus any projected volume bonus while it waits fully
+ * paid), else its own rate.
+ */
+export function commissionViews(data: PcPageData): Map<string, CommissionView> {
+  const out = new Map<string, CommissionView>();
+  const lineByEnrollment = new Map<string, InvoiceLineDTO>();
+  for (const inv of data.invoices) {
+    if (inv.status === "cancelled") continue;
+    for (const l of inv.lines) if (l.enrollmentId) lineByEnrollment.set(`${inv.id}:${l.enrollmentId}`, l);
+  }
+  const queued = data.enrollments.filter((e) => stateOf(e) === "fullypaid");
+  const projected = new Map<string, VolumeAssignment>();
+  for (const pid of new Set(queued.map((e) => e.partnerId))) {
+    for (const [id, v] of projectVolume(data, pid, queued.filter((e) => e.partnerId === pid))) projected.set(id, v);
+  }
+  for (const e of data.enrollments) {
+    const line = e.invoice ? lineByEnrollment.get(`${e.invoice.id}:${e.id}`) : undefined;
+    if (line) {
+      out.set(e.id, { amount: line.amount, pct: line.commissionPct, flat: line.commissionFlat, bonus: line.volumeBonusPct ?? 0, seq: line.volumeSeq, fy: line.volumeFy, billed: true });
+      continue;
+    }
+    const v = projected.get(e.id);
+    const pct = e.commissionPct + (v?.extraPct ?? 0);
+    out.set(e.id, { amount: commissionOf(e.courseFee, pct, e.commissionFlat), pct, flat: e.commissionFlat, bonus: v?.extraPct ?? 0, seq: v?.seq ?? null, fy: v?.fy ?? null, billed: false });
+  }
+  return out;
 }

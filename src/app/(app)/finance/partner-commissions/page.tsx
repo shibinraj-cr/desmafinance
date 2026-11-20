@@ -3,7 +3,7 @@ import { prisma } from "@/lib/prisma";
 import { TopBar } from "@/components/TopBar";
 import { todayIst } from "@/lib/lead-pulse-dates";
 import { PC_FINANCE_PAGE, PROGRAM_CODES } from "@/lib/partner-commissions/constants";
-import { nextRunDate } from "@/lib/partner-commissions/logic";
+import { nextRunDate, parseVolumeOpening, parseVolumeTiers } from "@/lib/partner-commissions/logic";
 import { ENROLLMENT_INCLUDE, getAccess, getSettings, isoDate, serializeEnrollment } from "@/lib/partner-commissions/server";
 import { PartnerCommissionsClient, type PcPageData } from "./client";
 
@@ -69,7 +69,17 @@ export default async function PartnerCommissionsPage({ searchParams }: { searchP
       emailAlerts: settings.emailAlerts,
       bdePrograms: settings.bdePrograms,
     },
-    partners: partners.map((p) => ({ id: p.id, name: p.name, address: p.address, email: p.email, forLine: p.forLine, layout: p.layout, isActive: p.isActive })),
+    partners: partners.map((p) => ({
+      id: p.id,
+      name: p.name,
+      address: p.address,
+      email: p.email,
+      forLine: p.forLine,
+      layout: p.layout,
+      isActive: p.isActive,
+      volumeTiers: parseVolumeTiers(p.volumeTiers),
+      volumeOpening: parseVolumeOpening(p.volumeOpening),
+    })),
     programs: PROGRAM_CODES.map((code) => {
       const p = programs.find((x) => x.code === code);
       return {
@@ -116,6 +126,9 @@ export default async function PartnerCommissionsPage({ searchParams }: { searchP
         commissionPct: Number(l.commissionPct),
         commissionFlat: l.commissionFlat == null ? null : Number(l.commissionFlat),
         amount: Number(l.amount),
+        volumeBonusPct: l.volumeBonusPct == null ? null : Number(l.volumeBonusPct),
+        volumeSeq: l.volumeSeq,
+        volumeFy: l.volumeFy,
       })),
       receipts: i.receipts.map((r) => ({
         id: r.id,

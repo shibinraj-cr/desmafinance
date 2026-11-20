@@ -25,15 +25,17 @@ import {
   amountInWords,
   commissionOf,
   fmtInvoiceNumber,
+  fmtMoney,
   isEditableInvoice,
   looksLikeSeries,
   openAud,
   round2,
   splitByProgram,
   suggestInvoiceNumber,
+  volumeLineLabel,
 } from "@/lib/partner-commissions/logic";
 import { LEDGER } from "@/lib/partner-commissions/constants";
-import { stateOf, totalOf, type InvoiceDTO, type InvoiceLineDTO, type PcPageData, type ReceiptDTO, type SettingsDTO } from "./_types";
+import { projectVolume, stateOf, totalOf, type InvoiceDTO, type InvoiceLineDTO, type PcPageData, type ReceiptDTO, type SettingsDTO } from "./_types";
 import type { PcCtx } from "./client";
 
 const BASE = "/api/finance/partner-commissions";
@@ -50,7 +52,12 @@ function InvoiceList({ ctx }: { ctx: PcCtx }) {
   const { data } = ctx;
   const [generating, setGenerating] = useState(false);
   const queued = data.enrollments.filter((e) => stateOf(e) === "fullypaid");
-  const qAud = queued.reduce((s, e) => s + commissionOf(e.courseFee, e.commissionPct, e.commissionFlat), 0);
+  // Includes any volume bonus each would get if billed now.
+  const qAud = [...new Set(queued.map((e) => e.partnerId))].reduce((sum, pid) => {
+    const rows = queued.filter((e) => e.partnerId === pid);
+    const vol = projectVolume(data, pid, rows);
+    return sum + rows.reduce((t, e) => t + commissionOf(e.courseFee, e.commissionPct + (vol.get(e.id)?.extraPct ?? 0), e.commissionFlat), 0);
+  }, 0);
   return (
     <div className="flex flex-col gap-md">
       <div className={`${cardCls} flex flex-wrap items-center gap-md px-md py-sm`}>
@@ -177,7 +184,9 @@ function GenerateModal({ ctx, onClose }: { ctx: PcCtx; onClose: () => void }) {
       <Field label="Invoice date"><input className={`${inputCls} !w-48`} type="date" value={date} onChange={(e) => setDate(e.target.value)} /></Field>
       {partnerIds.map((pid) => {
         const rows = queued.filter((e) => e.partnerId === pid);
-        const sum = rows.filter((e) => picked.has(e.id)).reduce((s, e) => s + commissionOf(e.courseFee, e.commissionPct, e.commissionFlat), 0);
+        const vol = projectVolume(data, pid, rows.filter((e) => picked.has(e.id)));
+        const pctOf = (e: (typeof rows)[number]) => e.commissionPct + (vol.get(e.id)?.extraPct ?? 0);
+        const sum = rows.filter((e) => picked.has(e.id)).reduce((s, e) => s + commissionOf(e.courseFee, pctOf(e), e.commissionFlat), 0);
         return (
           <div key={pid} className="border border-outline-variant rounded-lg p-sm flex flex-col gap-2">
             <div className="flex flex-wrap items-end gap-sm justify-between">
@@ -187,8 +196,16 @@ function GenerateModal({ ctx, onClose }: { ctx: PcCtx; onClose: () => void }) {
             {rows.map((e) => (
               <label key={e.id} className="flex items-center gap-2 text-body-md">
                 <input type="checkbox" checked={picked.has(e.id)} onChange={(x) => { const n = new Set(picked); if (x.target.checked) n.add(e.id); else n.delete(e.id); setPicked(n); }} />
-                <span className="flex-1">{e.candidateName} <ProgramTag code={e.program} /> <span className="text-caption text-on-surface-variant">fully paid {fmtDate(e.fullyPaidOn)}</span></span>
-                <span className="tabular-nums">{AUD(commissionOf(e.courseFee, e.commissionPct, e.commissionFlat))}</span>
+                <span className="flex-1">
+                  {e.candidateName} <ProgramTag code={e.program} /> <span className="text-caption text-on-surface-variant">fully paid {fmtDate(e.fullyPaidOn)}</span>
+                  {vol.get(e.id) ? (
+                    <span className="text-caption text-on-surface-variant">
+                      {" "}· #{vol.get(e.id)!.seq} of FY {vol.get(e.id)!.fy}
+                      {vol.get(e.id)!.extraPct ? <b className="text-on-surface"> · {e.commissionPct}% + {vol.get(e.id)!.extraPct}% volume</b> : null}
+                    </span>
+                  ) : null}
+                </span>
+                <span className="tabular-nums">{AUD(commissionOf(e.courseFee, picked.has(e.id) ? pctOf(e) : e.commissionPct, e.commissionFlat))}</span>
               </label>
             ))}
             <div className="text-right text-body-md">Total <b className="tabular-nums">{AUD(sum)}</b></div>
@@ -395,6 +412,12 @@ function InvoiceEditor({ ctx, inv }: { ctx: PcCtx; inv: InvoiceDTO }) {
                     <b className="ml-auto tabular-nums">{AUD(pv.amount)}</b>
                   </div>
                 )}
+                {volumeLineLabel(l) ? (
+                  <span className="text-caption text-on-surface-variant">
+                    {volumeLineLabel(l)}
+                    {l.volumeBonusPct ? ` — included in the %; the enrollment's own rate is ${fmtMoney(l.commissionPct - l.volumeBonusPct)}%.` : ""}
+                  </span>
+                ) : null}
               </div>
             );
           })}

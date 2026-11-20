@@ -6924,23 +6924,31 @@ model EsignImportRecord {
 
 /// An institution DESMA earns commission from (e.g. the NCLEX/OSCE provider).
 model CommissionPartner {
-  id        String   @id @default(cuid())
-  name      String   @unique
+  id            String   @id @default(cuid())
+  name          String   @unique
   /// Multi-line postal address, printed under BILL TO.
-  address   String   @default("")
-  email     String?
+  address       String   @default("")
+  email         String?
   /// Optional "FOR:" line under the bill-to block.
-  forLine   String?
+  forLine       String?
   /// "compact" = program in the description ("Name | OSCE | Full Fee Paid");
   /// "detailed" = separate Student ID and Course columns.
-  layout    String   @default("compact")
-  isActive  Boolean  @default(true)
+  layout        String   @default("compact")
+  isActive      Boolean  @default(true)
+  /// Volume bonus, counted per Australian financial year (July–June, by intake
+  /// month): [{ from: 51, extraPct: 5 }, { from: 101, extraPct: 10 }] = the
+  /// 51st–100th enrollment billed that year earns 5% more, the 101st on 10%
+  /// more. Each program enrollment counts once. Empty = no volume bonus.
+  volumeTiers   Json     @default("[]")
+  /// Enrollments billed outside DesGro, per financial year — counted before
+  /// DesGro's own, e.g. { "2025-26": 71 }.
+  volumeOpening Json     @default("{}")
   /// Party used as the counterparty on the Revenue rows. Filled on first
   /// posting when unset.
-  partyId   String?
-  party     Party?   @relation(fields: [partyId], references: [id], onDelete: SetNull)
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  partyId       String?
+  party         Party?   @relation(fields: [partyId], references: [id], onDelete: SetNull)
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
 
   programs    CommissionProgram[]
   enrollments CommissionEnrollment[]
@@ -7092,6 +7100,13 @@ model CommissionInvoiceLine {
   commissionFlat Decimal?              @db.Decimal(12, 2)
   /// AUD, courseFee × commissionPct / 100.
   amount         Decimal               @db.Decimal(12, 2)
+  /// Volume bonus included in commissionPct (e.g. 5 of 25%), fixed when the
+  /// line was billed. Null = none. The enrollment keeps the base rate.
+  volumeBonusPct Decimal?              @db.Decimal(5, 2)
+  /// This enrollment's place in the partner's financial-year count (e.g. 72),
+  /// and that year ("2025-26"). Set only for partners with volume tiers.
+  volumeSeq      Int?
+  volumeFy       String?
 
   @@index([invoiceId])
   @@index([enrollmentId])

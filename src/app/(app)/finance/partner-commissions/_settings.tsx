@@ -3,8 +3,8 @@
 import { useState } from "react";
 import { Callout, Field, Icon, ProgramTag, api, btnCls, cardCls, inputCls, linkBtnCls, primaryBtnCls } from "@/components/partner-commissions/ui";
 import { LEDGER, MAX_INSTALLMENTS, PROGRAM_CODES } from "@/lib/partner-commissions/constants";
-import { parsePlans, suggestInvoiceNumber } from "@/lib/partner-commissions/logic";
-import type { PartnerDTO, ProgramDTO } from "./_types";
+import { parsePlans, suggestInvoiceNumber, volumeExtraPct, volumeFyOfDate, volumeTiersLabel } from "@/lib/partner-commissions/logic";
+import { billedInFy, type PartnerDTO, type ProgramDTO } from "./_types";
 import type { PcCtx } from "./client";
 
 const URL_SETTINGS = "/api/finance/partner-commissions/settings";
@@ -78,6 +78,7 @@ function PartnersCard({ ctx, ro }: { ctx: PcCtx; ro: boolean }) {
             <div className="flex-1 min-w-[220px]">
               <b>{p.name}</b>{!p.isActive ? <span className="text-caption text-on-surface-variant"> · inactive</span> : null}
               <div className="text-caption text-on-surface-variant whitespace-pre-line">{[p.address, p.email, p.forLine ? `FOR: ${p.forLine}` : null].filter(Boolean).join("\n")}</div>
+              <VolumeSummary ctx={ctx} partner={p} />
             </div>
             <span className="text-caption text-on-surface-variant">{p.layout === "detailed" ? "Student ID and Course columns" : "Program in the description"}</span>
             {!ro && !editing ? <button className={linkBtnCls} onClick={() => setEditing(p)}>Edit</button> : null}
@@ -96,6 +97,9 @@ function PartnerForm({ ctx, partner, onDone }: { ctx: PcCtx; partner: PartnerDTO
   const [forLine, setForLine] = useState(partner?.forLine ?? "");
   const [layout, setLayout] = useState(partner?.layout ?? "compact");
   const [active, setActive] = useState(partner?.isActive ?? true);
+  const [tiers, setTiers] = useState<TierRow[]>(() => (partner?.volumeTiers ?? []).map((t) => ({ from: String(t.from), extra: String(t.extraPct) })));
+  const [opening, setOpening] = useState<OpeningRow[]>(() => Object.entries(partner?.volumeOpening ?? {}).map(([fy, n]) => ({ fy, count: String(n) })));
+  const [localErr, setLocalErr] = useState<string | null>(null);
   const { busy, err, save } = useSaver(ctx);
   return (
     <div className="border border-primary-container bg-primary-fixed/20 rounded-lg p-sm flex flex-col gap-sm">
@@ -114,14 +118,18 @@ function PartnerForm({ ctx, partner, onDone }: { ctx: PcCtx; partner: PartnerDTO
         </div>
       </div>
       <label className="flex items-center gap-2 text-body-md"><input type="checkbox" checked={active} onChange={(e) => setActive(e.target.checked)} />Active</label>
-      {err ? <p className="text-body-md text-error font-medium">{err}</p> : null}
+      <VolumeEditor today={ctx.data.today} tiers={tiers} setTiers={setTiers} opening={opening} setOpening={setOpening} />
+      {localErr ?? err ? <p className="text-body-md text-error font-medium">{localErr ?? err}</p> : null}
       <div className="flex gap-2 justify-end">
         <button className={btnCls} onClick={onDone} disabled={busy}>Cancel</button>
         <button
           className={primaryBtnCls}
           disabled={busy}
           onClick={async () => {
-            if (await save({ action: "partner", id: partner?.id ?? null, name, address, email: email || null, forLine: forLine || null, layout, isActive: active }, partner ? "Partner saved." : `${name} added.`)) onDone();
+            const vol = volumeBody(tiers, opening);
+            setLocalErr(typeof vol === "string" ? vol : null);
+            if (typeof vol === "string") return;
+            if (await save({ action: "partner", id: partner?.id ?? null, name, address, email: email || null, forLine: forLine || null, layout, isActive: active, ...vol }, partner ? "Partner saved." : `${name} added.`)) onDone();
           }}
         >
           Save partner
@@ -129,6 +137,125 @@ function PartnerForm({ ctx, partner, onDone }: { ctx: PcCtx; partner: PartnerDTO
       </div>
     </div>
   );
+}
+
+/** Financial years worth showing: the current one and the two before it ("2026-27", "2025-26", "2024-25"). */
+function recentFys(today: string): string[] {
+  const cur = Number(volumeFyOfDate(today).slice(0, 4));
+  return [cur, cur - 1, cur - 2].map((y) => `${y}-${String(y + 1).slice(-2)}`);
+}
+
+function VolumeSummary({ ctx, partner }: { ctx: PcCtx; partner: PartnerDTO }) {
+  if (partner.volumeTiers.length === 0) return null;
+  const rows = recentFys(ctx.data.today)
+    .map((fy, i) => {
+      const outside = partner.volumeOpening[fy] ?? 0;
+      const inDesGro = billedInFy(ctx.data.enrollments, partner.id, fy);
+      return { fy, outside, total: outside + inDesGro, current: i === 0 };
+    })
+    .filter((r) => r.current || r.total > 0);
+  return (
+    <div className="mt-1.5 text-caption">
+      <div><b>Volume bonus</b> {volumeTiersLabel(partner.volumeTiers)} <span className="text-on-surface-variant">(per financial year, July–June, by intake month)</span></div>
+      {rows.map((r) => {
+        const extra = volumeExtraPct(partner.volumeTiers, r.total + 1);
+        return (
+          <div key={r.fy} className="text-on-surface-variant tabular-nums">
+            FY {r.fy}: {r.total} billed{r.outside ? ` (${r.outside} outside DesGro)` : ""} · next is #{r.total + 1}{extra ? `, at +${extra}%` : ""}
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+type TierRow = { from: string; extra: string };
+type OpeningRow = { fy: string; count: string };
+
+function VolumeEditor({
+  today,
+  tiers,
+  setTiers,
+  opening,
+  setOpening,
+}: {
+  today: string;
+  tiers: TierRow[];
+  setTiers: (t: TierRow[]) => void;
+  opening: OpeningRow[];
+  setOpening: (o: OpeningRow[]) => void;
+}) {
+  const fys = recentFys(today);
+  function addTier() {
+    const last = tiers[tiers.length - 1];
+    setTiers([...tiers, last ? { from: String((parseInt(last.from) || 1) + 50), extra: String((parseFloat(last.extra) || 0) + 5) } : { from: "51", extra: "5" }]);
+  }
+  return (
+    <div className="border-t border-outline-variant pt-sm flex flex-col gap-2">
+      <div>
+        <h5 className="font-semibold text-body-md">Volume bonus</h5>
+        <p className="text-caption text-on-surface-variant">
+          Extra commission once enough enrollments are billed in an Australian financial year (July–June, by intake month). Each program enrollment counts once, so one
+          candidate in NCLEX and OSCE counts twice. The highest tier reached applies, added to the enrollment&apos;s own rate (20% + 5% = 25%). Leave empty for none.
+        </p>
+      </div>
+      {tiers.map((t, i) => (
+        <div key={i} className="flex items-center gap-1.5 text-body-md flex-wrap">
+          <span>From enrollment #</span>
+          <input className={`${inputCls} !w-24 tabular-nums`} type="number" min={2} step={1} value={t.from} aria-label={`Tier ${i + 1} starts at enrollment`} onChange={(e) => setTiers(tiers.map((x, j) => (j === i ? { ...x, from: e.target.value } : x)))} />
+          <span>add</span>
+          <input className={`${inputCls} !w-20 tabular-nums`} type="number" min={0.5} max={100} step={0.5} value={t.extra} aria-label={`Tier ${i + 1} extra %`} onChange={(e) => setTiers(tiers.map((x, j) => (j === i ? { ...x, extra: e.target.value } : x)))} />
+          <span>% more commission</span>
+          <button type="button" className="h-8 w-8 grid place-items-center rounded hover:bg-surface-container" aria-label={`Remove tier ${i + 1}`} onClick={() => setTiers(tiers.filter((_, j) => j !== i))}><Icon name="close" /></button>
+        </div>
+      ))}
+      {tiers.length < 5 ? <div><button type="button" className={btnCls} onClick={addTier}><Icon name="add" />Add tier</button></div> : null}
+      {tiers.length > 0 ? (
+        <div className="flex flex-col gap-1.5 mt-1">
+          <span className="text-label-sm font-semibold text-on-surface-variant">Enrollments billed outside DesGro (counted before DesGro&apos;s own)</span>
+          {opening.map((o, i) => (
+            <div key={i} className="flex items-center gap-1.5 text-body-md flex-wrap">
+              <span>FY</span>
+              <select className={`${inputCls} !w-32`} value={o.fy} aria-label={`Financial year ${i + 1}`} onChange={(e) => setOpening(opening.map((x, j) => (j === i ? { ...x, fy: e.target.value } : x)))}>
+                {[...new Set([o.fy, ...fys])].map((fy) => <option key={fy} value={fy}>{fy}</option>)}
+              </select>
+              <input className={`${inputCls} !w-24 tabular-nums`} type="number" min={0} step={1} value={o.count} aria-label={`Billed outside DesGro in ${o.fy}`} onChange={(e) => setOpening(opening.map((x, j) => (j === i ? { ...x, count: e.target.value } : x)))} />
+              <span>enrollments</span>
+              <button type="button" className="h-8 w-8 grid place-items-center rounded hover:bg-surface-container" aria-label={`Remove ${o.fy}`} onClick={() => setOpening(opening.filter((_, j) => j !== i))}><Icon name="close" /></button>
+            </div>
+          ))}
+          {opening.length < fys.length ? (
+            <div>
+              <button type="button" className={btnCls} onClick={() => setOpening([...opening, { fy: fys.find((f) => !opening.some((o) => o.fy === f)) ?? fys[0], count: "" }])}>
+                <Icon name="add" />Add a year
+              </button>
+            </div>
+          ) : null}
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+/** Editor rows → what the API takes, or an error to show. */
+function volumeBody(tiers: TierRow[], opening: OpeningRow[]): { volumeTiers: Array<{ from: number; extraPct: number }>; volumeOpening: Record<string, number> } | string {
+  const volumeTiers: Array<{ from: number; extraPct: number }> = [];
+  for (const t of tiers) {
+    const from = Number(t.from);
+    const extraPct = Number(t.extra);
+    if (!Number.isInteger(from) || from < 2) return "Each volume tier needs a starting enrollment number (2 or more).";
+    if (!(extraPct > 0 && extraPct <= 100)) return "Each volume tier needs an extra % above 0.";
+    volumeTiers.push({ from, extraPct });
+  }
+  const volumeOpening: Record<string, number> = {};
+  for (const o of opening) {
+    if (o.count.trim() === "") continue;
+    const n = Number(o.count);
+    if (!Number.isInteger(n) || n < 0) return `Enter a whole number billed outside DesGro for FY ${o.fy}.`;
+    if (o.fy in volumeOpening) return `FY ${o.fy} is listed twice.`;
+    volumeOpening[o.fy] = n;
+  }
+  return { volumeTiers, volumeOpening };
 }
 
 // ── programs ─────────────────────────────────────────────────────────────────
