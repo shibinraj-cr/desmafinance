@@ -19,6 +19,7 @@ import {
 } from "@/lib/crm-leads";
 import { openRemarketingCampaign, stopRemarketingCampaigns } from "@/lib/crm-remarketing";
 import { syncPipelineToLeadStatus } from "@/lib/crm-enroll";
+import { leadEnrollment } from "@/lib/crm-enrollment";
 import { REMARKETING_STATUS_CODE } from "@/lib/crm-reinquiry";
 import { assignLeadTo } from "@/lib/crm-assign";
 import { QualityInputSchema, resolveQualityChange, type QualityChange } from "@/lib/crm-lead-quality-data";
@@ -37,10 +38,26 @@ export const GET = withApiHandler(async (_req: Request, { params }: Ctx) => {
 
   const lead = await prisma.lead.findUnique({ where: { id: params.id }, include: leadRowInclude });
   if (!lead) throw notFound();
+  // Where Finance is with the enrollment, as the web lead page shows it, so the
+  // app can show it too and let the BDE fix one Finance sent back.
+  const enrollment = lead.status.code === "enrolled" ? await leadEnrollment(lead.id) : null;
   return NextResponse.json({
     lead: serializeLead(lead),
     canEdit: canEditLead(access, lead, userId),
     canAddNote: canAddNote(access, lead, userId),
+    // Whoever may reverse an enrollment may also date one in an earlier month (as on the web).
+    canBackdate: access.canUnenroll,
+    enrollment: enrollment
+      ? {
+          status: enrollment.status,
+          exception: enrollment.exception,
+          exceptionNote: enrollment.exceptionNote,
+          financeNote: enrollment.financeNote,
+          fields: enrollment.fields,
+          verifiedAt: enrollment.verifiedAt,
+          invoiceNumber: enrollment.invoice?.number ?? null,
+        }
+      : null,
   });
 });
 
