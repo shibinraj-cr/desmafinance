@@ -34,6 +34,7 @@ const Body = z.discriminatedUnion("action", [
     isActive: z.boolean().optional(),
     volumeTiers: z.array(z.object({ from: z.number().int(), extraPct: z.number() })).max(5).optional(),
     volumeOpening: z.record(z.string().max(10), z.number().int()).optional(),
+    paymentMode: z.string().max(40).optional(),
   }),
   z.object({
     action: z.literal("program"),

@@ -4,7 +4,7 @@ import { useState } from "react";
 import { AED, AUD, Callout, Field, INR, Icon, Pill, api, btnCls, cardCls, fmtDate, inputCls, linkBtnCls, primaryBtnCls } from "@/components/partner-commissions/ui";
 import { splitByProgram } from "@/lib/partner-commissions/logic";
 import { LEDGER } from "@/lib/partner-commissions/constants";
-import { totalOf, type InvoiceDTO, type ReceiptDTO } from "./_types";
+import { accountOf, totalOf, type InvoiceDTO, type ReceiptDTO } from "./_types";
 import { LedgerRows } from "./_invoices";
 import type { PcCtx } from "./client";
 
@@ -43,9 +43,9 @@ export function PaymentsTab({ ctx }: { ctx: PcCtx }) {
                   <td className="px-sm py-2.5">{inv.billToName}</td>
                   <td className="px-sm py-2.5 tabular-nums">{fmtDate(r.receivedOn)}</td>
                   <td className="px-sm py-2.5 text-right tabular-nums">{AUD(r.audSettled)}</td>
-                  <td className="px-sm py-2.5 text-right tabular-nums">{AED(r.aedAmount)}</td>
-                  <td className="px-sm py-2.5 text-right tabular-nums">{(r.aedAmount / r.audSettled).toFixed(4)}</td>
-                  <td className="px-sm py-2.5 text-right tabular-nums">{r.aedInrRate.toFixed(4)}</td>
+                  <td className="px-sm py-2.5 text-right tabular-nums">{r.aedAmount > 0 ? AED(r.aedAmount) : <span title={`Paid into ${inv.paymentMode} in INR`}>— {inv.paymentMode}</span>}</td>
+                  <td className="px-sm py-2.5 text-right tabular-nums">{r.aedAmount > 0 ? (r.aedAmount / r.audSettled).toFixed(4) : "—"}</td>
+                  <td className="px-sm py-2.5 text-right tabular-nums">{r.aedAmount > 0 ? r.aedInrRate.toFixed(4) : "—"}</td>
                   <td className="px-sm py-2.5 text-right tabular-nums font-semibold">{INR(r.inrAmount)}</td>
                   <td className="px-sm py-2.5">{r.recordedBy ?? "—"}</td>
                 </tr>
@@ -67,7 +67,7 @@ export function PaymentsTab({ ctx }: { ctx: PcCtx }) {
                 {returned.map(({ inv, r }) => (
                   <tr key={r.id} className="border-t border-outline-variant/60">
                     <td className="px-sm py-2.5 tabular-nums">{inv.number}</td>
-                    <td className="px-sm py-2.5 text-right tabular-nums">{AED(r.aedAmount)}</td>
+                    <td className="px-sm py-2.5 text-right tabular-nums">{r.aedAmount > 0 ? AED(r.aedAmount) : "—"}</td>
                     <td className="px-sm py-2.5 text-right tabular-nums">{INR(r.inrAmount)}</td>
                     <td className="px-sm py-2.5">{r.reviewNote ?? "No reason given"}{r.reviewedBy ? <span className="text-caption text-on-surface-variant"> · {r.reviewedBy}</span> : null}</td>
                     <td className="px-sm py-2.5"><button className={linkBtnCls} onClick={() => ctx.go("invoices", inv.id)}>Record again</button></td>
@@ -96,8 +96,8 @@ export function PaymentsTab({ ctx }: { ctx: PcCtx }) {
                   <td className="px-sm py-2.5 tabular-nums">{fmtDate(r.reviewedAt?.slice(0, 10))}</td>
                   <td className="px-sm py-2.5 tabular-nums">{inv.number}</td>
                   <td className="px-sm py-2.5">{inv.billToName}</td>
-                  <td className="px-sm py-2.5 text-right tabular-nums">{AED(r.aedAmount)}</td>
-                  <td className="px-sm py-2.5 text-right tabular-nums">{r.aedInrRate.toFixed(4)}</td>
+                  <td className="px-sm py-2.5 text-right tabular-nums">{r.aedAmount > 0 ? AED(r.aedAmount) : `— ${inv.paymentMode}`}</td>
+                  <td className="px-sm py-2.5 text-right tabular-nums">{r.aedAmount > 0 ? r.aedInrRate.toFixed(4) : "—"}</td>
                   <td className="px-sm py-2.5 text-right tabular-nums font-semibold">{INR(r.inrAmount)}</td>
                   <td className="px-sm py-2.5 text-caption">
                     {r.skipLedger ? "Already in the ledger" : splitByProgram(inv.lines, r.inrAmount).filter((p) => p.inr > 0).map((p) => <div key={p.program}>{LEDGER.subItem(p.program)} {INR(p.inr)}</div>)}
@@ -116,6 +116,8 @@ export function PaymentsTab({ ctx }: { ctx: PcCtx }) {
 function ReviewCard({ ctx, row }: { ctx: PcCtx; row: Row }) {
   const { data } = ctx;
   const { inv, r } = row;
+  // Wio: AED and its INR value. An Indian bank: the INR credited only.
+  const aedMode = accountOf(data, inv.paymentMode).ownSettings;
   const [aed, setAed] = useState(String(r.aedAmount));
   const [rate, setRate] = useState(r.aedInrRate.toFixed(4));
   const [inr, setInr] = useState(String(r.inrAmount));
@@ -124,7 +126,7 @@ function ReviewCard({ ctx, row }: { ctx: PcCtx; row: Row }) {
   const [err, setErr] = useState<string | null>(null);
   const aedN = parseFloat(aed);
   const inrN = parseFloat(inr);
-  const edited = aedN !== r.aedAmount || inrN !== r.inrAmount;
+  const edited = (aedMode && aedN !== r.aedAmount) || inrN !== r.inrAmount;
   const preview: ReceiptDTO = { ...r, aedAmount: aedN > 0 ? aedN : r.aedAmount, inrAmount: inrN > 0 ? inrN : r.inrAmount, aedInrRate: parseFloat(rate) || r.aedInrRate };
   const mixed = splitByProgram(inv.lines, 1).length > 1;
 
@@ -156,7 +158,7 @@ function ReviewCard({ ctx, row }: { ctx: PcCtx; row: Row }) {
       setBusy(false);
     }
   }
-  const figures = edited ? { aedAmount: aedN, inrAmount: inrN } : {};
+  const figures = edited ? (aedMode ? { aedAmount: aedN, inrAmount: inrN } : { inrAmount: inrN }) : {};
 
   return (
     <div className={`${cardCls} !border-primary-container p-md flex flex-col gap-sm`}>
@@ -169,12 +171,18 @@ function ReviewCard({ ctx, row }: { ctx: PcCtx; row: Row }) {
       </div>
       <div className="grid gap-sm grid-cols-[repeat(auto-fit,minmax(160px,1fr))]">
         <div className="flex flex-col gap-1"><span className="text-label-sm font-semibold text-on-surface-variant">Invoice</span><b className="tabular-nums py-2">{AUD(totalOf(inv))}</b></div>
-        <Field label="AED credited in Wio"><input className={inputCls} type="number" step="0.01" value={aed} onChange={(e) => onAed(e.target.value)} /></Field>
-        <Field label="AED → INR rate"><input className={inputCls} type="number" step="0.0001" value={rate} onChange={(e) => onRate(e.target.value)} /></Field>
-        <Field label="INR value"><input className={inputCls} type="number" step="1" value={inr} onChange={(e) => onInr(e.target.value)} /></Field>
+        {aedMode ? (
+          <>
+            <Field label="AED credited in Wio"><input className={inputCls} type="number" step="0.01" value={aed} onChange={(e) => onAed(e.target.value)} /></Field>
+            <Field label="AED → INR rate"><input className={inputCls} type="number" step="0.0001" value={rate} onChange={(e) => onRate(e.target.value)} /></Field>
+            <Field label="INR value"><input className={inputCls} type="number" step="1" value={inr} onChange={(e) => onInr(e.target.value)} /></Field>
+          </>
+        ) : (
+          <Field label={`INR credited in ${inv.paymentMode}`}><input className={inputCls} type="number" step="1" value={inr} onChange={(e) => setInr(e.target.value)} /></Field>
+        )}
       </div>
       <p className="text-caption text-on-surface-variant tabular-nums">
-        Settles {AUD(r.audSettled)} · AUD→AED {(preview.aedAmount / r.audSettled).toFixed(4)}{r.settleInFull ? " · closes the invoice in full" : ""}
+        Settles {AUD(r.audSettled)}{aedMode ? ` · AUD→AED ${(preview.aedAmount / r.audSettled).toFixed(4)}` : ` · into ${inv.paymentMode} · AUD→INR ${(preview.inrAmount / r.audSettled).toFixed(4)}`}{r.settleInFull ? " · closes the invoice in full" : ""}
       </p>
       {r.skipLedger ? (
         <Callout tone="gold" icon="info">Marked as <b>already in the ledger</b> (paid before DesGro tracked it). Approving marks the invoice paid without posting Revenue.</Callout>
@@ -192,7 +200,7 @@ function ReviewCard({ ctx, row }: { ctx: PcCtx; row: Row }) {
             <input className={`${inputCls} flex-1 min-w-[220px]`} placeholder="Reason, if you send it back" value={note} onChange={(e) => setNote(e.target.value)} aria-label="Reason for sending back" />
             <div className="flex gap-2">
               <button className={btnCls} disabled={busy} onClick={() => act({ action: "send-back", note: note || null }, "Sent back to whoever recorded it.")}>Send back</button>
-              <button className={primaryBtnCls} disabled={busy || !(aedN > 0) || !(inrN > 0)} onClick={() => act({ action: "approve", ...figures }, r.skipLedger ? "Approved. Marked paid without posting." : `Approved. ${INR(preview.inrAmount)} posted to Revenue › Commissions.`)}>
+              <button className={primaryBtnCls} disabled={busy || (aedMode && !(aedN > 0)) || !(inrN > 0)} onClick={() => act({ action: "approve", ...figures }, r.skipLedger ? "Approved. Marked paid without posting." : `Approved. ${INR(preview.inrAmount)} posted to Revenue › Commissions.`)}>
                 <Icon name="check" />Approve and post to Revenue
               </button>
             </div>

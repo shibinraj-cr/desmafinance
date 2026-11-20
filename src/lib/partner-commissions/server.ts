@@ -11,6 +11,7 @@ import { badRequest, conflict, forbidden, notFound, unauthorized, unprocessable 
 import { gstInAmount } from "@/lib/finance-gst";
 import { advisoryLock, candidateInvoiceNumberTaken, candidateStemState, laterNumber, lockInvoiceStem, stemOfNumber } from "@/lib/invoices/numbering";
 import { sameInvoiceNumber, stemVariants } from "@/lib/invoices/core";
+import { DEFAULT_ACCOUNT, EXPORT_SERIES_KEY, loadAccount } from "./accounts";
 import {
   LEDGER,
   MAX_INSTALLMENTS,
@@ -42,7 +43,6 @@ import {
   suggestInvoiceNumber,
   invoiceStem,
   type NumberStyle,
-  fyLabel,
   assignVolume,
   checkVolumeTiers,
   isVolumeFy,
@@ -429,8 +429,8 @@ export async function deleteEnrollment(a: PcAccess, id: string) {
 
 const QUEUED_WHERE = { status: "active", invoiceId: null, fullyPaidOn: { not: null } } satisfies Prisma.CommissionEnrollmentWhereInput;
 
-export async function suggestNumber(dateIso: string): Promise<string> {
-  return suggestNumberIn(prisma, await getSettings(), dateIso);
+export async function suggestNumber(dateIso: string, paymentMode: string = DEFAULT_ACCOUNT): Promise<string> {
+  return suggestNumberIn(prisma, await getSettings(), dateIso, paymentMode);
 }
 
 /**
@@ -444,22 +444,36 @@ async function numberStyle(db: Prisma.TransactionClient | typeof prisma, prefix:
 }
 
 /**
- * The next number, read through `db` (inside createInvoice's transaction, after
- * the stem lock). D/DLLC is shared with candidate invoices for Wio payments:
- * their numbers count as used and their series' floor applies here too, and
- * the number is written in that series' format. Numbers count whether their
- * year is written 26-27 or 2627.
+ * The series an account's invoices are numbered in. Wio (the UAE company):
+ * this module's prefix (D/DLLC/) in the candidate series' format, with its own
+ * "next number" floor. An Indian bank: Finance › Invoices' export series
+ * (E/DIPL/), shared with candidate export invoices.
  */
-async function suggestNumberIn(db: Prisma.TransactionClient | typeof prisma, settings: CommissionSettings, dateIso: string): Promise<string> {
-  const style = await numberStyle(db, settings.numberPrefix);
-  const stem = invoiceStem(settings.numberPrefix, dateIso, style);
+async function seriesFor(db: Prisma.TransactionClient | typeof prisma, settings: CommissionSettings, paymentMode: string): Promise<{ prefix: string; style: NumberStyle; floor: string | null }> {
+  const account = await loadAccount(db, paymentMode);
+  if (account.ownSettings) return { prefix: settings.numberPrefix, style: await numberStyle(db, settings.numberPrefix), floor: settings.nextNumber };
+  const s = await db.invoiceSeries.findUnique({ where: { key: EXPORT_SERIES_KEY }, select: { prefix: true, fyStyle: true, padding: true } });
+  return { prefix: s?.prefix || "E/DIPL/", style: { fyStyle: s?.fyStyle === "compact" ? "compact" : "dash", padding: s?.padding ?? 3 }, floor: null };
+}
+
+/**
+ * The next number for an account's series, read through `db` (inside
+ * createInvoice's transaction, after the stem lock). Each series is shared with
+ * candidate invoices (D/DLLC for Wio, E/DIPL for exports from India): their
+ * numbers count as used, their series' floor applies here too, and the number
+ * is written in that series' format. Numbers count whether their year is
+ * written 26-27 or 2627.
+ */
+async function suggestNumberIn(db: Prisma.TransactionClient | typeof prisma, settings: CommissionSettings, dateIso: string, paymentMode: string = DEFAULT_ACCOUNT): Promise<string> {
+  const { prefix, style, floor } = await seriesFor(db, settings, paymentMode);
+  const stem = invoiceStem(prefix, dateIso, style);
   const [own, candidate] = await Promise.all([
     db.commissionInvoice.findMany({ select: { number: true } }).then((r) => r.map((i) => i.number)),
     candidateStemState(db, stem),
   ]);
   const used = [...own, ...candidate.numbers];
-  const mine = suggestInvoiceNumber(settings.numberPrefix, dateIso, used, settings.nextNumber, style);
-  return candidate.floor ? laterNumber(mine, suggestInvoiceNumber(settings.numberPrefix, dateIso, used, candidate.floor, style)) : mine;
+  const mine = suggestInvoiceNumber(prefix, dateIso, used, floor, style);
+  return candidate.floor ? laterNumber(mine, suggestInvoiceNumber(prefix, dateIso, used, candidate.floor, style)) : mine;
 }
 
 /**
@@ -548,6 +562,7 @@ export async function createInvoice(opts: {
   const typed = clean(opts.number);
   if (typed && typed.length > 60) throw badRequest("That invoice number is too long.");
   const settings = typed ? null : await getSettings();
+  const series = settings ? await seriesFor(prisma, settings, partner.paymentMode) : null;
   // Picked inside the transaction, after the stem lock, so a candidate
   // invoice issued in the meantime can't take the same number.
   let number = typed ?? "";
@@ -555,8 +570,8 @@ export async function createInvoice(opts: {
     const invoice = await prisma.$transaction(async (tx) => {
       if (typed) await assertNumberFree(tx, typed);
       else {
-        await lockInvoiceStem(tx, `${settings!.numberPrefix}${fyLabel(opts.invoiceDate)}/`);
-        number = await suggestNumberIn(tx, settings!, opts.invoiceDate);
+        await lockInvoiceStem(tx, invoiceStem(series!.prefix, opts.invoiceDate, series!.style));
+        number = await suggestNumberIn(tx, settings!, opts.invoiceDate, partner.paymentMode);
       }
       const ens = await tx.commissionEnrollment.findMany({
         where: { id: { in: ids }, partnerId: partner.id, ...QUEUED_WHERE },
@@ -573,6 +588,7 @@ export async function createInvoice(opts: {
           billToAddress: partner.address,
           billToEmail: partner.email,
           billToFor: partner.forLine,
+          paymentMode: partner.paymentMode,
           source: opts.source,
           createdById: opts.userId,
         },
@@ -763,18 +779,30 @@ export type ReceiptInput = {
   skipLedger?: boolean;
 };
 
-function checkReceipt(r: ReceiptInput, today: string) {
-  if (!/^\d{4}-\d{2}-\d{2}$/.test(r.receivedOn)) throw badRequest("Pick the date the money reached Wio.");
+/**
+ * A payment's figures. Into Wio (`aed`): the AED credited and its INR value.
+ * Into an Indian bank: only the INR credited — the AED fields stay 0.
+ */
+function checkReceipt(r: ReceiptInput, today: string, aed: boolean, paymentMode: string) {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(r.receivedOn)) throw badRequest(`Pick the date the money reached ${paymentMode}.`);
   if (r.receivedOn > today) throw badRequest("The received date can't be in the future.");
-  if (!(r.aedAmount > 0)) throw badRequest("Enter the AED credited in Wio.");
-  if (!(r.inrAmount > 0)) throw badRequest("Enter the AED → INR rate or the INR value.");
+  if (aed && !(r.aedAmount > 0)) throw badRequest("Enter the AED credited in Wio.");
+  if (!(r.inrAmount > 0)) throw badRequest(aed ? "Enter the AED → INR rate or the INR value." : `Enter the INR credited in ${paymentMode}.`);
   if (!(r.audSettled > 0)) throw badRequest("Enter how much of the invoice (AUD) this payment settles.");
+}
+
+/** The stored AED fields: as entered for Wio, 0 for an account paid in INR. */
+function aedFields(r: ReceiptInput, aed: boolean) {
+  return aed
+    ? { aedAmount: round2(r.aedAmount), aedInrRate: Math.round((r.inrAmount / r.aedAmount) * 1e6) / 1e6 }
+    : { aedAmount: 0, aedInrRate: 0 };
 }
 
 export async function recordReceipt(a: PcAccess, invoiceId: string, r: ReceiptInput, approveNow: boolean) {
   if (!a.isFinance) throw forbidden();
-  checkReceipt(r, todayIst());
   const inv = await loadInvoice(invoiceId);
+  const aed = (await loadAccount(prisma, inv.paymentMode)).ownSettings;
+  checkReceipt(r, todayIst(), aed, inv.paymentMode);
   if (inv.status !== "sent" && inv.status !== "partpaid") {
     throw conflict(inv.status === "draft" ? "Mark the invoice as sent first." : "This invoice can't take a payment right now.");
   }
@@ -787,9 +815,8 @@ export async function recordReceipt(a: PcAccess, invoiceId: string, r: ReceiptIn
         invoiceId,
         receivedOn: toDate(r.receivedOn),
         audSettled: round2(r.audSettled),
-        aedAmount: round2(r.aedAmount),
+        ...aedFields(r, aed),
         inrAmount: round2(r.inrAmount),
-        aedInrRate: Math.round((r.inrAmount / r.aedAmount) * 1e6) / 1e6,
         reference: clean(r.reference),
         settleInFull: r.settleInFull,
         skipLedger: !!r.skipLedger,
@@ -804,15 +831,16 @@ export async function recordReceipt(a: PcAccess, invoiceId: string, r: ReceiptIn
   if (approveNow && a.canApprove) {
     return approveReceipt(a, receipt.id, null);
   }
-  await notifyApprovers(inv.number, inv.billToName, r.aedAmount, r.inrAmount).catch(() => undefined);
+  await notifyApprovers(inv.number, inv.billToName, aed ? r.aedAmount : null, r.inrAmount).catch(() => undefined);
   return { receiptId: receipt.id, approved: false as const };
 }
 
 export async function updateReceipt(a: PcAccess, id: string, r: Partial<ReceiptInput>) {
   if (!a.isFinance) throw forbidden();
-  const cur = await prisma.commissionReceipt.findUnique({ where: { id } });
+  const cur = await prisma.commissionReceipt.findUnique({ where: { id }, include: { invoice: { select: { paymentMode: true } } } });
   if (!cur) throw notFound();
   if (cur.status !== "awaiting") throw conflict("This payment has already been reviewed.");
+  const aed = (await loadAccount(prisma, cur.invoice.paymentMode)).ownSettings;
   const merged: ReceiptInput = {
     receivedOn: r.receivedOn ?? isoDate(cur.receivedOn)!,
     audSettled: r.audSettled ?? num(cur.audSettled),
@@ -822,15 +850,14 @@ export async function updateReceipt(a: PcAccess, id: string, r: Partial<ReceiptI
     settleInFull: r.settleInFull ?? cur.settleInFull,
     skipLedger: r.skipLedger ?? cur.skipLedger,
   };
-  checkReceipt(merged, todayIst());
+  checkReceipt(merged, todayIst(), aed, cur.invoice.paymentMode);
   await prisma.commissionReceipt.update({
     where: { id },
     data: {
       receivedOn: toDate(merged.receivedOn),
       audSettled: round2(merged.audSettled),
-      aedAmount: round2(merged.aedAmount),
+      ...aedFields(merged, aed),
       inrAmount: round2(merged.inrAmount),
-      aedInrRate: Math.round((merged.inrAmount / merged.aedAmount) * 1e6) / 1e6,
       reference: clean(merged.reference),
       settleInFull: merged.settleInFull,
       skipLedger: !!merged.skipLedger,
@@ -853,8 +880,9 @@ async function partnerPartyId(tx: Prisma.TransactionClient, partner: { id: strin
 
 /**
  * Approve a recorded payment: posts the INR value to Revenue › Commissions,
- * split by program, dated the day it reached Wio — unless the receipt is marked
- * as already in the ledger (cutover). Only the commission is ever booked.
+ * split by program, dated the day it reached the invoice's account and booked
+ * to that account (Wio, Axis, HDFC) as export revenue — unless the receipt is
+ * marked as already in the ledger (cutover). Only the commission is ever booked.
  */
 export async function approveReceipt(a: PcAccess, id: string, edits: Partial<ReceiptInput> | null) {
   if (!a.canApprove) throw forbidden("Only a Finance Manager or Admin can approve.");
@@ -878,7 +906,8 @@ export async function approveReceipt(a: PcAccess, id: string, edits: Partial<Rec
     }
   }
   const receivedOn = r.receivedOn;
-  const rate = num(r.aedInrRate).toFixed(4);
+  const mode = inv.paymentMode || LEDGER.paymentMode;
+  const via = num(r.aedAmount) > 0 ? `AED ${num(r.aedAmount)} @ ${num(r.aedInrRate).toFixed(4)}` : `INR into ${mode}`;
   const result = await prisma.$transaction(async (tx) => {
     const claimed = await tx.commissionReceipt.updateMany({
       where: { id, status: "awaiting" },
@@ -896,12 +925,12 @@ export async function approveReceipt(a: PcAccess, id: string, edits: Partial<Rec
             type: LEDGER.type,
             category: LEDGER.category,
             subItem: LEDGER.subItem(p.program),
-            description: `Commission · ${inv.number} · ${inv.billToName} · AED ${num(r.aedAmount)} @ ${rate}`.slice(0, 500),
-            paymentMode: LEDGER.paymentMode,
+            description: `Commission · ${inv.number} · ${inv.billToName} · ${via}`.slice(0, 500),
+            paymentMode: mode,
             amount: p.inr,
             flow: flowFor("Revenue"),
             expDom: LEDGER.expDom,
-            gstAmount: gstInAmount({ type: LEDGER.type, paymentMode: LEDGER.paymentMode, expDom: LEDGER.expDom, amount: p.inr }),
+            gstAmount: gstInAmount({ type: LEDGER.type, paymentMode: mode, expDom: LEDGER.expDom, amount: p.inr }),
             partyId,
             createdById: a.userId,
           },
@@ -976,9 +1005,10 @@ async function notifyUsers(userIds: string[], title: string, body: string, link 
   return count;
 }
 
-async function notifyApprovers(number: string, partner: string, aed: number, inr: number) {
+async function notifyApprovers(number: string, partner: string, aed: number | null, inr: number) {
   const ids = (await financeRecipients(true)).map((u) => u.id);
-  await notifyUsers(ids, "Commission payment awaiting approval", `${number} · ${partner} · AED ${aed} (₹${inr.toLocaleString("en-IN")}).`, `${LINK}?tab=payments`);
+  const amount = aed != null ? `AED ${aed} (₹${inr.toLocaleString("en-IN")})` : `₹${inr.toLocaleString("en-IN")}`;
+  await notifyUsers(ids, "Commission payment awaiting approval", `${number} · ${partner} · ${amount}.`, `${LINK}?tab=payments`);
 }
 
 function appBaseUrl(): string {
@@ -1136,6 +1166,8 @@ export type PartnerInput = {
   volumeTiers?: VolumeTier[];
   /** Enrollments billed outside DesGro per financial year ("2025-26" → 71); omitted = unchanged. */
   volumeOpening?: Record<string, number>;
+  /** The account the partner pays into (a Finance › Invoices bank); omitted = unchanged (Wio for a new partner). */
+  paymentMode?: string;
 };
 
 export async function savePartner(a: PcAccess, id: string | null, p: PartnerInput) {
@@ -1165,6 +1197,14 @@ export async function savePartner(a: PcAccess, id: string | null, p: PartnerInpu
       if (n > 0) opening[fy] = n;
     }
     data.volumeOpening = opening;
+  }
+  if (p.paymentMode !== undefined) {
+    const mode = p.paymentMode.trim();
+    const current = id ? (await prisma.commissionPartner.findUnique({ where: { id }, select: { paymentMode: true } }))?.paymentMode : null;
+    const bank = await prisma.invoiceBank.findUnique({ where: { paymentMode: mode } });
+    if (!bank && mode !== DEFAULT_ACCOUNT) throw badRequest("Pick one of the accounts set up in Finance › Invoices → Settings.");
+    if (bank && !bank.isActive && mode !== current) throw badRequest(`${mode} is switched off in Finance › Invoices → Settings.`);
+    data.paymentMode = mode;
   }
   try {
     const saved = id ? await prisma.commissionPartner.update({ where: { id }, data }) : await prisma.commissionPartner.create({ data });

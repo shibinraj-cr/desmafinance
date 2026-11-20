@@ -49,7 +49,7 @@ export type SeriesKey = (typeof SERIES_KEYS)[number];
 
 export const SERIES_LABEL: Record<SeriesKey, string> = {
   "DIPL-DOM": "India, domestic",
-  "DIPL-EXP": "India, export",
+  "DIPL-EXP": "India, export (shared with Partner Commissions)",
   "DLLC-DOM": "UAE (shared with Partner Commissions)",
 };
 

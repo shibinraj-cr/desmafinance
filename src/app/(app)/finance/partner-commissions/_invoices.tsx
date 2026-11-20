@@ -35,7 +35,8 @@ import {
   volumeLineLabel,
 } from "@/lib/partner-commissions/logic";
 import { LEDGER } from "@/lib/partner-commissions/constants";
-import { projectVolume, stateOf, totalOf, type InvoiceDTO, type InvoiceLineDTO, type PcPageData, type ReceiptDTO, type SettingsDTO } from "./_types";
+import { accountLine, accountOf, projectVolume, seriesPrefixOf, stateOf, totalOf, type AccountDTO, type InvoiceDTO, type InvoiceLineDTO, type PcPageData, type ReceiptDTO, type SettingsDTO } from "./_types";
+import { stemOfNumber } from "@/lib/invoices/core";
 import type { PcCtx } from "./client";
 
 const BASE = "/api/finance/partner-commissions";
@@ -133,12 +134,18 @@ function GenerateModal({ ctx, onClose }: { ctx: PcCtx; onClose: () => void }) {
   const [picked, setPicked] = useState<Set<string>>(new Set(queued.map((e) => e.id)));
   const [date, setDate] = useState(data.today);
   const initialNumbers = useMemo(() => {
-    // The server's next number in the shared series (Wio invoices included), then one up per partner.
+    // Each partner's account has its series (D/DLLC for Wio, E/DIPL for India),
+    // shared with candidate invoices: the server's next number there, then one
+    // up for each further partner in the same series.
     const out: Record<string, string> = {};
-    let n = data.suggestedNumber;
+    const next: Record<string, string> = {};
     for (const pid of partnerIds) {
+      const acct = accountOf(data, data.partners.find((p) => p.id === pid)?.paymentMode ?? "Wio Bank");
+      const first = acct.suggestedNumber || data.suggestedNumber;
+      const key = stemOfNumber(first).toUpperCase();
+      const n = next[key] ?? first;
       out[pid] = n;
-      n = bumpInvoiceNumber(n);
+      next[key] = bumpInvoiceNumber(n);
     }
     return out;
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -189,7 +196,10 @@ function GenerateModal({ ctx, onClose }: { ctx: PcCtx; onClose: () => void }) {
         return (
           <div key={pid} className="border border-outline-variant rounded-lg p-sm flex flex-col gap-2">
             <div className="flex flex-wrap items-end gap-sm justify-between">
-              <b>{rows[0].partnerName}</b>
+              <div>
+                <b>{rows[0].partnerName}</b>
+                <span className="block text-caption text-on-surface-variant">{accountLine(accountOf(data, data.partners.find((p) => p.id === pid)?.paymentMode ?? "Wio Bank"))}</span>
+              </div>
               <Field label="Invoice number"><input className={`${inputCls} !w-56 tabular-nums`} value={numbers[pid] ?? ""} onChange={(e) => setNumbers({ ...numbers, [pid]: e.target.value })} /></Field>
             </div>
             {rows.map((e) => (
@@ -315,7 +325,9 @@ function InvoiceEditor({ ctx, inv }: { ctx: PcCtx; inv: InvoiceDTO }) {
 
   const addable = data.enrollments.filter((e) => e.partnerId === inv.partnerId && stateOf(e) === "fullypaid");
   const awaiting = inv.receipts.find((r) => r.status === "awaiting");
-  const seriesOk = looksLikeSeries(data.settings.numberPrefix, d.number.trim());
+  const acct = accountOf(data, inv.paymentMode);
+  const prefix = acct.ownSettings ? data.settings.numberPrefix : seriesPrefixOf(acct.suggestedNumber);
+  const seriesOk = looksLikeSeries(prefix, d.number.trim());
   const set = (patch: Partial<Draft>) => setD((x) => ({ ...x, ...patch }));
 
   return (
@@ -325,6 +337,7 @@ function InvoiceEditor({ ctx, inv }: { ctx: PcCtx; inv: InvoiceDTO }) {
         <div className="flex items-center gap-sm flex-1 min-w-0 flex-wrap">
           <h3 className="text-h3 tabular-nums">{inv.number}</h3>
           <InvoicePill status={inv.status} />
+          <span className="text-caption text-on-surface-variant">{accountLine(acct)}</span>
         </div>
         <div className="flex flex-wrap gap-2">
           {editable && dirty ? <button className={primaryBtnCls} disabled={busy} onClick={save}><Icon name="save" />Save changes</button> : null}
@@ -334,7 +347,7 @@ function InvoiceEditor({ ctx, inv }: { ctx: PcCtx; inv: InvoiceDTO }) {
           {inv.status === "draft" ? (
             <>
               <button className={btnCls} disabled={busy} onClick={() => setConfirm("delete")}><Icon name="delete" />Delete draft</button>
-              <button className={dirty ? btnCls : primaryBtnCls} disabled={busy || inv.lines.length === 0} onClick={() => saveThen(() => call({ action: "sent" }, `Marked as sent. Record the payment here when it reaches Wio.`))}><Icon name="send" />Mark as sent</button>
+              <button className={dirty ? btnCls : primaryBtnCls} disabled={busy || inv.lines.length === 0} onClick={() => saveThen(() => call({ action: "sent" }, `Marked as sent. Record the payment here when it reaches ${inv.paymentMode}.`))}><Icon name="send" />Mark as sent</button>
             </>
           ) : null}
           {inv.status === "sent" ? <button className={btnCls} disabled={busy} onClick={() => setConfirm("cancel")}><Icon name="block" />Cancel invoice</button> : null}
@@ -358,7 +371,7 @@ function InvoiceEditor({ ctx, inv }: { ctx: PcCtx; inv: InvoiceDTO }) {
       ) : null}
 
       {inv.status === "draft" ? <Callout tone="gold" icon="edit_note">{inv.source === "monthly_run" ? `Drafted by the ${fmtDate(inv.createdAt.slice(0, 10))} monthly run. ` : ""}Check it, download the PDF, send it to {inv.billToName}, then mark it as sent.</Callout> : null}
-      {inv.status === "sent" ? <Callout icon="info">Sent {fmtDate(inv.sentAt?.slice(0, 10))}. You can still edit it; download it again and resend if you do. Record the payment when it reaches Wio.</Callout> : null}
+      {inv.status === "sent" ? <Callout icon="info">Sent {fmtDate(inv.sentAt?.slice(0, 10))}. You can still edit it; download it again and resend if you do. Record the payment when it reaches {inv.paymentMode}.</Callout> : null}
       {inv.status === "awaiting" ? <Callout tone="gold" icon="hourglass_top">A payment is recorded and waiting for a Finance Manager. The invoice is locked until it&apos;s approved or sent back.</Callout> : null}
       {inv.status === "partpaid" ? <Callout icon="info">Part-paid: {AUD(openAud(total, inv.receipts))} still open. Record the next payment when it arrives.</Callout> : null}
       {inv.status === "paid" ? <Callout tone="ok" icon="check_circle">Paid. The commission is posted to Revenue (details below). The invoice is locked.</Callout> : null}
@@ -367,7 +380,7 @@ function InvoiceEditor({ ctx, inv }: { ctx: PcCtx; inv: InvoiceDTO }) {
 
       <div className="grid gap-md items-start grid-cols-1 xl:grid-cols-[minmax(0,380px)_minmax(0,1fr)]">
         <div className={`${cardCls} p-md flex flex-col gap-sm`}>
-          <Field label="Invoice number" hint={editable ? (seriesOk ? `DesGro suggests the next number in ${data.settings.numberPrefix}YY-YY/NNN. Change it if that number was used outside DesGro.` : "This doesn't follow the usual series. Check it before you send.") : "Locked once a payment is recorded."}>
+          <Field label="Invoice number" hint={editable ? (seriesOk ? `DesGro suggests the next number in ${prefix}YY-YY/NNN. Change it if that number was used outside DesGro.` : "This doesn't follow the usual series. Check it before you send.") : "Locked once a payment is recorded."}>
             <input className={`${inputCls} tabular-nums`} value={d.number} disabled={!editable} onChange={(e) => set({ number: e.target.value })} />
           </Field>
           <div className="grid grid-cols-2 gap-sm">
@@ -438,7 +451,10 @@ function InvoiceEditor({ ctx, inv }: { ctx: PcCtx; inv: InvoiceDTO }) {
         </div>
 
         <div className="overflow-x-auto rounded-xl bg-surface-container border border-outline-variant p-md">
-          <InvoicePaper inv={inv} draft={d} lines={previewLines} total={total} words={words} settings={data.settings} />
+          {!acct.ownSettings && acct.gaps.length && inv.status !== "cancelled" ? (
+            <Callout tone="gold" icon="warning">This invoice prints {acct.entityLabel}&apos;s letterhead. Still missing in Finance › Invoices → Settings: {acct.gaps.join(", ")}.</Callout>
+          ) : null}
+          <InvoicePaper inv={inv} draft={d} lines={previewLines} total={total} words={words} settings={data.settings} account={acct} />
         </div>
       </div>
 
@@ -452,12 +468,12 @@ function ReceiptsCard({ inv }: { inv: InvoiceDTO }) {
   if (!inv.receipts.length) return null;
   return (
     <div className={`${cardCls} p-md flex flex-col gap-sm`}>
-      <div className="flex justify-between items-baseline gap-sm flex-wrap"><h4 className="font-semibold">Payments on this invoice</h4><span className="text-caption text-on-surface-variant">Into Wio Bank (AED)</span></div>
+      <div className="flex justify-between items-baseline gap-sm flex-wrap"><h4 className="font-semibold">Payments on this invoice</h4><span className="text-caption text-on-surface-variant">Into {inv.paymentMode}</span></div>
       {inv.receipts.map((r) => (
         <div key={r.id} className="flex flex-col gap-1.5 border-t border-outline-variant/60 pt-sm first:border-t-0 first:pt-0">
           <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1">
-            <b className="tabular-nums">{AED(r.aedAmount)}</b>
-            <span className="text-caption text-on-surface-variant tabular-nums">received {fmtDate(r.receivedOn)} · settles {AUD(r.audSettled)} · AED→INR {r.aedInrRate.toFixed(4)} · {INR(r.inrAmount)}{r.reference ? ` · ref ${r.reference}` : ""}</span>
+            <b className="tabular-nums">{r.aedAmount > 0 ? AED(r.aedAmount) : INR(r.inrAmount)}</b>
+            <span className="text-caption text-on-surface-variant tabular-nums">received {fmtDate(r.receivedOn)} · settles {AUD(r.audSettled)}{r.aedAmount > 0 ? ` · AED→INR ${r.aedInrRate.toFixed(4)} · ${INR(r.inrAmount)}` : ""}{r.reference ? ` · ref ${r.reference}` : ""}</span>
             {r.status === "approved" ? <Pill tone="ok">Approved{r.reviewedBy ? ` by ${r.reviewedBy}` : ""}{r.reviewedAt ? `, ${fmtDate(r.reviewedAt.slice(0, 10))}` : ""}</Pill> : r.status === "awaiting" ? <Pill tone="warn">Awaiting approval</Pill> : <Pill tone="bad">Sent back</Pill>}
           </div>
           {r.status === "returned" ? <p className="text-caption">Reason: {r.reviewNote ?? "No reason given"}</p> : null}
@@ -486,7 +502,7 @@ export function LedgerRows({ inv, r }: { inv: InvoiceDTO; r: ReceiptDTO }) {
               <td className="px-2 py-1.5 tabular-nums">{fmtDate(r.receivedOn)}</td>
               <td className="px-2 py-1.5">{LEDGER.type}</td>
               <td className="px-2 py-1.5">{LEDGER.category} › {LEDGER.subItem(p.program)}</td>
-              <td className="px-2 py-1.5">{LEDGER.paymentMode}</td>
+              <td className="px-2 py-1.5">{inv.paymentMode}</td>
               <td className="px-2 py-1.5">{LEDGER.expDom}</td>
               <td className="px-2 py-1.5">{inv.billToName}</td>
               <td className="px-2 py-1.5 text-right tabular-nums font-semibold">{INR(p.inr)}</td>
@@ -501,12 +517,14 @@ export function LedgerRows({ inv, r }: { inv: InvoiceDTO; r: ReceiptDTO }) {
 // ── record payment ───────────────────────────────────────────────────────────
 
 export function lastRate(data: PcPageData): { rate: number; date: string } | null {
-  const rs = data.invoices.flatMap((i) => i.receipts).filter((r) => r.status !== "returned").sort((a, b) => (a.receivedOn < b.receivedOn ? 1 : -1));
+  const rs = data.invoices.flatMap((i) => i.receipts).filter((r) => r.status !== "returned" && r.aedAmount > 0).sort((a, b) => (a.receivedOn < b.receivedOn ? 1 : -1));
   return rs[0] ? { rate: Number(rs[0].aedInrRate.toFixed(4)), date: rs[0].receivedOn } : null;
 }
 
 function RecordPaymentModal({ ctx, inv, onClose }: { ctx: PcCtx; inv: InvoiceDTO; onClose: () => void }) {
   const { data } = ctx;
+  // Wio: AED credited, then its INR value. An Indian bank: just the INR credited.
+  const aedMode = accountOf(data, inv.paymentMode).ownSettings;
   const total = totalOf(inv);
   const open = openAud(total, inv.receipts);
   const lr = lastRate(data);
@@ -541,18 +559,18 @@ function RecordPaymentModal({ ctx, inv, onClose }: { ctx: PcCtx; inv: InvoiceDTO
 
   async function submit() {
     setErr(null);
-    if (!(aedN > 0)) return setErr("Enter the AED credited in Wio.");
+    if (aedMode && !(aedN > 0)) return setErr("Enter the AED credited in Wio.");
     if (!(audN > 0)) return setErr("Enter how much of the invoice (AUD) this payment settles.");
     if (audN > open + 0.005) return setErr(`That's more than the ${AUD(open)} still open on this invoice.`);
     const inrN = parseFloat(inr);
-    if (!(inrN > 0)) return setErr("Enter the AED → INR rate or the INR value.");
+    if (!(inrN > 0)) return setErr(aedMode ? "Enter the AED → INR rate or the INR value." : `Enter the INR credited in ${inv.paymentMode}.`);
     setBusy(true);
     try {
       const res = await api<{ approved: boolean }>(`${BASE}/invoices/${inv.id}`, {
         action: "record-payment",
         receivedOn,
         audSettled: audN,
-        aedAmount: aedN,
+        aedAmount: aedMode ? aedN : 0,
         inrAmount: inrN,
         reference: ref || null,
         settleInFull: settle,
@@ -581,20 +599,30 @@ function RecordPaymentModal({ ctx, inv, onClose }: { ctx: PcCtx; inv: InvoiceDTO
     >
       <div className="grid grid-cols-1 sm:grid-cols-2 gap-sm">
         <Field label="Received on"><input className={inputCls} type="date" max={data.today} value={receivedOn} onChange={(e) => setReceivedOn(e.target.value)} /></Field>
-        <Field label="Into account"><input className={inputCls} value="Wio Bank · AED" disabled /></Field>
+        <Field label="Into account"><input className={inputCls} value={`${inv.paymentMode} · ${aedMode ? "AED" : "INR"}`} disabled /></Field>
         <Field label="AUD this payment settles"><input className={inputCls} type="number" min={0.01} step="0.01" value={aud} onChange={(e) => setAud(e.target.value)} /></Field>
-        <Field label="AED credited in Wio"><input className={inputCls} type="number" min={0.01} step="0.01" value={aed} onChange={(e) => onAed(e.target.value)} placeholder="As shown in Wio" autoFocus /></Field>
+        {aedMode ? (
+          <Field label="AED credited in Wio"><input className={inputCls} type="number" min={0.01} step="0.01" value={aed} onChange={(e) => onAed(e.target.value)} placeholder="As shown in Wio" autoFocus /></Field>
+        ) : (
+          <Field label={`INR credited in ${inv.paymentMode}`}><input className={inputCls} type="number" min={1} step="1" value={inr} onChange={(e) => setInr(e.target.value)} placeholder="As shown in the bank statement" autoFocus /></Field>
+        )}
       </div>
-      <p className="text-caption text-on-surface-variant tabular-nums">{aedN > 0 && audN > 0 ? `AUD→AED ${(aedN / audN).toFixed(4)} on this payment.` : "Enter the AED credited to see the AUD→AED rate."}</p>
-      <div className="grid grid-cols-1 sm:grid-cols-2 gap-sm">
-        <Field label="AED → INR rate"><input className={inputCls} type="number" min={0.0001} step="0.0001" value={rate} onChange={(e) => onRate(e.target.value)} /></Field>
-        <Field label="INR value"><input className={inputCls} type="number" min={1} step="1" value={inr} onChange={(e) => onInr(e.target.value)} placeholder="Fills in from the rate" /></Field>
-      </div>
-      <p className="text-caption text-on-surface-variant">Change either one and the other follows. This INR value is what posts to Revenue after approval.{lr ? ` Last rate used: ${lr.rate} on ${fmtDate(lr.date)}.` : ""}</p>
-      <Field label="Bank reference"><input className={inputCls} value={ref} onChange={(e) => setRef(e.target.value)} placeholder="Wio transaction reference" /></Field>
+      {aedMode ? (
+        <>
+          <p className="text-caption text-on-surface-variant tabular-nums">{aedN > 0 && audN > 0 ? `AUD→AED ${(aedN / audN).toFixed(4)} on this payment.` : "Enter the AED credited to see the AUD→AED rate."}</p>
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-sm">
+            <Field label="AED → INR rate"><input className={inputCls} type="number" min={0.0001} step="0.0001" value={rate} onChange={(e) => onRate(e.target.value)} /></Field>
+            <Field label="INR value"><input className={inputCls} type="number" min={1} step="1" value={inr} onChange={(e) => onInr(e.target.value)} placeholder="Fills in from the rate" /></Field>
+          </div>
+          <p className="text-caption text-on-surface-variant">Change either one and the other follows. This INR value is what posts to Revenue after approval.{lr ? ` Last rate used: ${lr.rate} on ${fmtDate(lr.date)}.` : ""}</p>
+        </>
+      ) : (
+        <p className="text-caption text-on-surface-variant tabular-nums">This INR posts to Revenue › Commissions under {inv.paymentMode} after approval (export, no GST).{parseFloat(inr) > 0 && audN > 0 ? ` AUD→INR ${(parseFloat(inr) / audN).toFixed(4)} on this payment.` : ""}</p>
+      )}
+      <Field label="Bank reference"><input className={inputCls} value={ref} onChange={(e) => setRef(e.target.value)} placeholder={`${inv.paymentMode} transaction reference`} /></Field>
       <label className="flex gap-2 items-start text-body-md">
         <input type="checkbox" className="mt-1" checked={settle} onChange={(e) => setSettle(e.target.checked)} />
-        <span><b>Settle this invoice in full</b><span className="block text-caption text-on-surface-variant">Leave ticked when the partner paid the whole invoice and the AED is short only because of bank charges or the rate.</span></span>
+        <span><b>Settle this invoice in full</b><span className="block text-caption text-on-surface-variant">Leave ticked when the partner paid the whole invoice and the amount is short only because of bank charges or the rate.</span></span>
       </label>
       <label className="flex gap-2 items-start text-body-md">
         <input type="checkbox" className="mt-1" checked={skip} onChange={(e) => setSkip(e.target.checked)} />
@@ -612,19 +640,26 @@ function slash(iso: string) {
   return `${d}/${m}/${y}`;
 }
 
-export function InvoicePaper({ inv, draft, lines, total, words, settings }: { inv: InvoiceDTO; draft: Draft; lines: InvoiceLineDTO[]; total: number; words: string; settings: SettingsDTO }) {
+export function InvoicePaper({ inv, draft, lines, total, words, settings, account }: { inv: InvoiceDTO; draft: Draft; lines: InvoiceLineDTO[]; total: number; words: string; settings: SettingsDTO; account: AccountDTO }) {
   const detailed = inv.layout === "detailed";
+  // Paid into an Indian bank: DESMA International Pvt Ltd's export invoice (Finance › Invoices letterhead).
+  const india = !account.ownSettings;
+  const issuerName = india ? account.issuerName : settings.issuerName;
   const head = detailed ? ["DESCRIPTION", "Student ID", "Course", "Intake Month", "Course Fee", "Commission%", "Amount"] : ["DESCRIPTION", "Intake Month", "Course Fee", "Commission%", "Amount"];
   const band = "bg-[#F6CB47]";
   const cell = "border border-[#a0a0a0] px-1 py-[3px]";
-  const short = (settings.issuerName || "us").replace(/\s+(LLC|L\.L\.C\.?|Ltd\.?|Limited|Pvt\.?\s*Ltd\.?|Private Limited)$/i, "");
+  const short = (issuerName || "us").replace(/\s+(LLC|L\.L\.C\.?|Ltd\.?|Limited|Pvt\.?\s*Ltd\.?|Private Limited)$/i, "");
   return (
     <div className="relative mx-auto min-w-[600px] max-w-[760px] bg-white text-[#333] shadow-md px-[34px] pl-[70px] pt-6 pb-6 text-[11.5px] leading-[1.42] font-sans">
-      <div className={`${band} -ml-[46px] -mr-[10px] text-center font-bold text-[15px] py-0.5`}>INVOICE</div>
+      <div className={`${band} -ml-[46px] -mr-[10px] text-center font-bold text-[15px] py-0.5`}>{india ? "EXPORT INVOICE" : "INVOICE"}</div>
       <div className="absolute left-[18px] top-[250px] text-[#EDBE35] text-[22px] whitespace-nowrap [writing-mode:vertical-rl] rotate-180">{draft.number}</div>
       {/* eslint-disable-next-line @next/next/no-img-element */}
       <img src="/desma-logo.png" alt="" className="w-[84px] h-[84px] mt-4 mb-2.5" />
-      <div><b className="block text-[14px]">{(settings.issuerName || "Invoice issuer (set in Settings)").toUpperCase()}</b>{settings.issuerAddress}<br />{settings.issuerRegLine}</div>
+      {india ? (
+        <div><b className="block text-[14px]">{(issuerName || `${account.entityLabel} (set in Finance › Invoices)`).toUpperCase()}</b><span className="whitespace-pre-line">{account.issuerLines}</span></div>
+      ) : (
+        <div><b className="block text-[14px]">{(settings.issuerName || "Invoice issuer (set in Settings)").toUpperCase()}</b>{settings.issuerAddress}<br />{settings.issuerRegLine}</div>
+      )}
       <div className="grid grid-cols-[minmax(0,1fr)_auto] gap-4 mt-10">
         <div>
           <b className="block text-[12.5px]">BILL TO</b>
@@ -660,7 +695,7 @@ export function InvoicePaper({ inv, draft, lines, total, words, settings }: { in
         <div>
           <span className="block text-[#555] mt-1">Amount in Words:</span>
           <b className="block mt-1">{words}</b>
-          <span className="block text-[#555] mt-2">Thank you for choosing {short}!</span>
+          <span className="block text-[#555] mt-2">{india && account.thanksLine ? account.thanksLine : `Thank you for choosing ${short}!`}</span>
         </div>
         <table className="w-full border-separate [border-spacing:2px] border border-[#a0a0a0] h-fit">
           <tbody>
@@ -670,7 +705,16 @@ export function InvoicePaper({ inv, draft, lines, total, words, settings }: { in
         </table>
       </div>
       <div className="mt-4 text-[11px] text-[#4a4a4a]">
-        {settings.bankAccountName || settings.bankIban ? (
+        {india ? (
+          account.bankLines.length ? (
+            <>
+              Bank Account<br />
+              {account.bankLines.map((l, i) => <span key={i} className="block">{l}</span>)}
+            </>
+          ) : (
+            <span className="text-[#b45309]">{account.paymentMode}&apos;s bank details aren&apos;t set. Add them in Finance › Invoices → Settings.</span>
+          )
+        ) : settings.bankAccountName || settings.bankIban ? (
           <>
             Bank Account<br />
             {settings.bankAccountName ? <>{settings.bankAccountName}<br /></> : null}
@@ -684,15 +728,21 @@ export function InvoicePaper({ inv, draft, lines, total, words, settings }: { in
         )}
       </div>
       <div className="flex flex-col items-end -mt-2 font-bold">
-        {settings.issuerName ? <span>For {settings.issuerName}</span> : null}
-        {settings.hasSignature ? (
+        {india ? (account.signFor ? <span>{account.signFor}</span> : null) : settings.issuerName ? <span>For {settings.issuerName}</span> : null}
+        {(india ? account.hasSignature : settings.hasSignature) ? (
           // eslint-disable-next-line @next/next/no-img-element
-          <img src={`${BASE}/settings/signature`} alt="Signature" className="max-w-[120px] max-h-[48px] mr-4 my-1" />
+          <img
+            src={india ? `/api/finance/invoices/settings/signature/${account.entityCode}` : `${BASE}/settings/signature`}
+            alt="Signature"
+            className="max-w-[120px] max-h-[48px] mr-4 my-1"
+            onError={(e) => { e.currentTarget.style.visibility = "hidden"; }}
+          />
         ) : (
           <span className="h-12" />
         )}
-        <span>{settings.signatoryName}</span>
+        <span>{india ? account.signatoryName : settings.signatoryName}</span>
       </div>
+      {india && account.lutLine ? <div className="mt-2 text-[10px] text-[#4a4a4a]">{account.lutLine}</div> : null}
       <div className="flex flex-col gap-[22px] mt-6"><div className={`${band} h-4 -ml-[46px] -mr-[10px]`} /><div className={`${band} h-4 -ml-[46px] -mr-[10px]`} /></div>
       {inv.status === "cancelled" ? <div className="absolute inset-0 grid place-items-center pointer-events-none"><span className="text-[72px] font-bold text-red-600/20 -rotate-[30deg]">CANCELLED</span></div> : null}
     </div>

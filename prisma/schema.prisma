@@ -6943,6 +6943,12 @@ model CommissionPartner {
   /// Enrollments billed outside DesGro, per financial year — counted before
   /// DesGro's own, e.g. { "2025-26": 71 }.
   volumeOpening Json     @default("{}")
+  /// The account the partner pays into — a Finance › Invoices bank. "Wio Bank"
+  /// (DESMA International LLC): billed on D/DLLC with this module's issuer and
+  /// bank settings, receipts in AED. "Axis Bank" / "HDFC Bank" (DESMA
+  /// International Pvt Ltd): billed as an export on E/DIPL with the Invoices
+  /// letterhead, bank details and LUT line, receipts in INR.
+  paymentMode   String   @default("Wio Bank")
   /// Party used as the counterparty on the Revenue rows. Filled on first
   /// posting when unset.
   partyId       String?
@@ -7066,6 +7072,9 @@ model CommissionInvoice {
   status        String            @default("draft")
   /// "monthly_run" | "manual".
   source        String            @default("manual")
+  /// The account this invoice asks to be paid into: the partner's when it was
+  /// drafted, so changing the partner later never changes an issued invoice.
+  paymentMode   String            @default("Wio Bank")
   sentAt        DateTime?
   cancelledAt   DateTime?
   createdById   String?

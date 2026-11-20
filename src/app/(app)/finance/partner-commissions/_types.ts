@@ -56,6 +56,8 @@ export type InvoiceDTO = {
   billToFor: string | null;
   amountWords: string | null;
   status: string;
+  /** The account this invoice asks to be paid into (fixed when drafted). */
+  paymentMode: string;
   source: string;
   sentAt: string | null;
   cancelledAt: string | null;
@@ -95,11 +97,60 @@ export type PartnerDTO = {
   volumeTiers: VolumeTier[];
   /** Enrollments billed outside DesGro, per financial year. */
   volumeOpening: Record<string, number>;
+  /** The account the partner pays into ("Wio Bank", "Axis Bank", …). */
+  paymentMode: string;
 };
 export type ProgramDTO = { code: string; configured: boolean; partnerId: string | null; courseName: string; defaultFee: number | null; defaultPct: number | null; defaultFlat: number | null; installmentPlans: number[]; isActive: boolean };
 
+/**
+ * An account partners can pay into (Finance › Invoices' banks). `ownSettings`
+ * = the UAE company (Wio): this page's issuer and bank settings, AED receipts.
+ * Otherwise the Indian company's export invoice and INR receipts.
+ */
+export type AccountDTO = {
+  paymentMode: string;
+  entityCode: string;
+  entityLabel: string;
+  ownSettings: boolean;
+  isActive: boolean;
+  /** The next number in this account's series today, as the server would pick it. */
+  suggestedNumber: string;
+  issuerName: string;
+  issuerLines: string;
+  signFor: string;
+  thanksLine: string;
+  signatoryName: string;
+  hasSignature: boolean;
+  bankLines: string[];
+  lutLine: string | null;
+  /** What still needs filling in (Finance › Invoices → Settings) before its invoices print properly. */
+  gaps: string[];
+};
+
+/** The account behind a partner or invoice; an unknown one reads as the UAE company's (Wio). */
+export function accountOf(data: Pick<PcPageData, "accounts">, paymentMode: string): AccountDTO {
+  return (
+    data.accounts.find((a) => a.paymentMode === paymentMode) ??
+    data.accounts.find((a) => a.ownSettings) ?? {
+      paymentMode, entityCode: "DLLC", entityLabel: "", ownSettings: true, isActive: true, suggestedNumber: "",
+      issuerName: "", issuerLines: "", signFor: "", thanksLine: "", signatoryName: "", hasSignature: false, bankLines: [], lutLine: null, gaps: [],
+    }
+  );
+}
+
+/** "Paid into Wio Bank", or "Paid into Axis Bank · export invoice from DESMA International Pvt Ltd (India)". */
+export function accountLine(a: AccountDTO): string {
+  return a.ownSettings ? `Paid into ${a.paymentMode}` : `Paid into ${a.paymentMode} · export invoice from ${a.entityLabel}`;
+}
+
+/** A series' prefix from one of its numbers: "E/DIPL/26-27/069" → "E/DIPL/". */
+export function seriesPrefixOf(n: string): string {
+  return n.replace(/\d{2}-?\d{2}\/\d+$/, "");
+}
+
 export type PcPageData = {
   today: string;
+  accounts: AccountDTO[];
   /** The next number in the shared D/DLLC series today (candidate invoices included), as the server would pick it. */
   suggestedNumber: string;
   userId: string;

@@ -5,6 +5,8 @@ import { todayIst } from "@/lib/lead-pulse-dates";
 import { PC_FINANCE_PAGE, PROGRAM_CODES } from "@/lib/partner-commissions/constants";
 import { nextRunDate, parseVolumeOpening, parseVolumeTiers } from "@/lib/partner-commissions/logic";
 import { ENROLLMENT_INCLUDE, getAccess, getSettings, isoDate, serializeEnrollment, suggestNumber } from "@/lib/partner-commissions/server";
+import { loadAccounts } from "@/lib/partner-commissions/accounts";
+import { ENTITY_LABEL } from "@/lib/invoices/core";
 import { PartnerCommissionsClient, type PcPageData } from "./client";
 
 export const dynamic = "force-dynamic";
@@ -18,7 +20,7 @@ export default async function PartnerCommissionsPage({ searchParams }: { searchP
 
   const today = todayIst();
   const month = today.slice(0, 7);
-  const [settings, partners, programs, enrollments, invoices, run, lastRun, suggestedNumber] = await Promise.all([
+  const [settings, partners, programs, enrollments, invoices, run, lastRun, suggestedNumber, accounts] = await Promise.all([
     getSettings(),
     prisma.commissionPartner.findMany({ orderBy: { name: "asc" } }),
     prisma.commissionProgram.findMany(),
@@ -39,6 +41,8 @@ export default async function PartnerCommissionsPage({ searchParams }: { searchP
     prisma.commissionRun.findFirst({ orderBy: { ranAt: "desc" } }),
     // The shared D/DLLC series (with Wio's candidate invoices), in its format.
     suggestNumber(today),
+    // Every account a partner can pay into, each with the next number in its own series.
+    loadAccounts().then((list) => Promise.all(list.map(async (a) => ({ ...a, suggestedNumber: await suggestNumber(today, a.paymentMode) })))),
   ]);
 
   // Settings-tab extras only an approver can use.
@@ -53,6 +57,23 @@ export default async function PartnerCommissionsPage({ searchParams }: { searchP
   const data: PcPageData = {
     today,
     suggestedNumber,
+    accounts: accounts.map((a) => ({
+      paymentMode: a.paymentMode,
+      entityCode: a.entityCode,
+      entityLabel: ENTITY_LABEL[a.entityCode],
+      ownSettings: a.ownSettings,
+      isActive: a.isActive,
+      suggestedNumber: a.suggestedNumber,
+      issuerName: a.issuerName,
+      issuerLines: a.issuerLines,
+      signFor: a.signFor,
+      thanksLine: a.thanksLine,
+      signatoryName: a.signatoryName,
+      hasSignature: !!a.signature,
+      bankLines: a.bankLines,
+      lutLine: a.lutLine,
+      gaps: a.gaps,
+    })),
     userId: access.userId,
     canApprove: access.canApprove,
     settings: {
@@ -82,6 +103,7 @@ export default async function PartnerCommissionsPage({ searchParams }: { searchP
       isActive: p.isActive,
       volumeTiers: parseVolumeTiers(p.volumeTiers),
       volumeOpening: parseVolumeOpening(p.volumeOpening),
+      paymentMode: p.paymentMode,
     })),
     programs: PROGRAM_CODES.map((code) => {
       const p = programs.find((x) => x.code === code);
@@ -112,6 +134,7 @@ export default async function PartnerCommissionsPage({ searchParams }: { searchP
       billToFor: i.billToFor,
       amountWords: i.amountWords,
       status: i.status,
+      paymentMode: i.paymentMode,
       source: i.source,
       sentAt: i.sentAt?.toISOString() ?? null,
       cancelledAt: i.cancelledAt?.toISOString() ?? null,
