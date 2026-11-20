@@ -4,7 +4,7 @@ import { useState } from "react";
 import { Callout, Field, Icon, ProgramTag, api, btnCls, cardCls, inputCls, linkBtnCls, primaryBtnCls } from "@/components/partner-commissions/ui";
 import { LEDGER, MAX_INSTALLMENTS, PROGRAM_CODES } from "@/lib/partner-commissions/constants";
 import { parsePlans, volumeExtraPct, volumeFyOfDate, volumeTiersLabel } from "@/lib/partner-commissions/logic";
-import { billedInFy, type PartnerDTO, type ProgramDTO } from "./_types";
+import { accountLine, accountOf, billedInFy, seriesPrefixOf, type AccountDTO, type PartnerDTO, type ProgramDTO } from "./_types";
 import type { PcCtx } from "./client";
 
 const URL_SETTINGS = "/api/finance/partner-commissions/settings";
@@ -27,10 +27,10 @@ export function SettingsTab({ ctx }: { ctx: PcCtx }) {
           <dt className="text-on-surface-variant">Type</dt><dd>{LEDGER.type}</dd>
           <dt className="text-on-surface-variant">Category</dt><dd>{LEDGER.category}</dd>
           <dt className="text-on-surface-variant">Sub-items</dt><dd>{PROGRAM_CODES.map((c) => LEDGER.subItem(c)).join(" · ")}</dd>
-          <dt className="text-on-surface-variant">Payment mode</dt><dd>{LEDGER.paymentMode}</dd>
+          <dt className="text-on-surface-variant">Payment mode</dt><dd>The invoice&apos;s account: {LEDGER.paymentMode}, or Axis / HDFC Bank for a partner paying into India</dd>
           <dt className="text-on-surface-variant">EXP / DOM</dt><dd>{LEDGER.expDom}</dd>
           <dt className="text-on-surface-variant">Party</dt><dd>The partner&apos;s party (created as a Vendor party on first posting if none matches its name)</dd>
-          <dt className="text-on-surface-variant">Date</dt><dd>The day the AED reached Wio</dd>
+          <dt className="text-on-surface-variant">Date</dt><dd>The day the money reached that account</dd>
         </dl>
         <p className="text-caption text-on-surface-variant">Weekly P&amp;L, the Sales Objective and Sales Analysis already count Revenue › Commissions.</p>
       </div>
@@ -78,6 +78,7 @@ function PartnersCard({ ctx, ro }: { ctx: PcCtx; ro: boolean }) {
             <div className="flex-1 min-w-[220px]">
               <b>{p.name}</b>{!p.isActive ? <span className="text-caption text-on-surface-variant"> · inactive</span> : null}
               <div className="text-caption text-on-surface-variant whitespace-pre-line">{[p.address, p.email, p.forLine ? `FOR: ${p.forLine}` : null].filter(Boolean).join("\n")}</div>
+              <AccountSummary account={accountOf(ctx.data, p.paymentMode)} />
               <VolumeSummary ctx={ctx} partner={p} />
             </div>
             <span className="text-caption text-on-surface-variant">{p.layout === "detailed" ? "Student ID and Course columns" : "Program in the description"}</span>
@@ -97,6 +98,9 @@ function PartnerForm({ ctx, partner, onDone }: { ctx: PcCtx; partner: PartnerDTO
   const [forLine, setForLine] = useState(partner?.forLine ?? "");
   const [layout, setLayout] = useState(partner?.layout ?? "compact");
   const [active, setActive] = useState(partner?.isActive ?? true);
+  const [paymentMode, setPaymentMode] = useState(partner?.paymentMode ?? "Wio Bank");
+  const account = accountOf(ctx.data, paymentMode);
+  const choices = ctx.data.accounts.filter((a) => a.isActive || a.paymentMode === partner?.paymentMode);
   const [tiers, setTiers] = useState<TierRow[]>(() => (partner?.volumeTiers ?? []).map((t) => ({ from: String(t.from), extra: String(t.extraPct) })));
   const [opening, setOpening] = useState<OpeningRow[]>(() => Object.entries(partner?.volumeOpening ?? {}).map(([fy, n]) => ({ fy, count: String(n) })));
   const [localErr, setLocalErr] = useState<string | null>(null);
@@ -117,6 +121,24 @@ function PartnerForm({ ctx, partner, onDone }: { ctx: PcCtx; partner: PartnerDTO
           </Field>
         </div>
       </div>
+      <div className="border-t border-outline-variant pt-sm flex flex-col gap-2">
+        <Field label="Pays into">
+          <select className={`${inputCls} md:!w-96`} value={paymentMode} onChange={(e) => setPaymentMode(e.target.value)}>
+            {choices.map((a) => (
+              <option key={a.paymentMode} value={a.paymentMode}>{a.paymentMode} · {a.ownSettings ? "DESMA International LLC (UAE)" : a.entityLabel}</option>
+            ))}
+          </select>
+        </Field>
+        <p className="text-caption text-on-surface-variant">
+          {account.ownSettings
+            ? `Invoiced by the UAE company with the issuer and bank details on this page, numbered ${account.suggestedNumber ? seriesPrefixOf(account.suggestedNumber) : "D/DLLC/"}…; payments are recorded in AED with their INR value.`
+            : `Invoiced as an export by ${account.entityLabel}, with its letterhead, ${account.paymentMode}'s bank details and the LUT line from Finance › Invoices → Settings, numbered ${seriesPrefixOf(account.suggestedNumber)}… alongside candidate export invoices; payments are recorded in INR.`}
+          {partner && partner.paymentMode !== paymentMode ? " Applies to invoices drafted from now on; existing ones keep their account." : ""}
+        </p>
+        {!account.ownSettings && account.gaps.length ? (
+          <Callout tone="gold" icon="warning">Still missing in Finance › Invoices → Settings: {account.gaps.join(", ")}.</Callout>
+        ) : null}
+      </div>
       <label className="flex items-center gap-2 text-body-md"><input type="checkbox" checked={active} onChange={(e) => setActive(e.target.checked)} />Active</label>
       <VolumeEditor today={ctx.data.today} tiers={tiers} setTiers={setTiers} opening={opening} setOpening={setOpening} />
       {localErr ?? err ? <p className="text-body-md text-error font-medium">{localErr ?? err}</p> : null}
@@ -129,12 +151,24 @@ function PartnerForm({ ctx, partner, onDone }: { ctx: PcCtx; partner: PartnerDTO
             const vol = volumeBody(tiers, opening);
             setLocalErr(typeof vol === "string" ? vol : null);
             if (typeof vol === "string") return;
-            if (await save({ action: "partner", id: partner?.id ?? null, name, address, email: email || null, forLine: forLine || null, layout, isActive: active, ...vol }, partner ? "Partner saved." : `${name} added.`)) onDone();
+            if (await save({ action: "partner", id: partner?.id ?? null, name, address, email: email || null, forLine: forLine || null, layout, isActive: active, paymentMode, ...vol }, partner ? "Partner saved." : `${name} added.`)) onDone();
           }}
         >
           Save partner
         </button>
       </div>
+    </div>
+  );
+}
+
+/** Where a partner's commission is paid, and which company invoices it. */
+function AccountSummary({ account }: { account: AccountDTO }) {
+  return (
+    <div className="mt-1 text-caption">
+      <b>{accountLine(account)}</b>
+      {account.suggestedNumber ? <span className="text-on-surface-variant"> · next number {account.suggestedNumber}</span> : null}
+      {!account.isActive ? <span className="text-error"> · switched off in Finance › Invoices</span> : null}
+      {!account.ownSettings && account.gaps.length ? <span className="block text-[#b45309]">Missing in Finance › Invoices → Settings: {account.gaps.join(", ")}</span> : null}
     </div>
   );
 }
@@ -562,8 +596,8 @@ function RunCard({ ctx, ro }: { ctx: PcCtx; ro: boolean }) {
         <Field label="Financial year"><input className={inputCls} value="April to March (automatic)" disabled /></Field>
       </div>
       <Field
-        label="Next invoice number"
-        hint="Invoices raised outside DesGro share this series, so set the next free number here. DesGro won't suggest anything lower this financial year and moves on by itself as invoices are made; from April the new year starts at 001. Any number can still be changed on the invoice before payment."
+        label="Next invoice number (Wio partners)"
+        hint="Partners paying into an Indian bank are numbered in Finance › Invoices' export series instead. Invoices raised outside DesGro share this series, so set the next free number here. DesGro won't suggest anything lower this financial year and moves on by itself as invoices are made; from April the new year starts at 001. Any number can still be changed on the invoice before payment."
       >
         <input className={`${inputCls} tabular-nums`} value={next} disabled={ro} onChange={(e) => setNext(e.target.value)} />
       </Field>

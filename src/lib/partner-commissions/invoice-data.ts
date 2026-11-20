@@ -5,6 +5,7 @@ import { notFound } from "@/lib/http-error";
 import { STAMP_FONT_PUBLIC_PATH } from "@/lib/esign/font";
 import { amountInWords, invoiceTotal } from "./logic";
 import { getSettings } from "./server";
+import { loadAccount } from "./accounts";
 import type { InvoicePdfData } from "./pdf";
 
 /**
@@ -36,6 +37,10 @@ export async function loadInvoicePdfData(id: string): Promise<InvoicePdfData> {
     loadFont(),
   ]);
   if (!inv) throw notFound("That invoice no longer exists.");
+  // Paid into an Indian bank: DESMA International Pvt Ltd's export invoice, with
+  // the Finance › Invoices letterhead, that bank's details and the LUT line.
+  const account = await loadAccount(prisma, inv.paymentMode);
+  const india = !account.ownSettings;
   const lines = inv.lines.map((l) => ({
     description: l.description,
     studentId: l.studentId,
@@ -57,12 +62,23 @@ export async function loadInvoicePdfData(id: string): Promise<InvoicePdfData> {
     lines,
     total,
     words: inv.amountWords ?? amountInWords(total, inv.currency),
-    issuer: { name: s.issuerName, address: s.issuerAddress, regLine: s.issuerRegLine },
-    bank: { accountName: s.bankAccountName, currency: s.bankCurrency, iban: s.bankIban, bic: s.bankBic, accountNo: s.bankAccountNo },
-    signatory: {
-      name: s.signatoryName,
-      image: s.signaturePng && s.signatureMime ? { bytes: new Uint8Array(s.signaturePng), mime: s.signatureMime } : null,
-    },
+    issuer: india
+      ? { name: account.issuerName, address: account.issuerLines, regLine: "" }
+      : { name: s.issuerName, address: s.issuerAddress, regLine: s.issuerRegLine },
+    bank: india
+      ? { accountName: "", currency: "", iban: "", bic: "", accountNo: "" }
+      : { accountName: s.bankAccountName, currency: s.bankCurrency, iban: s.bankIban, bic: s.bankBic, accountNo: s.bankAccountNo },
+    bankLines: india ? account.bankLines : null,
+    title: india ? "Export Invoice" : null,
+    signFor: india ? account.signFor : null,
+    thanksLine: india ? account.thanksLine || null : null,
+    note: india ? account.lutLine : null,
+    signatory: india
+      ? { name: account.signatoryName, image: account.signature }
+      : {
+          name: s.signatoryName,
+          image: s.signaturePng && s.signatureMime ? { bytes: new Uint8Array(s.signaturePng), mime: s.signatureMime } : null,
+        },
     logoPng,
     fallbackFont,
     cancelled: inv.status === "cancelled",

@@ -45,6 +45,8 @@ import {
 } from "@/lib/partner-commissions/logic";
 import { PROGRAM_CODES } from "@/lib/partner-commissions/constants";
 import { buildInvoicePdf, type InvoicePdfData } from "@/lib/partner-commissions/pdf";
+import { lutLineFor } from "@/lib/partner-commissions/accounts";
+import { accountLine, accountOf, seriesPrefixOf, type AccountDTO } from "@/app/(app)/finance/partner-commissions/_types";
 
 describe("amount in words (matches DESMA's invoices)", () => {
   it("writes whole amounts the way the samples do", () => {
@@ -281,6 +283,23 @@ describe("invoice PDF", () => {
     const doc = await PDFDocument.load(await buildInvoicePdf({ ...base, layout: "detailed", lines: [flatLine], total: 800, words: "AUD Eight Hundred" }));
     expect(doc.getPageCount()).toBe(1);
   });
+  it("prints an export invoice from India: its bank lines and LUT line move the footer to a new page sooner", async () => {
+    const india: InvoicePdfData = {
+      ...base,
+      title: "Export Invoice",
+      issuer: { name: "DESMA INTERNATIONAL PRIVATE LIMITED", address: "Kochi, Kerala\nGSTIN: 32AAAAA0000A1Z5", regLine: "" },
+      bankLines: ["Account name: DESMA International Pvt Ltd", "A/c No: 000000000000", "IFSC: UTIB0000000", "SWIFT: AXISINBB000", "Branch: Kochi", "Account type: Current"],
+      signFor: "For DESMA International Private Limited",
+      note: lutLineFor("AD320000000000X"),
+    };
+    const pages = async (d: InvoicePdfData, n: number) =>
+      (await PDFDocument.load(await buildInvoicePdf({ ...d, lines: Array.from({ length: n }, () => base.lines[0]), total: 500 * n }))).getPageCount();
+    expect(await pages(india, 1)).toBe(1);
+    // Somewhere the Wio footer still fits on page one but the taller export footer doesn't.
+    let found = false;
+    for (let n = 5; n <= 30 && !found; n++) found = (await pages(base, n)) === 1 && (await pages(india, n)) === 2;
+    expect(found).toBe(true);
+  });
   it("runs onto more pages for a long invoice, with names Helvetica can't encode", async () => {
     const lines = Array.from({ length: 60 }, (_, i) => ({ ...base.lines[0], description: `Ŝṙeeja ${i} | OSCE | Full Fee Paid` }));
     const doc = await PDFDocument.load(await buildInvoicePdf({ ...base, layout: "detailed", lines, total: 30000 }));
@@ -424,5 +443,32 @@ describe("volume bonus (per Australian financial year, by final payment date)", 
     expect(volumeLineLabel({ volumeSeq: 12, volumeFy: "2026-27", volumeBonusPct: null })).toBe("#12 · FY 2026-27");
     expect(volumeLineLabel({ volumeSeq: null, volumeFy: null, volumeBonusPct: null })).toBeNull();
     expect(commissionOf(2500, 20 + volumeExtraPct(NAI, 72))).toBe(625);
+  });
+});
+
+describe("the account a partner pays into", () => {
+  const acct = (over: Partial<AccountDTO>): AccountDTO => ({
+    paymentMode: "Wio Bank", entityCode: "DLLC", entityLabel: "DESMA International LLC (UAE)", ownSettings: true, isActive: true, suggestedNumber: "D/DLLC/2627/031",
+    issuerName: "", issuerLines: "", signFor: "", thanksLine: "", signatoryName: "", hasSignature: false, bankLines: [], lutLine: null, gaps: [], ...over,
+  });
+  const axis = acct({ paymentMode: "Axis Bank", entityCode: "DIPL", entityLabel: "DESMA International Pvt Ltd (India)", ownSettings: false, suggestedNumber: "E/DIPL/26-27/069" });
+  it("words the export declaration only when there's an ARN", () => {
+    expect(lutLineFor("AD320000000000X")).toBe("Supply meant for export under Letter of Undertaking (ARN AD320000000000X) without payment of integrated tax.");
+    expect(lutLineFor("  ")).toBeNull();
+    expect(lutLineFor(null)).toBeNull();
+  });
+  it("reads a series' prefix from one of its numbers", () => {
+    expect(seriesPrefixOf("E/DIPL/26-27/069")).toBe("E/DIPL/");
+    expect(seriesPrefixOf("D/DLLC/2627/031")).toBe("D/DLLC/");
+  });
+  it("describes where a partner's commission is paid", () => {
+    expect(accountLine(acct({}))).toBe("Paid into Wio Bank");
+    expect(accountLine(axis)).toBe("Paid into Axis Bank · export invoice from DESMA International Pvt Ltd (India)");
+  });
+  it("falls back to the UAE company's account for an unknown bank", () => {
+    const data = { accounts: [acct({}), axis] };
+    expect(accountOf(data, "Axis Bank").ownSettings).toBe(false);
+    expect(accountOf(data, "Old Bank").paymentMode).toBe("Wio Bank");
+    expect(accountOf({ accounts: [] }, "Wio Bank").ownSettings).toBe(true);
   });
 });

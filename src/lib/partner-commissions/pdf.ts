@@ -36,6 +36,16 @@ export type InvoicePdfData = {
   words: string;
   issuer: { name: string; address: string; regLine: string };
   bank: { accountName: string; currency: string; iban: string; bic: string; accountNo: string };
+  /** An Indian bank's printed lines (Finance › Invoices); replaces `bank` when set. */
+  bankLines?: string[] | null;
+  /** "EXPORT INVOICE" for invoices from India; "INVOICE" otherwise. */
+  title?: string | null;
+  /** "For DESMA International Private Limited" above the signature; default "For <issuer>". */
+  signFor?: string | null;
+  /** Default "Thank you for choosing <issuer>!". */
+  thanksLine?: string | null;
+  /** The export declaration (LUT), printed small under the bank details. */
+  note?: string | null;
   signatory: { name: string; image: { bytes: Uint8Array; mime: string } | null };
   logoPng: Uint8Array | null;
   /** Unicode fallback font for names WinAnsi can't encode. */
@@ -54,6 +64,7 @@ const RULE = rgb(0.6, 0.6, 0.6);
 const GOLD = rgb(0.93, 0.745, 0.21);
 const ROW_H = 16;
 const FOOTER_SPACE = 222;
+const FOOTER_BOX_W = 210;
 
 type Fonts = { reg: PDFFont; bold: PDFFont; uni: PDFFont | null };
 
@@ -178,7 +189,7 @@ export async function buildInvoicePdf(data: InvoicePdfData): Promise<Uint8Array>
   const newPage = (first: boolean) => {
     const page = doc.addPage(A4);
     band(page, H - 64, 20);
-    draw(page, fonts, "INVOICE", W / 2, H - 58, 13, { bold: true, align: "center" });
+    draw(page, fonts, (data.title || "INVOICE").toUpperCase(), W / 2, H - 58, 13, { bold: true, align: "center" });
     // The invoice number running up the left margin, as on the template.
     const vs = safe(fonts, data.number, false);
     page.drawText(vs.text, { x: 50, y: first ? 360 : 520, size: 20, font: vs.font, color: GOLD, rotate: degrees(90) });
@@ -245,6 +256,30 @@ export async function buildInvoicePdf(data: InvoicePdfData): Promise<Uint8Array>
   let tableTop = y;
   y = drawHeader(page, y);
   const rows = data.lines;
+  // What the footer prints, measured so it never runs into the yellow bands at
+  // the foot of the page (their top edge is at 92pt): the left column (amount in
+  // words, thanks, bank lines, the export declaration) and the signature block.
+  const leftW = X1 - FOOTER_BOX_W - X0 - 16;
+  const wordRows = wrap(fonts, data.words, 10, leftW, true);
+  const bankRows = (
+    data.bankLines?.length
+      ? data.bankLines
+      : ([
+          data.bank.accountName && data.bank.accountName,
+          data.bank.currency && `ACCOUNT CURRENCY: ${data.bank.currency}`,
+          data.bank.iban && `IBAN:${data.bank.iban}`,
+          data.bank.bic && `BIC/SWIFT:${data.bank.bic}`,
+          data.bank.accountNo && `ACCOUNT NUMBER:${data.bank.accountNo}`,
+        ].filter(Boolean) as string[])
+  ).flatMap((t) => wrap(fonts, t, 9, leftW, false));
+  const noteRows = data.note ? wrap(fonts, data.note, 8, X1 - X0, false) : [];
+  // Lowest baselines below the top of the footer: the left column, the
+  // signature block (132 with a signature image), then the declaration, which
+  // runs full width under both.
+  const leftDepth = bankRows.length ? 77.5 + 13 * wordRows.length + 12.5 * (bankRows.length - 1) : 35 + 13 * wordRows.length;
+  const columnsDepth = Math.max(leftDepth, 132);
+  const depth = noteRows.length ? columnsDepth + 14 + 10.5 * (noteRows.length - 1) : columnsDepth;
+  const footerSpace = Math.max(FOOTER_SPACE, Math.ceil(depth + 96));
   let i = 0;
   const outline = (p: PDFPage, top: number, bottom: number) =>
     p.drawRectangle({ x: X0, y: bottom, width: X1 - X0, height: top - bottom, borderColor: RULE, borderWidth: 0.6 });
@@ -254,7 +289,7 @@ export async function buildInvoicePdf(data: InvoicePdfData): Promise<Uint8Array>
     y -= ROW_H;
   }
   while (i < rows.length) {
-    const roomWithFooter = Math.floor((y - FOOTER_SPACE) / ROW_H);
+    const roomWithFooter = Math.floor((y - footerSpace) / ROW_H);
     const roomFull = Math.floor((y - 90) / ROW_H);
     const remaining = rows.length - i;
     const take = remaining <= roomWithFooter ? remaining : Math.max(1, Math.min(roomFull, remaining));
@@ -280,11 +315,11 @@ export async function buildInvoicePdf(data: InvoicePdfData): Promise<Uint8Array>
   if (rows.length === 0) outline(page, tableTop, y);
 
   // ── footer: words, total, bank, signature ──
-  if (y < FOOTER_SPACE) {
+  if (y < footerSpace) {
     page = newPage(false);
     y = H - 90;
   }
-  const boxW = 210;
+  const boxW = FOOTER_BOX_W;
   const bx = X1 - boxW;
   const labW = 110;
   cell(page, bx, y - 18, labW, 16);
@@ -298,34 +333,30 @@ export async function buildInvoicePdf(data: InvoicePdfData): Promise<Uint8Array>
   let ly = y - 14;
   draw(page, fonts, "Amount in Words:", X0, ly, 9, { color: SOFT });
   ly -= 15;
-  for (const l of wrap(fonts, data.words, 10, bx - X0 - 16, true)) {
+  for (const l of wordRows) {
     draw(page, fonts, l, X0, ly, 10, { bold: true });
     ly -= 13;
   }
   ly -= 6;
   const short = (data.issuer.name || "us").replace(/\s+(LLC|L\.L\.C\.?|Ltd\.?|Limited|Pvt\.?\s*Ltd\.?|Private Limited)$/i, "");
-  draw(page, fonts, `Thank you for choosing ${short}!`, X0, ly, 9.5, { color: SOFT });
+  draw(page, fonts, data.thanksLine || `Thank you for choosing ${short}!`, X0, ly, 9.5, { color: SOFT });
   ly -= 30;
 
-  const bankLines = [
-    data.bank.accountName && data.bank.accountName,
-    data.bank.currency && `ACCOUNT CURRENCY: ${data.bank.currency}`,
-    data.bank.iban && `IBAN:${data.bank.iban}`,
-    data.bank.bic && `BIC/SWIFT:${data.bank.bic}`,
-    data.bank.accountNo && `ACCOUNT NUMBER:${data.bank.accountNo}`,
-  ].filter(Boolean) as string[];
-  if (bankLines.length) {
+  let leftLast = ly + 30; // the thanks line
+  if (bankRows.length) {
     draw(page, fonts, "Bank Account", X0, ly, 9, { color: SOFT });
     ly -= 12.5;
-    for (const l of bankLines) {
+    for (const l of bankRows) {
       draw(page, fonts, l, X0, ly, 9, { color: SOFT });
+      leftLast = ly;
       ly -= 12.5;
     }
   }
 
   // Signature block, right-aligned under the total.
   let sy = y - 70;
-  if (data.issuer.name) draw(page, fonts, `For ${data.issuer.name}`, X1 - 10, sy, 9.5, { bold: true, align: "right" });
+  const signFor = data.signFor || (data.issuer.name ? `For ${data.issuer.name}` : "");
+  if (signFor) draw(page, fonts, signFor, X1 - 10, sy, 9.5, { bold: true, align: "right" });
   sy -= 6;
   if (sig) {
     const scale = Math.min(120 / sig.width, 48 / sig.height, 1);
@@ -337,6 +368,13 @@ export async function buildInvoicePdf(data: InvoicePdfData): Promise<Uint8Array>
     sy -= 44;
   }
   if (data.signatory.name) draw(page, fonts, data.signatory.name, X1 - 10, sy, 9.5, { bold: true, align: "right" });
+
+  // The export declaration, full width under the bank details and the signature.
+  let ny = Math.min(leftLast, sy) - 14;
+  for (const l of noteRows) {
+    draw(page, fonts, l, X0, ny, 8, { color: SOFT });
+    ny -= 10.5;
+  }
 
   for (const p of doc.getPages()) {
     band(p, 74, 18);
