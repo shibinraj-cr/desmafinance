@@ -27,12 +27,14 @@ import {
   isGstin,
   isIndia,
   isSeriesNumber,
+  intoStem,
   nextSeq,
   notInvoiceableReason,
   restyleNumber,
   round2,
   seriesKeyFor,
   seriesStem,
+  stemVariants,
   setupGaps,
   type AmountsProblem,
   type FyStyle,
@@ -371,7 +373,8 @@ type SeriesRow = InvoiceSettings["series"][number];
  * above the highest already issued in that series and year (a change of
  * prefix or year style mid-year continues the count), never below the
  * series' "next number" floor, and clear of numbers Partner Commissions has
- * used in the same stem (D/DLLC is one series shared by both).
+ * used in the same series (D/DLLC is one series shared by both, whether the
+ * year is written 26-27 or 2627).
  */
 async function nextNumber(db: Db, given: SeriesRow, invoiceDate: string, lock: boolean) {
   const fy = fyCode(invoiceDate, "dash");
@@ -388,12 +391,12 @@ async function nextNumber(db: Db, given: SeriesRow, invoiceDate: string, lock: b
   if (lock) await lockInvoiceStem(db as Prisma.TransactionClient, stem);
   const [maxSeq, pcNumbers, pc] = await Promise.all([
     db.invoice.aggregate({ where: { seriesKey: series.key, fy }, _max: { seq: true } }),
-    db.commissionInvoice.findMany({ where: { number: { startsWith: stem, mode: "insensitive" } }, select: { number: true } }),
+    db.commissionInvoice.findMany({ where: { OR: stemVariants(stem).map((s) => ({ number: { startsWith: s, mode: "insensitive" as const } })) }, select: { number: true } }),
     db.commissionSettings.findUnique({ where: { id: "default" }, select: { nextNumber: true } }),
   ]);
   const seq = Math.max(
     (maxSeq._max.seq ?? 0) + 1,
-    nextSeq(stem, pcNumbers.map((n) => n.number.toUpperCase()), [series.nextNumber, pc?.nextNumber?.toUpperCase()]),
+    nextSeq(stem, intoStem(stem, pcNumbers.map((n) => n.number)), [series.nextNumber, ...intoStem(stem, [pc?.nextNumber])]),
   );
   return { number: formatInvoiceNo(stem, seq, series.padding), seq, fy, series };
 }

@@ -100,6 +100,8 @@ export type ProgramDTO = { code: string; configured: boolean; partnerId: string 
 
 export type PcPageData = {
   today: string;
+  /** The next number in the shared D/DLLC series today (candidate invoices included), as the server would pick it. */
+  suggestedNumber: string;
   userId: string;
   canApprove: boolean;
   settings: SettingsDTO;

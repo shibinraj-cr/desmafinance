@@ -1,11 +1,13 @@
 import type { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
+import { intoStem, runningNumber, sameInvoiceNumber, stemKey, stemOfNumber, stemVariants } from "./core";
 
 /**
  * Invoice numbers shared across modules. D/DLLC is one series used by both
  * candidate invoices (Wio payments) and Partner Commission invoices, so both
- * take the same lock on a stem ("D/DLLC/26-27/") while they pick or check a
- * number, and each refuses a number the other already holds.
+ * take the same lock on a stem while they pick or check a number, and each
+ * refuses a number the other already holds. The year may be written "26-27"
+ * or "2627" — it is still one series.
  */
 
 type Db = Prisma.TransactionClient | typeof prisma;
@@ -14,33 +16,22 @@ export async function advisoryLock(tx: Prisma.TransactionClient, key: string): P
   await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${key}))`;
 }
 
-/** Serialise everyone numbering inside one stem, until the transaction ends. */
+/** Serialise everyone numbering inside one series (any year style), until the transaction ends. */
 export async function lockInvoiceStem(tx: Prisma.TransactionClient, stem: string): Promise<void> {
-  await advisoryLock(tx, `invoice-stem:${stem.toUpperCase()}`);
+  await advisoryLock(tx, `invoice-stem:${stemKey(stem)}`);
 }
 
-/** "D/DLLC/26-27/025" → "D/DLLC/26-27/". */
-export function stemOfNumber(number: string): string {
-  const i = number.lastIndexOf("/");
-  return i >= 0 ? number.slice(0, i + 1) : number;
-}
-
-/** The running number at the end of a number ("…/031" → 31), or null. */
-function runningNumber(number: string): number | null {
-  const tail = number.slice(stemOfNumber(number).length);
-  return /^\d+$/.test(tail) ? Number(tail) : null;
-}
+export { stemOfNumber };
 
 /**
  * Whether a candidate invoice already holds this number. Compared the way a
- * person reads it: same stem ignoring case, same running number ignoring
- * leading zeros, so "D/DLLC/26-27/31" is taken when "D/DLLC/26-27/031" is.
+ * person reads it: same series whatever the year style ("D/DLLC/26-27/" =
+ * "D/DLLC/2627/"), same running number ignoring leading zeros, so
+ * "D/DLLC/2627/31" is taken when "D/DLLC/26-27/031" is.
  */
 export async function candidateInvoiceNumberTaken(db: Db, number: string): Promise<boolean> {
-  const stem = stemOfNumber(number);
-  const seq = runningNumber(number);
-  const rows = await db.invoice.findMany({ where: { number: { startsWith: stem, mode: "insensitive" } }, select: { number: true } });
-  return rows.some((r) => r.number.toUpperCase() === number.toUpperCase() || (seq != null && runningNumber(r.number) === seq));
+  const rows = await db.invoice.findMany({ where: { OR: stemVariants(stemOfNumber(number)).map((s) => ({ number: { startsWith: s, mode: "insensitive" as const } })) }, select: { number: true } });
+  return rows.some((r) => sameInvoiceNumber(r.number, number));
 }
 
 /**
@@ -49,13 +40,14 @@ export async function candidateInvoiceNumberTaken(db: Db, number: string): Promi
  * written for this stem.
  */
 export async function candidateStemState(db: Db, stem: string): Promise<{ numbers: string[]; floor: string | null }> {
+  const variants = stemVariants(stem);
   const [rows, series] = await Promise.all([
-    db.invoice.findMany({ where: { number: { startsWith: stem, mode: "insensitive" } }, select: { number: true } }),
-    db.invoiceSeries.findMany({ where: { nextNumber: { startsWith: stem, mode: "insensitive" } }, select: { nextNumber: true } }),
+    db.invoice.findMany({ where: { OR: variants.map((s) => ({ number: { startsWith: s, mode: "insensitive" as const } })) }, select: { number: true } }),
+    db.invoiceSeries.findMany({ where: { OR: variants.map((s) => ({ nextNumber: { startsWith: s, mode: "insensitive" as const } })) }, select: { nextNumber: true } }),
   ]);
   return {
-    numbers: rows.map((r) => r.number.toUpperCase()),
-    floor: series.map((s) => s.nextNumber!.toUpperCase()).sort((a, b) => (runningNumber(b) ?? 0) - (runningNumber(a) ?? 0))[0] ?? null,
+    numbers: intoStem(stem, rows.map((r) => r.number)),
+    floor: intoStem(stem, series.map((s) => s.nextNumber)).sort((a, b) => (runningNumber(b) ?? 0) - (runningNumber(a) ?? 0))[0] ?? null,
   };
 }
 

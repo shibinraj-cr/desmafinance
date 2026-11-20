@@ -3,7 +3,7 @@
 import { useState } from "react";
 import { Callout, Field, Icon, ProgramTag, api, btnCls, cardCls, inputCls, linkBtnCls, primaryBtnCls } from "@/components/partner-commissions/ui";
 import { LEDGER, MAX_INSTALLMENTS, PROGRAM_CODES } from "@/lib/partner-commissions/constants";
-import { parsePlans, suggestInvoiceNumber, volumeExtraPct, volumeFyOfDate, volumeTiersLabel } from "@/lib/partner-commissions/logic";
+import { parsePlans, volumeExtraPct, volumeFyOfDate, volumeTiersLabel } from "@/lib/partner-commissions/logic";
 import { billedInFy, type PartnerDTO, type ProgramDTO } from "./_types";
 import type { PcCtx } from "./client";
 
@@ -546,9 +546,8 @@ function IssuerCard({ ctx, ro }: { ctx: PcCtx; ro: boolean }) {
 
 function RunCard({ ctx, ro }: { ctx: PcCtx; ro: boolean }) {
   const s = ctx.data.settings;
-  const existing = ctx.data.invoices.map((i) => i.number);
-  // What DesGro will suggest next: one above the last DesGro invoice, but never below the saved floor.
-  const suggested = suggestInvoiceNumber(s.numberPrefix, ctx.data.today, existing, s.nextNumber);
+  // What DesGro will use next: one above the last number in the shared series (Wio invoices included), never below the saved floor.
+  const suggested = ctx.data.suggestedNumber;
   const [prefix, setPrefix] = useState(s.numberPrefix);
   const [next, setNext] = useState(suggested);
   const [day, setDay] = useState(String(s.runDay));
