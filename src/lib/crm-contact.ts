@@ -118,7 +118,15 @@ function pairCompletedAt(a: number | null, b: number | null): number | null {
  *   - reassigned       left this BDE before the deadline, uncontacted — on nobody's record
  *   - pending          nothing complete yet, deadline still ahead
  */
-export function evaluateContact(a: AssignmentWindow, events: ContactEvent[], now: Date): ContactVerdict {
+/**
+ * "pair" is R1 above. "any" is the older rule the backfill uses for leads
+ * assigned before the daily lead report went live, when nobody was asked to
+ * pair actions yet: the first call, note, WhatsApp or stage/Status change the
+ * BDE logged counts as contact.
+ */
+export type ContactRule = "pair" | "any";
+
+export function evaluateContact(a: AssignmentWindow, events: ContactEvent[], now: Date, rule: ContactRule = "pair"): ContactVerdict {
   const from = a.assignedAt.getTime();
   const to = a.endedAt ? a.endedAt.getTime() : Infinity;
   const mine = events.filter((e) => e.actorId === a.userId && e.at.getTime() >= from && e.at.getTime() <= to);
@@ -130,11 +138,15 @@ export function evaluateContact(a: AssignmentWindow, events: ContactEvent[], now
   const whatsapps = times((e) => e.kind === "whatsapp");
   const stages = times((e) => e.kind === "stage");
 
-  const completions = [
-    earliest(callsWithNote),
-    pairCompletedAt(earliest(calls), earliest(notes)),
-    pairCompletedAt(earliest(whatsapps), earliest(stages)),
-  ].filter((t): t is number => t !== null);
+  const completions = (
+    rule === "any"
+      ? [earliest(mine.map((e) => e.at.getTime()))]
+      : [
+          earliest(callsWithNote),
+          pairCompletedAt(earliest(calls), earliest(notes)),
+          pairCompletedAt(earliest(whatsapps), earliest(stages)),
+        ]
+  ).filter((t): t is number => t !== null);
   const first = earliest(completions);
 
   const halves: ContactHalves = {
