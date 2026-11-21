@@ -11,7 +11,8 @@ export const maxDuration = 300;
  * Send the next chunk of every due WhatsApp broadcast.
  *
  * This is the primary delivery path: on the Pro plan it fires every five
- * minutes (vercel.json) with a near-five-minute budget, so a campaign of a few
+ * minutes from 06:30 to 22:25 IST (vercel.json; overnight the database sleeps,
+ * see db-quiet-hours) with a near-five-minute budget, so a campaign of a few
  * thousand drains unattended within the hour. The admin's "Send next" button on
  * /crm/broadcasts drives ONE campaign in the moment. Both call the same
  * bounded, resumable drain, so neither can double-send.

@@ -16,7 +16,7 @@ import {
 import { classifyNarration, extractCounterparty } from "@/lib/bank/classify";
 import { isAmountToken, parseAmount, toDecimalString } from "@/lib/bank/money";
 import { retryDecision, toBankError } from "@/lib/bank/errors";
-import { isBankBusinessDay, isScheduledRunDue, missedBusinessDays, zonedParts } from "@/lib/bank/schedule";
+import { isBankBusinessDay, isRunTimeInWorkerHours, isScheduledRunDue, missedBusinessDays, zonedParts } from "@/lib/bank/schedule";
 import { envSecretName, redact, seal, unseal } from "@/lib/bank/secrets";
 import { importRows } from "@/lib/bank/import";
 import { HDFCStatementParser } from "@/lib/bank/parsers/hdfc";
@@ -153,6 +153,16 @@ describe("schedule", () => {
     expect(isScheduledRunDue({ ...base, now: at("2026-10-07T10:00:00Z"), lastScheduledRunOn: "2026-10-07" })).toBe(false);
     expect(isScheduledRunDue({ ...base, enabled: false, now: at("2026-10-07T10:00:00Z"), lastScheduledRunOn: null })).toBe(false);
     expect(zonedParts(at("2026-10-06T20:00:00Z"), "Asia/Kolkata").date).toBe("2026-10-07");
+  });
+
+  it("only accepts a run time while the worker cron is awake (06:30–22:00 IST)", () => {
+    expect(isRunTimeInWorkerHours("09:30")).toBe(true);
+    expect(isRunTimeInWorkerHours("06:30")).toBe(true);
+    expect(isRunTimeInWorkerHours("22:00")).toBe(true);
+    expect(isRunTimeInWorkerHours("06:29")).toBe(false);
+    expect(isRunTimeInWorkerHours("22:01")).toBe(false); // never picked up: the next tick is tomorrow
+    expect(isRunTimeInWorkerHours("02:00")).toBe(false);
+    expect(isRunTimeInWorkerHours("9:30")).toBe(false);
   });
 
   it("knows bank holidays: Sundays and 2nd/4th Saturdays", () => {

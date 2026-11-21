@@ -1,5 +1,5 @@
 /**
- * The lead-cutoff cron's work (every 5 minutes, /api/cron/lead-cutoff) and the
+ * The lead-cutoff cron's work (every 5 minutes, 06:30–22:25 IST, /api/cron/lead-cutoff) and the
  * handover notifications. Rules and wording: crm-lead-cutoff.ts.
  *
  * One tick:

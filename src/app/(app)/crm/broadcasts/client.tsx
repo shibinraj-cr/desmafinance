@@ -195,7 +195,7 @@ export function BroadcastsClient({
 
       <div className="flex items-center justify-between gap-base">
         <p className="text-label-sm text-on-surface-variant">
-          Queued campaigns send automatically every 5 minutes · Send next pushes one chunk of that campaign right away
+          Queued campaigns send automatically every 5 minutes from 06:30 to 22:30 IST · Send next pushes one chunk of that campaign right away, at any hour
         </p>
         {canBroadcast && (
           <button

@@ -7,7 +7,8 @@ export const dynamic = "force-dynamic";
 export const maxDuration = 300;
 
 /**
- * Bank Statement Automation worker — every 5 minutes (vercel.json).
+ * Bank Statement Automation worker — every 5 minutes from 06:30 to 22:25 IST
+ * (vercel.json; overnight the database sleeps, see db-quiet-hours).
  *
  *  1. Queue today's scheduled run for each integration whose configured time
  *     (default 09:30 IST) has passed — once per day, claimed atomically.
