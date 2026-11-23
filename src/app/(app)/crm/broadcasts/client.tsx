@@ -54,6 +54,8 @@ type FormInitial = {
   status: string[];
   service: string[];
   source: string[];
+  /** Consultant userIds, plus "unassigned" for leads with no consultant. */
+  assignee: string[];
   variableMap: Record<string, string>;
   engagedWithinDays: string;
   headerMediaType: "image" | "video" | "document" | null;
@@ -97,6 +99,7 @@ export function BroadcastsClient({
   coldStageIds,
   services,
   sources,
+  consultants,
 }: {
   providerLabel: string;
   canBroadcast: boolean;
@@ -108,6 +111,7 @@ export function BroadcastsClient({
   coldStageIds: string[];
   services: Opt[];
   sources: Opt[];
+  consultants: Opt[];
 }) {
   const [rows, setRows] = useState<BroadcastRow[]>([]);
   const [loading, setLoading] = useState(true);
@@ -158,6 +162,7 @@ export function BroadcastsClient({
         status: listParam(seg.status as string | string[] | undefined),
         service: listParam(seg.service as string | string[] | undefined),
         source: listParam(seg.source as string | string[] | undefined),
+        assignee: listParam(seg.assignee as string | string[] | undefined),
         variableMap: d.broadcast.variableMap ?? {},
         engagedWithinDays: Number.isFinite(engaged) && engaged > 0 ? String(engaged) : "",
         // Round-trip the persisted kind, not just the URL: it is the fallback
@@ -221,6 +226,7 @@ export function BroadcastsClient({
           coldStageIds={coldStageIds}
           services={services}
           sources={sources}
+          consultants={consultants}
           broadcastId={editing?.id}
           initial={editing?.initial}
           onReload={load}
@@ -480,6 +486,7 @@ function BroadcastForm({
   coldStageIds,
   services,
   sources,
+  consultants,
   broadcastId,
   initial,
   onReload,
@@ -491,6 +498,7 @@ function BroadcastForm({
   coldStageIds: string[];
   services: Opt[];
   sources: Opt[];
+  consultants: Opt[];
   broadcastId?: string;
   initial?: FormInitial;
   onReload: () => void;
@@ -510,6 +518,7 @@ function BroadcastForm({
   const [status, setStatus] = useState<string[]>(initial?.status ?? []);
   const [service, setService] = useState<string[]>(initial?.service ?? []);
   const [source, setSource] = useState<string[]>(initial?.source ?? []);
+  const [assignee, setAssignee] = useState<string[]>(initial?.assignee ?? []);
   const [engagedDays, setEngagedDays] = useState<string>(initial?.engagedWithinDays ?? "");
   const [headerMediaUrl, setHeaderMediaUrl] = useState<string>(initial?.headerMediaUrl ?? "");
   const [variableMap, setVariableMap] = useState<Record<string, string>>(initial?.variableMap ?? {});
@@ -520,12 +529,24 @@ function BroadcastForm({
   const [note, setNote] = useState<string | null>(null);
 
   const approved = templates.filter((t) => t.status === "APPROVED");
+  const consultantOptions = [
+    { value: "unassigned", label: "Unassigned" },
+    ...consultants.map((c) => ({ value: c.id, label: c.label ?? c.name ?? c.id })),
+    // A draft saved for a consultant who has since left the roster still shows
+    // (and can be removed) instead of filtering invisibly.
+    ...assignee
+      .filter((v) => v !== "unassigned" && !consultants.some((c) => c.id === v))
+      .map((v) => ({ value: v, label: "Former consultant" })),
+  ];
   // Stored as JSON and read back as LeadFilterParams, which takes one value or
   // several per key — so a segment can be "Study Abroad OR Nursing".
   const segment: Record<string, unknown> = {};
   if (status.length) segment.status = status;
   if (service.length) segment.service = service;
   if (source.length) segment.source = source;
+  // The Leads page's consultant filter (buildLeadWhere `assignee`): userIds, and
+  // "unassigned" for leads nobody owns. Empty = every consultant.
+  if (assignee.length) segment.assignee = assignee;
   // Only leads who messaged us within N days — the deliverability lever.
   if (engagedDays) segment.engagedWithinDays = Number(engagedDays);
 
@@ -772,6 +793,13 @@ function BroadcastForm({
                 selected={source}
                 onChange={setSource}
               />
+              <MultiSelect
+                placeholder="Any consultant"
+                options={consultantOptions}
+                selected={assignee}
+                onChange={setAssignee}
+                searchable
+              />
               <select
                 value={engagedDays}
                 onChange={(e) => setEngagedDays(e.target.value)}
@@ -788,6 +816,13 @@ function BroadcastForm({
               Opted-out and undeliverable numbers are excluded automatically and reported as skipped.{" "}
               <span className="font-medium">Replied in last N days</span> restricts the send to leads who messaged you — the
               audience a marketing template actually reaches.
+              {assignee.length > 0 && (
+                <>
+                  {" "}
+                  <span className="font-medium">Consultant</span> matches the lead&apos;s current owner; leads in the
+                  centralised marketing pool have no owner, so they only match <span className="font-medium">Unassigned</span>.
+                </>
+              )}
             </p>
             {showColdWarning && (
               <div className="mt-sm rounded-lg border border-amber-500/40 bg-amber-500/10 px-md py-sm text-label-sm text-amber-700">

@@ -111,6 +111,21 @@ describe("broadcastLeadWhere", () => {
     expect(w.phoneE164).toBeUndefined();
   });
 
+  it("narrows to the chosen consultants (and Unassigned) via the segment's assignee", async () => {
+    expect((await broadcastLeadWhere({ assignee: ["u1"] } as never)).assignedToId).toBe("u1");
+    expect((await broadcastLeadWhere({ assignee: ["u1", "u2"] } as never)).assignedToId).toEqual({ in: ["u1", "u2"] });
+    expect((await broadcastLeadWhere({ assignee: ["unassigned"] } as never)).assignedToId).toBeNull();
+    // Unassigned + a consultant is one audience of both piles, ANDed with the rest.
+    const both = await broadcastLeadWhere({ assignee: ["unassigned", "u1"], status: "st1" } as never);
+    expect(both.statusId).toBe("st1");
+    expect(both.assignedToId).toBeUndefined();
+    expect(both.AND).toContainEqual({ OR: [{ assignedToId: null }, { assignedToId: "u1" }] });
+  });
+
+  it("applies no consultant filter when the segment has none (campaigns saved before the picker)", async () => {
+    expect((await broadcastLeadWhere({ status: "st1" } as never)).assignedToId).toBeUndefined();
+  });
+
   it("adds no phone gate for a missing, zero, or non-numeric engagedWithinDays", async () => {
     expect((await broadcastLeadWhere({} as never)).phoneE164).toBeUndefined();
     expect((await broadcastLeadWhere({ engagedWithinDays: 0 } as never)).phoneE164).toBeUndefined();

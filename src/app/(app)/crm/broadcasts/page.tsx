@@ -7,6 +7,7 @@ import { WA_UI_ADMIN_ONLY } from "@/lib/rbac";
 import { getWaProvider } from "@/lib/wa/registry";
 import { getBroadcastConfig } from "@/lib/wa/broadcast";
 import { CRM_TEMPLATE_MERGE_FIELDS } from "@/lib/crm";
+import { getAssignableBdes } from "@/lib/crm-leads";
 import { BroadcastsClient } from "./client";
 
 export const dynamic = "force-dynamic";
@@ -44,7 +45,7 @@ export default async function CrmBroadcastsPage() {
     );
   }
 
-  const [provider, config, statuses, services, sources] = await Promise.all([
+  const [provider, config, statuses, services, sources, consultants] = await Promise.all([
     getWaProvider(),
     getBroadcastConfig(),
     prisma.crmLeadStatus.findMany({
@@ -54,6 +55,9 @@ export default async function CrmBroadcastsPage() {
     }),
     prisma.service.findMany({ orderBy: { name: "asc" }, select: { id: true, name: true } }),
     prisma.leadPulseSource.findMany({ where: { active: true }, orderBy: { displayOrder: "asc" }, select: { id: true, label: true } }),
+    // The same consultant list the Leads page filters by, so a campaign can be
+    // aimed at one BDE's (or several BDEs') leads.
+    getAssignableBdes(),
   ]);
 
   // Approved templates from the WABA when the transport can list them; the
@@ -80,6 +84,7 @@ export default async function CrmBroadcastsPage() {
           coldStageIds={coldStageIds}
           services={services}
           sources={sources}
+          consultants={consultants.map((c) => ({ id: c.userId, label: c.displayName }))}
         />
       </div>
     </>
