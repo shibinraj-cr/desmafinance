@@ -24,6 +24,11 @@ import {
   stemKey,
   stemOfNumber,
   stemVariants,
+  numberAfter,
+  startsAtOne,
+  correctedNumber,
+  numberCorrectionOpen,
+  projectNumbers,
 } from "@/lib/invoices/core";
 import { gstStateByName, gstStateOfGstin, placeOfSupplyLabel } from "@/lib/invoices/gst-states";
 
@@ -297,3 +302,77 @@ describe("restyleNumber", () => {
     expect(restyleNumber("E/DIPL/26-27/0526", dash, { prefix: "D/DIPL/", fyStyle: "compact", padding: 4 })).toBeNull();
   });
 });
+
+describe("next numbers shown before issuing", () => {
+  it("counts on from the next number, keeping the series' digits", () => {
+    expect(numberAfter("D/DIPL/2627/0671", 0, 4)).toBe("D/DIPL/2627/0671");
+    expect(numberAfter("D/DIPL/2627/0671", 2, 4)).toBe("D/DIPL/2627/0673");
+    expect(numberAfter("E/DIPL/2627/077", 1, 3)).toBe("E/DIPL/2627/078");
+    expect(numberAfter("E/DIPL/2627/999", 1, 3)).toBe("E/DIPL/2627/1000");
+  });
+
+  it("flags a series that starts at 1 only when no next number was set for that year", () => {
+    expect(startsAtOne("D/DIPL/2627/0001", null)).toBe(true);
+    expect(startsAtOne("D/DIPL/2627/0001", "D/DIPL/2526/0900")).toBe(true); // last year's floor doesn't count
+    expect(startsAtOne("D/DIPL/2627/0001", "D/DIPL/2627/0001")).toBe(false); // set on purpose
+    expect(startsAtOne("D/DIPL/2627/0670", "D/DIPL/2627/0670")).toBe(false);
+    expect(startsAtOne("D/DIPL/2627/0002", null)).toBe(false);
+  });
+
+  it("projects each waiting payment's number in list order, per series and year", () => {
+    const upcoming = {
+      "26-27": { "DIPL-DOM": "D/DIPL/2627/0671", "DIPL-EXP": "E/DIPL/2627/077", "DLLC-DOM": "D/DLLC/2627/031" },
+      "25-26": { "DIPL-DOM": "D/DIPL/2526/0950", "DIPL-EXP": "E/DIPL/2526/120", "DLLC-DOM": "D/DLLC/2526/090" },
+    };
+    const pad = { "DIPL-DOM": 4, "DIPL-EXP": 3, "DLLC-DOM": 3 };
+    const rows = [
+      { id: "a", date: "2027-03-30", entityCode: "DIPL", expDom: "DOM", blocked: false },
+      { id: "b", date: "2026-11-20", entityCode: "DIPL", expDom: "DOM", blocked: false },
+      { id: "c", date: "2026-11-21", entityCode: "DIPL", expDom: null, blocked: false },
+      { id: "d", date: "2026-11-21", entityCode: "DIPL", expDom: "EXP", blocked: false },
+      { id: "e", date: "2026-11-22", entityCode: "DIPL", expDom: "DOM", blocked: true },
+      { id: "f", date: "2026-11-22", entityCode: "DLLC", expDom: "EXP", blocked: false },
+      { id: "g", date: "2026-11-23", entityCode: "DIPL", expDom: "DOM", blocked: false },
+    ];
+    const got = projectNumbers(rows, upcoming, pad);
+    expect(got).toEqual({
+      a: "D/DIPL/2627/0671", // 30 Mar 2027 is still FY 26-27
+      b: "D/DIPL/2627/0672",
+      c: "D/DIPL/2627/0673", // no EXP/DOM yet: the form defaults to domestic
+      d: "E/DIPL/2627/077",
+      f: "D/DLLC/2627/031", // Wio is always the UAE series
+      g: "D/DIPL/2627/0674", // e is waiting for an approval, so it takes no number
+    });
+    expect(projectNumbers([{ id: "x", date: "2026-03-31", entityCode: "DIPL", expDom: "DOM", blocked: false }], upcoming, pad)).toEqual({ x: "D/DIPL/2526/0950" });
+  });
+});
+
+describe("correcting an issued invoice's number", () => {
+  const dom = { prefix: "D/DIPL/", fyStyle: "compact" as const, padding: 4 };
+
+  it("takes the whole number or just the running number, written as the series writes it", () => {
+    expect(correctedNumber("D/DIPL/2627/0670", dom, "2026-11-20")).toEqual({ number: "D/DIPL/2627/0670", seq: 670 });
+    expect(correctedNumber("d/dipl/2627/670", dom, "2026-11-20")).toEqual({ number: "D/DIPL/2627/0670", seq: 670 });
+    expect(correctedNumber(" 670 ", dom, "2026-11-20")).toEqual({ number: "D/DIPL/2627/0670", seq: 670 });
+    expect(correctedNumber("77", { prefix: "E/DIPL/", fyStyle: "compact", padding: 3 }, "2026-11-20")).toEqual({ number: "E/DIPL/2627/077", seq: 77 });
+  });
+
+  it("refuses another series, another year, a different year style, or zero", () => {
+    expect(correctedNumber("E/DIPL/2627/0670", dom, "2026-11-20")).toEqual({ problem: "format" });
+    expect(correctedNumber("D/DIPL/26-27/0670", dom, "2026-11-20")).toEqual({ problem: "format" });
+    expect(correctedNumber("D/DIPL/2526/0670", dom, "2026-11-20")).toEqual({ problem: "year" });
+    expect(correctedNumber("0", dom, "2026-11-20")).toEqual({ problem: "zero" });
+    expect(correctedNumber("D/DIPL/2627/0000", dom, "2026-11-20")).toEqual({ problem: "zero" });
+    expect(correctedNumber("", dom, "2026-11-20")).toEqual({ problem: "format" });
+    expect(correctedNumber("1234567", dom, "2026-11-20")).toEqual({ problem: "format" });
+  });
+
+  it("is open until the 10th of the month after the invoice date (before GSTR-1 falls due)", () => {
+    expect(numberCorrectionOpen("2026-11-20", "2026-11-23")).toBe(true);
+    expect(numberCorrectionOpen("2026-11-20", "2026-12-10")).toBe(true);
+    expect(numberCorrectionOpen("2026-11-20", "2026-12-11")).toBe(false);
+    expect(numberCorrectionOpen("2026-12-31", "2027-01-05")).toBe(true);
+    expect(numberCorrectionOpen("2026-10-31", "2026-12-01")).toBe(false);
+  });
+});
+

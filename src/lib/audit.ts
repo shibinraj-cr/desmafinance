@@ -19,10 +19,11 @@ type AuditAction =
   // (src/lib/crm-unenroll.ts) — it discards a revenue draft, so it belongs in
   // the same audit trail Finance reads.
   | "CRM_UNENROLL"
-  // Candidate invoices (src/lib/invoices/): a cancelled invoice, and every
-  // download of one by anyone (Finance, BDE, Ops).
+  // Candidate invoices (src/lib/invoices/): a cancelled invoice, every
+  // download of one by anyone (Finance, BDE, Ops), and a corrected number.
   | "CANCEL"
-  | "DOWNLOAD";
+  | "DOWNLOAD"
+  | "RENUMBER";
 
 export async function recordAudit(opts: {
   entityType: string;

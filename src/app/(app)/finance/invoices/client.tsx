@@ -4,7 +4,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import type { InvoiceDTO, InvoiceSettings, ToInvoiceRow } from "@/lib/invoices/server";
-import { SERIES_KEYS, SERIES_LABEL } from "@/lib/invoices/core";
+import { SERIES_KEYS, SERIES_LABEL, fyCode, numberCorrectionOpen, projectNumbers, startsAtOne, type SeriesKey } from "@/lib/invoices/core";
 import {
   Callout,
   Icon,
@@ -30,7 +30,10 @@ export type InvoicesPageData = {
   toInvoice: ToInvoiceRow[];
   issued: InvoiceDTO[];
   settings: InvoiceSettings;
+  /** What each series issues next today. */
   upcoming: Record<string, string>;
+  /** The same, per financial year ("26-27") of the payments waiting. */
+  upcomingByFy: Record<string, Record<string, string>>;
   gapsByBank: Record<string, string[]>;
   issuerStateCode: string | null;
   lutArn: string | null;
@@ -91,11 +94,24 @@ export function InvoicesClient({ data, initialTab, page }: { data: InvoicesPageD
 
 // ── To invoice ───────────────────────────────────────────────────────────────
 
+/** Each waiting payment's number if issued from the top down. */
+function projectedNumbers(data: InvoicesPageData): Record<string, string> {
+  return projectNumbers(
+    data.toInvoice.map((r) => ({ id: r.id, date: r.date, entityCode: r.entityCode, expDom: r.expDom, blocked: !!r.pendingChange })),
+    data.upcomingByFy,
+    Object.fromEntries(data.settings.series.map((s) => [s.key, s.padding])),
+  );
+}
+
 function ToInvoiceTab({ data, done, goSettings }: { data: InvoicesPageData; done: (m: string) => void; goSettings: () => void }) {
   const [issuing, setIssuing] = useState<ToInvoiceRow | null>(null);
   const activeGaps = data.settings.banks
     .filter((b) => b.isActive && (data.gapsByBank[b.paymentMode] ?? []).length)
     .map((b) => [b.paymentMode, data.gapsByBank[b.paymentMode]] as const);
+  const numbers = useMemo(() => projectedNumbers(data), [data]);
+  const activeEntities = new Set(data.settings.banks.filter((b) => b.isActive).map((b) => b.entityCode));
+  const shownSeries = data.settings.series.filter((s) => activeEntities.has(s.key.split("-")[0]));
+  const atOne = shownSeries.filter((s) => data.upcoming[s.key] && startsAtOne(data.upcoming[s.key], s.nextNumber));
 
   return (
     <div className="flex flex-col gap-md">
@@ -137,6 +153,34 @@ function ToInvoiceTab({ data, done, goSettings }: { data: InvoicesPageData; done
         </Callout>
       )}
 
+      {data.settings.startsOn && shownSeries.length > 0 && (
+        <section className={`${cardCls} px-md py-sm flex flex-col gap-1`} aria-label="Next invoice numbers">
+          <div className="flex flex-wrap items-baseline gap-x-lg gap-y-1">
+            <span className="text-label-sm font-semibold text-on-surface-variant">Next invoice numbers</span>
+            {shownSeries.map((s) => (
+              <span key={s.key} className="text-body-md">
+                {SERIES_LABEL[s.key as SeriesKey] ?? s.key}:{" "}
+                <b className="tabular-nums" data-next-number={s.key}>
+                  {data.upcoming[s.key] ?? "—"}
+                </b>
+              </span>
+            ))}
+            {data.canManage ? (
+              <button className={`${linkBtnCls} ml-auto`} onClick={goSettings}>
+                Change in Settings
+              </button>
+            ) : null}
+          </div>
+          {atOne.length > 0 && (
+            <p className="text-caption text-on-surface-variant">
+              {atOne.map((s) => SERIES_LABEL[s.key as SeriesKey] ?? s.key).join(" and ")} {atOne.length > 1 ? "start" : "starts"} at 1
+              this financial year. If {atOne.length > 1 ? "they continue" : "it continues"} numbers raised outside DesGro, set the next
+              number in Settings before issuing.
+            </p>
+          )}
+        </section>
+      )}
+
       <section className={`${cardCls} overflow-hidden`}>
         {data.toInvoice.length === 0 ? (
           <p className="p-lg text-center text-on-surface-variant">
@@ -153,6 +197,9 @@ function ToInvoiceTab({ data, done, goSettings }: { data: InvoicesPageData; done
                   <th className="px-md py-2 font-semibold text-right">Amount</th>
                   <th className="px-md py-2 font-semibold">For</th>
                   <th className="px-md py-2 font-semibold">BDE</th>
+                  <th className="px-md py-2 font-semibold" title="The number each payment gets when issued from the top down">
+                    Invoice no.
+                  </th>
                   <th className="px-md py-2" />
                 </tr>
               </thead>
@@ -179,6 +226,9 @@ function ToInvoiceTab({ data, done, goSettings }: { data: InvoicesPageData; done
                     <td className="px-md py-2 text-right tabular-nums font-semibold">{money(r.amount, "INR")}</td>
                     <td className="px-md py-2 text-on-surface-variant">{r.subItem}</td>
                     <td className="px-md py-2 text-on-surface-variant whitespace-nowrap">{r.party?.bde ?? "—"}</td>
+                    <td className="px-md py-2 whitespace-nowrap tabular-nums font-semibold" data-projected-number={r.id}>
+                      {numbers[r.id] ?? "—"}
+                    </td>
                     <td className="px-md py-2 text-right">
                       {r.pendingChange ? (
                         <div className="flex flex-col items-end gap-1">
@@ -225,6 +275,7 @@ function IssuedTab({ data, done }: { data: InvoicesPageData; done: (m: string) =
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [cancelling, setCancelling] = useState<InvoiceDTO | null>(null);
+  const [correcting, setCorrecting] = useState<InvoiceDTO | null>(null);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -374,6 +425,11 @@ function IssuedTab({ data, done }: { data: InvoicesPageData; done: (m: string) =
                       <a className={linkBtnCls} href={`/api/invoices/${i.id}/download`}>
                         Download
                       </a>
+                      {data.canManage && i.status === "issued" && numberCorrectionOpen(i.invoiceDate, data.today) ? (
+                        <button className={`${linkBtnCls} ml-3`} onClick={() => setCorrecting(i)}>
+                          Correct number
+                        </button>
+                      ) : null}
                       {data.canManage && i.status === "issued" ? (
                         <button className={`${linkBtnCls} ml-3 !text-error`} onClick={() => setCancelling(i)}>
                           Cancel
@@ -411,8 +467,94 @@ function IssuedTab({ data, done }: { data: InvoicesPageData; done: (m: string) =
           }}
         />
       )}
+      {correcting && (
+        <CorrectNumberDialog
+          invoice={correcting}
+          data={data}
+          onClose={() => setCorrecting(null)}
+          onDone={(from, to) => {
+            setCorrecting(null);
+            void load();
+            done(`Invoice ${from} is now ${to}. Download the new PDF if the candidate already had the old one.`);
+          }}
+        />
+      )}
     </div>
   );
+}
+
+/**
+ * Give an issued invoice the number it should have had, e.g. the first
+ * in-app invoice that went out as …/0001 because the series' next number
+ * wasn't set. The PDF is rebuilt with the new number; nothing else changes.
+ */
+function CorrectNumberDialog({
+  invoice,
+  data,
+  onClose,
+  onDone,
+}: {
+  invoice: InvoiceDTO;
+  data: InvoicesPageData;
+  onClose: () => void;
+  onDone: (from: string, to: string) => void;
+}) {
+  const series = data.settings.series.find((s) => s.key === invoice.seriesKey);
+  const stem = series ? `${series.prefix}${fyOf(invoice.invoiceDate, series.fyStyle)}/` : "";
+  const [number, setNumber] = useState(stem);
+  const [reason, setReason] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  async function submit() {
+    setBusy(true);
+    setError(null);
+    try {
+      const res = await api<{ from: string; number: string }>(`/api/finance/invoices/${invoice.id}/number`, { number, reason });
+      onDone(res.from, res.number);
+    } catch (e) {
+      setError((e as Error).message);
+      setBusy(false);
+    }
+  }
+  return (
+    <Modal
+      title={`Correct the number of ${invoice.number}`}
+      subtitle={`${invoice.billToName} · ${money(invoice.total, invoice.currency)} · ${fmtDate(invoice.invoiceDate)}`}
+      onClose={onClose}
+      footer={
+        <>
+          <button className={btnCls} onClick={onClose}>
+            Keep it
+          </button>
+          <button className={primaryBtnCls} onClick={submit} disabled={busy || reason.trim().length < 5 || number.trim() === stem}>
+            {busy ? "Saving…" : "Change number"}
+          </button>
+        </>
+      }
+    >
+      <Callout tone="gold" icon="info">
+        Use this only when the invoice got the wrong number, for example when the series should have continued from invoices raised
+        outside DesGro. The PDF is rebuilt with the new number and nothing else changes. If the candidate already has the old PDF,
+        send them the new one. New invoices carry on after the highest number in the series. It is allowed until the 10th of the
+        month after the invoice date, before its GSTR-1 is filed.
+      </Callout>
+      <label className="flex flex-col gap-1">
+        <span className="text-label-sm font-semibold text-on-surface-variant">New number</span>
+        <input className={inputCls} value={number} onChange={(e) => setNumber(e.target.value.toUpperCase())} placeholder={stem} autoFocus />
+        <span className="text-caption text-on-surface-variant">The whole number, or just the running number after {stem}</span>
+      </label>
+      <label className="flex flex-col gap-1">
+        <span className="text-label-sm font-semibold text-on-surface-variant">Why is it being changed?</span>
+        <textarea className={`${inputCls} h-20 py-2`} value={reason} onChange={(e) => setReason(e.target.value)} placeholder="e.g. Series continues from the last manual invoice" />
+      </label>
+      {error ? <Callout tone="bad" icon="error">{error}</Callout> : null}
+    </Modal>
+  );
+}
+
+/** The invoice date's financial year as the series writes it. */
+function fyOf(isoDate: string, style: string): string {
+  return fyCode(isoDate, style === "compact" ? "compact" : "dash");
 }
 
 function CancelDialog({ invoice, onClose, onDone }: { invoice: InvoiceDTO; onClose: () => void; onDone: () => void }) {

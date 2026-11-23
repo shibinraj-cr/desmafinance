@@ -255,6 +255,98 @@ export function formatInvoiceNo(stem: string, seq: number, padding: number): str
 /** GST rule 46: an invoice number may be at most 16 characters. */
 export const GST_INVOICE_NO_MAX = 16;
 
+/**
+ * The number `ahead` places after `next` in the same series: what the
+ * (ahead+1)th invoice issued from now would get. "D/DIPL/2627/0671", 2 →
+ * "D/DIPL/2627/0673".
+ */
+export function numberAfter(next: string, ahead: number, padding: number): string {
+  const seq = runningNumber(next);
+  if (seq == null) return next;
+  return formatInvoiceNo(stemOfNumber(next), seq + ahead, padding);
+}
+
+/**
+ * Whether the next number in a series simply starts at 1 because nobody set
+ * where it continues from: no number used yet this year and no "next number"
+ * written for this year. Fine in April; a mistake mid-year when the series
+ * carries on from invoices raised outside DesGro.
+ */
+export function startsAtOne(next: string, floor: string | null | undefined): boolean {
+  return runningNumber(next) === 1 && seqInStem(stemOfNumber(next), floor) == null;
+}
+
+/**
+ * The number each waiting payment gets if Finance issues them from the top
+ * down: per series and financial year, that series' next number, then one
+ * more for every payment above it in the same series. DIPL payments go to
+ * the export series only when the ledger row already says EXP, as the Issue
+ * form defaults. Rows that can't be issued yet (`blocked`) get none.
+ */
+export function projectNumbers(
+  rows: Array<{ id: string; date: string; entityCode: string | null; expDom: string | null; blocked: boolean }>,
+  upcomingByFy: Record<string, Record<string, string>>,
+  paddingByKey: Record<string, number>,
+): Record<string, string> {
+  const taken = new Map<string, number>();
+  const out: Record<string, string> = {};
+  for (const r of rows) {
+    if (r.blocked) continue;
+    const entity: InvoiceEntityCode = r.entityCode === "DLLC" ? "DLLC" : "DIPL";
+    const key = seriesKeyFor(entity, effectiveKind(entity, r.expDom === "EXP" ? "EXP" : "DOM"));
+    const fy = fyCode(r.date);
+    const next = upcomingByFy[fy]?.[key];
+    if (!next) continue;
+    const slot = `${fy}|${key}`;
+    const ahead = taken.get(slot) ?? 0;
+    taken.set(slot, ahead + 1);
+    out[r.id] = numberAfter(next, ahead, paddingByKey[key] ?? 3);
+  }
+  return out;
+}
+
+export type CorrectionProblem = "format" | "year" | "zero";
+
+/**
+ * The number an issued invoice is corrected to. Finance types either the
+ * whole number ("D/DIPL/2627/670") or just the running number ("670"); it is
+ * written the way the series writes numbers now, in the invoice's own
+ * financial year, padded: "D/DIPL/2627/0670".
+ */
+export function correctedNumber(
+  typed: string,
+  series: { prefix: string; fyStyle: FyStyle; padding: number },
+  invoiceDate: string,
+): { number: string; seq: number } | { problem: CorrectionProblem } {
+  const t = typed.trim().toUpperCase();
+  const stem = seriesStem(series.prefix, invoiceDate, series.fyStyle);
+  let seq: number | null = null;
+  if (/^\d{1,6}$/.test(t)) seq = Number(t);
+  else if (isSeriesNumber(series.prefix, series.fyStyle, t)) {
+    if (!t.startsWith(stem)) return { problem: "year" };
+    const tail = t.slice(stem.length);
+    if (tail.length > 6) return { problem: "format" };
+    seq = Number(tail);
+  } else return { problem: "format" };
+  if (!(seq >= 1)) return { problem: "zero" };
+  return { number: formatInvoiceNo(stem, seq, series.padding), seq };
+}
+
+/**
+ * An issued invoice's number may be corrected only until its month's GSTR-1
+ * falls due (the 11th of the next month): dated this month, or last month
+ * while today is the 10th or earlier. After that the number may already be in
+ * a filed return, so the CA decides (cancel, credit note).
+ */
+export function numberCorrectionOpen(invoiceDate: string, today: string): boolean {
+  const inv = invoiceDate.slice(0, 7);
+  const now = today.slice(0, 7);
+  if (inv === now) return true;
+  const [y, m] = inv.split("-").map(Number);
+  const following = m === 12 ? `${y + 1}-01` : `${y}-${String(m + 1).padStart(2, "0")}`;
+  return now === following && Number(today.slice(8, 10)) <= 10;
+}
+
 // ── words ────────────────────────────────────────────────────────────────────
 
 const ONES = ["", "One", "Two", "Three", "Four", "Five", "Six", "Seven", "Eight", "Nine", "Ten", "Eleven", "Twelve",
