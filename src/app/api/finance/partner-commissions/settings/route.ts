@@ -31,6 +31,7 @@ const Body = z.discriminatedUnion("action", [
     email: z.string().max(200).nullish(),
     forLine: z.string().max(200).nullish(),
     layout: z.string().max(20),
+    printFinalPayment: z.boolean().optional(),
     isActive: z.boolean().optional(),
     volumeTiers: z.array(z.object({ from: z.number().int(), extraPct: z.number() })).max(5).optional(),
     volumeOpening: z.record(z.string().max(10), z.number().int()).optional(),

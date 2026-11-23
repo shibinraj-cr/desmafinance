@@ -389,7 +389,7 @@ function InvoiceEditor({ ctx, inv }: { ctx: PcCtx; inv: InvoiceDTO }) {
               <div key={l.id} className="border border-outline-variant rounded-lg px-sm py-2 flex flex-col gap-1.5">
                 <div className="flex items-center gap-2">
                   <ProgramTag code={l.program} />
-                  <span className="text-caption text-on-surface-variant flex-1 truncate">{l.intakeMonth}{l.studentId ? ` · ${l.studentId}` : ""}</span>
+                  <span className="text-caption text-on-surface-variant flex-1 truncate">{l.intakeMonth}{l.fullyPaidOn ? ` · final payment ${slash(l.fullyPaidOn)}` : ""}{l.studentId ? ` · ${l.studentId}` : ""}</span>
                   {editable ? (
                     <button className="h-7 w-7 grid place-items-center rounded hover:bg-surface-container" title="Remove from this invoice" aria-label={`Remove ${l.description}`} disabled={busy || dirty} onClick={() => call({ action: "remove-line", lineId: l.id }, "Line removed. That enrollment is queued again.")}>
                       <Icon name="close" />
@@ -614,7 +614,17 @@ function slash(iso: string) {
 
 export function InvoicePaper({ inv, draft, lines, total, words, settings }: { inv: InvoiceDTO; draft: Draft; lines: InvoiceLineDTO[]; total: number; words: string; settings: SettingsDTO }) {
   const detailed = inv.layout === "detailed";
-  const head = detailed ? ["DESCRIPTION", "Student ID", "Course", "Intake Month", "Course Fee", "Commission%", "Amount"] : ["DESCRIPTION", "Intake Month", "Course Fee", "Commission%", "Amount"];
+  // As on the PDF: any line carrying a final payment date adds the column.
+  const finalPayment = lines.some((l) => !!l.fullyPaidOn);
+  const head = [
+    "DESCRIPTION",
+    ...(detailed ? ["Student ID", "Course"] : []),
+    "Intake Month",
+    ...(finalPayment ? ["Final Payment"] : []),
+    "Course Fee",
+    "Commission%",
+    "Amount",
+  ];
   const band = "bg-[#F6CB47]";
   const cell = "border border-[#a0a0a0] px-1 py-[3px]";
   const short = (settings.issuerName || "us").replace(/\s+(LLC|L\.L\.C\.?|Ltd\.?|Limited|Pvt\.?\s*Ltd\.?|Private Limited)$/i, "");
@@ -649,6 +659,7 @@ export function InvoicePaper({ inv, draft, lines, total, words, settings }: { in
               <td className={cell}>{l.description}</td>
               {detailed ? <><td className={cell}>{l.studentId ?? ""}</td><td className={`${cell} text-center`}>{l.courseName}</td></> : null}
               <td className={cell}>{l.intakeMonth}</td>
+              {finalPayment ? <td className={cell}>{l.fullyPaidOn ? slash(l.fullyPaidOn) : ""}</td> : null}
               <td className={`${cell} text-center`}>{fmtInvoiceNumber(l.courseFee)}</td>
               <td className={`${cell} text-center`}>{l.commissionFlat != null ? "Flat" : `${fmtInvoiceNumber(l.commissionPct)}%`}</td>
               <td className={`${cell} text-center`}>{fmtInvoiceNumber(l.amount)}</td>

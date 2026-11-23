@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { readFileSync } from "node:fs";
 import path from "node:path";
-import { PDFDocument } from "pdf-lib";
+import { PDFDocument, StandardFonts } from "pdf-lib";
 import {
   amountInWords,
   balanceOf,
@@ -44,7 +44,7 @@ import {
   volumeTiersLabel,
 } from "@/lib/partner-commissions/logic";
 import { PROGRAM_CODES } from "@/lib/partner-commissions/constants";
-import { buildInvoicePdf, type InvoicePdfData } from "@/lib/partner-commissions/pdf";
+import { buildInvoicePdf, invoiceColumns, type InvoicePdfData } from "@/lib/partner-commissions/pdf";
 
 describe("amount in words (matches DESMA's invoices)", () => {
   it("writes whole amounts the way the samples do", () => {
@@ -285,6 +285,39 @@ describe("invoice PDF", () => {
     const lines = Array.from({ length: 60 }, (_, i) => ({ ...base.lines[0], description: `Ŝṙeeja ${i} | OSCE | Full Fee Paid` }));
     const doc = await PDFDocument.load(await buildInvoicePdf({ ...base, layout: "detailed", lines, total: 30000 }));
     expect(doc.getPageCount()).toBeGreaterThan(1);
+  });
+  it("adds a Final Payment column only when a line has a final payment date", () => {
+    for (const layout of ["compact", "detailed"]) {
+      expect(invoiceColumns(layout, false).map((c) => c.title)).not.toContain("Final Payment");
+      const titles = invoiceColumns(layout, true).map((c) => c.title);
+      expect(titles[titles.indexOf("Intake Month") + 1]).toBe("Final Payment");
+    }
+  });
+  it("fits every header, a date and a five-figure amount in its column, in every layout", async () => {
+    const doc = await PDFDocument.create();
+    const bold = await doc.embedFont(StandardFonts.HelveticaBold);
+    const reg = await doc.embedFont(StandardFonts.Helvetica);
+    for (const layout of ["compact", "detailed"]) {
+      for (const fp of [false, true]) {
+        const cols = invoiceColumns(layout, fp);
+        expect(cols.reduce((s, c) => s + c.w, 0)).toBeCloseTo(595.28 - 36 - 70, 6);
+        for (const c of cols) expect(bold.widthOfTextAtSize(c.title, 8.5), `${layout}/${fp}: ${c.title}`).toBeLessThanOrEqual(c.w - 6);
+        const width = (key: string) => cols.find((c) => c.key === key)!.w - 6;
+        if (fp) expect(reg.widthOfTextAtSize("09/07/2026", 9)).toBeLessThanOrEqual(width("fullyPaidOn"));
+        expect(reg.widthOfTextAtSize("99,999.99", 9)).toBeLessThanOrEqual(width("amount"));
+      }
+    }
+  });
+  it("prints final payment dates, with a blank cell for a line that has none", async () => {
+    const lines = [
+      { ...base.lines[0], fullyPaidOn: "2026-07-09" },
+      { ...base.lines[1], fullyPaidOn: "2026-07-01" },
+      { ...base.lines[2], description: "Candidate 2 | OSCE | +5% bonus", fullyPaidOn: null },
+    ];
+    for (const layout of ["compact", "detailed"]) {
+      const doc = await PDFDocument.load(await buildInvoicePdf({ ...base, layout, lines, total: 1500 }));
+      expect(doc.getPageCount()).toBe(1);
+    }
   });
 });
 

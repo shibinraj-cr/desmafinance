@@ -6934,6 +6934,9 @@ model CommissionPartner {
   /// "compact" = program in the description ("Name | OSCE | Full Fee Paid");
   /// "detailed" = separate Student ID and Course columns.
   layout        String   @default("compact")
+  /// Print each enrollment's final payment date on this partner's invoices
+  /// (a "Final Payment" column beside the intake month).
+  printFinalPayment Boolean @default(false)
   isActive      Boolean  @default(true)
   /// Volume bonus, counted per Australian financial year (July–June, by intake
   /// month): [{ from: 51, extraPct: 5 }, { from: 101, extraPct: 10 }] = the
@@ -7107,6 +7110,10 @@ model CommissionInvoiceLine {
   /// and that year ("2025-26"). Set only for partners with volume tiers.
   volumeSeq      Int?
   volumeFy       String?
+  /// The enrollment's final payment date, copied when the line was billed for
+  /// a partner that prints it (printFinalPayment); null otherwise. Any line
+  /// with one gives the invoice a "Final Payment" column.
+  fullyPaidOn    DateTime?             @db.Date
 
   @@index([invoiceId])
   @@index([enrollmentId])

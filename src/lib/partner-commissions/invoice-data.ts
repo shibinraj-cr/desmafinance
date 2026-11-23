@@ -41,6 +41,7 @@ export async function loadInvoicePdfData(id: string): Promise<InvoicePdfData> {
     studentId: l.studentId,
     courseName: l.courseName,
     intakeMonth: l.intakeMonth,
+    fullyPaidOn: l.fullyPaidOn ? l.fullyPaidOn.toISOString().slice(0, 10) : null,
     courseFee: Number(l.courseFee),
     commissionPct: Number(l.commissionPct),
     commissionFlat: l.commissionFlat == null ? null : Number(l.commissionFlat),
