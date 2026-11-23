@@ -26,6 +26,8 @@ export type InvoicePdfData = {
     studentId: string | null;
     courseName: string;
     intakeMonth: string;
+    /** Final payment date (YYYY-MM-DD) — any line with one adds a "Final Payment" column. */
+    fullyPaidOn?: string | null;
     courseFee: number;
     commissionPct: number;
     /** Flat commission: the Commission% cell reads "Flat". */
@@ -117,33 +119,57 @@ function cell(page: PDFPage, x: number, y: number, w: number, h: number, fill?: 
   page.drawRectangle({ x: x + 1, y: y + 1, width: w - 2, height: h - 2, borderColor: RULE, borderWidth: 0.6, color: fill });
 }
 
-function columns(layout: string): Array<{ title: string; w: number; key: keyof InvoicePdfData["lines"][number]; center: boolean }> {
+type LineKey = keyof InvoicePdfData["lines"][number];
+
+/** The table's columns (widths in points, summing to the table width). `finalPayment` adds "Final Payment" after the intake month. */
+export function invoiceColumns(layout: string, finalPayment: boolean): Array<{ title: string; w: number; key: LineKey; center: boolean }> {
   const total = X1 - X0;
-  const spec: Array<[string, number, keyof InvoicePdfData["lines"][number], boolean]> =
+  const spec: Array<[string, number, LineKey, boolean]> =
     layout === "detailed"
-      ? [
-          ["DESCRIPTION", 0.23, "description", false],
-          ["Student ID", 0.12, "studentId", false],
-          ["Course", 0.13, "courseName", true],
-          ["Intake Month", 0.13, "intakeMonth", false],
-          ["Course Fee", 0.11, "courseFee", true],
-          ["Commission%", 0.15, "commissionPct", true],
-          ["Amount", 0.13, "amount", true],
-        ]
-      : [
-          ["DESCRIPTION", 0.4, "description", false],
-          ["Intake Month", 0.15, "intakeMonth", false],
-          ["Course Fee", 0.13, "courseFee", true],
-          ["Commission%", 0.15, "commissionPct", true],
-          ["Amount", 0.17, "amount", true],
-        ];
+      ? finalPayment
+        ? [
+            ["DESCRIPTION", 0.19, "description", false],
+            ["Student ID", 0.1, "studentId", false],
+            ["Course", 0.095, "courseName", true],
+            ["Intake Month", 0.125, "intakeMonth", false],
+            ["Final Payment", 0.135, "fullyPaidOn", false],
+            ["Course Fee", 0.11, "courseFee", true],
+            ["Commission%", 0.135, "commissionPct", true],
+            ["Amount", 0.11, "amount", true],
+          ]
+        : [
+            ["DESCRIPTION", 0.23, "description", false],
+            ["Student ID", 0.12, "studentId", false],
+            ["Course", 0.13, "courseName", true],
+            ["Intake Month", 0.13, "intakeMonth", false],
+            ["Course Fee", 0.11, "courseFee", true],
+            ["Commission%", 0.15, "commissionPct", true],
+            ["Amount", 0.13, "amount", true],
+          ]
+      : finalPayment
+        ? [
+            ["DESCRIPTION", 0.39, "description", false],
+            ["Intake Month", 0.125, "intakeMonth", false],
+            ["Final Payment", 0.135, "fullyPaidOn", false],
+            ["Course Fee", 0.11, "courseFee", true],
+            ["Commission%", 0.135, "commissionPct", true],
+            ["Amount", 0.105, "amount", true],
+          ]
+        : [
+            ["DESCRIPTION", 0.4, "description", false],
+            ["Intake Month", 0.15, "intakeMonth", false],
+            ["Course Fee", 0.13, "courseFee", true],
+            ["Commission%", 0.15, "commissionPct", true],
+            ["Amount", 0.17, "amount", true],
+          ];
   return spec.map(([title, f, key, center]) => ({ title, w: total * f, key, center }));
 }
 
-function cellText(line: InvoicePdfData["lines"][number], key: keyof InvoicePdfData["lines"][number]): string {
+function cellText(line: InvoicePdfData["lines"][number], key: LineKey): string {
   const v = line[key];
   if (key === "courseFee" || key === "amount") return fmtInvoiceNumber(Number(v));
   if (key === "commissionPct") return line.commissionFlat != null ? "Flat" : `${fmtInvoiceNumber(Number(v))}%`;
+  if (key === "fullyPaidOn") return line.fullyPaidOn ? slashDate(line.fullyPaidOn) : "";
   return v == null ? "" : String(v);
 }
 
@@ -174,7 +200,7 @@ export async function buildInvoicePdf(data: InvoicePdfData): Promise<Uint8Array>
     sig = await (mime === "image/jpeg" ? doc.embedJpg(bytes) : doc.embedPng(bytes)).catch(() => null);
   }
 
-  const cols = columns(data.layout);
+  const cols = invoiceColumns(data.layout, data.lines.some((l) => !!l.fullyPaidOn));
   const newPage = (first: boolean) => {
     const page = doc.addPage(A4);
     band(page, H - 64, 20);

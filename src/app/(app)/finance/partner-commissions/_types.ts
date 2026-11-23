@@ -12,6 +12,8 @@ export type InvoiceLineDTO = {
   studentId: string | null;
   courseName: string;
   intakeMonth: string;
+  /** The final payment date (YYYY-MM-DD), kept for partners that print it; null otherwise. */
+  fullyPaidOn: string | null;
   courseFee: number;
   commissionPct: number;
   /** Set when the line is a flat commission (printed as "Flat"). */
@@ -91,6 +93,8 @@ export type PartnerDTO = {
   email: string | null;
   forLine: string | null;
   layout: string;
+  /** Invoices print a "Final Payment" column. */
+  printFinalPayment: boolean;
   isActive: boolean;
   volumeTiers: VolumeTier[];
   /** Enrollments billed outside DesGro, per financial year. */

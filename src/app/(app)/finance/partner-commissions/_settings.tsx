@@ -80,7 +80,7 @@ function PartnersCard({ ctx, ro }: { ctx: PcCtx; ro: boolean }) {
               <div className="text-caption text-on-surface-variant whitespace-pre-line">{[p.address, p.email, p.forLine ? `FOR: ${p.forLine}` : null].filter(Boolean).join("\n")}</div>
               <VolumeSummary ctx={ctx} partner={p} />
             </div>
-            <span className="text-caption text-on-surface-variant">{p.layout === "detailed" ? "Student ID and Course columns" : "Program in the description"}</span>
+            <span className="text-caption text-on-surface-variant">{p.layout === "detailed" ? "Student ID and Course columns" : "Program in the description"}{p.printFinalPayment ? " · Final payment date" : ""}</span>
             {!ro && !editing ? <button className={linkBtnCls} onClick={() => setEditing(p)}>Edit</button> : null}
           </div>
         ),
@@ -97,6 +97,7 @@ function PartnerForm({ ctx, partner, onDone }: { ctx: PcCtx; partner: PartnerDTO
   const [forLine, setForLine] = useState(partner?.forLine ?? "");
   const [layout, setLayout] = useState(partner?.layout ?? "compact");
   const [active, setActive] = useState(partner?.isActive ?? true);
+  const [finalPayment, setFinalPayment] = useState(partner?.printFinalPayment ?? false);
   const [tiers, setTiers] = useState<TierRow[]>(() => (partner?.volumeTiers ?? []).map((t) => ({ from: String(t.from), extra: String(t.extraPct) })));
   const [opening, setOpening] = useState<OpeningRow[]>(() => Object.entries(partner?.volumeOpening ?? {}).map(([fy, n]) => ({ fy, count: String(n) })));
   const [localErr, setLocalErr] = useState<string | null>(null);
@@ -117,6 +118,7 @@ function PartnerForm({ ctx, partner, onDone }: { ctx: PcCtx; partner: PartnerDTO
           </Field>
         </div>
       </div>
+      <label className="flex items-center gap-2 text-body-md"><input type="checkbox" checked={finalPayment} onChange={(e) => setFinalPayment(e.target.checked)} />Print the final payment date on invoices (a Final Payment column beside the intake month, from the next invoice)</label>
       <label className="flex items-center gap-2 text-body-md"><input type="checkbox" checked={active} onChange={(e) => setActive(e.target.checked)} />Active</label>
       <VolumeEditor today={ctx.data.today} tiers={tiers} setTiers={setTiers} opening={opening} setOpening={setOpening} />
       {localErr ?? err ? <p className="text-body-md text-error font-medium">{localErr ?? err}</p> : null}
@@ -129,7 +131,7 @@ function PartnerForm({ ctx, partner, onDone }: { ctx: PcCtx; partner: PartnerDTO
             const vol = volumeBody(tiers, opening);
             setLocalErr(typeof vol === "string" ? vol : null);
             if (typeof vol === "string") return;
-            if (await save({ action: "partner", id: partner?.id ?? null, name, address, email: email || null, forLine: forLine || null, layout, isActive: active, ...vol }, partner ? "Partner saved." : `${name} added.`)) onDone();
+            if (await save({ action: "partner", id: partner?.id ?? null, name, address, email: email || null, forLine: forLine || null, layout, printFinalPayment: finalPayment, isActive: active, ...vol }, partner ? "Partner saved." : `${name} added.`)) onDone();
           }}
         >
           Save partner

@@ -589,6 +589,7 @@ export async function createInvoice(opts: {
           studentId: e.studentId,
           courseName: e.courseName,
           intakeMonth: e.intakeMonth,
+          fullyPaidOn: partner.printFinalPayment ? e.fullyPaidOn : null,
           courseFee: e.courseFee,
           ...lineTerms(e, vol),
         })),
@@ -712,6 +713,7 @@ export async function addInvoiceLine(a: PcAccess, id: string, enrollmentId: stri
         studentId: e.studentId,
         courseName: e.courseName,
         intakeMonth: e.intakeMonth,
+        fullyPaidOn: inv.partner.printFinalPayment ? e.fullyPaidOn : null,
         courseFee: e.courseFee,
         ...lineTerms(e, vol),
       },
@@ -1131,6 +1133,8 @@ export type PartnerInput = {
   email?: string | null;
   forLine?: string | null;
   layout: string;
+  /** Print the final payment date on this partner's invoices; omitted = unchanged (off for a new partner). */
+  printFinalPayment?: boolean;
   isActive?: boolean;
   /** Volume bonus tiers; omitted = unchanged, [] = none. */
   volumeTiers?: VolumeTier[];
@@ -1151,6 +1155,7 @@ export async function savePartner(a: PcAccess, id: string | null, p: PartnerInpu
     layout: p.layout,
     isActive: p.isActive ?? true,
   };
+  if (p.printFinalPayment !== undefined) data.printFinalPayment = p.printFinalPayment;
   if (p.volumeTiers !== undefined) {
     const tiers = [...p.volumeTiers].sort((x, y) => x.from - y.from).map((t) => ({ from: t.from, extraPct: round2(t.extraPct) }));
     const err = checkVolumeTiers(tiers);
