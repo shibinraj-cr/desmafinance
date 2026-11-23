@@ -21,6 +21,7 @@ import {
   amountInWords,
   billToLines,
   computeInvoiceAmounts,
+  correctedNumber,
   effectiveKind,
   formatInvoiceNo,
   fyCode,
@@ -30,13 +31,17 @@ import {
   intoStem,
   nextSeq,
   notInvoiceableReason,
+  numberCorrectionOpen,
   restyleNumber,
   round2,
+  sameInvoiceNumber,
   seriesKeyFor,
   seriesStem,
+  stemOfNumber,
   stemVariants,
   setupGaps,
   type AmountsProblem,
+  type CorrectionProblem,
   type FyStyle,
   type InvoiceEntityCode,
   type InvoiceKind,
@@ -401,13 +406,20 @@ async function nextNumber(db: Db, given: SeriesRow, invoiceDate: string, lock: b
   return { number: formatInvoiceNo(stem, seq, series.padding), seq, fy, series };
 }
 
-/** What each series would issue next today, for Settings. */
-export async function upcomingNumbers(): Promise<Record<string, string>> {
+/** What each series would issue next for an invoice dated `onDate` (default today), for Settings and To invoice. */
+export async function upcomingNumbers(onDate: string = todayIst()): Promise<Record<string, string>> {
   const settings = await loadSettings();
-  const today = todayIst();
   const out: Record<string, string> = {};
-  for (const s of settings.series) out[s.key] = (await nextNumber(prisma, s, today, false)).number;
+  for (const s of settings.series) out[s.key] = (await nextNumber(prisma, s, onDate, false)).number;
   return out;
+}
+
+/** The number one series would give an invoice dated `invoiceDate` if it were issued now. */
+export async function upcomingNumber(seriesKey: string, invoiceDate: string): Promise<string> {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(invoiceDate)) throw badRequest("Pick the invoice date.");
+  const series = (await loadSettings()).series.find((s) => s.key === seriesKey);
+  if (!series) throw notFound();
+  return (await nextNumber(prisma, series, invoiceDate, false)).number;
 }
 
 // ── issuing ──────────────────────────────────────────────────────────────────
@@ -421,7 +433,14 @@ export type IssueInput = {
   billTo: { name: string; address: string; pin: string; state: string | null; country: string };
   saveToParty: boolean;
   foreign: { currency: string; amount: number } | null;
+  /**
+   * The number Finance saw before clicking Issue. When the series has moved on
+   * since (someone else issued one), nothing is issued and they are told.
+   */
+  expectedNumber?: string | null;
 };
+
+const PAYMENT_TERM = "Immediate";
 
 const AMOUNT_PROBLEM: Record<AmountsProblem, string> = {
   amount_not_positive: "The payment amount must be more than zero.",
@@ -563,7 +582,7 @@ async function prepare(db: Db, input: IssueInput, settings: InvoiceSettings): Pr
       layout,
       title: kind === "EXP" ? "Export Invoice" : "Domestic Invoice",
       invoiceDate: input.invoiceDate,
-      paymentTerm: "Immediate",
+      paymentTerm: PAYMENT_TERM,
       currency: amounts.currency,
       issuer: {
         legalName: entity.legalName,
@@ -617,6 +636,12 @@ export async function issueInvoice(a: InvoiceAccess, input: IssueInput): Promise
       const settings = await loadSettings(tx);
       const p = await prepare(tx, input, settings);
       const n = await nextNumber(tx, p.series, input.invoiceDate, true);
+      if (input.expectedNumber && !sameInvoiceNumber(input.expectedNumber, n.number)) {
+        throw conflict(
+          `The next number is now ${n.number}, not ${input.expectedNumber}: someone issued or changed the series a moment ago. Nothing was issued; check and issue again.`,
+          "number_changed",
+        );
+      }
       const pdf = await buildCandidateInvoicePdf({ ...p.pdf, number: n.number });
       const inv = await tx.invoice.create({
         data: {
@@ -739,6 +764,135 @@ export async function cancelInvoice(a: InvoiceAccess, id: string, reason: string
     await tx.invoiceFile.create({ data: { invoiceId: id, kind: "cancelled", bytes: Buffer.from(stamped), sha256: sha256(stamped) } });
   });
   await recordAudit({ entityType: "Invoice", entityId: id, action: "CANCEL", userId: a.userId, changes: { number: inv.number, reason: why } });
+}
+
+// ── correcting a number ──────────────────────────────────────────────────────
+
+/** What issueInvoice froze in `Invoice.snapshot`. */
+type InvoiceSnapshot = {
+  layout: InvoicePdfInput["layout"];
+  title: string;
+  issuer: InvoicePdfInput["issuer"];
+  hsn: string | null;
+  intakeMonth: string | null;
+  note: string;
+  bankLines: string[];
+  lutLine: string | null;
+  words: string;
+};
+
+const CORRECTION_PROBLEM: Record<CorrectionProblem, (example: string) => string> = {
+  format: (e) => `Type the number the way the series writes it, e.g. ${e}, or just the running number.`,
+  year: (e) => `The number must be in the invoice's own financial year, e.g. ${e}.`,
+  zero: (e) => `The running number starts at 1, e.g. ${e}.`,
+};
+
+/**
+ * Give an issued invoice a different number, e.g. the first in-app invoice
+ * that went out as D/DIPL/2627/0001 because the series' next number wasn't
+ * set, when it should have continued at 0670. Only Finance Manager, only
+ * before the month's GSTR-1 falls due, only to a number nobody holds. The
+ * stored PDF is built again from what was frozen at issue (company block,
+ * bank lines, candidate, amounts), with the new number; the audit log keeps
+ * the old number and file hash. Numbering then carries on after the highest
+ * number the series holds, so 0001 → 0670 makes the next one 0671.
+ */
+export async function correctInvoiceNumber(
+  a: InvoiceAccess,
+  id: string,
+  typed: string,
+  reason: string,
+): Promise<{ from: string; number: string }> {
+  const why = text(reason, 300, "Reason");
+  if (why.length < 5) throw badRequest("Say why the number is being corrected.");
+  const { logo, font } = await loadAssets(); // fail before taking any lock if the template files are missing
+  const done = await prisma.$transaction(
+    async (tx) => {
+      const head = await tx.invoice.findUnique({ where: { id }, select: { seriesKey: true, transactionId: true } });
+      if (!head) throw notFound();
+      // The same locks, in the same order, as issuing and cancelling.
+      await lockLedgerRow(tx, head.transactionId);
+      await advisoryLock(tx, `invoice-series:${head.seriesKey}`);
+      const [inv, series] = await Promise.all([
+        tx.invoice.findUnique({ where: { id } }),
+        tx.invoiceSeries.findUnique({ where: { key: head.seriesKey } }),
+      ]);
+      if (!inv || !series) throw notFound();
+      if (inv.status !== "issued") throw conflict("A cancelled invoice keeps its number.", "not_issued");
+      const invoiceDate = fromPrismaDate(inv.invoiceDate);
+      if (!numberCorrectionOpen(invoiceDate, todayIst())) {
+        throw conflict(
+          `${inv.number}'s month may already be in a filed GSTR-1, so its number can't be changed here. Ask the CA: cancel it, or issue a credit note.`,
+          "correction_closed",
+        );
+      }
+      const fyStyle = series.fyStyle as FyStyle;
+      const c = correctedNumber(typed, { prefix: series.prefix, fyStyle, padding: series.padding }, invoiceDate);
+      if ("problem" in c) {
+        throw badRequest(CORRECTION_PROBLEM[c.problem](formatInvoiceNo(seriesStem(series.prefix, invoiceDate, fyStyle), 1, series.padding)), `number_${c.problem}`);
+      }
+      if (c.number === inv.number) throw badRequest(`${inv.number} already has that number.`, "number_same");
+
+      const stem = stemOfNumber(c.number);
+      await lockInvoiceStem(tx, stem);
+      const variants = stemVariants(stem).map((s) => ({ number: { startsWith: s, mode: "insensitive" as const } }));
+      const [others, sameSeq, pc] = await Promise.all([
+        tx.invoice.findMany({ where: { id: { not: id }, OR: variants }, select: { number: true } }),
+        tx.invoice.findFirst({ where: { id: { not: id }, seriesKey: inv.seriesKey, fy: inv.fy, seq: c.seq }, select: { number: true } }),
+        tx.commissionInvoice.findMany({ where: { OR: variants }, select: { number: true } }),
+      ]);
+      const taken = others.find((r) => sameInvoiceNumber(r.number, c.number))?.number ?? sameSeq?.number;
+      if (taken) throw conflict(`${taken} is already issued, so ${c.number} can't be used again.`, "number_taken");
+      const pcTaken = pc.find((r) => sameInvoiceNumber(r.number, c.number));
+      if (pcTaken) throw conflict(`Partner Commissions already used ${pcTaken.number}.`, "number_taken");
+
+      const snap = inv.snapshot as unknown as InvoiceSnapshot;
+      const entity = await tx.invoiceEntity.findUnique({ where: { code: inv.entityCode }, select: { signaturePng: true, signatureMime: true } });
+      const dom = snap.layout === "dipl-dom";
+      const pdf = await buildCandidateInvoicePdf({
+        layout: snap.layout,
+        title: snap.title,
+        number: c.number,
+        invoiceDate,
+        paymentTerm: PAYMENT_TERM,
+        currency: inv.currency,
+        issuer: snap.issuer,
+        billTo: { name: inv.billToName, lines: inv.billToAddress.split("\n").filter(Boolean) },
+        description: inv.description,
+        intakeMonth: snap.intakeMonth,
+        hsn: snap.hsn,
+        amount: dom ? Number(inv.taxableAmount) : Number(inv.totalAmount),
+        tax: dom ? { cgst: Number(inv.cgst), sgst: Number(inv.sgst), igst: Number(inv.igst), ratePct: GST_RATE_PCT } : null,
+        total: Number(inv.totalAmount),
+        receivedInr: Number(inv.receivedInr),
+        words: snap.words,
+        note: snap.note,
+        bankLines: snap.bankLines,
+        lutLine: snap.lutLine,
+        placeOfSupply: inv.placeOfSupply,
+        signature: entity?.signaturePng && entity.signatureMime ? { bytes: new Uint8Array(entity.signaturePng), mime: entity.signatureMime } : null,
+        logoPng: logo,
+        unicodeFont: font,
+      });
+      const old = await tx.invoiceFile.findUnique({ where: { invoiceId_kind: { invoiceId: id, kind: "original" } }, select: { sha256: true } });
+      await tx.invoice.update({ where: { id }, data: { number: c.number, seq: c.seq } });
+      await tx.invoiceFile.upsert({
+        where: { invoiceId_kind: { invoiceId: id, kind: "original" } },
+        create: { invoiceId: id, kind: "original", bytes: Buffer.from(pdf), sha256: sha256(pdf) },
+        update: { bytes: Buffer.from(pdf), sha256: sha256(pdf) },
+      });
+      return { from: inv.number, number: c.number, previousSha256: old?.sha256 ?? null, transactionId: inv.transactionId };
+    },
+    { timeout: 20_000, maxWait: 10_000 },
+  );
+  await recordAudit({
+    entityType: "Invoice",
+    entityId: id,
+    action: "RENUMBER",
+    userId: a.userId,
+    changes: { from: done.from, to: done.number, reason: why, previousSha256: done.previousSha256, transactionId: done.transactionId },
+  });
+  return { from: done.from, number: done.number };
 }
 
 // ── reading ──────────────────────────────────────────────────────────────────

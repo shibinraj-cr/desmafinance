@@ -1,8 +1,8 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import type { ToInvoiceRow } from "@/lib/invoices/server";
-import { computeInvoiceAmounts, defaultDescription, isIndia, seriesKeyFor, type InvoiceEntityCode, type InvoiceKind } from "@/lib/invoices/core";
+import { SERIES_LABEL, computeInvoiceAmounts, defaultDescription, fyCode, isIndia, seriesKeyFor, type InvoiceEntityCode, type InvoiceKind, type SeriesKey } from "@/lib/invoices/core";
 import { GST_STATES, gstStateByName } from "@/lib/invoices/gst-states";
 import { Callout, Field, Modal, api, btnCls, fmtDate, inputCls, primaryBtnCls } from "@/components/partner-commissions/ui";
 import type { InvoicesPageData } from "./client";
@@ -59,6 +59,32 @@ export function IssueDialog({
   );
   const seriesKey = seriesKeyFor(entity, effective);
 
+  // The number this invoice gets, asked of the server for this series and
+  // invoice date. Issuing sends it back, and the server refuses if the series
+  // moved on in between, so the number shown is the number issued.
+  const fallbackNumber = /^\d{4}-\d{2}-\d{2}$/.test(invoiceDate)
+    ? (data.upcomingByFy[fyCode(invoiceDate)]?.[seriesKey] ?? null)
+    : null;
+  const [checked, setChecked] = useState<{ key: string; number: string } | null>(null);
+  const [numberTick, setNumberTick] = useState(0);
+  const numberKey = `${seriesKey}|${invoiceDate}`;
+  useEffect(() => {
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(invoiceDate)) return;
+    let live = true;
+    const p = new URLSearchParams({ series: seriesKey, date: invoiceDate });
+    fetch(`/api/finance/invoices/next-number?${p}`, { cache: "no-store" })
+      .then((r) => (r.ok ? r.json() : null))
+      .then((j: { number?: string } | null) => {
+        if (live && j?.number) setChecked({ key: `${seriesKey}|${invoiceDate}`, number: j.number });
+      })
+      .catch(() => {});
+    return () => {
+      live = false;
+    };
+  }, [seriesKey, invoiceDate, numberTick]);
+  const exactNumber = checked?.key === numberKey ? checked.number : null;
+  const shownNumber = exactNumber ?? fallbackNumber;
+
   const body = {
     transactionId: row.id,
     kind: effective,
@@ -68,6 +94,7 @@ export function IssueDialog({
     billTo: { name, address, pin, state: india ? state || null : state || null, country },
     saveToParty,
     foreign: wantsForeign ? { currency: currency.trim().toUpperCase(), amount: Number(foreignAmount) || 0 } : null,
+    expectedNumber: exactNumber,
   };
 
   async function preview() {
@@ -105,6 +132,7 @@ export function IssueDialog({
     } catch (e) {
       setError((e as Error).message);
       setBusy(null);
+      setNumberTick((t) => t + 1); // the series may have moved on: show the number it would get now
     }
   }
 
@@ -128,7 +156,7 @@ export function IssueDialog({
             {busy === "preview" ? "Building…" : "Preview PDF"}
           </button>
           <button className={primaryBtnCls} onClick={issue} disabled={!!busy || "problem" in amounts}>
-            {busy === "issue" ? "Issuing…" : "Issue invoice"}
+            {busy === "issue" ? "Issuing…" : shownNumber ? `Issue ${shownNumber}` : "Issue invoice"}
           </button>
         </>
       }
@@ -216,7 +244,14 @@ export function IssueDialog({
         ))}
       </datalist>
 
-      <div className="rounded-lg border border-outline-variant bg-surface-container-low px-md py-sm text-body-md">
+      <div className="rounded-lg border border-outline-variant bg-surface-container-low px-md py-sm text-body-md flex flex-col gap-1">
+        <div>
+          Invoice no.{" "}
+          <b className="tabular-nums text-title-sm" data-issue-number>
+            {shownNumber ?? "—"}
+          </b>
+          <span className="text-caption text-on-surface-variant"> · given when you issue; next in the {seriesLabel(seriesKey)} series</span>
+        </div>
         {"problem" in amounts ? (
           <span className="text-on-surface-variant">
             {amounts.problem === "foreign_amount_required"
@@ -244,7 +279,6 @@ export function IssueDialog({
               Total <b>{money(amounts.total, amounts.currency)}</b>
               {amounts.currency !== "INR" ? ` (= ${money(amounts.receivedInr, "INR")} at ${amounts.exchangeRate})` : null}
             </span>
-            <span className="text-on-surface-variant">Number: next in the series, e.g. {data.upcoming[seriesKey] ?? "—"}</span>
           </div>
         )}
         {entity === "DIPL" && effective === "DOM" && !st ? <div className="text-caption text-on-surface-variant mt-1">Pick the state to see CGST + SGST or IGST.</div> : null}
@@ -265,4 +299,8 @@ export function IssueDialog({
       {error ? <Callout tone="bad" icon="error">{error}</Callout> : null}
     </Modal>
   );
+}
+
+function seriesLabel(key: SeriesKey): string {
+  return key === "DLLC-DOM" ? "UAE" : (SERIES_LABEL[key] ?? key);
 }

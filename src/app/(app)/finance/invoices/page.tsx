@@ -2,7 +2,7 @@ import { redirect } from "next/navigation";
 import { TopBar } from "@/components/TopBar";
 import { todayIst } from "@/lib/lead-pulse-dates";
 import { gstStateOfGstin } from "@/lib/invoices/gst-states";
-import { setupGaps } from "@/lib/invoices/core";
+import { fyCode, setupGaps } from "@/lib/invoices/core";
 import {
   INVOICES_PAGE,
   getInvoiceAccess,
@@ -30,6 +30,13 @@ export default async function InvoicesPage({ searchParams }: { searchParams?: { 
     upcomingNumbers(),
     listInvoices({ month }),
   ]);
+  // The next number per series for every financial year a waiting payment
+  // falls in (normally just this one), so To invoice can show each row's number.
+  const fyDates = new Map<string, string>([[fyCode(today), today]]);
+  for (const r of toInvoice.rows) if (!fyDates.has(fyCode(r.date))) fyDates.set(fyCode(r.date), r.date);
+  const upcomingByFy = Object.fromEntries(
+    await Promise.all([...fyDates].map(async ([fy, date]) => [fy, fy === fyCode(today) ? upcoming : await upcomingNumbers(date)] as const)),
+  );
   const dipl = settings.entities.find((e) => e.code === "DIPL") ?? null;
   // What stops each bank's invoices, so the page can say it before anyone clicks.
   const gapsByBank = Object.fromEntries(
@@ -48,6 +55,7 @@ export default async function InvoicesPage({ searchParams }: { searchParams?: { 
     issued,
     settings,
     upcoming,
+    upcomingByFy,
     gapsByBank,
     issuerStateCode: gstStateOfGstin(dipl?.gstin)?.code ?? null,
     lutArn: dipl?.lutArn ?? null,

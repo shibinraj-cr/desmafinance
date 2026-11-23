@@ -17,6 +17,8 @@ export const IssueBody = z.object({
   }),
   saveToParty: z.boolean().default(true),
   foreign: z.object({ currency: z.string().max(3), amount: z.number().finite() }).nullable().optional(),
+  /** The number the form showed; issuing refuses if the series has moved on since. */
+  expectedNumber: z.string().max(40).nullable().optional(),
 });
 export type IssueBodyT = z.infer<typeof IssueBody>;
 
@@ -30,5 +32,6 @@ export function toIssueInput(b: IssueBodyT) {
     billTo: { name: b.billTo.name, address: b.billTo.address, pin: b.billTo.pin, state: b.billTo.state ?? null, country: b.billTo.country },
     saveToParty: b.saveToParty,
     foreign: b.foreign ?? null,
+    expectedNumber: b.expectedNumber ?? null,
   };
 }
