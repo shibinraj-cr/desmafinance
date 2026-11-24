@@ -120,7 +120,7 @@ const ready = { ...row, exception: null, firstAmount: { toString: () => "25000" 
 function txWith(e: unknown) {
   const tx = {
     $queryRaw: vi.fn(async () => []),
-    crmEnrollment: { findUnique: vi.fn(async () => e), updateMany: vi.fn(async () => ({ count: 1 })) },
+    crmEnrollment: { findUnique: vi.fn(async () => e), updateMany: vi.fn(async (_args: { where: unknown; data: Record<string, unknown> }) => ({ count: 1 })) },
   };
   fn(prisma.$transaction).mockImplementation(async (cb: (t: typeof tx) => Promise<unknown>) => cb(tx));
   return tx;
@@ -130,7 +130,7 @@ describe("submitForApproval", () => {
   it("marks it checked by the executive, still pending, and says so on the lead", async () => {
     const tx = txWith({ ...ready, status: "sent_back", financeNote: "Wrong UTR", returnNote: "Check the date" });
     await submitForApproval(executive, "enr1", null, UPDATED.toISOString());
-    const call = tx.crmEnrollment.updateMany.mock.calls[0][0];
+    const call = tx.crmEnrollment.updateMany.mock.calls[0]![0];
     expect(call.where).toEqual({ id: "enr1", status: { in: ["pending", "sent_back", "not_received"] } });
     expect(call.data).toMatchObject({ status: "pending", financeNote: null, checkedById: "fe1", returnNote: null });
     expect(call.data.checkedAt).toBeInstanceOf(Date);
