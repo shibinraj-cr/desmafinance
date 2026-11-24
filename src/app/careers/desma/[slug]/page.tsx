@@ -5,6 +5,9 @@ import { headers } from "next/headers";
 import { getPublicJob, getApplyForm, jobPostingJsonLd, isCareersPublic } from "@/lib/hiring/careers";
 import { markdownToPlainText } from "@/lib/hiring/markdown";
 import { Markdown } from "@/components/hiring/Markdown";
+import { JobTabs } from "@/components/careers/JobTabs";
+import { splitDescription, groupIntoTabs } from "@/lib/hiring/job-sections";
+import { mintCareersToken } from "@/lib/hiring/careers-token";
 import { ApplyForm } from "./apply-form";
 
 export const dynamic = "force-dynamic";
@@ -82,11 +85,37 @@ export default async function CareersRolePage({ params }: { params: { slug: stri
         )}
       </header>
 
-      {job.descriptionMd && (
-        <section aria-label="About the role">
-          <Markdown source={job.descriptionMd} />
-        </section>
-      )}
+      {job.descriptionMd &&
+        (() => {
+          // Computed per render rather than stored. The splitter is pure and
+          // cheap, so there is no column to migrate and no second copy of the
+          // description to keep in step — and `descriptionMd` stays the single
+          // source of truth for the JobPosting structured data, the meta
+          // description and the publish gate.
+          const { intro, sections } = splitDescription(job.descriptionMd);
+          const tabs = groupIntoTabs(sections);
+
+          // A description the splitter cannot read renders exactly as it does
+          // today. The worst case is the status quo, never something worse.
+          if (tabs.length < 2) {
+            return (
+              <section aria-label="About the role">
+                <Markdown source={job.descriptionMd!} />
+              </section>
+            );
+          }
+
+          return (
+            <>
+              {intro && (
+                <div className="mb-lg">
+                  <Markdown source={intro} />
+                </div>
+              )}
+              <JobTabs tabs={tabs} />
+            </>
+          );
+        })()}
 
       {job.mustHaves.length > 0 && (
         <section className="careers-card p-lg">
@@ -115,6 +144,7 @@ export default async function CareersRolePage({ params }: { params: { slug: stri
         <h2 className="text-h2 careers-ink mb-md">Apply</h2>
         <ApplyForm
           slug={form.slug}
+          parseToken={mintCareersToken(form.slug)}
           jobId={form.jobId}
           jobTitle={form.title}
           resumeMode={form.resumeMode}
