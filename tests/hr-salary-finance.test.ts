@@ -87,6 +87,8 @@ const financeManager = role({ canApprove: true, needsApproval: false });
 const admin = role({ isAdmin: true, canApprove: true, needsApproval: false });
 const submissionsOnly = role({});
 const hrManager = role({ canApprove: true, needsApproval: false, pages: ["/hr/salary", "/hr/attendance"] });
+/** An HR Manager role whose "can approve" flag is off: works payroll, can't approve. */
+const payrollNoApprove = role({ pages: ["/hr/salary", "/hr/attendance"] });
 
 const line = (employeeId: string, net: number, adj = 0, designation: string | null = "Executive") => ({
   employeeId,
@@ -261,6 +263,15 @@ describe("POST /api/hr/salary/[id] (approve)", () => {
     expect(res.status).toBe(403);
     expect(mock.$transaction).not.toHaveBeenCalled();
   });
+
+  it("keeps approval from payroll staff who may only send", async () => {
+    auth.perms = payrollNoApprove;
+
+    const res = await approveRun(request(), { params: { id: run.id } });
+
+    expect(res.status).toBe(403);
+    expect(mock.$transaction).not.toHaveBeenCalled();
+  });
 });
 
 describe("POST /api/hr/salary/[id] (send to Finance)", () => {
@@ -352,7 +363,17 @@ describe("POST /api/hr/salary/[id] (send to Finance)", () => {
     await expect(sendWith(tx)).rejects.toThrow("connection lost");
   });
 
-  it("refuses someone without HR approval rights", async () => {
+  it("lets an HR Manager whose role has no approval rights send it", async () => {
+    auth.perms = payrollNoApprove;
+    const tx = client({ status: "hr_approved", financeSubmittedAt: null, drafts: 0 });
+
+    const res = await sendWith(tx);
+
+    expect(res.status).toBe(200);
+    expect(tx.transactionDraft.createMany).toHaveBeenCalledOnce();
+  });
+
+  it("refuses someone who doesn't work payroll", async () => {
     auth.perms = financeManager;
 
     const res = await approveRun(request(), { params: { id: run.id } });

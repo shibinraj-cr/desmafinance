@@ -2,7 +2,7 @@ import { redirect, notFound } from "next/navigation";
 import Link from "next/link";
 import { prisma } from "@/lib/prisma";
 import { getCurrentUserAndPermissions } from "@/lib/permissions";
-import { isHrUser, canApproveHr, canDownloadAxis } from "@/lib/hr-rbac";
+import { isHrUser, canApproveHr, canDownloadAxis, canSendSalaryToFinance } from "@/lib/hr-rbac";
 import { TopBar } from "@/components/TopBar";
 import { Section } from "@/components/Cards";
 import type { PfSegmentCalc } from "@/lib/hr-pf";
@@ -44,7 +44,7 @@ export default async function SalaryRunDetailPage({ params }: { params: { id: st
   // already entered by hand for that month.
   const draftsWaiting = run._count.financeDrafts;
   const canSendToFinance =
-    canApproveHr(perms) && run.status === "hr_approved" && !run.financeSubmittedAt && draftsWaiting === 0;
+    canSendSalaryToFinance(perms) && run.status === "hr_approved" && !run.financeSubmittedAt && draftsWaiting === 0;
   const alreadyInFinance = canSendToFinance
     ? await salaryAlreadyInFinance(run.monthKey, run.lines.map((l) => l.employeeId))
     : null;
