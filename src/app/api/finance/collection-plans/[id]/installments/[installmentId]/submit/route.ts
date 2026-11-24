@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { Prisma } from "@prisma/client";
 import { z } from "zod";
 import { prisma } from "@/lib/prisma";
 import { getCurrentUserAndPermissions } from "@/lib/permissions";
@@ -7,56 +8,81 @@ import { verifyCategorySubItem } from "@/lib/master-data";
 import { canApprove, canSeePage } from "@/lib/rbac";
 import { recordAudit } from "@/lib/audit";
 import type { TxProposed } from "@/lib/approval";
-import { isHistoricalDate } from "@/lib/finance-historical";
+import { isBeforeHistoricalFloor, isCandidatePaymentCategory, isHistoricalDate } from "@/lib/finance-historical";
 import { gstInAmount } from "@/lib/finance-gst";
+import { todayIst, toPrismaDate } from "@/lib/lead-pulse-dates";
+import { utrRequired } from "@/lib/crm-enroll-confirm";
+import { planChangeFor } from "@/lib/collection-payment";
+import { PlanChangeRefused, applyPaymentToPlan, findDuplicatePayment, loadPlanInstalments, type DuplicatePayment } from "@/lib/collection-payment-server";
+import { NOT_INVOICEABLE_MESSAGE, notInvoiceableReason } from "@/lib/invoices/core";
+import { loadSettings } from "@/lib/invoices/server";
 
 export const dynamic = "force-dynamic";
 
-// Collection-plan installments are submitted from the Collection Plan page.
+// Collection-plan installments are recorded from the Collection Plan page.
 const PAGE = "/finance/collection-plan";
 
 /**
- * The ledger month for an installment's date, or null when the date falls
- * outside the months the ledger tracks. This used to fall back to MONTHS[0],
- * so an installment due in Apr 2027 was posted with its 2027 date but the
- * month "Apr-26", landing in the wrong month of every month-bucketed report.
- * A payment from before DesGro keeps its real month: isHistorical keeps it
- * out of those reports, so there's no bucket to fit.
+ * The ledger month for a payment date, or null when the date falls outside
+ * the months the ledger tracks (it used to fall back to MONTHS[0], posting a
+ * 2027 date in "Apr-26"). A payment from before DesGro keeps its real month:
+ * isHistorical keeps it out of the month-bucketed reports.
  */
+/** Thrown inside the executive's transaction: the instalment stopped being due meanwhile. */
+class InstalmentTaken extends Error {}
+
+/** Thrown inside the posting transaction: the UTR reached the ledger meanwhile. */
+class DuplicateMeanwhile extends Error {
+  constructor(readonly dup: DuplicatePayment) {
+    super("duplicate_payment");
+  }
+}
+
+/** 409 naming the entry that already carries this UTR; an approver may link it instead. */
+function duplicateResponse(dup: DuplicatePayment, approver: boolean) {
+  return NextResponse.json(
+    {
+      error: "duplicate_payment",
+      existing: { source: dup.source, id: dup.id, date: dup.date, amount: dup.amount, description: dup.description },
+      canLink: approver && dup.source === "ledger" && !dup.linked,
+    },
+    { status: 409 },
+  );
+}
+
 function ledgerMonthFor(d: Date): string | null {
   const code = monthCodeFromDate(d);
   if (isHistoricalDate(d)) return code;
   return (MONTHS as readonly string[]).includes(code) ? code : null;
 }
 
-/** Optional body: lets the caller supply category/sub-item/payment-mode/
- *  EXP-DOM at submit time when the plan doesn't have defaults. */
-const BodySchema = z
-  .object({
-    category: z.string().min(1).max(120).optional().nullable(),
-    subItem: z.string().min(1).max(160).optional().nullable(),
-    paymentMode: z.enum(PAYMENT_MODES).optional().nullable(),
-    expDom: z.enum(["EXP", "DOM"]).optional().nullable(),
-  })
-  .optional()
-  .nullable();
+/**
+ * The payment as it arrived: the day the money landed, the amount, the bank,
+ * the UTR and, when someone else paid, who. Category / sub-item / EXP-DOM are
+ * asked only when the plan doesn't carry them yet.
+ */
+const BodySchema = z.object({
+  paidOn: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
+  amount: z.coerce.number().positive().max(1_000_000_000),
+  paymentMode: z.enum(PAYMENT_MODES).optional().nullable(),
+  utr: z.string().trim().max(60).optional().nullable(),
+  paidBy: z.string().trim().max(120).optional().nullable(),
+  category: z.string().min(1).max(120).optional().nullable(),
+  subItem: z.string().min(1).max(160).optional().nullable(),
+  expDom: z.enum(["EXP", "DOM"]).optional().nullable(),
+});
 
 /**
- * Submit an installment to the Daily Tracker for approval. Routing
- * follows the same rules as POST /api/finance/transactions:
+ * POST — record the payment received for an instalment. The ledger entry
+ * carries what actually arrived (paid date, amount, bank, UTR in the
+ * description so bank reconciliation matches it); the plan is reshaped for a
+ * part or extra payment (src/lib/collection-payment.ts).
  *
- *   - draftFirst user → creates a TransactionDraft (the user must
- *     then submit it from My Drafts; the pending row will link to
- *     this installment at that later step).
- *   - canApprove user → writes Transaction directly, links the
- *     installment to it with status='received'.
- *   - executive → creates a PendingApproval with the installment id
- *     attached, so approve/reject can update the installment.
- *
- * The installment is locked (status='submitted', editing blocked)
- * for the canApprove + executive paths; the draftFirst path leaves
- * status as 'pending' so the executive can still edit/resubmit if
- * the draft is discarded — see TODO below.
+ *   - An approver posts it straight to the ledger, in one transaction with the
+ *     plan change, and is told whether the payment can be invoiced now.
+ *   - Anyone else's goes to Approvals; approving it posts it and changes the
+ *     plan then (approvePending). draftFirst is deliberately not used here:
+ *     a draft has no link back to the instalment.
  */
 export async function POST(
   req: NextRequest,
@@ -70,14 +96,11 @@ export async function POST(
     return NextResponse.json({ error: "forbidden" }, { status: 403 });
   }
 
-  // Body is optional; only required if the plan/installment don't
-  // already carry the missing fields.
-  const rawBody = await req.json().catch(() => null);
-  const parsedBody = BodySchema.safeParse(rawBody);
+  const parsedBody = BodySchema.safeParse(await req.json().catch(() => null));
   if (!parsedBody.success) {
     return NextResponse.json({ error: "validation_failed" }, { status: 400 });
   }
-  const body = parsedBody.data ?? {};
+  const body = parsedBody.data;
 
   const installment = await prisma.collectionPlanInstallment.findUnique({
     where: { id: params.installmentId },
@@ -100,22 +123,16 @@ export async function POST(
     return NextResponse.json({ error: "party_inactive" }, { status: 400 });
   }
 
-  // Resolution order: per-submit body → installment override → plan default.
-  const category = body?.category ?? installment.category ?? plan.category ?? null;
-  const subItem = body?.subItem ?? installment.subItem ?? plan.subItem ?? null;
-  const paymentMode =
-    body?.paymentMode ?? installment.paymentMode ?? plan.paymentMode ?? null;
-  const expDom = body?.expDom ?? plan.expDom ?? null;
+  // Resolution order: this payment → installment override → plan default.
+  const category = body.category ?? installment.category ?? plan.category ?? null;
+  const subItem = body.subItem ?? installment.subItem ?? plan.subItem ?? null;
+  const paymentMode = body.paymentMode ?? installment.paymentMode ?? plan.paymentMode ?? null;
+  const expDom = body.expDom ?? plan.expDom ?? null;
   if (!category || !subItem || !paymentMode || !expDom) {
     return NextResponse.json(
       {
         error: "submit_fields_required",
-        missing: {
-          category: !category,
-          subItem: !subItem,
-          paymentMode: !paymentMode,
-          expDom: !expDom,
-        },
+        missing: { category: !category, subItem: !subItem, paymentMode: !paymentMode, expDom: !expDom },
       },
       { status: 400 },
     );
@@ -123,15 +140,41 @@ export async function POST(
   const verr = await verifyCategorySubItem(category, subItem, "Revenue");
   if (verr) return NextResponse.json({ error: verr }, { status: 400 });
 
-  // Refuse before writing anything: the ledger row takes this date.
-  const expectedDate = installment.expectedDate;
-  const month = ledgerMonthFor(expectedDate);
+  // The payment's own date, checked before anything is written.
+  if (body.paidOn > todayIst()) {
+    return NextResponse.json({ error: "paid_in_future" }, { status: 400 });
+  }
+  const paidOn = toPrismaDate(body.paidOn);
+  const month = ledgerMonthFor(paidOn);
   if (!month) {
     return NextResponse.json({ error: "month_out_of_range" }, { status: 400 });
   }
+  // Before DesGro's books began: the ledger's own rules for historical entries.
+  if (isHistoricalDate(paidOn)) {
+    if (isBeforeHistoricalFloor(paidOn)) return NextResponse.json({ error: "historical_too_old" }, { status: 400 });
+    if (!isCandidatePaymentCategory(category)) return NextResponse.json({ error: "historical_payments_only" }, { status: 400 });
+    if (plan.party.group !== "Candidate") return NextResponse.json({ error: "historical_candidate_only" }, { status: 400 });
+  }
+  const utr = body.utr?.replace(/\s+/g, "") || null;
+  if (utrRequired(paymentMode) && (utr ?? "").length < 4) {
+    return NextResponse.json({ error: "utr_required" }, { status: 400 });
+  }
+  const paidBy = body.paidBy?.trim() || null;
+  const amount = Math.round(body.amount * 100) / 100;
 
-  // Persist the user's picks back onto plan + installment so the next
-  // submit doesn't re-prompt for the same answers.
+  // Refuse up front what the plan can't take (an executive's entry is checked
+  // again when it's approved, against the plan as it is then).
+  const check = planChangeFor(await loadPlanInstalments(prisma, plan.id), installment.id, amount);
+  if ("error" in check) return NextResponse.json(check, { status: 409 });
+
+  // The same money twice: this UTR is already on the ledger for the candidate
+  // (booked from the bank line or the Daily Tracker), or waiting for approval.
+  const approver = canApprove(perms);
+  const dup = await findDuplicatePayment(prisma, { partyId: plan.partyId, utr, includeWaiting: true });
+  if (dup) return duplicateResponse(dup, approver);
+
+  // Persist the picks back onto plan + installment so the next payment
+  // doesn't ask for the same answers.
   await prisma.$transaction([
     prisma.collectionPlan.update({
       where: { id: plan.id },
@@ -145,122 +188,156 @@ export async function POST(
     prisma.collectionPlanInstallment.update({
       where: { id: installment.id },
       data: {
-        // Only write per-installment override when caller asked for
-        // something different from the (now-saved) plan default.
-        ...(body?.category && body.category !== plan.category
-          ? { category: body.category }
-          : {}),
-        ...(body?.subItem && body.subItem !== plan.subItem ? { subItem: body.subItem } : {}),
-        ...(body?.paymentMode && body.paymentMode !== plan.paymentMode
-          ? { paymentMode: body.paymentMode }
-          : {}),
+        ...(body.category && body.category !== plan.category ? { category: body.category } : {}),
+        ...(body.subItem && body.subItem !== plan.subItem ? { subItem: body.subItem } : {}),
+        ...(body.paymentMode && body.paymentMode !== plan.paymentMode ? { paymentMode: body.paymentMode } : {}),
       },
     }),
   ]);
 
-  const amountNum = Number(installment.amount.toString());
+  // "Plan label · instalment 2 · UTR … · paid by …": the UTR is what bank
+  // reconciliation matches the statement line on.
+  const description = [
+    `${plan.label} · instalment ${installment.seq}`,
+    installment.description?.trim() || null,
+    utr ? `UTR ${utr}` : null,
+    paidBy ? `paid by ${paidBy}` : null,
+  ]
+    .filter(Boolean)
+    .join(" · ")
+    .slice(0, 500);
+
   const proposed: TxProposed = {
-    date: expectedDate.toISOString(),
+    date: paidOn.toISOString(),
     month,
     type: "Revenue",
     category,
     subItem,
-    description: installment.description ?? plan.label,
+    description,
     paymentMode,
-    amount: amountNum,
+    amount,
     flow: flowFor("Revenue"),
     partyId: plan.partyId,
     expDom,
   };
+  const audit = { ...proposed, fromInstallmentId: installment.id, planId: plan.id, plannedAmount: Number(installment.amount.toString()), plannedDate: installment.expectedDate.toISOString() };
 
-  // Route per role. We don't use submitCreate() directly because we
-  // need to set PendingApproval.collectionInstallmentId atomically and
-  // flip the installment to its new status / link.
-  //
-  // draftFirst is intentionally NOT special-cased here. For ad-hoc
-  // Daily Tracker entries that flag routes a user's submissions through
-  // a personal draft queue first; but a collection-plan installment is
-  // already explicitly reviewed in the "Submit to Daily Tracker" dialog
-  // (category / sub-item / payment / EXP-DOM are confirmed there), and
-  // TransactionDraft has no link back to the installment — so a draft
-  // would orphan the installment and risk a double-submit. draftFirst
-  // executives therefore use the standard executive enqueue path below,
-  // which keeps the installment ↔ PendingApproval link intact.
-
-  if (canApprove(perms)) {
-    // Atomic: create the ledger row and link the installment together. If the
-    // installment link failed after a loose create, the Transaction would be
-    // orphaned (posted revenue with no installment marked received).
-    const { tx, updated } = await prisma.$transaction(async (dbtx) => {
-      const tx = await dbtx.transaction.create({
-        data: {
-          date: expectedDate,
-          month: proposed.month,
-          type: "Revenue",
-          category,
-          subItem,
-          description: proposed.description ?? null,
-          paymentMode,
-          amount: amountNum,
-          flow: proposed.flow,
-          partyId: plan.partyId,
-          expDom: proposed.expDom ?? null,
-          isHistorical: isHistoricalDate(expectedDate),
-          gstAmount: gstInAmount({ type: "Revenue", paymentMode, expDom: proposed.expDom ?? null, amount: amountNum }),
-          createdById: userId,
-        },
+  if (approver) {
+    // Atomic: the ledger row and the plan change land together or not at all.
+    let posted;
+    try {
+      posted = await prisma.$transaction(async (dbtx) => {
+        const again = await findDuplicatePayment(dbtx, { partyId: plan.partyId, utr });
+        if (again) throw new DuplicateMeanwhile(again);
+        const tx = await dbtx.transaction.create({
+          data: {
+            date: paidOn,
+            month,
+            type: "Revenue",
+            category,
+            subItem,
+            description,
+            paymentMode,
+            amount,
+            flow: proposed.flow,
+            partyId: plan.partyId,
+            expDom,
+            isHistorical: isHistoricalDate(paidOn),
+            gstAmount: gstInAmount({ type: "Revenue", paymentMode, expDom, amount }),
+            createdById: userId,
+          },
+        });
+        const change = await applyPaymentToPlan(dbtx, { instalmentId: installment.id, transactionId: tx.id, paid: amount });
+        return { tx, change };
       });
-      const updated = await dbtx.collectionPlanInstallment.update({
-        where: { id: installment.id },
-        data: { status: "received", transactionId: tx.id, pendingApprovalId: null },
-      });
-      return { tx, updated };
-    });
+    } catch (e) {
+      if (e instanceof PlanChangeRefused) return NextResponse.json(e.problem, { status: 409 });
+      if (e instanceof DuplicateMeanwhile) return duplicateResponse(e.dup, true);
+      throw e;
+    }
     await recordAudit({
       entityType: "Transaction",
-      entityId: tx.id,
+      entityId: posted.tx.id,
       action: "CREATE",
       userId,
-      changes: { ...proposed, fromInstallmentId: installment.id, planId: plan.id },
+      changes: { ...audit, planChange: posted.change },
     });
+
+    // Whether Finance can issue the invoice for it right now, and if not, why.
+    const settings = await loadSettings();
+    const reason = notInvoiceableReason(
+      {
+        type: "Revenue",
+        deletedAt: null,
+        isHistorical: isHistoricalDate(paidOn),
+        category,
+        paymentMode,
+        date: body.paidOn,
+        partyGroup: plan.party.group,
+      },
+      { activeBanks: settings.banks.filter((b) => b.isActive).map((b) => b.paymentMode), startsOn: settings.startsOn },
+    );
     return NextResponse.json({
       ok: true,
       applied: true,
-      transactionId: tx.id,
-      installment: { ...updated, amount: Number(updated.amount.toString()) },
+      transactionId: posted.tx.id,
+      invoice: { canIssue: reason === null, reason: reason ? NOT_INVOICEABLE_MESSAGE[reason] : null },
     });
   }
 
-  // Executive — enqueue. Atomic: create the pending row and link the
-  // installment to it together, so a failure can't leave an orphaned
-  // PendingApproval or an installment pointing at a row that never committed.
-  const { pending, updated } = await prisma.$transaction(async (dbtx) => {
-    const pending = await dbtx.pendingApproval.create({
-      data: {
-        kind: "create",
-        status: "pending",
-        proposed: proposed as unknown as object,
-        submittedById: userId,
-        collectionInstallmentId: installment.id,
-      },
+  // Executive — enqueue. Atomic: the pending row and the instalment's link to
+  // it together, so neither is left pointing at nothing, and only while the
+  // instalment is still due. A rejected entry for this instalment is replaced
+  // by this one (so it can't be resubmitted as well).
+  let superseded: string[] = [];
+  let pending;
+  try {
+    pending = await prisma.$transaction(async (dbtx) => {
+      const old = await dbtx.pendingApproval.findMany({
+        where: { collectionInstallmentId: installment.id, status: "rejected" },
+        select: { id: true },
+      });
+      superseded = old.map((o) => o.id);
+      if (superseded.length) await dbtx.pendingApproval.deleteMany({ where: { id: { in: superseded } } });
+      const created = await dbtx.pendingApproval.create({
+        data: {
+          kind: "create",
+          status: "pending",
+          proposed: proposed as unknown as object,
+          submittedById: userId,
+          collectionInstallmentId: installment.id,
+        },
+      });
+      const claimed = await dbtx.collectionPlanInstallment.updateMany({
+        where: { id: installment.id, status: "pending" },
+        data: { status: "submitted", pendingApprovalId: created.id },
+      });
+      if (claimed.count !== 1) throw new InstalmentTaken();
+      return created;
     });
-    const updated = await dbtx.collectionPlanInstallment.update({
-      where: { id: installment.id },
-      data: { status: "submitted", pendingApprovalId: pending.id },
+  } catch (e) {
+    if (e instanceof InstalmentTaken) return NextResponse.json({ error: "installment_not_pending" }, { status: 409 });
+    // Another entry for this instalment got there first (still waiting, or approved).
+    if (e instanceof Prisma.PrismaClientKnownRequestError && e.code === "P2002") {
+      return NextResponse.json({ error: "pending_exists" }, { status: 409 });
+    }
+    throw e;
+  }
+  for (const id of superseded) {
+    await recordAudit({
+      entityType: "PendingApproval",
+      entityId: id,
+      action: "DELETE",
+      userId,
+      changes: { kind: "superseded_by_new_record", installmentId: installment.id, by: pending.id },
     });
-    return { pending, updated };
-  });
+  }
   await recordAudit({
     entityType: "PendingApproval",
     entityId: pending.id,
     action: "SUBMIT_CREATE",
     userId,
-    changes: { ...proposed, fromInstallmentId: installment.id, planId: plan.id },
+    changes: audit,
   });
-  return NextResponse.json({
-    ok: true,
-    applied: false,
-    pendingId: pending.id,
-    installment: { ...updated, amount: Number(updated.amount.toString()) },
-  });
+  return NextResponse.json({ ok: true, applied: false, pendingId: pending.id });
 }

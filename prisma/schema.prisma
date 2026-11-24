@@ -1656,6 +1656,11 @@ model CollectionPlanInstallment {
   /// FK to the canonical Transaction (if status='received').
   transactionId     String?          @unique
   transaction       Transaction?     @relation("InstallmentTransaction", fields: [transactionId], references: [id], onDelete: SetNull)
+  /// Set when a payment is recorded against this instalment with Record
+  /// payment (or an existing ledger entry is linked): the plan's instalments
+  /// just before and just after, so the payment can be undone while nothing
+  /// else on the plan has changed (src/lib/collection-payment-server.ts).
+  paymentUndo       Json?
   createdAt         DateTime         @default(now())
   updatedAt         DateTime         @updatedAt
 

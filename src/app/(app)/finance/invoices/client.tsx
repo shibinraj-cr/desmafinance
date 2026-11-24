@@ -41,7 +41,18 @@ export type InvoicesPageData = {
 
 type Tab = "to-invoice" | "issued" | "not-invoiced" | "settings";
 
-export function InvoicesClient({ data, initialTab, page }: { data: InvoicesPageData; initialTab: string; page: string }) {
+export function InvoicesClient({
+  data,
+  initialTab,
+  page,
+  openIssue = null,
+}: {
+  data: InvoicesPageData;
+  initialTab: string;
+  page: string;
+  /** A ledger entry id whose Issue dialog opens on arrival (?issue=). */
+  openIssue?: string | null;
+}) {
   const router = useRouter();
   const pathname = usePathname();
   const { show, node } = useToast();
@@ -83,7 +94,7 @@ export function InvoicesClient({ data, initialTab, page }: { data: InvoicesPageD
         ))}
       </div>
 
-      {tab === "to-invoice" && <ToInvoiceTab data={data} done={done} goSettings={() => setTab("settings")} />}
+      {tab === "to-invoice" && <ToInvoiceTab data={data} done={done} goSettings={() => setTab("settings")} openIssue={openIssue} />}
       {tab === "issued" && <IssuedTab data={data} done={done} />}
       {tab === "not-invoiced" && <NotInvoicedTab data={data} />}
       {tab === "settings" && <SettingsTab data={data} done={done} />}
@@ -103,8 +114,20 @@ function projectedNumbers(data: InvoicesPageData): Record<string, string> {
   );
 }
 
-function ToInvoiceTab({ data, done, goSettings }: { data: InvoicesPageData; done: (m: string) => void; goSettings: () => void }) {
-  const [issuing, setIssuing] = useState<ToInvoiceRow | null>(null);
+function ToInvoiceTab({
+  data,
+  done,
+  goSettings,
+  openIssue,
+}: {
+  data: InvoicesPageData;
+  done: (m: string) => void;
+  goSettings: () => void;
+  openIssue: string | null;
+}) {
+  // Arriving from a link to one payment: open it, unless a change to it waits for approval.
+  const linked = openIssue ? (data.toInvoice.find((r) => r.id === openIssue) ?? null) : null;
+  const [issuing, setIssuing] = useState<ToInvoiceRow | null>(linked && !linked.pendingChange ? linked : null);
   const activeGaps = data.settings.banks
     .filter((b) => b.isActive && (data.gapsByBank[b.paymentMode] ?? []).length)
     .map((b) => [b.paymentMode, data.gapsByBank[b.paymentMode]] as const);
@@ -129,10 +152,21 @@ function ToInvoiceTab({ data, done, goSettings }: { data: InvoicesPageData; done
         </Callout>
       ) : (
         <p className="text-body-md text-on-surface-variant">
-          Approved candidate payments into Axis, HDFC or Wio from {fmtDate(data.settings.startsOn)} on, oldest first. Issuing gives
+          Approved candidate payments into Axis, HDFC or Wio from {fmtDate(data.settings.startsOn)} on, enrollments and collections, oldest first. Issuing gives
           the invoice its number and stores the PDF; the BDE and Ops can then download it from the lead.
         </p>
       )}
+      {openIssue && !linked ? (
+        <Callout tone="gold" icon="info">
+          That payment isn&apos;t waiting for an invoice: it has one already, or it can&apos;t be invoiced here (see Not invoiced).
+        </Callout>
+      ) : null}
+      {linked?.pendingChange ? (
+        <Callout tone="gold" icon="info">
+          That payment has {linked.pendingChange === "delete" ? "a deletion" : "an edit"} waiting for approval. Approve or reject it in Approvals, then
+          issue the invoice.
+        </Callout>
+      ) : null}
       {activeGaps.length > 0 && (
         <Callout tone="bad" icon="settings">
           <b>Invoice settings aren&apos;t complete.</b>
@@ -224,7 +258,14 @@ function ToInvoiceTab({ data, done, goSettings }: { data: InvoicesPageData; done
                       {r.entityCode ? <div className="text-caption text-on-surface-variant">{r.entityCode === "DLLC" ? "UAE invoice" : `India · ${r.expDom ?? "DOM?"}`}</div> : null}
                     </td>
                     <td className="px-md py-2 text-right tabular-nums font-semibold">{money(r.amount, "INR")}</td>
-                    <td className="px-md py-2 text-on-surface-variant">{r.subItem}</td>
+                    <td className="px-md py-2 text-on-surface-variant">
+                      {r.subItem}
+                      {r.instalment ? (
+                        <div className="text-caption">
+                          Instalment {r.instalment.seq} of {r.instalment.of} · {r.instalment.plan}
+                        </div>
+                      ) : null}
+                    </td>
                     <td className="px-md py-2 text-on-surface-variant whitespace-nowrap">{r.party?.bde ?? "—"}</td>
                     <td className="px-md py-2 whitespace-nowrap tabular-nums font-semibold" data-projected-number={r.id}>
                       {numbers[r.id] ?? "—"}

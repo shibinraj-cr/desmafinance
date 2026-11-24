@@ -297,45 +297,75 @@ const PARTY_BILLING = {
 } satisfies Prisma.PartySelect;
 
 /** Payments waiting for an invoice: approved, into an active invoicing bank, from the cut-over on. */
-export async function listToInvoice() {
+/** "Instalment N of M" among the plan's instalments that aren't cancelled, so it never reads "3 of 2". */
+function instalmentPosition(ci: { id: string; seq: number; plan: { label: string; installments: Array<{ id: string }> } }) {
+  const live = ci.plan.installments;
+  const at = live.findIndex((x) => x.id === ci.id);
+  return at >= 0 ? { seq: at + 1, of: live.length, plan: ci.plan.label } : { seq: ci.seq, of: Math.max(ci.seq, live.length), plan: ci.plan.label };
+}
+
+export async function listToInvoice(opts?: {
+  /** A payment to include even when it falls outside the first 300 (the ?issue= link). */
+  include?: string | null;
+}) {
   const settings = await loadSettings();
   const activeBanks = settings.banks.filter((b) => b.isActive).map((b) => b.paymentMode);
   if (!settings.startsOn || activeBanks.length === 0) return { startsOn: settings.startsOn, rows: [] };
-  const rows = await prisma.transaction.findMany({
-    where: {
-      type: "Revenue",
-      deletedAt: null,
-      isHistorical: false,
-      category: { not: "Commissions" },
-      paymentMode: { in: activeBanks },
-      date: { gte: toPrismaDate(settings.startsOn) },
-      party: { group: "Candidate" },
-      invoices: { none: { status: "issued" } },
-    },
-    orderBy: [{ date: "asc" }, { createdAt: "asc" }],
-    take: 300,
-    select: {
-      id: true,
-      date: true,
-      amount: true,
-      paymentMode: true,
-      category: true,
-      subItem: true,
-      description: true,
-      expDom: true,
-      pendingApprovals: { where: { status: "pending", kind: { in: ["update", "delete"] } }, select: { kind: true }, take: 1 },
-      party: {
-        select: {
-          ...PARTY_BILLING,
-          leads: {
-            select: { id: true, country: true, assignedTo: { select: { username: true, leadPulseRole: { select: { displayName: true } } } } },
-            orderBy: { createdAt: "desc" },
-            take: 1,
+  // Each read below also says isHistorical: false (tests/finance-historical-guard.test.ts reads the call).
+  const where: Prisma.TransactionWhereInput = {
+    type: "Revenue",
+    deletedAt: null,
+    category: { not: "Commissions" },
+    paymentMode: { in: activeBanks },
+    date: { gte: toPrismaDate(settings.startsOn) },
+    party: { group: "Candidate" },
+    invoices: { none: { status: "issued" } },
+  };
+  const select = {
+    id: true,
+    date: true,
+    amount: true,
+    paymentMode: true,
+    category: true,
+    subItem: true,
+    description: true,
+    expDom: true,
+    pendingApprovals: { where: { status: "pending", kind: { in: ["update", "delete"] } }, select: { kind: true }, take: 1 },
+    // A collection recorded on a plan: "Instalment 2 of 3", counted among
+    // the plan's instalments that aren't cancelled.
+    collectionInstallment: {
+      select: {
+        id: true,
+        seq: true,
+        plan: {
+          select: {
+            label: true,
+            installments: { where: { status: { not: "cancelled" } }, orderBy: { seq: "asc" }, select: { id: true } },
           },
         },
       },
     },
+    party: {
+      select: {
+        ...PARTY_BILLING,
+        leads: {
+          select: { id: true, country: true, assignedTo: { select: { username: true, leadPulseRole: { select: { displayName: true } } } } },
+          orderBy: { createdAt: "desc" },
+          take: 1,
+        },
+      },
+    },
+  } satisfies Prisma.TransactionSelect;
+  const rows = await prisma.transaction.findMany({
+    where: { ...where, isHistorical: false },
+    orderBy: [{ date: "asc" }, { createdAt: "asc" }],
+    take: 300,
+    select,
   });
+  if (opts?.include && !rows.some((r) => r.id === opts.include)) {
+    const extra = await prisma.transaction.findFirst({ where: { ...where, isHistorical: false, id: opts.include }, select });
+    if (extra) rows.push(extra);
+  }
   return {
     startsOn: settings.startsOn,
     rows: rows.map((r) => ({
@@ -349,6 +379,7 @@ export async function listToInvoice() {
       expDom: r.expDom,
       /** An edit or deletion of this payment waiting for approval: settle it before invoicing. */
       pendingChange: r.pendingApprovals[0]?.kind ?? null,
+      instalment: r.collectionInstallment ? instalmentPosition(r.collectionInstallment) : null,
       entityCode: settings.banks.find((b) => b.paymentMode === r.paymentMode)?.entityCode ?? null,
       party: r.party
         ? {

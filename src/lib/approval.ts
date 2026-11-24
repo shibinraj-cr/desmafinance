@@ -4,7 +4,8 @@ import { recordAudit } from "./audit";
 import { canApprove, canWorkSalaryDrafts, needsApproval, type Permissions } from "./rbac";
 import { isHistoricalDate } from "./finance-historical";
 import { gstInAmount } from "./finance-gst";
-import { guardLedgerWrite, invoiceBlocks, invoicedOrThrow, INVOICED } from "./invoices/ledger-lock";
+import { guardLedgerWrite, guardedOrThrow, invoiceBlocks, planLinkBlocks, INVOICED, PLAN_LINKED } from "./invoices/ledger-lock";
+import { PlanChangeRefused, applyPaymentToPlan, findDuplicatePayment, utrFromDescription } from "./collection-payment-server";
 
 export type TxProposed = {
   date: string; // ISO date
@@ -321,6 +322,10 @@ export async function submitUpdate(opts: {
   if (await invoiceBlocks(prisma, existing, data)) {
     return { error: "invoiced" as const };
   }
+  // A payment recorded on a collection plan: its amount, date and party are the plan's.
+  if (await planLinkBlocks(prisma, existing, data)) {
+    return { error: "plan_linked" as const };
+  }
 
   if (canApprove(perms)) {
     const updated = await prisma
@@ -346,8 +351,9 @@ export async function submitUpdate(opts: {
           },
         });
       })
-      .catch(invoicedOrThrow);
+      .catch(guardedOrThrow);
     if (updated === INVOICED) return { error: "invoiced" as const };
+    if (updated === PLAN_LINKED) return { error: "plan_linked" as const };
     await recordAudit({
       entityType: "Transaction",
       entityId: updated.id,
@@ -414,6 +420,9 @@ export async function submitDelete(opts: {
   if (await invoiceBlocks(prisma, existing, null)) {
     return { error: "invoiced" as const };
   }
+  if (await planLinkBlocks(prisma, existing, null)) {
+    return { error: "plan_linked" as const };
+  }
 
   if (canApprove(perms)) {
     const deleted = await prisma
@@ -424,8 +433,9 @@ export async function submitDelete(opts: {
           data: { deletedAt: new Date(), deletedById: userId },
         });
       })
-      .catch(invoicedOrThrow);
+      .catch(guardedOrThrow);
     if (deleted === INVOICED) return { error: "invoiced" as const };
+    if (deleted === PLAN_LINKED) return { error: "plan_linked" as const };
     await recordAudit({
       entityType: "Transaction",
       entityId: txId,
@@ -473,6 +483,9 @@ export async function submitDelete(opts: {
 /** Thrown inside a $transaction when another reviewer resolved the pending first. */
 class PendingAlreadyResolved extends Error {}
 
+/** Thrown inside a $transaction: a collection payment whose UTR is already on the ledger for the candidate. */
+class DuplicatePaymentOnApprove extends Error {}
+
 /**
  * Resolve a pending row only if it is STILL pending, as the first write of the
  * transaction. The status check before the transaction is just a fast path:
@@ -505,6 +518,10 @@ export async function approvePending(opts: {
     return await approvePendingInner(opts);
   } catch (e) {
     if (e instanceof PendingAlreadyResolved) return { error: "already_resolved" as const };
+    // The collection plan can't take this payment any more (e.g. another
+    // instalment was received since it was submitted): reject it, or fix the plan.
+    if (e instanceof PlanChangeRefused) return { error: e.problem.error };
+    if (e instanceof DuplicatePaymentOnApprove) return { error: "duplicate_payment_on_approve" as const };
     throw e;
   }
 }
@@ -535,6 +552,13 @@ async function approvePendingInner(opts: {
     // could then be approved again → double-posted revenue).
     const created = await prisma.$transaction(async (tx) => {
       await claimPending(tx, pendingId, resolution);
+      // A collection payment whose UTR reached the ledger another way since it
+      // was submitted (the bank line, the Daily Tracker): posting it would count
+      // the money twice. Reject it and link the existing entry on the plan.
+      if (p.collectionInstallmentId && data.partyId) {
+        const dup = await findDuplicatePayment(tx, { partyId: data.partyId, utr: utrFromDescription(data.description) });
+        if (dup) throw new DuplicatePaymentOnApprove();
+      }
       const row = await tx.transaction.create({
         data: {
           date: new Date(data.date),
@@ -558,17 +582,11 @@ async function approvePendingInner(opts: {
         where: { id: pendingId },
         data: { targetTxId: row.id },
       });
-      // If this pending was raised from a Collection Plan installment,
-      // flip the installment to 'received' + link to the new transaction.
+      // Raised from a Collection Plan instalment: mark it received for what
+      // was paid and reshape the plan for a part or extra payment, against the
+      // plan as it is now. If it no longer fits, nothing is posted.
       if (p.collectionInstallmentId) {
-        await tx.collectionPlanInstallment.update({
-          where: { id: p.collectionInstallmentId },
-          data: {
-            status: "received",
-            transactionId: row.id,
-            pendingApprovalId: null,
-          },
-        });
+        await applyPaymentToPlan(tx, { instalmentId: p.collectionInstallmentId, transactionId: row.id, paid: data.amount });
       }
       return row;
     });
@@ -613,8 +631,9 @@ async function approvePendingInner(opts: {
         },
       });
       return updated;
-    }).catch(invoicedOrThrow);
+    }).catch(guardedOrThrow);
     if (after === INVOICED) return { error: "invoiced" as const };
+    if (after === PLAN_LINKED) return { error: "plan_linked" as const };
     await recordAudit({
       entityType: "Transaction",
       entityId: after.id,
@@ -643,8 +662,9 @@ async function approvePendingInner(opts: {
         where: { id: targetTxId },
         data: { deletedAt: new Date(), deletedById: reviewerId },
       });
-    }).catch(invoicedOrThrow);
+    }).catch(guardedOrThrow);
     if (deleted === INVOICED) return { error: "invoiced" as const };
+    if (deleted === PLAN_LINKED) return { error: "plan_linked" as const };
     await recordAudit({
       entityType: "Transaction",
       entityId: targetTxId,
@@ -682,11 +702,12 @@ export async function rejectPending(opts: {
         reviewedById: reviewerId,
         reviewNote: note ?? null,
       });
-      // Revert any linked installment back to 'pending' so the executive
-      // can edit + resubmit it from the Collection Plan detail page.
+      // Put the linked instalment back to due so it can be recorded again —
+      // only while it is still waiting on THIS entry. One received or
+      // cancelled since (recorded directly, paid by an extra payment) stays so.
       if (p.collectionInstallmentId) {
-        await tx.collectionPlanInstallment.update({
-          where: { id: p.collectionInstallmentId },
+        await tx.collectionPlanInstallment.updateMany({
+          where: { id: p.collectionInstallmentId, status: "submitted", pendingApprovalId: pendingId },
           data: { status: "pending", pendingApprovalId: null },
         });
       }

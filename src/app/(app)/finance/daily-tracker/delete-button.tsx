@@ -2,6 +2,7 @@
 
 import { useRouter } from "next/navigation";
 import { useState } from "react";
+import { txErrorMessage } from "@/lib/finance-tx-errors";
 
 export function DeleteRowButton({ id }: { id: string }) {
   const router = useRouter();
@@ -13,7 +14,9 @@ export function DeleteRowButton({ id }: { id: string }) {
     const res = await fetch(`/api/finance/transactions/${id}`, { method: "DELETE" });
     setBusy(false);
     if (!res.ok) {
-      alert("Could not delete. Please try again.");
+      // Say why when the server does (a GST invoice, a collection plan payment).
+      const data = (await res.json().catch(() => ({}))) as { error?: string };
+      alert(txErrorMessage(data.error, "Could not delete. Please try again."));
       return;
     }
     // 202 means an executive's delete went into the approval queue
