@@ -143,7 +143,10 @@ export function EnrollmentsClient({ data }: { data: EnrollmentsPageData }) {
           key={open.id}
           row={open}
           data={data}
-          onClose={() => setOpen(null)}
+          onClose={(stale) => {
+            setOpen(null);
+            if (stale) router.refresh();
+          }}
           onDone={(msg) => {
             setOpen(null);
             show(msg);
