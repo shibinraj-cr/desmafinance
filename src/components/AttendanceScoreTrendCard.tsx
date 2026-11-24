@@ -1,6 +1,14 @@
+import Link from "next/link";
 import { Section } from "@/components/Cards";
 import type { AttendanceScoreTrend } from "@/lib/hr-attendance-score-data";
 import type { AttScoreBand } from "@/lib/hr-attendance-score";
+
+/** Header link to the plain-language "how your score works" explainer. */
+const HowScoredLink = (
+  <Link href="/me/attendance/scoring" className="text-label-sm text-primary font-semibold whitespace-nowrap">
+    How is this calculated?
+  </Link>
+);
 
 /**
  * Employee-facing attendance score card for the home page: a monthly-score
@@ -119,7 +127,7 @@ export function AttendanceScoreTrendCard({ trend }: { trend: AttendanceScoreTren
 
   if (!anyScored || !latest || !latest.components) {
     return (
-      <Section title="Attendance score">
+      <Section title="Attendance score" action={HowScoredLink}>
         <p className="py-base text-center text-on-surface-variant text-label-sm">
           Your attendance score will appear here once you have about a month of attendance on record.
         </p>
@@ -129,7 +137,7 @@ export function AttendanceScoreTrendCard({ trend }: { trend: AttendanceScoreTren
 
   const band = latest.band!;
   return (
-    <Section title="Attendance score">
+    <Section title="Attendance score" action={HowScoredLink}>
       <div className="flex flex-wrap items-center gap-md mb-md">
         <div className={`flex flex-col items-center justify-center rounded-xl px-lg py-sm ${BAND_CHIP[band]}`}>
           <span className="text-h1 font-extrabold leading-none tabular-nums">{latest.value}</span>
