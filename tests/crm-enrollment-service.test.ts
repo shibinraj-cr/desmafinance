@@ -128,13 +128,22 @@ function txWith(e: unknown) {
 
 describe("submitForApproval", () => {
   it("marks it checked by the executive, still pending, and says so on the lead", async () => {
-    const tx = txWith({ ...ready, status: "sent_back", financeNote: "Wrong UTR", returnNote: "Check the date" });
+    const tx = txWith({ ...ready, returnNote: "Check the date" });
     await submitForApproval(executive, "enr1", null, UPDATED.toISOString());
     const call = tx.crmEnrollment.updateMany.mock.calls[0]![0];
-    expect(call.where).toEqual({ id: "enr1", status: { in: ["pending", "sent_back", "not_received"] } });
-    expect(call.data).toMatchObject({ status: "pending", financeNote: null, checkedById: "fe1", returnNote: null });
+    expect(call.where).toEqual({ id: "enr1", status: { in: ["pending"] } });
+    expect(call.data).toMatchObject({ checkedById: "fe1", returnNote: null });
+    expect(call.data).not.toHaveProperty("status");
     expect(call.data.checkedAt).toBeInstanceOf(Date);
     expect(recordLeadActivity).toHaveBeenCalledWith(expect.objectContaining({ type: "ENROLLMENT_CHECKED" }));
+  });
+
+  it("only from To verify: not one sent back to the BDE or marked money not received", async () => {
+    for (const status of ["sent_back", "not_received"]) {
+      const tx = txWith({ ...ready, status });
+      await expect(submitForApproval(executive, "enr1", null)).rejects.toMatchObject({ status: 409, code: "enrollment_closed" });
+      expect(tx.crmEnrollment.updateMany).not.toHaveBeenCalled();
+    }
   });
 
   it("refuses one the manager couldn't approve yet, writing nothing", async () => {
@@ -157,10 +166,10 @@ describe("returnToChecker", () => {
     expect(prisma.crmEnrollment.updateMany).not.toHaveBeenCalled();
   });
 
-  it("takes back only one still waiting for approval, with the reason", async () => {
-    await returnToChecker(manager, "enr1", "Recheck the UTR");
+  it("takes back only the version the manager opened, still waiting for approval, with the reason", async () => {
+    await returnToChecker(manager, "enr1", "Recheck the UTR", UPDATED.toISOString());
     expect(prisma.crmEnrollment.updateMany).toHaveBeenCalledWith({
-      where: { id: "enr1", status: "pending", checkedAt: { not: null } },
+      where: { id: "enr1", status: "pending", checkedAt: { not: null }, updatedAt: UPDATED },
       data: { checkedAt: null, checkedById: null, returnNote: "Recheck the UTR" },
     });
     fn(prisma.crmEnrollment.updateMany).mockResolvedValueOnce({ count: 0 });
@@ -169,12 +178,12 @@ describe("returnToChecker", () => {
 });
 
 describe("sendBack", () => {
-  it("takes it out of the approval queue", async () => {
+  it("takes it out of the approval queue, keeping any return note", async () => {
     fn(prisma.crmEnrollment.findUnique).mockResolvedValue({ ...ready, checkedAt: UPDATED, checkedById: "fe1" });
     await sendBack(manager, "enr1", "The UTR is for another candidate");
     expect(prisma.crmEnrollment.updateMany).toHaveBeenCalledWith({
       where: { id: "enr1", status: { in: ["pending", "not_received"] } },
-      data: { status: "sent_back", financeNote: "The UTR is for another candidate", checkedAt: null, checkedById: null, returnNote: null },
+      data: { status: "sent_back", financeNote: "The UTR is for another candidate", checkedAt: null, checkedById: null },
     });
   });
 });

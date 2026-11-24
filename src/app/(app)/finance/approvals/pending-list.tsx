@@ -466,7 +466,10 @@ export function PendingList({
           key={openEnrollment.id}
           row={openEnrollment}
           data={enrollmentCtx}
-          onClose={() => setOpenEnrollment(null)}
+          onClose={(stale) => {
+            setOpenEnrollment(null);
+            if (stale) router.refresh();
+          }}
           onDone={(msg) => {
             setOpenEnrollment(null);
             setServerError(null);

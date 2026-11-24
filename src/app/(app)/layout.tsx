@@ -3,6 +3,8 @@ import { prisma } from "@/lib/prisma";
 import { getCurrentUserAndPermissions } from "@/lib/permissions";
 import { countNewLeadsAssignedTo } from "@/lib/crm-leads";
 import { countUnreadCrmNotifications } from "@/lib/crm-notify";
+import { canApprove, canSeePage, isAdmin } from "@/lib/rbac";
+import { ENROLLMENTS_PAGE } from "@/lib/crm-enrollment";
 import { myTasksWhere } from "@/lib/ops-action-items";
 import { countUnreadNews, tickerHeadlines } from "@/lib/news/read";
 import {
@@ -68,7 +70,9 @@ export default async function AppLayout({ children }: { children: React.ReactNod
     Promise.all([
       prisma.pendingApproval.count({ where: { status: "pending" } }).catch(() => 0),
       prisma.commissionReceipt.count({ where: { status: "awaiting" } }).catch(() => 0),
-      prisma.crmEnrollment.count({ where: { status: "pending", checkedAt: { not: null } } }).catch(() => 0),
+      canApprove(perms) && (isAdmin(perms) || canSeePage(perms, ENROLLMENTS_PAGE))
+        ? prisma.crmEnrollment.count({ where: { status: "pending", checkedAt: { not: null } } }).catch(() => 0)
+        : 0,
     ]).then(([a, b, c]) => a + b + c),
     prisma.pendingApproval
       .count({ where: { status: "rejected", submittedById: userId } })

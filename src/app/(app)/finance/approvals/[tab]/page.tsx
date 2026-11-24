@@ -52,6 +52,8 @@ function fmtDDMMYY(s: string): string {
 }
 
 const DATE_RX = /^\d{4}-\d{2}-\d{2}$/;
+/** Submissions loaded per tab. */
+const PAGE_LIMIT = 200;
 
 export default async function ApprovalsPage({
   params,
@@ -105,10 +107,17 @@ export default async function ApprovalsPage({
 
   // Enrollments Finance has checked and submitted wait for an approver here
   // too, beside the other revenue, and open in the enrollment review panel.
-  const showsEnrollments = tab === "pending" && reviewer && (isAdmin(perms) || canSeePage(perms, ENROLLMENTS_PAGE));
+  const seesEnrollments = reviewer && (isAdmin(perms) || canSeePage(perms, ENROLLMENTS_PAGE));
+  const showsEnrollments = tab === "pending" && seesEnrollments;
   const [checkedEnrollments, enrollmentCtx] = showsEnrollments
     ? await Promise.all([listEnrollments("submitted").then((l) => l.rows), loadEnrollmentReviewContext(true)])
     : [[] as EnrollmentDTO[], null];
+  // The Pending tab's count includes them on every tab, not just while it's open.
+  const checkedEnrollmentCount = showsEnrollments
+    ? checkedEnrollments.length
+    : seesEnrollments
+      ? await prisma.crmEnrollment.count({ where: { status: "pending", checkedAt: { not: null } } })
+      : 0;
 
   const [items, counts, masters, draftsCount] = await Promise.all([
     prisma.pendingApproval.findMany({
@@ -118,8 +127,10 @@ export default async function ApprovalsPage({
         reviewedBy: { select: { id: true, username: true } },
         targetTx: true,
       },
-      orderBy: [{ createdAt: "desc" }],
-      take: 200,
+      // Pending is worked oldest first, so a long queue keeps its oldest items
+      // (the page says when there are more); the history tabs show the latest.
+      orderBy: [{ createdAt: tab === "pending" ? "asc" : "desc" }],
+      take: PAGE_LIMIT,
     }),
     Promise.all([
       prisma.pendingApproval.count({ where: { ...ownershipWhere, status: "pending" } }),
@@ -420,7 +431,7 @@ export default async function ApprovalsPage({
         ) : null}
         <Tabs
           active={tab}
-          counts={{ pending: pendingCount + enrollmentRows.length, approved: approvedCount, rejected: rejectedCount }}
+          counts={{ pending: pendingCount + checkedEnrollmentCount, approved: approvedCount, rejected: rejectedCount }}
           myDrafts={
             perms.draftFirst || perms.isAdmin || draftsCount > 0 ? { count: draftsCount } : undefined
           }
@@ -453,6 +464,12 @@ export default async function ApprovalsPage({
             typeFilter === "all" ? `/finance/approvals/${tab}` : `/finance/approvals/${tab}?type=${typeFilter}`
           }
         />
+
+        {tab === "pending" && pendingCount > items.length ? (
+          <p className="text-body-md text-on-surface-variant">
+            Showing the oldest {items.length} of {pendingCount} submissions. Work through these and the rest appear.
+          </p>
+        ) : null}
 
         <FilteredTotals
           count={filteredCount}

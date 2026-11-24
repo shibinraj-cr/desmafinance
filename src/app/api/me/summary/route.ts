@@ -70,12 +70,10 @@ export async function GET() {
   }
 
   const [pendingApprovals, newLeads, unreadCrm, recent] = await Promise.all([
+    // PendingApproval rows only: the app's approvals list can't show submitted
+    // enrollments yet, so counting them would leave a badge that never clears.
     perms?.canApprove
-      ? Promise.all([
-          prisma.pendingApproval.count({ where: { status: "pending" } }),
-          // Enrollments Finance has checked and submitted wait on the approver too.
-          prisma.crmEnrollment.count({ where: { status: "pending", checkedAt: { not: null } } }),
-        ]).then(([a, b]) => a + b)
+      ? prisma.pendingApproval.count({ where: { status: "pending" } })
       : prisma.pendingApproval.count({ where: { submittedById: userId, status: "pending" } }),
     prisma.crmNotification.count({ where: { userId, readAt: null, kind: "lead_assigned" } }),
     prisma.crmNotification.count({ where: { userId, readAt: null } }),

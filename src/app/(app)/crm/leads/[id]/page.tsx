@@ -247,7 +247,9 @@ export default async function LeadDetailPage({ params }: { params: { id: string 
   const canSeeTransactions = lead.partyId ? (await partyViewerAccess(userId, perms, lead.partyId)) !== null : false;
 
   // Where Finance is with the enrollment (Pending Finance, sent back, verified).
-  const enrollment = lead.status.code === "enrolled" ? await leadEnrollment(lead.id) : null;
+  // Finance's internal hand-offs (who checked it, the manager's return note)
+  // stay out of the page data the BDE's browser receives.
+  const enrollment = lead.status.code === "enrolled" ? await leadEnrollment(lead.id).then((e) => (e ? { ...e, checkedByName: null, returnNote: null } : null)) : null;
 
   return (
     <>

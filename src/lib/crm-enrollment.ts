@@ -366,8 +366,10 @@ function assertFresh(e: Row, expectedUpdatedAt: string | null | undefined) {
 
 class NeedsSalesHead extends Error {}
 
-/** Back with the checker: not waiting for approval, no return note. */
-const UNCHECKED = { checkedAt: null, checkedById: null, returnNote: null } as const;
+/** Back with the checker: not waiting for approval. A manager's return note
+ *  stays until the enrollment is submitted again or approved, so a BDE edit in
+ *  between can't wipe the only record of why it was returned. */
+const UNCHECKED = { checkedAt: null, checkedById: null } as const;
 
 const bdeOf = (e: { ownerUserId: string | null; submittedById: string | null }) => [e.ownerUserId, e.submittedById];
 
@@ -740,8 +742,20 @@ export async function submitForApproval(a: EnrollmentAccess, id: string, patch: 
     .$transaction(async (tx) => {
       const e = await lockRow(tx, id);
       assertFresh(e, expectedUpdatedAt);
-      if (!OPEN_STATUSES.includes(e.status as EnrollmentStatus)) {
-        throw conflict(e.status === "verified" ? "This enrollment is already verified." : "This enrollment can't be submitted now.", "enrollment_closed");
+      // Only from To verify: one sent back is the BDE's to fix, and one marked
+      // money not received waits on the sales head. An approver can still
+      // approve those directly.
+      if (e.status !== "pending") {
+        throw conflict(
+          e.status === "verified"
+            ? "This enrollment is already verified."
+            : e.status === "sent_back"
+              ? "This enrollment was sent back to the BDE. It can be submitted once they've fixed it and it's back in To verify."
+              : e.status === "not_received"
+                ? "This enrollment is marked money not received. Ask the Finance Manager to approve it if the money has arrived."
+                : "This enrollment can't be submitted now.",
+          "enrollment_closed",
+        );
       }
       const before = fieldsOf(e);
       const f = patch ? merged(e, patch) : before;
@@ -754,9 +768,7 @@ export async function submitForApproval(a: EnrollmentAccess, id: string, patch: 
       await checkClassification(tx, f);
       ledgerMonth(f.paidOn!);
       const changes = enrollmentChanges(before, f);
-      await writeFields(tx, e, f, OPEN_STATUSES, {
-        status: "pending",
-        financeNote: null,
+      await writeFields(tx, e, f, ["pending"], {
         exception,
         checkedById: a.userId,
         checkedAt: new Date(),
@@ -785,16 +797,22 @@ export async function submitForApproval(a: EnrollmentAccess, id: string, patch: 
   return { changes: out.changes };
 }
 
-/** The Finance Manager hands a submitted enrollment back to whoever checked it, saying why. Nothing else changes. */
-export async function returnToChecker(a: EnrollmentAccess, id: string, rawNote: string) {
+/**
+ * The Finance Manager hands a submitted enrollment back to whoever checked it,
+ * saying why. Nothing else changes. Refused when the enrollment changed since
+ * the manager opened it, so a note about one version never lands on another.
+ */
+export async function returnToChecker(a: EnrollmentAccess, id: string, rawNote: string, expectedUpdatedAt?: string | null) {
   if (!a.canApprove) throw forbidden("Only a Finance approver (the Finance Manager, or the director) can return it.");
   const note = rawNote.trim().slice(0, 500);
   if (note.length < 3) throw badRequest("Say what to look at again.", "note_required");
   const res = await prisma.crmEnrollment.updateMany({
-    where: { id, status: "pending", checkedAt: { not: null } },
+    where: { id, status: "pending", checkedAt: { not: null }, ...(expectedUpdatedAt ? { updatedAt: new Date(expectedUpdatedAt) } : {}) },
     data: { checkedAt: null, checkedById: null, returnNote: note },
   });
-  if (res.count !== 1) throw conflict("This enrollment isn't waiting for approval any more. Reload it.", "enrollment_changed");
+  if (res.count !== 1) {
+    throw conflict("This enrollment changed since you opened it, or isn't waiting for approval any more. Close it and open it again.", "enrollment_changed");
+  }
   await recordAudit({ entityType: "CrmEnrollment", entityId: id, action: "UPDATE", userId: a.userId, changes: { returned: true, note } });
   return { returned: true };
 }

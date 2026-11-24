@@ -62,7 +62,8 @@ export function EnrollmentReview({
 }: {
   row: EnrollmentDTO;
   data: EnrollmentReviewContext;
-  onClose: () => void;
+  /** `stale`: an action failed, so the list behind may be out of date and should reload. */
+  onClose: (stale: boolean) => void;
   onDone: (msg: string) => void;
 }) {
   const editable = row.status === "pending" || row.status === "sent_back" || row.status === "not_received";
@@ -84,6 +85,8 @@ export function EnrollmentReview({
   const [history, setHistory] = useState<History>([]);
   const [busy, setBusy] = useState<null | Action>(null);
   const [error, setError] = useState<string | null>(null);
+  /** An action failed (often: changed since opened). Closing reloads the list. */
+  const [failed, setFailed] = useState(false);
   const [noteFor, setNoteFor] = useState<null | "back" | "none" | "return">(null);
   const [note, setNote] = useState("");
 
@@ -144,7 +147,7 @@ export function EnrollmentReview({
         await api(`/api/finance/enrollments/${row.id}/submit`, { patch, expectedUpdatedAt: row.updatedAt });
         onDone("Submitted. It's waiting for the Finance Manager in Approvals › Revenue.");
       } else if (kind === "return") {
-        await api(`/api/finance/enrollments/${row.id}/return`, { note });
+        await api(`/api/finance/enrollments/${row.id}/return`, { note, expectedUpdatedAt: row.updatedAt });
         onDone("Returned to Finance to check again.");
       } else if (kind === "approve") {
         const wio = entity === "DLLC";
@@ -174,6 +177,7 @@ export function EnrollmentReview({
       }
     } catch (e) {
       setError((e as Error).message);
+      setFailed(true);
     } finally {
       setBusy(null);
     }
@@ -186,7 +190,7 @@ export function EnrollmentReview({
   );
 
   return (
-    <Drawer onClose={onClose} label="Review enrollment">
+    <Drawer onClose={() => onClose(failed)} label="Review enrollment">
       <div className="px-lg pt-lg pb-sm border-b border-outline-variant">
         <h3 className="text-h3 text-on-surface">{row.candidateName}</h3>
         <p className="text-caption text-on-surface-variant">
@@ -434,7 +438,7 @@ export function EnrollmentReview({
               <button type="button" className={btnCls} disabled={!!busy || !changes.length} onClick={() => run("save")}>
                 {busy === "save" ? "Saving…" : "Save changes"}
               </button>
-              {!data.canApprove && !checked && (
+              {!data.canApprove && !checked && row.status === "pending" && (
                 <button type="button" className={primaryBtnCls} disabled={!!busy} onClick={() => run("submit")} title={blocker ?? undefined}>
                   {busy === "submit" ? "Submitting…" : "Submit for approval"}
                 </button>
