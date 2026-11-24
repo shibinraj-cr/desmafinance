@@ -72,7 +72,8 @@ export default async function CollectionPlanListPage({
         : p.installments;
       const sum = (st?: string) =>
         insts
-          .filter((i) => (st ? i.status === st : true))
+          // A cancelled instalment (scrapped, or paid with another) isn't owed.
+          .filter((i) => (st ? i.status === st : i.status !== "cancelled"))
           .reduce((s, i) => s + Number(i.amount.toString()), 0);
       return {
         plan: p,

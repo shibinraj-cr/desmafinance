@@ -40,9 +40,16 @@ const auditMock = recordAudit as unknown as ReturnType<typeof vi.fn>;
 // The mock interactive-transaction client handed to every $transaction(cb) call.
 let txClient: {
   $queryRaw: ReturnType<typeof vi.fn>;
-  transaction: { create: ReturnType<typeof vi.fn>; update: ReturnType<typeof vi.fn>; findUnique: ReturnType<typeof vi.fn> };
+  transaction: { create: ReturnType<typeof vi.fn>; update: ReturnType<typeof vi.fn>; findUnique: ReturnType<typeof vi.fn>; findMany: ReturnType<typeof vi.fn> };
   pendingApproval: { update: ReturnType<typeof vi.fn>; updateMany: ReturnType<typeof vi.fn> };
-  collectionPlanInstallment: { update: ReturnType<typeof vi.fn> };
+  collectionPlanInstallment: {
+    update: ReturnType<typeof vi.fn>;
+    findUnique: ReturnType<typeof vi.fn>;
+    findFirst: ReturnType<typeof vi.fn>;
+    findMany: ReturnType<typeof vi.fn>;
+    updateMany: ReturnType<typeof vi.fn>;
+    create: ReturnType<typeof vi.fn>;
+  };
   invoice: { findFirst: ReturnType<typeof vi.fn> };
 };
 
@@ -93,10 +100,17 @@ beforeEach(() => {
   txClient = {
     // The row lock (SELECT … FOR NO KEY UPDATE) and the invoice check that guard every ledger edit.
     $queryRaw: vi.fn().mockResolvedValue([]),
-    transaction: { create: vi.fn(), update: vi.fn(), findUnique: vi.fn().mockResolvedValue({ ...before, partyId: "party1", expDom: "DOM" }) },
+    transaction: {
+      create: vi.fn(),
+      update: vi.fn(),
+      findUnique: vi.fn().mockResolvedValue({ ...before, partyId: "party1", expDom: "DOM" }),
+      // The candidate's ledger, searched for a UTR already booked.
+      findMany: vi.fn().mockResolvedValue([]),
+    },
     // The in-transaction claim succeeds unless a test says another reviewer won.
     pendingApproval: { update: vi.fn(), updateMany: vi.fn().mockResolvedValue({ count: 1 }) },
-    collectionPlanInstallment: { update: vi.fn() },
+    // findFirst: is the ledger row a payment recorded on a plan? Not unless a test says so.
+    collectionPlanInstallment: { update: vi.fn(), findUnique: vi.fn(), findFirst: vi.fn().mockResolvedValue(null), findMany: vi.fn(), updateMany: vi.fn(), create: vi.fn() },
     invoice: { findFirst: vi.fn().mockResolvedValue(null) },
   };
   // Default: run the interactive callback with our mock tx client and return
@@ -147,12 +161,69 @@ describe("approvePending — create", () => {
     });
     txClient.transaction.create.mockResolvedValueOnce({ id: "tx1" });
 
+    txClient.collectionPlanInstallment.findUnique.mockResolvedValueOnce({ planId: "plan1" });
+    txClient.collectionPlanInstallment.findMany.mockResolvedValue([
+      { id: "inst1", seq: 2, expectedDate: new Date("2026-05-01T00:00:00.000Z"), amount: { toString: () => "1000" }, status: "submitted" },
+    ]);
+
     await approvePending({ pendingId: "p1", reviewerId: "rev1", reviewerPerms: approver });
 
+    // The plan's rows are locked, then the instalment is received for what was paid.
+    expect(txClient.$queryRaw).toHaveBeenCalled();
     expect(txClient.collectionPlanInstallment.update).toHaveBeenCalledWith({
       where: { id: "inst1" },
-      data: { status: "received", transactionId: "tx1", pendingApprovalId: null },
+      data: { status: "received", amount: 1000, transactionId: "tx1", pendingApprovalId: null },
     });
+  });
+
+  it("splits off the rest of a part-paid instalment in the same transaction", async () => {
+    findUnique.mockResolvedValueOnce({
+      id: "p1",
+      status: "pending",
+      kind: "create",
+      proposed: { ...proposed, amount: 600 },
+      submittedById: "u1",
+      collectionInstallmentId: "inst1",
+    });
+    txClient.transaction.create.mockResolvedValueOnce({ id: "tx1" });
+    txClient.collectionPlanInstallment.findUnique.mockResolvedValueOnce({ planId: "plan1" });
+    txClient.collectionPlanInstallment.findMany.mockResolvedValue([
+      { id: "inst1", seq: 2, expectedDate: new Date("2026-05-01T00:00:00.000Z"), amount: { toString: () => "1000" }, status: "submitted", category: "C", subItem: "S", paymentMode: "HDFC Bank", description: null },
+    ]);
+
+    const res = await approvePending({ pendingId: "p1", reviewerId: "rev1", reviewerPerms: approver });
+
+    expect(res).toEqual({ applied: true, transactionId: "tx1" });
+    expect(txClient.collectionPlanInstallment.create).toHaveBeenCalledWith({
+      data: expect.objectContaining({ planId: "plan1", seq: 3, amount: 400, status: "pending", description: "Rest of instalment 2" }),
+    });
+    expect(txClient.collectionPlanInstallment.update).toHaveBeenCalledWith({
+      where: { id: "inst1" },
+      data: { status: "received", amount: 600, transactionId: "tx1", pendingApprovalId: null },
+    });
+  });
+
+  it("posts nothing when the plan can no longer take the payment", async () => {
+    findUnique.mockResolvedValueOnce({
+      id: "p1",
+      status: "pending",
+      kind: "create",
+      proposed: { ...proposed, amount: 5000 },
+      submittedById: "u1",
+      collectionInstallmentId: "inst1",
+    });
+    txClient.transaction.create.mockResolvedValueOnce({ id: "tx1" });
+    txClient.collectionPlanInstallment.findUnique.mockResolvedValueOnce({ planId: "plan1" });
+    txClient.collectionPlanInstallment.findMany.mockResolvedValue([
+      { id: "inst1", seq: 2, expectedDate: new Date("2026-05-01T00:00:00.000Z"), amount: { toString: () => "1000" }, status: "submitted" },
+    ]);
+
+    const res = await approvePending({ pendingId: "p1", reviewerId: "rev1", reviewerPerms: approver });
+
+    // The throw rolls the whole transaction back (claim and ledger row included).
+    expect(res).toEqual({ error: "collection_more_than_due" });
+    expect(txClient.collectionPlanInstallment.update).not.toHaveBeenCalled();
+    expect(auditMock).not.toHaveBeenCalled();
   });
 
   it("aborts without auditing when a write inside the transaction fails (no double-post)", async () => {
@@ -286,10 +357,12 @@ describe("rejectPending", () => {
       where: { id: "p1", status: "pending" },
       data: expect.objectContaining({ status: "rejected" }),
     });
-    expect(txClient.collectionPlanInstallment.update).toHaveBeenCalledWith({
-      where: { id: "inst1" },
+    // Only while the instalment is still waiting on THIS entry.
+    expect(txClient.collectionPlanInstallment.updateMany).toHaveBeenCalledWith({
+      where: { id: "inst1", status: "submitted", pendingApprovalId: "p1" },
       data: { status: "pending", pendingApprovalId: null },
     });
+    expect(txClient.collectionPlanInstallment.update).not.toHaveBeenCalled();
     expect(auditMock).toHaveBeenCalledTimes(1);
   });
 
@@ -389,6 +462,7 @@ describe("concurrent resolution (two reviewers, double-click, bulk + single)", (
 
     expect(res).toEqual({ error: "already_resolved" });
     expect(txClient.collectionPlanInstallment.update).not.toHaveBeenCalled();
+    expect(txClient.collectionPlanInstallment.updateMany).not.toHaveBeenCalled();
     expect(auditMock).not.toHaveBeenCalled();
   });
 
@@ -399,5 +473,49 @@ describe("concurrent resolution (two reviewers, double-click, bulk + single)", (
     await expect(
       approvePending({ pendingId: "p1", reviewerId: "rev1", reviewerPerms: approver }),
     ).rejects.toThrow("db down");
+  });
+});
+
+describe("collection plan payments", () => {
+  it("refuses to post a collection whose UTR reached the candidate's ledger meanwhile", async () => {
+    findUnique.mockResolvedValueOnce({
+      id: "p1",
+      status: "pending",
+      kind: "create",
+      proposed: { ...proposed, description: "Balance · instalment 2 · UTR HDFC00012345" },
+      submittedById: "u1",
+      collectionInstallmentId: "inst1",
+    });
+    txClient.transaction.findMany.mockResolvedValueOnce([
+      { id: "old", date: new Date("2026-05-01T00:00:00Z"), amount: { toString: () => "1000" }, description: "Ref hdfc-00012345", collectionInstallment: null, bankMatches: [] },
+    ]);
+
+    const res = await approvePending({ pendingId: "p1", reviewerId: "rev1", reviewerPerms: approver });
+
+    expect(res).toEqual({ error: "duplicate_payment_on_approve" });
+    expect(txClient.transaction.create).not.toHaveBeenCalled();
+    expect(txClient.collectionPlanInstallment.update).not.toHaveBeenCalled();
+  });
+
+  it("won't change the amount or date of, or delete, a payment recorded on a plan", async () => {
+    txClient.collectionPlanInstallment.findFirst.mockResolvedValue({ planId: "plan1", seq: 2 });
+    findUnique.mockResolvedValueOnce({ id: "p2", status: "pending", kind: "update", targetTxId: "tx1", proposed });
+    txFindUnique.mockResolvedValueOnce(before);
+    expect(await approvePending({ pendingId: "p2", reviewerId: "rev1", reviewerPerms: approver })).toEqual({ error: "plan_linked" });
+
+    findUnique.mockResolvedValueOnce({ id: "p3", status: "pending", kind: "delete", targetTxId: "tx1" });
+    txFindUnique.mockResolvedValueOnce(before);
+    expect(await approvePending({ pendingId: "p3", reviewerId: "rev1", reviewerPerms: approver })).toEqual({ error: "plan_linked" });
+    expect(txClient.transaction.update).not.toHaveBeenCalled();
+  });
+
+  it("still lets its description be corrected", async () => {
+    txClient.collectionPlanInstallment.findFirst.mockResolvedValue({ planId: "plan1", seq: 2 });
+    const same = { ...proposed, date: "2026-04-01T00:00:00.000Z", amount: 500, description: "fixed", partyId: "party1" };
+    findUnique.mockResolvedValueOnce({ id: "p4", status: "pending", kind: "update", targetTxId: "tx1", proposed: same });
+    txFindUnique.mockResolvedValueOnce(before);
+    txClient.transaction.update.mockResolvedValueOnce({ id: "tx1" });
+
+    expect(await approvePending({ pendingId: "p4", reviewerId: "rev1", reviewerPerms: approver })).toMatchObject({ applied: true });
   });
 });

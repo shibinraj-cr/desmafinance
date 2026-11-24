@@ -1,6 +1,7 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
+import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { MONTHS, PAYMENT_MODES, TYPES, monthCodeFromDate, type TxType } from "@/lib/catalog";
 import {
@@ -142,6 +143,30 @@ export function TransactionForm({
   // must keep a date in that period; the server enforces the same.
   const historical = isHistoricalDate(date);
   const editingHistorical = mode === "edit" && !!initial?.date && isHistoricalDate(initial.date);
+
+  // A candidate with an instalment still due on a collection plan: a payment
+  // from them belongs on the plan (Record payment), which marks the instalment
+  // received. Entered here, the instalment would still read due, and
+  // recording it later would count the money twice.
+  const [duePlan, setDuePlan] = useState<{ planId: string; label: string; seq: number; amount: number; date: string } | null>(null);
+  useEffect(() => {
+    setDuePlan(null);
+    if (mode !== "create" || type !== "Revenue" || !partyId) return;
+    let live = true;
+    fetch(`/api/finance/collection-plans?partyId=${encodeURIComponent(partyId)}&status=active`, { cache: "no-store" })
+      .then((r) => (r.ok ? r.json() : null))
+      .then((j: { items?: Array<{ id: string; label: string; installments: Array<{ seq: number; amount: number; status: string; expectedDate: string }> }> } | null) => {
+        if (!live || !j?.items) return;
+        const due = j.items
+          .flatMap((p) => p.installments.filter((i) => i.status === "pending").map((i) => ({ planId: p.id, label: p.label, seq: i.seq, amount: i.amount, date: String(i.expectedDate).slice(0, 10) })))
+          .sort((a, b) => (a.date < b.date ? -1 : a.date > b.date ? 1 : 0));
+        setDuePlan(due[0] ?? null);
+      })
+      .catch(() => {});
+    return () => {
+      live = false;
+    };
+  }, [mode, type, partyId]);
 
   const visibleParties = useMemo(
     () =>
@@ -457,6 +482,17 @@ export function TransactionForm({
               <InlineNewParty txType={type} onCreated={handleNewParty} />
             </div>
           </Field>
+          {duePlan ? (
+            <div className="mt-xs rounded-lg bg-amber-50 text-amber-900 px-md py-sm text-body-md" data-collection-due>
+              This candidate has instalment {duePlan.seq} (₹{duePlan.amount.toLocaleString("en-IN")} due{" "}
+              {duePlan.date.split("-").reverse().join("-")}) on the collection plan &ldquo;{duePlan.label}&rdquo;. If this is
+              that money, record it from the plan with <b>Record payment</b> instead, so the instalment is marked received and
+              isn&apos;t counted twice.{" "}
+              <Link href={`/finance/collection-plan/${duePlan.planId}`} className="font-semibold underline">
+                Open the plan
+              </Link>
+            </div>
+          ) : null}
         </div>
         <div className="md:col-span-2">
           <Field label="Description / Narration">

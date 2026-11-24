@@ -12,6 +12,9 @@ export const dynamic = "force-dynamic";
 // Resubmission of a rejected approval lives on the Approvals page.
 const PAGE = "/finance/approvals";
 
+/** The collection instalment this entry was for is no longer due. */
+class InstalmentClosed extends Error {}
+
 const BodySchema = z.object({
   // For create/update kinds — optional, but required for resubmission of
   // create/update. Delete kind has no editable fields. The payload is validated
@@ -107,19 +110,38 @@ export async function POST(
     ? `${stamp} (previously: ${previousReviewNote})`
     : stamp;
 
-  const updated = await prisma.pendingApproval.update({
-    where: { id: params.id },
-    data: {
-      status: "pending",
-      reviewedById: null,
-      reviewedAt: null,
-      reviewNote: newReviewNote,
-      // Only swap proposed when the caller supplies one (create/update kinds).
-      ...(proposed
-        ? { proposed: proposed as unknown as object }
-        : {}),
-    },
-  });
+  // A collection payment holds its instalment again while it waits — only if
+  // the instalment is still due. Received or cancelled since (recorded
+  // directly, or paid by an extra payment): resubmitting would count it twice.
+  const installmentId = existing.kind === "create" ? existing.collectionInstallmentId : null;
+  const updated = await prisma
+    .$transaction(async (tx) => {
+      if (installmentId) {
+        const held = await tx.collectionPlanInstallment.updateMany({
+          where: { id: installmentId, status: "pending", pendingApprovalId: null },
+          data: { status: "submitted", pendingApprovalId: params.id },
+        });
+        if (held.count !== 1) throw new InstalmentClosed();
+      }
+      return tx.pendingApproval.update({
+        where: { id: params.id },
+        data: {
+          status: "pending",
+          reviewedById: null,
+          reviewedAt: null,
+          reviewNote: newReviewNote,
+          // Only swap proposed when the caller supplies one (create/update kinds).
+          ...(proposed ? { proposed: proposed as unknown as object } : {}),
+        },
+      });
+    })
+    .catch((e) => {
+      if (e instanceof InstalmentClosed) return null;
+      throw e;
+    });
+  if (!updated) {
+    return NextResponse.json({ error: "resubmit_installment_closed" }, { status: 409 });
+  }
 
   await recordAudit({
     entityType: "PendingApproval",

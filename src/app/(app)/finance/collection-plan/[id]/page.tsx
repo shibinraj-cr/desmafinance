@@ -2,11 +2,15 @@ import Link from "next/link";
 import { notFound, redirect } from "next/navigation";
 import { prisma } from "@/lib/prisma";
 import { getCurrentUserAndPermissions } from "@/lib/permissions";
-import { canSeePage } from "@/lib/rbac";
+import { canApprove, canSeePage } from "@/lib/rbac";
 import { TopBar } from "@/components/TopBar";
 import { PlanDetailClient } from "./client";
 import { PAYMENT_MODES } from "@/lib/catalog";
 import { getTransactionFormMasters } from "@/lib/master-data";
+import { todayIst, fromPrismaDate } from "@/lib/lead-pulse-dates";
+import { loadSettings } from "@/lib/invoices/server";
+import { notInvoiceableReason } from "@/lib/invoices/core";
+import { parseUndo } from "@/lib/collection-payment-server";
 
 export const dynamic = "force-dynamic";
 
@@ -29,7 +33,18 @@ export default async function CollectionPlanDetailPage({
       installments: {
         orderBy: { seq: "asc" },
         include: {
-          transaction: { select: { id: true, date: true, amount: true, paymentMode: true } },
+          transaction: {
+            select: {
+              id: true,
+              date: true,
+              amount: true,
+              paymentMode: true,
+              category: true,
+              isHistorical: true,
+              deletedAt: true,
+              invoices: { where: { status: "issued" }, select: { number: true }, take: 1 },
+            },
+          },
         },
       },
       createdBy: { select: { id: true, username: true } },
@@ -37,7 +52,27 @@ export default async function CollectionPlanDetailPage({
   });
   if (!plan) notFound();
 
-  const masters = await getTransactionFormMasters();
+  // Undo payment: the plan's most recent recorded payment, for an approver,
+  // while its entry is live and has no invoice (a linked entry only unlinks).
+  // The server re-checks everything, including that nothing changed since.
+  const latestRecorded = plan.installments
+    .map((i) => ({ i, undo: parseUndo(i.paymentUndo) }))
+    .filter((x) => x.undo && x.i.status === "received")
+    .sort((a, b) => b.undo!.at.localeCompare(a.undo!.at))[0];
+  const undoableId =
+    canApprove(perms) &&
+    latestRecorded &&
+    latestRecorded.i.transaction &&
+    !latestRecorded.i.transaction.deletedAt &&
+    (latestRecorded.undo!.linked || !latestRecorded.i.transaction.invoices.length)
+      ? latestRecorded.i.id
+      : null;
+
+  const [masters, invoiceSettings] = await Promise.all([getTransactionFormMasters(), loadSettings()]);
+  const invoiceOpts = {
+    activeBanks: invoiceSettings.banks.filter((b) => b.isActive).map((b) => b.paymentMode),
+    startsOn: invoiceSettings.startsOn,
+  };
   const revenueCategories = masters.categories.filter(
     (c) => c.isActive && (c.type === "Revenue" || c.type === "Both"),
   );
@@ -87,15 +122,33 @@ export default async function CollectionPlanDetailPage({
               transaction: i.transaction
                 ? {
                     id: i.transaction.id,
-                    date: i.transaction.date.toISOString().slice(0, 10),
+                    date: fromPrismaDate(i.transaction.date),
                     amount: Number(i.transaction.amount.toString()),
                     paymentMode: i.transaction.paymentMode,
+                    invoiceNumber: i.transaction.invoices[0]?.number ?? null,
+                    canInvoice:
+                      !i.transaction.invoices.length &&
+                      notInvoiceableReason(
+                        {
+                          type: "Revenue",
+                          deletedAt: i.transaction.deletedAt,
+                          isHistorical: i.transaction.isHistorical,
+                          category: i.transaction.category,
+                          paymentMode: i.transaction.paymentMode,
+                          date: fromPrismaDate(i.transaction.date),
+                          partyGroup: plan.party.group,
+                        },
+                        invoiceOpts,
+                      ) === null,
                   }
                 : null,
             })),
           }}
           categories={revenueCategories}
           paymentModes={[...PAYMENT_MODES]}
+          today={todayIst()}
+          canApprove={canApprove(perms)}
+          undoableId={undoableId}
         />
       </div>
     </>

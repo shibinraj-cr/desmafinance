@@ -17,7 +17,7 @@ export const dynamic = "force-dynamic";
 
 const TABS = ["to-invoice", "issued", "not-invoiced", "settings"] as const;
 
-export default async function InvoicesPage({ searchParams }: { searchParams?: { tab?: string } }) {
+export default async function InvoicesPage({ searchParams }: { searchParams?: { tab?: string; issue?: string } }) {
   const access = await getInvoiceAccess();
   if (!access) redirect("/login");
   if (!access.isFinance) redirect("/finance/overview");
@@ -25,7 +25,7 @@ export default async function InvoicesPage({ searchParams }: { searchParams?: { 
   const today = todayIst();
   const month = today.slice(0, 7);
   const [toInvoice, settings, upcoming, issued] = await Promise.all([
-    listToInvoice(),
+    listToInvoice({ include: typeof searchParams?.issue === "string" ? searchParams.issue : null }),
     loadSettings(),
     upcomingNumbers(),
     listInvoices({ month }),
@@ -60,12 +60,15 @@ export default async function InvoicesPage({ searchParams }: { searchParams?: { 
     issuerStateCode: gstStateOfGstin(dipl?.gstin)?.code ?? null,
     lutArn: dipl?.lutArn ?? null,
   };
-  const tab = (TABS as readonly string[]).includes(searchParams?.tab ?? "") ? searchParams!.tab! : "to-invoice";
+  // ?issue=<ledger entry id>: open that payment's Issue dialog (from Record
+  // payment on a collection plan, or anywhere that links a payment here).
+  const issue = typeof searchParams?.issue === "string" && searchParams.issue ? searchParams.issue : null;
+  const tab = issue ? "to-invoice" : (TABS as readonly string[]).includes(searchParams?.tab ?? "") ? searchParams!.tab! : "to-invoice";
 
   return (
     <>
       <TopBar title="Invoices" subtitle="GST invoices for candidate payments · Axis · HDFC · Wio" />
-      <InvoicesClient data={data} initialTab={tab} page={INVOICES_PAGE} />
+      <InvoicesClient data={data} initialTab={tab} page={INVOICES_PAGE} openIssue={issue} />
     </>
   );
 }

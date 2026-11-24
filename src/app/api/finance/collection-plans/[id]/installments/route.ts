@@ -4,6 +4,7 @@ import { prisma } from "@/lib/prisma";
 import { getCurrentUserAndPermissions } from "@/lib/permissions";
 import { canSeePage } from "@/lib/rbac";
 import { recordAudit } from "@/lib/audit";
+import { lockPlan } from "@/lib/collection-payment-server";
 
 export const dynamic = "force-dynamic";
 
@@ -36,23 +37,32 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
 
   const plan = await prisma.collectionPlan.findUnique({
     where: { id: params.id },
-    include: { installments: { orderBy: { seq: "desc" }, take: 1 } },
   });
   if (!plan) return NextResponse.json({ error: "plan_not_found" }, { status: 404 });
   if (plan.status !== "active") {
     return NextResponse.json({ error: "plan_not_active" }, { status: 400 });
   }
 
-  const nextSeq = (plan.installments[0]?.seq ?? 0) + 1;
-  const created = await prisma.collectionPlanInstallment.create({
-    data: {
-      planId: plan.id,
-      seq: nextSeq,
-      expectedDate: new Date(data.expectedDate),
-      amount: data.amount,
-      description: data.description ?? null,
-    },
+  // The next seq is read and used under the plan's lock, so a payment
+  // renumbering the plan (or another add) can't take it meanwhile.
+  const created = await prisma.$transaction(async (tx) => {
+    await lockPlan(tx, plan.id);
+    const last = await tx.collectionPlanInstallment.findFirst({
+      where: { planId: plan.id },
+      orderBy: { seq: "desc" },
+      select: { seq: true },
+    });
+    return tx.collectionPlanInstallment.create({
+      data: {
+        planId: plan.id,
+        seq: (last?.seq ?? 0) + 1,
+        expectedDate: new Date(data.expectedDate),
+        amount: data.amount,
+        description: data.description ?? null,
+      },
+    });
   });
+  const nextSeq = created.seq;
 
   await recordAudit({
     entityType: "CollectionPlanInstallment",

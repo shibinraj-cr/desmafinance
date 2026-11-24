@@ -59,7 +59,7 @@ export async function PATCH(req: NextRequest, { params }: { params: { id: string
 
   const result = await submitUpdate({ txId: params.id, data: built.proposed, userId, perms });
   if ("error" in result) {
-    return NextResponse.json({ error: result.error }, { status: result.error === "invoiced" ? 409 : 404 });
+    return NextResponse.json({ error: result.error }, { status: result.error === "invoiced" || result.error === "plan_linked" ? 409 : 404 });
   }
   if (result.applied) {
     return NextResponse.json({
@@ -84,7 +84,7 @@ export async function DELETE(_req: NextRequest, { params }: { params: { id: stri
 
   const result = await submitDelete({ txId: params.id, userId, perms });
   if ("error" in result) {
-    return NextResponse.json({ error: result.error }, { status: result.error === "invoiced" ? 409 : 404 });
+    return NextResponse.json({ error: result.error }, { status: result.error === "invoiced" || result.error === "plan_linked" ? 409 : 404 });
   }
   if (result.applied) {
     return NextResponse.json({ applied: true });

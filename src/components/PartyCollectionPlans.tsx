@@ -66,10 +66,10 @@ export async function PartyCollectionPlans({ partyId }: { partyId: string }) {
       </div>
       <div className="divide-y divide-outline-variant">
         {plans.map((plan) => {
-          const total = plan.installments.reduce(
-            (s, i) => s + Number(i.amount.toString()),
-            0,
-          );
+          // A cancelled instalment (scrapped, or paid with another) isn't owed.
+          const total = plan.installments
+            .filter((i) => i.status !== "cancelled")
+            .reduce((s, i) => s + Number(i.amount.toString()), 0);
           const received = plan.installments
             .filter((i) => i.status === "received")
             .reduce((s, i) => s + Number(i.amount.toString()), 0);

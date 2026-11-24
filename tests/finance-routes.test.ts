@@ -18,14 +18,19 @@ vi.mock("@/lib/permissions", () => ({
   getCurrentUserPermissions: vi.fn(),
 }));
 
-vi.mock("@/lib/prisma", () => ({
-  prisma: {
+vi.mock("@/lib/prisma", () => {
+  const prisma = {
     transaction: { findMany: vi.fn() },
     collectionPlan: { findMany: vi.fn() },
+    collectionPlanInstallment: { updateMany: vi.fn() },
     pendingApproval: { findUnique: vi.fn(), update: vi.fn() },
     transactionDraft: { findUnique: vi.fn() },
-  },
-}));
+    // Resubmit holds a collection instalment again in the same transaction:
+    // the callback runs against this same mock.
+    $transaction: vi.fn(async (cb: (tx: unknown) => unknown) => cb(prisma)),
+  };
+  return { prisma };
+});
 
 vi.mock("@/lib/approval", () => ({
   submitCreate: vi.fn(),
@@ -364,5 +369,42 @@ describe("PATCH /api/finance/drafts/[id] — strict validation", () => {
       { params: { id: "d1" } },
     );
     expect(counterpartyMock.mock.lastCall?.[0].allowInactiveEmployeeId).toBeNull();
+  });
+});
+
+describe("POST /api/finance/approvals/[id]/resubmit — a collection plan payment", () => {
+  const instUpdateMany = prisma.collectionPlanInstallment.updateMany as unknown as ReturnType<typeof vi.fn>;
+  const rejectedCollection = () =>
+    pendingFindUnique.mockResolvedValue({
+      id: "p1",
+      submittedById: "u1",
+      status: "rejected",
+      kind: "create",
+      reviewNote: "wrong UTR",
+      reviewedById: "m1",
+      collectionInstallmentId: "inst1",
+    });
+
+  it("holds the instalment again while it waits", async () => {
+    getPerms.mockResolvedValue({ perms: perms(["/finance/approvals"]), userId: "u1" });
+    rejectedCollection();
+    instUpdateMany.mockResolvedValue({ count: 1 });
+    pendingUpdate.mockResolvedValue({ id: "p1", status: "pending" });
+    const res = await resubmitPost(jsonReq("http://t/api/finance/approvals/p1/resubmit", {}) as never, { params: { id: "p1" } });
+    expect(res.status).toBe(200);
+    expect(instUpdateMany).toHaveBeenCalledWith({
+      where: { id: "inst1", status: "pending", pendingApprovalId: null },
+      data: { status: "submitted", pendingApprovalId: "p1" },
+    });
+  });
+
+  it("refuses once the instalment was received or cancelled, leaving the entry rejected", async () => {
+    getPerms.mockResolvedValue({ perms: perms(["/finance/approvals"]), userId: "u1" });
+    rejectedCollection();
+    instUpdateMany.mockResolvedValue({ count: 0 });
+    const res = await resubmitPost(jsonReq("http://t/api/finance/approvals/p1/resubmit", {}) as never, { params: { id: "p1" } });
+    expect(res.status).toBe(409);
+    expect(await res.json()).toEqual({ error: "resubmit_installment_closed" });
+    expect(pendingUpdate).not.toHaveBeenCalled();
   });
 });
