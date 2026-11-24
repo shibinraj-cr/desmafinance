@@ -16,6 +16,7 @@
 import { getSetting, setSetting } from "./app-settings";
 import { prisma } from "./prisma";
 import { logger } from "./logger";
+import { QUIET_HEARTBEAT_MINUTES, inDbQuietHours } from "./db-quiet-hours";
 
 const PREFIX = "sheet_leads_health:";
 const REJECTED_KEY = PREFIX + "__rejected";
@@ -119,11 +120,15 @@ export async function readSheetSyncHealth(): Promise<SheetSyncHealth> {
 
 /**
  * A sheet that heartbeats is expected every minute, so a quarter of an hour of
- * silence already means the trigger stopped. A sheet still running a script too
- * old to heartbeat only calls when it has rows, so silence there is only
- * suspicious after most of a working day.
+ * silence already means the trigger stopped. Overnight (db-quiet-hours) it
+ * checks in only every QUIET_HEARTBEAT_MINUTES, so the limit stretches to that
+ * plus a quarter of an hour — whenever either the last call or now falls in
+ * quiet hours, which covers the hand-over at both ends. A sheet still running a
+ * script too old to heartbeat only calls when it has rows, so silence there is
+ * only suspicious after most of a working day.
  */
 export const STALE_AFTER_MINUTES = 15;
+export const STALE_AFTER_MINUTES_QUIET = QUIET_HEARTBEAT_MINUTES + STALE_AFTER_MINUTES;
 export const STALE_AFTER_MINUTES_NO_HEARTBEAT = 12 * 60;
 
 export type SheetVerdict = "ok" | "idle" | "stale" | "rejected" | "never";
@@ -133,8 +138,14 @@ export function verdictFor(p: { contact: SheetContact | null; rejected: SheetRej
   // turning it away, which is the one failure the CRM can diagnose on its own.
   if (p.rejected && p.rejected.count > 0) return "rejected";
   if (!p.contact) return "never";
-  const ageMin = ((p.now?.getTime() ?? Date.now()) - new Date(p.contact.at).getTime()) / 60000;
-  const limit = p.contact.lastHeartbeatAt ? STALE_AFTER_MINUTES : STALE_AFTER_MINUTES_NO_HEARTBEAT;
+  const now = p.now ?? new Date();
+  const at = new Date(p.contact.at);
+  const ageMin = (now.getTime() - at.getTime()) / 60000;
+  const limit = !p.contact.lastHeartbeatAt
+    ? STALE_AFTER_MINUTES_NO_HEARTBEAT
+    : inDbQuietHours(now) || inDbQuietHours(at)
+      ? STALE_AFTER_MINUTES_QUIET
+      : STALE_AFTER_MINUTES;
   if (ageMin > limit) return "stale";
   return p.contact.inserted > 0 ? "ok" : "idle";
 }

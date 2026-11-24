@@ -6,7 +6,8 @@ export const runtime = "nodejs";
 export const maxDuration = 300;
 
 /**
- * The daily lead report's heartbeat, every five minutes (vercel.json), every
+ * The daily lead report's heartbeat, every five minutes from 06:30 to 22:25 IST
+ * (vercel.json; overnight the database sleeps, see db-quiet-hours), every
  * day — Vercel schedules in UTC, so a Mon–Sat schedule would skip Monday
  * morning IST; the tick itself only reminds and summarises on days with a
  * cutoff. See runLeadCutoffTick for what one tick does.

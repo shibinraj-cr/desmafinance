@@ -221,9 +221,11 @@ quietly dropped, so the report answers *why* someone did not receive it.
 
 ### Scheduling
 
-On the Pro plan the drain cron fires **every five minutes** with a ~280s budget
-(`maxDuration 300`), looping batch after batch — a campaign of a few thousand
-drains unattended within the hour. The drain stays chunked and resumable, so an
+On the Pro plan the drain cron fires **every five minutes from 06:30 to 22:25 IST**
+with a ~280s budget (`maxDuration 300`), looping batch after batch — a campaign
+of a few thousand drains unattended within the hour. Overnight it does not run,
+so the database can sleep (`src/lib/db-quiet-hours.ts`): a campaign queued for
+the night goes out from 06:30, and **Send next** still works at any hour. The drain stays chunked and resumable, so an
 interrupted pass is picked up by the next tick. **Send next** on
 `/crm/broadcasts` pushes one bounded chunk of *that campaign only*, for when
 five minutes is too long to wait.

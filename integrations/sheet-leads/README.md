@@ -60,6 +60,13 @@ Do this **once per spreadsheet** (Meta sheet, Website sheet):
    *(Run `resetForBackfill` instead to import the whole sheet.)*
 4. **Triggers** (clock) → Add Trigger → `syncNewLeads`, Time-driven → Every minute.
 
+The script checks in with the CRM on every run even when there is nothing new, so the
+Integrations page can tell "no new leads" from "the script stopped". Overnight
+(22:30–06:30 IST) that empty check-in drops to every 30 minutes so the database can sleep
+(`src/lib/db-quiet-hours.ts`); new leads still go out the minute they appear. **After this
+change, re-paste the script into both sheets** — an older copy keeps waking the database
+every minute.
+
 ## Payload contract
 
 `POST /api/integrations/sheet-leads` — header `x-webhook-secret: <secret>`

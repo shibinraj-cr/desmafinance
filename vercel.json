@@ -23,11 +23,11 @@
     },
     {
       "path": "/api/cron/crm-broadcasts",
-      "schedule": "*/5 * * * *"
+      "schedule": "*/5 1-16 * * *"
     },
     {
       "path": "/api/cron/lead-cutoff",
-      "schedule": "*/5 * * * *"
+      "schedule": "*/5 1-16 * * *"
     },
     {
       "path": "/api/cron/wa-media-archive",
@@ -91,7 +91,7 @@
     },
     {
       "path": "/api/cron/bank-statements",
-      "schedule": "*/5 * * * *"
+      "schedule": "*/5 1-16 * * *"
     },
     {
       "path": "/api/cron/crm-lifecycle",
