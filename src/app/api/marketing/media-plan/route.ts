@@ -11,6 +11,7 @@ import {
   MEDIA_ITEM_STATUSES,
   MEDIA_DEFAULT_CHECKLIST,
   canUseMediaPlanner,
+  isSafeHttpUrl,
   mediaItemInclude,
   serializeMediaItem,
   type MediaFormat,
@@ -66,6 +67,14 @@ const CreateSchema = z.object({
   publishTime: z.string().regex(TIME_RX).optional().nullable(),
   shootDate: z.string().regex(DATE_RX).optional().nullable(),
   hook: z.string().trim().max(2000).optional().nullable(),
+  // Empty string clears it; anything else must be an http(s) URL.
+  link: z
+    .string()
+    .trim()
+    .max(2000)
+    .refine((v) => v === "" || isSafeHttpUrl(v), "link must be an http(s) URL")
+    .optional()
+    .nullable(),
   ownerId: z.string().optional().nullable(),
   // Seed the standard production checklist for the format (default on). The
   // Publish step inherits the publish date so the reminder cron can fire.
@@ -96,6 +105,7 @@ export const POST = withApiHandler(async (req: Request) => {
       publishTime: data.publishTime ?? null,
       shootDate: data.shootDate ? toPrismaDate(data.shootDate) : null,
       hook: data.hook?.trim() ? data.hook.trim() : null,
+      link: data.link ? data.link : null,
       ownerId: data.ownerId ?? userId,
       createdById: userId,
       tasks: steps.length

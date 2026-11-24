@@ -2,7 +2,12 @@ import type { Prisma } from "@prisma/client";
 import type { Permissions } from "./rbac";
 import { canSeePage, isAdmin } from "./rbac";
 import { fromPrismaDate } from "./lead-pulse-dates";
-import { MEDIA_PLANNER_HREF, type MediaItemDto, type MediaTaskDto } from "./media-plan-shared";
+import {
+  MEDIA_PLANNER_HREF,
+  youtubeVideoId,
+  type MediaItemDto,
+  type MediaTaskDto,
+} from "./media-plan-shared";
 
 /**
  * Media Planner — server-side helpers. The pure vocabulary (formats,
@@ -40,6 +45,21 @@ export function serializeMediaTask(t: ItemWithTasks["tasks"][number]): MediaTask
   };
 }
 
+/** The calendar's cover image for an item — see MediaItemDto.thumbnailUrl. */
+export function mediaThumbnailUrl(item: {
+  id: string;
+  link: string | null;
+  thumbnailPath: string | null;
+  thumbnailUpdatedAt: Date | null;
+}): string | null {
+  if (item.thumbnailPath) {
+    const v = item.thumbnailUpdatedAt ? item.thumbnailUpdatedAt.getTime() : 0;
+    return `/api/marketing/media-plan/${item.id}/thumbnail?v=${v}`;
+  }
+  const yt = youtubeVideoId(item.link);
+  return yt ? `https://i.ytimg.com/vi/${yt}/mqdefault.jpg` : null;
+}
+
 export function serializeMediaItem(item: ItemWithTasks): MediaItemDto {
   return {
     id: item.id,
@@ -50,6 +70,9 @@ export function serializeMediaItem(item: ItemWithTasks): MediaItemDto {
     publishTime: item.publishTime,
     shootDate: item.shootDate ? fromPrismaDate(item.shootDate) : null,
     hook: item.hook,
+    link: item.link,
+    thumbnailUrl: mediaThumbnailUrl(item),
+    hasUploadedThumbnail: !!item.thumbnailPath,
     ownerId: item.ownerId,
     publishedAt: item.publishedAt ? item.publishedAt.toISOString() : null,
     createdAt: item.createdAt.toISOString(),

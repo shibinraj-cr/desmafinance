@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import { useRouter } from "next/navigation";
 import {
   MEDIA_FORMATS,
@@ -8,6 +8,10 @@ import {
   MEDIA_ITEM_STATUSES,
   MEDIA_STATUS_LABELS,
   MEDIA_WEEKLY_TARGETS,
+  MEDIA_THUMBNAIL_MAX_BYTES,
+  MEDIA_THUMBNAIL_TYPES,
+  isSafeHttpUrl,
+  linkPlatform,
   type MediaFormat,
   type MediaItemDto,
   type MediaItemStatus,
@@ -70,6 +74,73 @@ function tint(hex: string, alpha: number): string {
   return `rgba(${r}, ${g}, ${b}, ${alpha})`;
 }
 
+/**
+ * A cover image that quietly disappears when it can't load — a YouTube
+ * thumbnail 404s until the video goes public, and a cell shouldn't show a
+ * broken-image icon for a scheduled Short.
+ */
+function Thumb({
+  src,
+  className,
+  style,
+}: {
+  src: string | null;
+  className: string;
+  style?: CSSProperties;
+}) {
+  const [failed, setFailed] = useState(false);
+  const ref = useRef<HTMLImageElement>(null);
+
+  // i.ytimg.com answers a not-yet-public video with a 404 that still carries a
+  // 120×90 grey placeholder, so onError never fires for it.
+  const unusable = (img: HTMLImageElement) =>
+    img.naturalWidth === 0 ||
+    (!!src && src.includes("i.ytimg.com") && img.naturalWidth === 120 && img.naturalHeight === 90);
+
+  useEffect(() => {
+    setFailed(false);
+    // A cached image can finish loading before hydration attaches onLoad and
+    // onError, so check whatever has already settled.
+    const img = ref.current;
+    if (img?.complete && unusable(img)) setFailed(true);
+  }, [src]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  if (!src || failed) return null;
+  return (
+    // eslint-disable-next-line @next/next/no-img-element
+    <img
+      ref={ref}
+      src={src}
+      alt=""
+      onError={() => setFailed(true)}
+      onLoad={(e) => {
+        if (unusable(e.currentTarget)) setFailed(true);
+      }}
+      className={`${className} object-cover shrink-0`}
+      style={style}
+    />
+  );
+}
+
+/** Open-link icon that doesn't trigger the chip/card it sits in. */
+function LinkOut({ href, size = 11 }: { href: string; size?: number }) {
+  if (!isSafeHttpUrl(href)) return null;
+  return (
+    <a
+      href={href}
+      target="_blank"
+      rel="noopener noreferrer"
+      onClick={(e) => e.stopPropagation()}
+      title={`Open on ${linkPlatform(href)}`}
+      aria-label={`Open on ${linkPlatform(href)}`}
+      className="shrink-0 leading-none hover:opacity-100 opacity-70"
+      style={{ color: "var(--lp-primary)", fontSize: size }}
+    >
+      ↗
+    </a>
+  );
+}
+
 type Draft = {
   id: string | null;
   title: string;
@@ -79,6 +150,7 @@ type Draft = {
   publishTime: string;
   shootDate: string;
   hook: string;
+  link: string;
   ownerId: string;
   seedChecklist: boolean;
 };
@@ -93,6 +165,7 @@ function draftFromItem(item: MediaItemDto): Draft {
     publishTime: item.publishTime ?? "",
     shootDate: item.shootDate ?? "",
     hook: item.hook ?? "",
+    link: item.link ?? "",
     ownerId: item.ownerId ?? "",
     seedChecklist: false,
   };
@@ -130,6 +203,16 @@ export function MediaPlannerClient({
   const [draft, setDraft] = useState<Draft | null>(null);
   const [newStep, setNewStep] = useState("");
   const [busy, setBusy] = useState(false);
+  const thumbInput = useRef<HTMLInputElement>(null);
+  // Days whose cell is expanded to list every item instead of the first four.
+  const [expandedDays, setExpandedDays] = useState<Set<string>>(() => new Set());
+  const toggleDay = (d: string) =>
+    setExpandedDays((prev) => {
+      const next = new Set(prev);
+      if (next.has(d)) next.delete(d);
+      else next.add(d);
+      return next;
+    });
 
   const usernameById = useMemo(() => {
     const m = new Map<string, string>();
@@ -196,6 +279,10 @@ export function MediaPlannerClient({
       const arr = m.get(it.publishDate) ?? [];
       arr.push(it);
       m.set(it.publishDate, arr);
+    }
+    // Within a day, in posting order; untimed items last.
+    for (const arr of Array.from(m.values())) {
+      arr.sort((a, b) => (a.publishTime ?? "99:99").localeCompare(b.publishTime ?? "99:99"));
     }
     return m;
   }, [visibleItems]);
@@ -280,6 +367,7 @@ export function MediaPlannerClient({
       publishTime: "",
       shootDate: "",
       hook: "",
+      link: "",
       ownerId: selfId,
       seedChecklist: true,
     });
@@ -295,6 +383,10 @@ export function MediaPlannerClient({
   // ---- API calls ----
   async function saveDraft() {
     if (!draft || !draft.title.trim()) return;
+    if (draft.link.trim() && !isSafeHttpUrl(draft.link.trim())) {
+      alert("The link must start with https:// (or http://).");
+      return;
+    }
     setBusy(true);
     try {
       const payload = {
@@ -305,6 +397,7 @@ export function MediaPlannerClient({
         publishTime: draft.publishTime || null,
         shootDate: draft.shootDate || null,
         hook: draft.hook || null,
+        link: draft.link.trim() || null,
         ownerId: draft.ownerId || null,
         ...(draft.id ? {} : { seedChecklist: draft.seedChecklist }),
       };
@@ -361,6 +454,48 @@ export function MediaPlannerClient({
       }
       setItems((arr) => arr.filter((i) => i.id !== draft.id));
       setDraft(null);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function uploadThumbnail(file: File) {
+    if (!draft?.id) return;
+    if (!(MEDIA_THUMBNAIL_TYPES as readonly string[]).includes(file.type)) {
+      alert("Thumbnail must be a JPEG, PNG or WebP image.");
+      return;
+    }
+    if (file.size > MEDIA_THUMBNAIL_MAX_BYTES) {
+      alert("Thumbnail must be under 2 MB.");
+      return;
+    }
+    setBusy(true);
+    try {
+      const body = new FormData();
+      body.append("file", file);
+      const res = await fetch(`/api/marketing/media-plan/${draft.id}/thumbnail`, { method: "POST", body });
+      if (!res.ok) {
+        alert("Failed to upload the thumbnail.");
+        return;
+      }
+      const { item } = (await res.json()) as { item: MediaItemDto };
+      replaceItem(item);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function removeThumbnail() {
+    if (!draft?.id) return;
+    setBusy(true);
+    try {
+      const res = await fetch(`/api/marketing/media-plan/${draft.id}/thumbnail`, { method: "DELETE" });
+      if (!res.ok) {
+        alert("Failed to remove the thumbnail.");
+        return;
+      }
+      const { item } = (await res.json()) as { item: MediaItemDto };
+      replaceItem(item);
     } finally {
       setBusy(false);
     }
@@ -611,6 +746,8 @@ export function MediaPlannerClient({
             <div className="grid grid-cols-7 gap-[6px]">
               {cells.map((c) => {
                 const dayItems = itemsByDate.get(c.date) ?? [];
+                const expanded = expandedDays.has(c.date);
+                const shown = expanded ? dayItems : dayItems.slice(0, 4);
                 const due = dueCountByDate.get(c.date) ?? 0;
                 const isToday = c.date === todayStr;
                 const isSun = c.weekday === 0;
@@ -651,35 +788,62 @@ export function MediaPlannerClient({
                         </button>
                       </span>
                     </div>
-                    <div className="flex flex-col gap-[3px] overflow-hidden">
-                      {dayItems.slice(0, 3).map((it) => {
+                    <div className="flex flex-col gap-[3px] overflow-hidden min-w-0">
+                      {shown.map((it) => {
                         const meta = formatMeta(it.format);
                         const done = it.status === "published";
                         return (
-                          <button
+                          <div
                             key={it.id}
+                            role="button"
+                            tabIndex={0}
                             onClick={() => openItem(it)}
-                            className="flex items-center gap-[5px] rounded-[6px] px-[6px] py-[2px] text-[10.5px] font-semibold text-left truncate border"
+                            onKeyDown={(e) => {
+                              if (e.key === "Enter" || e.key === " ") {
+                                e.preventDefault();
+                                openItem(it);
+                              }
+                            }}
+                            className="flex items-stretch gap-[5px] rounded-[6px] pl-[3px] pr-[5px] py-[3px] text-[10.5px] font-semibold text-left border cursor-pointer min-w-0"
                             style={{
                               backgroundColor: tint(meta.color, 0.13),
                               borderColor: tint(meta.color, 0.35),
                               color: "var(--lp-on-surface)",
-                              opacity: done ? 0.55 : 1,
+                              opacity: done ? 0.6 : 1,
                             }}
-                            title={`${meta.label} — ${it.title}`}
+                            title={`${meta.label}${it.publishTime ? ` · ${it.publishTime}` : ""} — ${it.title}`}
                           >
                             <span
-                              className="inline-block w-[6px] h-[6px] rounded-full shrink-0"
+                              className="inline-block w-[3px] self-stretch rounded-full shrink-0"
                               style={{ backgroundColor: meta.color }}
                             />
-                            <span className="truncate">{done ? `✓ ${it.title}` : it.title}</span>
-                          </button>
+                            <Thumb src={it.thumbnailUrl} className="w-[20px] h-[34px] rounded-[3px]" />
+                            <span className="min-w-0 grow">
+                              <span className="leading-[1.2] line-clamp-2 break-words">
+                                {done ? `✓ ${it.title}` : it.title}
+                              </span>
+                              {(it.publishTime || it.link) && (
+                                <span className="flex items-center gap-[4px] mt-[1px]">
+                                  {it.publishTime && (
+                                    <span className="font-mono text-[9.5px] font-normal" style={{ color: "var(--lp-outline)" }}>
+                                      {it.publishTime}
+                                    </span>
+                                  )}
+                                  {it.link && <LinkOut href={it.link} size={10} />}
+                                </span>
+                              )}
+                            </span>
+                          </div>
                         );
                       })}
-                      {dayItems.length > 3 && (
-                        <span className="text-[10px]" style={{ color: "var(--lp-on-surface-variant)" }}>
-                          +{dayItems.length - 3} more
-                        </span>
+                      {dayItems.length > 4 && (
+                        <button
+                          onClick={() => toggleDay(c.date)}
+                          className="text-left text-[10px] font-semibold"
+                          style={{ color: "var(--lp-primary)" }}
+                        >
+                          {expanded ? "Show less" : `+${dayItems.length - 4} more`}
+                        </button>
                       )}
                     </div>
                     {due > 0 && (
@@ -856,9 +1020,13 @@ export function MediaPlannerClient({
                           </span>
                         ) : null}
                       </div>
-                      <p className="text-[12px] font-semibold leading-snug" style={{ color: "var(--lp-on-surface)" }}>
-                        {it.title}
-                      </p>
+                      <div className="flex items-start gap-[8px]">
+                        <Thumb src={it.thumbnailUrl} className="w-[36px] h-[56px] rounded-[5px]" />
+                        <p className="min-w-0 grow text-[12px] font-semibold leading-snug" style={{ color: "var(--lp-on-surface)" }}>
+                          {it.title}
+                        </p>
+                        {it.link && <LinkOut href={it.link} size={13} />}
+                      </div>
                       <p className="text-[10px]" style={{ color: "var(--lp-outline)" }}>
                         {it.ownerId ? usernameById.get(it.ownerId) ?? "unassigned" : "unassigned"}
                         {it.publishDate ? ` · ${shortDate(it.publishDate)}` : ""}
@@ -1034,6 +1202,91 @@ export function MediaPlannerClient({
                 style={inputStyle}
               />
             </div>
+
+            <div>
+              <label className="block text-[10px] uppercase tracking-widest font-semibold mb-[4px]" style={{ color: "var(--lp-outline)" }}>
+                Post link
+              </label>
+              <div className="flex gap-[8px]">
+                <input
+                  type="url"
+                  value={draft.link}
+                  onChange={(e) => setDraft({ ...draft, link: e.target.value })}
+                  placeholder="https://youtube.com/shorts/… or the Instagram post"
+                  className={inputClass}
+                  style={inputStyle}
+                />
+                {draft.link.trim() && isSafeHttpUrl(draft.link.trim()) && (
+                  <a
+                    href={draft.link.trim()}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="shrink-0 rounded-[8px] px-[10px] py-[8px] text-[12px] font-bold border whitespace-nowrap"
+                    style={{ borderColor: "var(--lp-outline-variant)", color: "var(--lp-primary)" }}
+                  >
+                    Open {linkPlatform(draft.link.trim())} ↗
+                  </a>
+                )}
+              </div>
+            </div>
+
+            {draft.id && drawerItem && (
+              <div>
+                <label className="block text-[10px] uppercase tracking-widest font-semibold mb-[4px]" style={{ color: "var(--lp-outline)" }}>
+                  Thumbnail
+                </label>
+                <div className="flex items-end gap-[12px]">
+                  {drawerItem.thumbnailUrl ? (
+                    <Thumb
+                      src={drawerItem.thumbnailUrl}
+                      className="w-[90px] h-[160px] rounded-[8px] border"
+                      style={{ borderColor: "var(--lp-outline-variant)" }}
+                    />
+                  ) : (
+                    <div
+                      className="w-[90px] h-[160px] rounded-[8px] border border-dashed flex items-center justify-center text-[10px] text-center px-[6px]"
+                      style={{ borderColor: "var(--lp-outline-variant)", color: "var(--lp-outline)" }}
+                    >
+                      No thumbnail
+                    </div>
+                  )}
+                  <div className="space-y-[6px]">
+                    <input
+                      ref={thumbInput}
+                      type="file"
+                      accept={MEDIA_THUMBNAIL_TYPES.join(",")}
+                      className="hidden"
+                      onChange={(e) => {
+                        const f = e.target.files?.[0];
+                        e.target.value = "";
+                        if (f) uploadThumbnail(f);
+                      }}
+                    />
+                    <button
+                      onClick={() => thumbInput.current?.click()}
+                      disabled={busy}
+                      className="block rounded-[8px] px-[12px] py-[6px] text-[12px] font-bold border"
+                      style={{ borderColor: "var(--lp-outline-variant)", color: "var(--lp-primary)" }}
+                    >
+                      {drawerItem.hasUploadedThumbnail ? "Replace image" : "Upload image"}
+                    </button>
+                    {drawerItem.hasUploadedThumbnail && (
+                      <button
+                        onClick={removeThumbnail}
+                        disabled={busy}
+                        className="block text-[11px] underline"
+                        style={{ color: "var(--lp-outline)" }}
+                      >
+                        Remove
+                      </button>
+                    )}
+                    <p className="text-[10px] leading-relaxed max-w-[220px]" style={{ color: "var(--lp-outline)" }}>
+                      JPEG, PNG or WebP, under 2 MB. A YouTube link shows YouTube&apos;s thumbnail once the video is public.
+                    </p>
+                  </div>
+                </div>
+              </div>
+            )}
 
             {draft.id === null ? (
               <label className="flex items-center gap-[8px] text-[12px]" style={{ color: "var(--lp-on-surface-variant)" }}>

@@ -1031,6 +1031,12 @@ model MediaPlanItem {
   shootDate   DateTime? @db.Date
   // Hook / caption / creative notes.
   hook        String?
+  // Where the piece lives once scheduled/published (YouTube, Instagram, …).
+  link        String?
+  // Private Blob pathname of an uploaded cover frame. Served only through
+  // /api/marketing/media-plan/[id]/thumbnail; thumbnailUpdatedAt busts caches.
+  thumbnailPath      String?
+  thumbnailUpdatedAt DateTime?
   ownerId     String?
   owner       User?     @relation("MediaPlanItemOwner", fields: [ownerId], references: [id], onDelete: SetNull)
   createdById String?

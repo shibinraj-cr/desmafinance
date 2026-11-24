@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { z } from "zod";
+import { del } from "@vercel/blob";
 import { prisma } from "@/lib/prisma";
 import { withApiHandler } from "@/lib/api";
 import { unauthorized, forbidden, notFound, badRequest } from "@/lib/http-error";
@@ -10,6 +11,7 @@ import {
   MEDIA_FORMAT_CODES,
   MEDIA_ITEM_STATUSES,
   canUseMediaPlanner,
+  isSafeHttpUrl,
   mediaItemInclude,
   serializeMediaItem,
 } from "@/lib/media-plan";
@@ -34,6 +36,14 @@ const PatchSchema = z.object({
   publishTime: z.string().regex(TIME_RX).optional().nullable(),
   shootDate: z.string().regex(DATE_RX).optional().nullable(),
   hook: z.string().trim().max(2000).optional().nullable(),
+  // Empty string clears it; anything else must be an http(s) URL.
+  link: z
+    .string()
+    .trim()
+    .max(2000)
+    .refine((v) => v === "" || isSafeHttpUrl(v), "link must be an http(s) URL")
+    .optional()
+    .nullable(),
   ownerId: z.string().optional().nullable(),
 });
 
@@ -85,6 +95,7 @@ export const PATCH = withApiHandler(
           ? { shootDate: data.shootDate ? toPrismaDate(data.shootDate) : null }
           : {}),
         ...(data.hook !== undefined ? { hook: data.hook?.trim() ? data.hook.trim() : null } : {}),
+        ...(data.link !== undefined ? { link: data.link ? data.link : null } : {}),
         ...(data.ownerId !== undefined ? { ownerId: data.ownerId } : {}),
       },
       include: mediaItemInclude,
@@ -107,11 +118,18 @@ export const DELETE = withApiHandler(
     const userId = await requirePlannerAccess();
     const existing = await prisma.mediaPlanItem.findUnique({
       where: { id: params.id },
-      select: { id: true, title: true, format: true },
+      select: { id: true, title: true, format: true, thumbnailPath: true },
     });
     if (!existing) throw notFound();
 
     await prisma.mediaPlanItem.delete({ where: { id: params.id } });
+    if (existing.thumbnailPath) {
+      try {
+        await del(existing.thumbnailPath);
+      } catch {
+        /* the row is gone; a stray private blob is harmless */
+      }
+    }
     await recordAudit({
       entityType: "MediaPlanItem",
       entityId: existing.id,
