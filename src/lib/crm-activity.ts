@@ -47,11 +47,13 @@ export const CRM_ACTIVITY_TYPES = [
   "UNENROLLED",
   "REVENUE_DRAFTED",
   // The enrollment confirmation's life with Finance (src/lib/crm-enrollment.ts):
-  // submitted, edited (by the BDE or Finance, with the changes), sent back,
+  // submitted, edited (by the BDE or Finance, with the changes), checked, sent back,
   // verified, money not received, and the sales head's call on a first payment
   // under the minimum.
   "ENROLLMENT_SUBMITTED",
   "ENROLLMENT_EDITED",
+  // Finance's executive checked it and sent it to the Finance Manager.
+  "ENROLLMENT_CHECKED",
   "ENROLLMENT_SENT_BACK",
   "ENROLLMENT_VERIFIED",
   "ENROLLMENT_NOT_RECEIVED",
