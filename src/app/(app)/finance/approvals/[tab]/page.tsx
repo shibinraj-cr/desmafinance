@@ -4,7 +4,7 @@ import { TopBar } from "@/components/TopBar";
 import { Section } from "@/components/Cards";
 import { prisma } from "@/lib/prisma";
 import { inrFull } from "@/lib/format";
-import { canApprove, canSeePage, canWorkSalaryDrafts } from "@/lib/rbac";
+import { canApprove, canSeePage, canWorkSalaryDrafts, isAdmin } from "@/lib/rbac";
 import { draftScope } from "@/lib/approval";
 import { PC_FINANCE_PAGE } from "@/lib/partner-commissions/constants";
 import { getCurrentUserAndPermissions } from "@/lib/permissions";
@@ -15,6 +15,9 @@ import { Tabs } from "../_tabs";
 import { ApprovalsFilterBar } from "../_filter-bar";
 import { listParam } from "@/lib/filter-params";
 import { loadCandidateTotals } from "@/lib/candidate-totals";
+import { ENROLLMENTS_PAGE, listEnrollments, type EnrollmentDTO } from "@/lib/crm-enrollment";
+import { loadEnrollmentReviewContext } from "@/lib/enrollment-review-context";
+import { flowFor } from "@/lib/catalog";
 
 export const dynamic = "force-dynamic";
 
@@ -99,6 +102,13 @@ export default async function ApprovalsPage({
     reviewer && canSeePage(perms, PC_FINANCE_PAGE)
       ? await prisma.commissionReceipt.count({ where: { status: "awaiting" } }).catch(() => 0)
       : 0;
+
+  // Enrollments Finance has checked and submitted wait for an approver here
+  // too, beside the other revenue, and open in the enrollment review panel.
+  const showsEnrollments = tab === "pending" && reviewer && (isAdmin(perms) || canSeePage(perms, ENROLLMENTS_PAGE));
+  const [checkedEnrollments, enrollmentCtx] = showsEnrollments
+    ? await Promise.all([listEnrollments("submitted").then((l) => l.rows), loadEnrollmentReviewContext(true)])
+    : [[] as EnrollmentDTO[], null];
 
   const [items, counts, masters, draftsCount] = await Promise.all([
     prisma.pendingApproval.findMany({
@@ -221,9 +231,38 @@ export default async function ApprovalsPage({
     if (p.kind === "delete") return p.targetTx?.paymentMode ?? "";
     return proposed?.paymentMode ?? p.targetTx?.paymentMode ?? "";
   }
+  // Submitted enrollments as queue rows: the first payment, dated the day it landed.
+  const enrollmentRows: PendingRow[] = checkedEnrollments.map((e) => ({
+    id: `enrollment:${e.id}`,
+    kind: "enrollment",
+    enrollmentId: e.id,
+    submittedBy: e.checkedByName ?? "—",
+    createdAt: e.checkedAt ?? e.createdAt,
+    date: e.fields.paidOn ?? "",
+    type: "Revenue",
+    category: e.fields.category ?? "",
+    subItem: e.fields.subItem ?? "",
+    partyId: e.partyId,
+    employeeId: null,
+    description: `Enrollment — ${e.candidateName} · ${e.serviceName}${e.fields.utr ? ` · UTR ${e.fields.utr}` : ""}`,
+    paymentMode: e.fields.paymentMode ?? "",
+    flow: flowFor("Revenue"),
+    amount: e.fields.firstAmount ?? 0,
+    expDom: e.fields.expDom ?? null,
+  }));
+  const filteredEnrollmentRows = enrollmentRows.filter(
+    (r) =>
+      typeFilter !== "Expense" &&
+      (!fromDate || (!!r.date && r.date >= fromDate)) &&
+      (!toDate || (!!r.date && r.date <= toDate)) &&
+      (!partyFilter.length || partyFilter.includes(r.partyId ?? "")) &&
+      (!categoryFilter.length || categoryFilter.includes(r.category)) &&
+      (!paymentFilter.length || paymentFilter.includes(r.paymentMode)),
+  );
+
   const typeCounts = {
-    all: items.length,
-    Revenue: items.filter((p) => effectiveType(p) === "Revenue").length,
+    all: items.length + enrollmentRows.length,
+    Revenue: items.filter((p) => effectiveType(p) === "Revenue").length + enrollmentRows.length,
     Expense: items.filter((p) => effectiveType(p) === "Expense").length,
   };
   // Type filter applies first (drives the chip counts), then the
@@ -249,11 +288,16 @@ export default async function ApprovalsPage({
   const typeScoped = items.filter(
     (p) => typeFilter === "all" || effectiveType(p) === typeFilter,
   );
+  const scopedEnrollments = typeFilter === "Expense" ? [] : enrollmentRows;
   const categoryOptions = Array.from(
-    new Set(typeScoped.map((p) => effectiveCategory(p)).filter((s) => s.length > 0)),
+    new Set(
+      [...typeScoped.map((p) => effectiveCategory(p)), ...scopedEnrollments.map((r) => r.category)].filter((s) => s.length > 0),
+    ),
   ).sort((a, b) => a.localeCompare(b));
   const paymentOptions = Array.from(
-    new Set(typeScoped.map((p) => effectivePaymentMode(p)).filter((s) => s.length > 0)),
+    new Set(
+      [...typeScoped.map((p) => effectivePaymentMode(p)), ...scopedEnrollments.map((r) => r.paymentMode)].filter((s) => s.length > 0),
+    ),
   ).sort((a, b) => a.localeCompare(b));
 
   /** Effective amount per pending row — `proposed.amount` for
@@ -276,7 +320,8 @@ export default async function ApprovalsPage({
     if (t === "Revenue") filteredRevenue += amt;
     else if (t === "Expense") filteredExpense += amt;
   }
-  const filteredCount = filteredItems.length;
+  for (const r of filteredEnrollmentRows) filteredRevenue += r.amount;
+  const filteredCount = filteredItems.length + filteredEnrollmentRows.length;
   const filteredNet = filteredRevenue - filteredExpense;
   const hasActiveFilters =
     !!fromDate ||
@@ -287,8 +332,11 @@ export default async function ApprovalsPage({
     typeFilter !== "all";
 
   const isReviewerPending = tab === "pending" && reviewer;
+  // Oldest first, the latest at the bottom: by the payment's date, then by when it was submitted.
+  const byDate = (a: { date: string; createdAt: string }, b: { date: string; createdAt: string }) =>
+    a.date.localeCompare(b.date) || a.createdAt.localeCompare(b.createdAt);
   const pendingRows: PendingRow[] = isReviewerPending
-    ? filteredItems.map((p) => {
+    ? [...filteredItems.map((p): PendingRow => {
         const proposed = (p.proposed as unknown as ProposedTx | null) ?? null;
         // create/update show the proposed values; delete shows what is
         // about to be removed.
@@ -325,14 +373,25 @@ export default async function ApprovalsPage({
           amount: typeof src.amount === "number" ? src.amount : Number(src.amount ?? 0),
           expDom: src.expDom ?? null,
         };
-      })
+      }), ...filteredEnrollmentRows].sort(byDate)
     : [];
   // The candidate's quoted total / paid / balance beside each payment, so a
   // reviewer can sanity-check it without opening the candidate page.
   const candidateTotals = isReviewerPending
     ? await loadCandidateTotals(pendingRows.map((r) => r.partyId ?? ""))
     : {};
-  const totalShown = filteredItems.length;
+  const totalShown = filteredCount;
+  // The cards (an executive's own submissions, and the history tabs): pending
+  // oldest first like the reviewer's table; approved and rejected newest first.
+  const shownItems =
+    tab === "pending"
+      ? [...filteredItems].sort((a, b) =>
+          byDate(
+            { date: effectiveDate(a), createdAt: a.createdAt.toISOString() },
+            { date: effectiveDate(b), createdAt: b.createdAt.toISOString() },
+          ),
+        )
+      : filteredItems;
   const tabSubtitle =
     tab === "pending"
       ? `${totalShown} pending`
@@ -361,7 +420,7 @@ export default async function ApprovalsPage({
         ) : null}
         <Tabs
           active={tab}
-          counts={{ pending: pendingCount, approved: approvedCount, rejected: rejectedCount }}
+          counts={{ pending: pendingCount + enrollmentRows.length, approved: approvedCount, rejected: rejectedCount }}
           myDrafts={
             perms.draftFirst || perms.isAdmin || draftsCount > 0 ? { count: draftsCount } : undefined
           }
@@ -409,8 +468,10 @@ export default async function ApprovalsPage({
             partyById={partyLookup}
             employeeById={employeeLookup}
             candidateTotals={candidateTotals}
+            enrollments={Object.fromEntries(checkedEnrollments.map((e) => [e.id, e]))}
+            enrollmentCtx={enrollmentCtx}
           />
-        ) : filteredItems.length === 0 ? (
+        ) : shownItems.length === 0 ? (
           <Section title="">
             <div className="py-lg text-center text-on-surface-variant">
               {tab === "pending"
@@ -427,7 +488,7 @@ export default async function ApprovalsPage({
             </div>
           </Section>
         ) : (
-          filteredItems.map((p) => {
+          shownItems.map((p) => {
             const proposed = (p.proposed as unknown as ProposedTx | null) ?? null;
             const before = p.targetTx
               ? {

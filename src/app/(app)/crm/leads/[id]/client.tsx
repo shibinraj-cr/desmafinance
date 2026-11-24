@@ -209,6 +209,7 @@ const ACTIVITY_ICON: Record<string, string> = {
   REVENUE_DRAFTED: "request_quote",
   ENROLLMENT_SUBMITTED: "send_money",
   ENROLLMENT_EDITED: "edit_note",
+  ENROLLMENT_CHECKED: "fact_check",
   ENROLLMENT_SENT_BACK: "undo",
   ENROLLMENT_VERIFIED: "task_alt",
   ENROLLMENT_NOT_RECEIVED: "money_off",

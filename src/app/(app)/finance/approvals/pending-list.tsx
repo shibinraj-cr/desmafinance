@@ -7,6 +7,8 @@ import { HISTORICAL_LABEL, isHistoricalDate } from "@/lib/finance-historical";
 import { txErrorMessage } from "@/lib/finance-tx-errors";
 import { bulkFailure } from "@/lib/finance-bulk-errors";
 import type { CandidateTotals } from "@/lib/candidate-totals";
+import type { EnrollmentDTO } from "@/lib/crm-enrollment";
+import { EnrollmentReview, type EnrollmentReviewContext } from "@/components/finance/EnrollmentReview";
 
 /** localStorage key for in-progress approve/reject decisions. Kept
  *  scoped to this page so other surfaces (daily tracker drafts etc.)
@@ -24,7 +26,10 @@ function fmtDDMMYY(s: string): string {
 
 export type PendingRow = {
   id: string;
-  kind: "create" | "update" | "delete";
+  /** "enrollment": a new enrollment's first payment, checked and submitted by
+   *  Finance. Approved in the enrollment panel (with its invoice), not by tick. */
+  kind: "create" | "update" | "delete" | "enrollment";
+  enrollmentId?: string;
   submittedBy: string;
   createdAt: string;
   // Effective payload — proposed for create/update, targetTx for delete.
@@ -52,14 +57,20 @@ export function PendingList({
   partyById,
   employeeById,
   candidateTotals = {},
+  enrollments = {},
+  enrollmentCtx = null,
 }: {
   rows: PendingRow[];
   partyById: PartyLookup;
   employeeById: EmployeeLookup;
   /** Keyed by party id; only Candidates are present. */
   candidateTotals?: Record<string, CandidateTotals>;
+  /** The submitted enrollments behind the "enrollment" rows, by enrollment id. */
+  enrollments?: Record<string, EnrollmentDTO>;
+  enrollmentCtx?: EnrollmentReviewContext | null;
 }) {
   const router = useRouter();
+  const [openEnrollment, setOpenEnrollment] = useState<EnrollmentDTO | null>(null);
   // Hydrate from localStorage on first paint so refreshes / nav-aways
   // don't lose a half-finished review. We only restore entries whose
   // id is still in the current `rows` (so processed items don't ghost
@@ -368,6 +379,23 @@ export function PendingList({
                   <td className="px-md py-sm">
                     <KindBadge kind={r.kind} />
                   </td>
+                  {r.kind === "enrollment" ? (
+                    <td colSpan={3} className="px-md py-sm">
+                      {r.enrollmentId && enrollments[r.enrollmentId] && enrollmentCtx ? (
+                        <button
+                          type="button"
+                          onClick={() => setOpenEnrollment(enrollments[r.enrollmentId!])}
+                          className="inline-flex items-center gap-xs h-9 px-md rounded-lg bg-primary text-on-primary font-semibold hover:bg-primary-container transition whitespace-nowrap"
+                        >
+                          <span className="material-symbols-outlined text-[18px]">fact_check</span>
+                          Review, approve &amp; invoice
+                        </button>
+                      ) : (
+                        <span className="text-on-surface-variant">Open it in Verify enrollments.</span>
+                      )}
+                    </td>
+                  ) : (
+                    <>
                   <td className="px-md py-sm text-center">
                     <input
                       type="checkbox"
@@ -414,6 +442,8 @@ export function PendingList({
                       }
                     />
                   </td>
+                    </>
+                  )}
                 </tr>
               );
             })}
@@ -430,6 +460,21 @@ export function PendingList({
           </tbody>
         </table>
       </div>
+
+      {openEnrollment && enrollmentCtx && (
+        <EnrollmentReview
+          key={openEnrollment.id}
+          row={openEnrollment}
+          data={enrollmentCtx}
+          onClose={() => setOpenEnrollment(null)}
+          onDone={(msg) => {
+            setOpenEnrollment(null);
+            setServerError(null);
+            setToast(msg);
+            router.refresh();
+          }}
+        />
+      )}
     </div>
   );
 }
@@ -537,14 +582,16 @@ function HistoricalBadge() {
   );
 }
 
-function KindBadge({ kind }: { kind: "create" | "update" | "delete" }) {
-  const label = kind === "create" ? "New" : kind === "update" ? "Edit" : "Delete";
+function KindBadge({ kind }: { kind: PendingRow["kind"] }) {
+  const label = kind === "create" ? "New" : kind === "update" ? "Edit" : kind === "enrollment" ? "Enrollment" : "Delete";
   const cls =
     kind === "create"
       ? "bg-blue-50 text-blue-700 border-blue-200"
       : kind === "update"
         ? "bg-amber-50 text-amber-800 border-amber-200"
-        : "bg-red-50 text-red-700 border-red-200";
+        : kind === "enrollment"
+          ? "bg-violet-50 text-violet-700 border-violet-200"
+          : "bg-red-50 text-red-700 border-red-200";
   return (
     <span
       className={

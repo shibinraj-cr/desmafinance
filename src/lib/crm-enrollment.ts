@@ -3,6 +3,8 @@
  * (src/lib/crm-enroll.ts creates it; the rules are in crm-enroll-confirm.ts).
  *
  *   pending ──Finance approves──▶ verified   (ledger row + collection plan; invoice)
+ *      │  (a Finance user who can't approve checks it and submits it first: it
+ *      │   stays pending, `checkedAt` set, and waits in Approvals › Revenue)
  *      │  ▲
  *      │  └──BDE fixes and resubmits── sent_back ◀──Finance sends back──┘
  *      └──Finance finds no money──▶ not_received   (the sales head decides: un-enroll)
@@ -94,6 +96,8 @@ const ROW = {
   transactionId: true,
   collectionPlanId: true,
   verifiedAt: true,
+  checkedAt: true,
+  returnNote: true,
   createdAt: true,
   updatedAt: true,
   lead: { select: { candidateName: true, country: true } },
@@ -101,6 +105,7 @@ const ROW = {
   owner: { select: personSelect },
   submittedBy: { select: personSelect },
   verifiedBy: { select: personSelect },
+  checkedBy: { select: personSelect },
   exceptionBy: { select: personSelect },
   transaction: { select: { invoices: { where: { status: "issued" }, select: { id: true, number: true }, take: 1 } } },
 } satisfies Prisma.CrmEnrollmentSelect;
@@ -190,6 +195,11 @@ function serialize(e: Row, repeat = false) {
     financeNote: e.financeNote,
     verifiedByName: nameOf(e.verifiedBy),
     verifiedAt: e.verifiedAt?.toISOString() ?? null,
+    /** Checked and submitted for approval (status stays pending). */
+    checkedByName: nameOf(e.checkedBy),
+    checkedAt: e.checkedAt?.toISOString() ?? null,
+    /** Why the Finance Manager returned it to the executive. */
+    returnNote: e.returnNote,
     transactionId: e.transactionId,
     invoice: e.transaction?.invoices[0] ?? null,
     /** The candidate already holds another service: a re-enrollment. */
@@ -208,9 +218,12 @@ export async function leadEnrollment(leadId: string): Promise<EnrollmentDTO | nu
   return e ? serialize(e) : null;
 }
 
-export type EnrollmentTab = "verify" | "sent-back" | "not-received" | "verified";
+export type EnrollmentTab = "verify" | "submitted" | "sent-back" | "not-received" | "verified";
+export const ENROLLMENT_TABS: EnrollmentTab[] = ["verify", "submitted", "sent-back", "not-received", "verified"];
 const TAB_WHERE: Record<EnrollmentTab, Prisma.CrmEnrollmentWhereInput> = {
-  verify: { status: "pending" },
+  verify: { status: "pending", checkedAt: null },
+  // Checked and submitted: waiting for the Finance Manager in Approvals › Revenue.
+  submitted: { status: "pending", checkedAt: { not: null } },
   "sent-back": { status: "sent_back" },
   "not-received": { status: "not_received" },
   verified: { status: "verified" },
@@ -218,7 +231,7 @@ const TAB_WHERE: Record<EnrollmentTab, Prisma.CrmEnrollmentWhereInput> = {
 
 /** One tab of Finance's queue, oldest first (verified: newest first), with every tab's count. */
 export async function listEnrollments(tab: EnrollmentTab) {
-  const [rows, counts] = await Promise.all([
+  const [rows, counts, submitted] = await Promise.all([
     prisma.crmEnrollment.findMany({
       where: TAB_WHERE[tab],
       orderBy: tab === "verified" ? { verifiedAt: "desc" } : { createdAt: "asc" },
@@ -226,6 +239,7 @@ export async function listEnrollments(tab: EnrollmentTab) {
       select: ROW,
     }),
     prisma.crmEnrollment.groupBy({ by: ["status"], _count: { _all: true }, where: { status: { in: ["pending", "sent_back", "not_received"] } } }),
+    prisma.crmEnrollment.count({ where: TAB_WHERE.submitted }),
   ]);
   // Re-enrollments: the candidate holds a service other than this one.
   const others = rows.length
@@ -237,7 +251,7 @@ export async function listEnrollments(tab: EnrollmentTab) {
   const count = (s: string) => counts.find((c) => c.status === s)?._count._all ?? 0;
   return {
     rows: rows.map((r) => serialize(r, others.some((o) => o.partyId === r.partyId && o.serviceId !== r.serviceId))),
-    counts: { verify: count("pending"), "sent-back": count("sent_back"), "not-received": count("not_received") },
+    counts: { verify: count("pending") - submitted, submitted, "sent-back": count("sent_back"), "not-received": count("not_received") },
   };
 }
 
@@ -352,6 +366,9 @@ function assertFresh(e: Row, expectedUpdatedAt: string | null | undefined) {
 
 class NeedsSalesHead extends Error {}
 
+/** Back with the checker: not waiting for approval, no return note. */
+const UNCHECKED = { checkedAt: null, checkedById: null, returnNote: null } as const;
+
 const bdeOf = (e: { ownerUserId: string | null; submittedById: string | null }) => [e.ownerUserId, e.submittedById];
 
 async function askSalesHead(e: Row, firstAmount: number, actorId: string) {
@@ -421,6 +438,8 @@ export async function editEnrollmentByBde(args: {
     await writeFields(tx, e, next, OPEN_STATUSES, {
       status: "pending",
       financeNote: null,
+      // Changed since Finance checked it: it goes back to be checked again.
+      ...(changes.length || e.status !== "pending" ? UNCHECKED : {}),
       submitted: next as unknown as Prisma.InputJsonValue,
       ...(exception !== e.exception ? { exception, exceptionById: null, exceptionAt: null, exceptionNote: null } : {}),
     });
@@ -523,7 +542,16 @@ export async function financeSave(a: EnrollmentAccess, id: string, patch: Financ
     const changes = enrollmentChanges(before, next);
     if (!changes.length) return { e, changes, newException: null };
     const exception = nextException(e.exception, before.firstAmount, next.firstAmount);
-    await writeFields(tx, e, next, OPEN_STATUSES, exception !== e.exception ? { exception, exceptionById: null, exceptionAt: null, exceptionNote: null } : {});
+    await writeFields(
+      tx,
+      e,
+      next,
+      OPEN_STATUSES,
+      exception !== e.exception
+        ? // Now waiting for the sales head: it can't wait for approval meanwhile.
+          { exception, exceptionById: null, exceptionAt: null, exceptionNote: null, ...(exception === "pending" ? UNCHECKED : {}) }
+        : {},
+    );
     return { e, changes, newException: exception !== e.exception && exception === "pending" ? next.firstAmount : null };
    }, TX_OPTS);
   if (out.changes.length) await logFinanceChanges(a, out.e, out.changes);
@@ -598,7 +626,7 @@ export async function approveEnrollment(a: EnrollmentAccess, id: string, patch: 
       const changes = enrollmentChanges(before, f);
       const now = new Date();
       // Claim it: verified, with these fields. Throws if it moved meanwhile.
-      await writeFields(tx, e, f, OPEN_STATUSES, { status: "verified", verifiedById: a.userId, verifiedAt: now, financeNote: null, exception });
+      await writeFields(tx, e, f, OPEN_STATUSES, { status: "verified", verifiedById: a.userId, verifiedAt: now, financeNote: null, returnNote: null, exception });
 
       const payer = f.payerRelation && f.payerRelation !== "candidate" ? ` · paid by ${f.payerRelation}${f.payerName ? ` ${f.payerName}` : ""}` : "";
       const row = await tx.transaction.create({
@@ -700,6 +728,77 @@ export async function approveEnrollment(a: EnrollmentAccess, id: string, patch: 
   return { transactionId: out.transactionId, fields: f, partyId: out.e.partyId, serviceName: out.e.service.name, subItem: f.subItem };
 }
 
+/**
+ * A Finance user who can't approve (the Finance Executive) has checked the
+ * enrollment and submits it: it stays pending, and waits for the Finance
+ * Manager in Approvals › Revenue, who approves it and issues the invoice. Any
+ * last edits in `patch` are saved (and logged) first. Refused while it
+ * couldn't be approved anyway, so the manager is never handed an incomplete one.
+ */
+export async function submitForApproval(a: EnrollmentAccess, id: string, patch: FinancePatch | null, expectedUpdatedAt?: string | null) {
+  const out = await prisma
+    .$transaction(async (tx) => {
+      const e = await lockRow(tx, id);
+      assertFresh(e, expectedUpdatedAt);
+      if (!OPEN_STATUSES.includes(e.status as EnrollmentStatus)) {
+        throw conflict(e.status === "verified" ? "This enrollment is already verified." : "This enrollment can't be submitted now.", "enrollment_closed");
+      }
+      const before = fieldsOf(e);
+      const f = patch ? merged(e, patch) : before;
+      const problems = financeProblems(f, todayIst());
+      if (problems.length) throw badRequest(problems[0], "enrollment_invalid");
+      const exception = nextException(e.exception, before.firstAmount, f.firstAmount);
+      if (exception === "pending" && e.exception !== "pending") throw new NeedsSalesHead();
+      const blocker = approveBlocker({ ...f, status: e.status, exception });
+      if (blocker) throw conflict(blocker, "cannot_submit");
+      await checkClassification(tx, f);
+      ledgerMonth(f.paidOn!);
+      const changes = enrollmentChanges(before, f);
+      await writeFields(tx, e, f, OPEN_STATUSES, {
+        status: "pending",
+        financeNote: null,
+        exception,
+        checkedById: a.userId,
+        checkedAt: new Date(),
+        returnNote: null,
+      });
+      return { e, changes };
+    }, TX_OPTS)
+    .catch(async (err) => {
+      if (!(err instanceof NeedsSalesHead)) throw err;
+      await financeSave(a, id, patch ?? {}, expectedUpdatedAt);
+      throw conflict(
+        `Saved, not submitted: the first payment is now under ${inr(MIN_FIRST_PAYMENT)}, so the sales head has been asked to approve it. Submit it once they have.`,
+        "exception_requested",
+      );
+    });
+
+  if (out.changes.length) await logFinanceChanges(a, out.e, out.changes);
+  await recordLeadActivity({
+    leadId: out.e.leadId,
+    actorId: a.userId,
+    type: "ENROLLMENT_CHECKED",
+    summary: "Finance checked the enrollment and sent it to the Finance Manager for approval",
+    metadata: { enrollmentId: out.e.id },
+  });
+  await recordAudit({ entityType: "CrmEnrollment", entityId: out.e.id, action: "UPDATE", userId: a.userId, changes: { checked: true } });
+  return { changes: out.changes };
+}
+
+/** The Finance Manager hands a submitted enrollment back to whoever checked it, saying why. Nothing else changes. */
+export async function returnToChecker(a: EnrollmentAccess, id: string, rawNote: string) {
+  if (!a.canApprove) throw forbidden("Only a Finance approver (the Finance Manager, or the director) can return it.");
+  const note = rawNote.trim().slice(0, 500);
+  if (note.length < 3) throw badRequest("Say what to look at again.", "note_required");
+  const res = await prisma.crmEnrollment.updateMany({
+    where: { id, status: "pending", checkedAt: { not: null } },
+    data: { checkedAt: null, checkedById: null, returnNote: note },
+  });
+  if (res.count !== 1) throw conflict("This enrollment isn't waiting for approval any more. Reload it.", "enrollment_changed");
+  await recordAudit({ entityType: "CrmEnrollment", entityId: id, action: "UPDATE", userId: a.userId, changes: { returned: true, note } });
+  return { returned: true };
+}
+
 /** Finance sends the enrollment back to the BDE to fix. */
 export async function sendBack(a: EnrollmentAccess, id: string, note: string) {
   return closeWithNote(a, id, note, {
@@ -760,7 +859,7 @@ async function closeWithNote(
   if (note.length < 3) throw badRequest("Say what's wrong, so the BDE knows what to fix.", "note_required");
   const e = await prisma.crmEnrollment.findUnique({ where: { id }, select: ROW });
   if (!e) throw notFound("Enrollment not found.");
-  const res = await prisma.crmEnrollment.updateMany({ where: { id, status: { in: o.from } }, data: { status: o.to, financeNote: note } });
+  const res = await prisma.crmEnrollment.updateMany({ where: { id, status: { in: o.from } }, data: { status: o.to, financeNote: note, ...UNCHECKED } });
   if (res.count !== 1) throw conflict("This enrollment changed meanwhile. Reload it.", "enrollment_changed");
   await recordLeadActivity({ leadId: e.leadId, actorId: a.userId, type: o.type, summary: o.summary(note), metadata: { enrollmentId: id, note } });
   await recordAudit({ entityType: "CrmEnrollment", entityId: id, action: "UPDATE", userId: a.userId, changes: { status: { from: e.status, to: o.to }, note } });

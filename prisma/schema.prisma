@@ -205,6 +205,7 @@ model User {
   crmEnrollOwned        CrmEnrollment[]        @relation("CrmEnrollmentOwner")
   crmEnrollSubmitted    CrmEnrollment[]        @relation("CrmEnrollmentSubmittedBy")
   crmEnrollVerified     CrmEnrollment[]        @relation("CrmEnrollmentVerifiedBy")
+  crmEnrollChecked      CrmEnrollment[]        @relation("CrmEnrollmentCheckedBy")
   crmEnrollExceptions   CrmEnrollment[]        @relation("CrmEnrollmentExceptionBy")
 
   @@index([roleId])
@@ -1732,6 +1733,15 @@ model CrmEnrollment {
   verifiedById     String?
   verifiedBy       User?              @relation("CrmEnrollmentVerifiedBy", fields: [verifiedById], references: [id], onDelete: SetNull)
   verifiedAt       DateTime?
+  /// A Finance user without approval rights (the Finance Executive) checked it
+  /// and submitted it: it waits for the Finance Manager in Approvals › Revenue.
+  /// Cleared when it leaves their hands: the BDE changes it, it's sent back or
+  /// marked money not received, or the manager returns it.
+  checkedById      String?
+  checkedBy        User?              @relation("CrmEnrollmentCheckedBy", fields: [checkedById], references: [id], onDelete: SetNull)
+  checkedAt        DateTime?
+  /// The Finance Manager's reason for returning it to the executive unapproved.
+  returnNote       String?
   createdAt        DateTime           @default(now())
   updatedAt        DateTime           @updatedAt
 

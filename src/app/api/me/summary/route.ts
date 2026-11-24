@@ -71,7 +71,11 @@ export async function GET() {
 
   const [pendingApprovals, newLeads, unreadCrm, recent] = await Promise.all([
     perms?.canApprove
-      ? prisma.pendingApproval.count({ where: { status: "pending" } })
+      ? Promise.all([
+          prisma.pendingApproval.count({ where: { status: "pending" } }),
+          // Enrollments Finance has checked and submitted wait on the approver too.
+          prisma.crmEnrollment.count({ where: { status: "pending", checkedAt: { not: null } } }),
+        ]).then(([a, b]) => a + b)
       : prisma.pendingApproval.count({ where: { submittedById: userId, status: "pending" } }),
     prisma.crmNotification.count({ where: { userId, readAt: null, kind: "lead_assigned" } }),
     prisma.crmNotification.count({ where: { userId, readAt: null } }),
