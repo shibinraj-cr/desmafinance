@@ -47,6 +47,9 @@ export const GET = withApiHandler(async (_req: Request, { params }: Ctx) => {
     canAddNote: canAddNote(access, lead, userId),
     // Whoever may reverse an enrollment may also date one in an earlier month (as on the web).
     canBackdate: access.canUnenroll,
+    // The web lead page's "Assign / reassign" control, so the app can offer it
+    // too (POST /api/crm/leads/[id]/assign checks the same flag).
+    canAssign: access.canAssign,
     enrollment: enrollment
       ? {
           status: enrollment.status,
