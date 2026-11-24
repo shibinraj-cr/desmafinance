@@ -48,6 +48,9 @@ export function TeamLeadReportView({ team, isToday }: { team: TeamLeadReport; is
         cutoffLabel={team.cutoff ? istTime(team.cutoff) : null}
         submitted={`${submitted} / ${team.rows.length}`}
       />
+      {team.rows.some((r) => r.olderRule) && (
+        <p className="text-caption font-semibold text-on-surface-variant">Leads assigned before the daily lead report went live are judged by the older rule: any call, note, WhatsApp or stage change by the cutoff counts as contacted.</p>
+      )}
 
       <Section title="By BDE">
         <p className="-mt-sm mb-sm text-caption text-on-surface-variant">Click a name for their sources and lead list.</p>
