@@ -152,6 +152,21 @@ beforeEach(() => {
   ]);
 });
 
+describe("a plan that follows a Partner Commissions invoice", () => {
+  it("is refused: the payment is recorded on the invoice", async () => {
+    getPerms.mockResolvedValue({ perms: perms({ canApprove: true, needsApproval: false }), userId: "u1" });
+    const inst = pendingInstallment();
+    instFindUnique.mockResolvedValue({ ...inst, plan: { ...inst.plan, commissionInvoiceId: "pcinv1" } });
+
+    const res = await submitPost(req() as never, params);
+
+    expect(res.status).toBe(409);
+    expect(await res.json()).toEqual({ error: "commission_plan" });
+    expect($transaction).not.toHaveBeenCalled();
+    expect(applyMock).not.toHaveBeenCalled();
+  });
+});
+
 describe("canApprove path — direct ledger write", () => {
   it("creates the Transaction and links the installment inside ONE transaction", async () => {
     getPerms.mockResolvedValue({

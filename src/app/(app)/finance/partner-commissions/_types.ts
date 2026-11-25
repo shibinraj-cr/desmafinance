@@ -61,6 +61,8 @@ export type InvoiceDTO = {
   source: string;
   sentAt: string | null;
   cancelledAt: string | null;
+  /** The collection plan expecting this invoice's money (made when it's marked sent). */
+  collectionPlanId: string | null;
   createdAt: string;
   createdBy: string | null;
   lines: InvoiceLineDTO[];

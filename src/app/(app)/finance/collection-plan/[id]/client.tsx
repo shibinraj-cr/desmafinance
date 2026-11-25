@@ -54,6 +54,8 @@ type Plan = {
   status: "active" | "closed" | "cancelled";
   createdByUsername: string | null;
   createdAt: string;
+  /** Set when the plan follows a Partner Commissions invoice: read-only here. */
+  commissionInvoice: { number: string; href: string } | null;
   installments: Installment[];
 };
 
@@ -113,6 +115,8 @@ export function PlanDetailClient({
   const [error, setError] = useState<string | null>(null);
   /** ID of the installment whose Record payment dialog is open. */
   const [recordFor, setRecordFor] = useState<string | null>(null);
+  /** Follows a Partner Commissions invoice: paid there, so nothing to change here. */
+  const pc = plan.commissionInvoice;
 
   const totals = useMemo(() => {
     const t = { total: 0, received: 0, submitted: 0, pending: 0 };
@@ -164,7 +168,7 @@ export function PlanDetailClient({
       {/* Plan metadata card */}
       <div className="bg-surface-container-lowest border border-outline-variant rounded-xl p-lg">
         <div className="grid grid-cols-2 md:grid-cols-4 gap-md text-body-md">
-          <Meta label="Candidate">
+          <Meta label={pc ? "Partner" : "Candidate"}>
             <Link href={`/finance/parties/${plan.partyId}`} className="text-primary hover:underline">
               {plan.partyName}
             </Link>
@@ -190,6 +194,17 @@ export function PlanDetailClient({
         ) : null}
       </div>
 
+      {pc ? (
+        <div className="rounded-xl border border-primary/30 bg-primary/5 px-md py-sm text-body-md">
+          This plan follows Partner Commissions invoice{" "}
+          <Link href={pc.href} className="text-primary font-semibold hover:underline">
+            {pc.number}
+          </Link>
+          . Record the partner&rsquo;s payment on the invoice; when it is approved, the payment shows here as received at its
+          INR value. The amount still due is an estimate in rupees from the partner&rsquo;s recent payments.
+        </div>
+      ) : null}
+
       {/* Totals */}
       <section className="grid grid-cols-2 md:grid-cols-4 gap-gutter">
         <Tile label="Total expected" value={totals.total} />
@@ -208,17 +223,23 @@ export function PlanDetailClient({
           <div>
             <h3 className="text-h3 font-bold">Installments</h3>
             <p className="text-caption text-on-surface-variant">
-              When the candidate pays, use <b>Record payment</b> with the date the money landed and the amount received.
+              {pc ? (
+                <>Updated from the invoice. Nothing to record here.</>
+              ) : (
+                <>When the candidate pays, use <b>Record payment</b> with the date the money landed and the amount received.</>
+              )}
             </p>
           </div>
-          <button
-            type="button"
-            onClick={() => setAdding(true)}
-            className="px-md py-sm bg-primary text-on-primary rounded-md text-body-md font-semibold hover:opacity-90"
-            disabled={plan.status !== "active"}
-          >
-            + Add installment
-          </button>
+          {pc ? null : (
+            <button
+              type="button"
+              onClick={() => setAdding(true)}
+              className="px-md py-sm bg-primary text-on-primary rounded-md text-body-md font-semibold hover:opacity-90"
+              disabled={plan.status !== "active"}
+            >
+              + Add installment
+            </button>
+          )}
         </div>
         <div className="overflow-auto">
           <table className="w-full text-body-md">
@@ -280,7 +301,11 @@ export function PlanDetailClient({
                       ) : null}
                     </td>
                     <td className="px-md py-sm whitespace-nowrap space-x-md">
-                      {inst.status === "pending" ? (
+                      {pc && inst.status === "pending" ? (
+                        <Link href={pc.href} className="text-green-700 font-semibold hover:underline">
+                          Record on invoice
+                        </Link>
+                      ) : inst.status === "pending" ? (
                         <>
                           <button
                             type="button"
@@ -314,7 +339,7 @@ export function PlanDetailClient({
                         </Link>
                       ) : inst.transaction ? (
                         <>
-                          {inst.transaction.canInvoice ? (
+                          {!pc && inst.transaction.canInvoice ? (
                             <Link href={issueHref(inst.transaction.id)} className="text-green-700 font-semibold hover:underline">
                               Issue invoice
                             </Link>

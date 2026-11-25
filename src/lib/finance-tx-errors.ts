@@ -46,6 +46,8 @@ const MESSAGES: Record<string, string> = {
   not_latest: "Only the plan's most recent payment can be undone. Undo the later ones first.",
   plan_changed: "The plan has changed since this payment was recorded (an instalment was added, edited or removed), so it can't be undone automatically.",
   link_unavailable: "That entry can't be linked: it's deleted, for another candidate, not revenue, or already linked to an instalment.",
+  commission_plan:
+    "This plan follows a Partner Commissions invoice. Record the partner's payment on the invoice; the plan updates when it is approved.",
 };
 
 export function txErrorMessage(code: string | null | undefined, fallback = "Failed to save."): string {

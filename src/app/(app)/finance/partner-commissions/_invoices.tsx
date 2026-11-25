@@ -362,6 +362,15 @@ function InvoiceEditor({ ctx, inv }: { ctx: PcCtx; inv: InvoiceDTO }) {
       {inv.status === "awaiting" ? <Callout tone="gold" icon="hourglass_top">A payment is recorded and waiting for a Finance Manager. The invoice is locked until it&apos;s approved or sent back.</Callout> : null}
       {inv.status === "partpaid" ? <Callout icon="info">Part-paid: {AUD(openAud(total, inv.receipts))} still open. Record the next payment when it arrives.</Callout> : null}
       {inv.status === "paid" ? <Callout tone="ok" icon="check_circle">Paid. The commission is posted to Revenue (details below). The invoice is locked.</Callout> : null}
+      {inv.collectionPlanId && ["sent", "awaiting", "partpaid"].includes(inv.status) ? (
+        <p className="text-body-md text-on-surface-variant">
+          Expected in{" "}
+          <a href={`/finance/collection-plan/${inv.collectionPlanId}`} className="text-primary font-semibold hover:underline">
+            Collection Plans
+          </a>{" "}
+          (in rupees, estimated). It moves to received when the payment is approved.
+        </p>
+      ) : null}
       {inv.status === "cancelled" ? <Callout tone="bad" icon="block">Cancelled {fmtDate(inv.cancelledAt?.slice(0, 10))}. The number stays used; its enrollments went back to the queue.</Callout> : null}
       {err ? <Callout tone="bad" icon="error">{err}</Callout> : null}
 

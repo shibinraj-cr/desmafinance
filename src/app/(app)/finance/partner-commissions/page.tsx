@@ -5,6 +5,7 @@ import { todayIst } from "@/lib/lead-pulse-dates";
 import { PC_FINANCE_PAGE, PROGRAM_CODES } from "@/lib/partner-commissions/constants";
 import { nextRunDate, parseVolumeOpening, parseVolumeTiers } from "@/lib/partner-commissions/logic";
 import { ENROLLMENT_INCLUDE, getAccess, getSettings, isoDate, serializeEnrollment, suggestNumber } from "@/lib/partner-commissions/server";
+import { syncOpenCommissionPlans } from "@/lib/partner-commissions/plan-sync";
 import { PartnerCommissionsClient, type PcPageData } from "./client";
 
 export const dynamic = "force-dynamic";
@@ -18,6 +19,8 @@ export default async function PartnerCommissionsPage({ searchParams }: { searchP
 
   const today = todayIst();
   const month = today.slice(0, 7);
+  // Invoices sent before collection plans followed them get theirs now.
+  await syncOpenCommissionPlans();
   const [settings, partners, programs, enrollments, invoices, run, lastRun, suggestedNumber] = await Promise.all([
     getSettings(),
     prisma.commissionPartner.findMany({ orderBy: { name: "asc" } }),
@@ -29,6 +32,7 @@ export default async function PartnerCommissionsPage({ searchParams }: { searchP
         lines: { orderBy: { position: "asc" } },
         partner: { select: { layout: true } },
         createdBy: { select: { username: true } },
+        collectionPlan: { select: { id: true } },
         receipts: {
           orderBy: { createdAt: "asc" },
           include: { recordedBy: { select: { username: true } }, reviewedBy: { select: { username: true } } },
@@ -116,6 +120,7 @@ export default async function PartnerCommissionsPage({ searchParams }: { searchP
       source: i.source,
       sentAt: i.sentAt?.toISOString() ?? null,
       cancelledAt: i.cancelledAt?.toISOString() ?? null,
+      collectionPlanId: i.collectionPlan?.id ?? null,
       createdAt: i.createdAt.toISOString(),
       createdBy: i.createdBy?.username ?? null,
       lines: i.lines.map((l) => ({

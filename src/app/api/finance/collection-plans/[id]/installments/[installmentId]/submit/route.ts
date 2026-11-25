@@ -95,7 +95,6 @@ export async function POST(
   if (!canSeePage(perms, PAGE)) {
     return NextResponse.json({ error: "forbidden" }, { status: 403 });
   }
-
   const parsedBody = BodySchema.safeParse(await req.json().catch(() => null));
   if (!parsedBody.success) {
     return NextResponse.json({ error: "validation_failed" }, { status: 400 });
@@ -108,6 +107,11 @@ export async function POST(
   });
   if (!installment || installment.planId !== params.id) {
     return NextResponse.json({ error: "not_found" }, { status: 404 });
+  }
+  // A plan that follows a Partner Commissions invoice is paid on the invoice,
+  // which posts the ledger entry: recording it here too would book it twice.
+  if (installment.plan.commissionInvoiceId) {
+    return NextResponse.json({ error: "commission_plan" }, { status: 409 });
   }
   if (installment.status !== "pending") {
     return NextResponse.json(
