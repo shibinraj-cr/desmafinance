@@ -58,8 +58,12 @@ export function ProjectsClient({
   const [status, setStatus] = useState<string[]>([]);
   const [serviceIds, setServiceIds] = useState<string[]>([]);
   const [assignee, setAssignee] = useState<string[]>([]);
+  const [q, setQ] = useState("");
 
   const filtered = useMemo(() => {
+    // Every word typed must appear somewhere in the name, so "jane doe",
+    // "doe jane" and "  JANE " all find "Jane Doe".
+    const words = q.trim().toLowerCase().split(/\s+/).filter(Boolean);
     const serviceNames = serviceIds
       .map((id) => services.find((s) => s.id === id)?.name)
       .filter((n): n is string => !!n);
@@ -68,6 +72,10 @@ export function ProjectsClient({
     const ownerIds = assignee.map((a) => (a === "me" ? currentUserId : a)).filter((a) => a !== "unassigned");
     const wantsUnassigned = assignee.includes("unassigned");
     return projects.filter((p) => {
+      if (words.length) {
+        const name = p.candidateName.toLowerCase();
+        if (!words.every((w) => name.includes(w))) return false;
+      }
       if (status.length && !status.includes(p.status)) return false;
       if (serviceNames.length && !serviceNames.includes(p.serviceName)) return false;
       if (assignee.length) {
@@ -77,13 +85,30 @@ export function ProjectsClient({
       }
       return true;
     });
-  }, [projects, status, serviceIds, assignee, services, currentUserId]);
+  }, [projects, q, status, serviceIds, assignee, services, currentUserId]);
 
   const unassignedCount = projects.filter((p) => !p.assigneeId).length;
 
   return (
     <div className="space-y-md">
       <div className="flex flex-wrap items-center gap-sm">
+        <div className="relative min-w-[220px] flex-1 max-w-xs">
+          <span
+            className="material-symbols-outlined absolute left-sm top-1/2 -translate-y-1/2 text-on-surface-variant pointer-events-none"
+            style={{ fontSize: 18 }}
+            aria-hidden="true"
+          >
+            search
+          </span>
+          <input
+            type="search"
+            className={selCls + " w-full pl-xl"}
+            placeholder="Search candidate name"
+            value={q}
+            onChange={(e) => setQ(e.target.value)}
+            aria-label="Search by candidate name"
+          />
+        </div>
         <MultiSelect
           placeholder="All statuses"
           options={[
