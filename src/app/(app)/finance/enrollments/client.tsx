@@ -52,7 +52,15 @@ export function EnrollmentsClient({ data }: { data: EnrollmentsPageData }) {
           <Callout icon="info">
             Each enrollment counts from the day the money landed, and the BDE&apos;s incentive counts it once you verify it (by the 7th of the next
             month). Check the payment against the bank, correct anything that&apos;s wrong (the BDE is told), then approve: the first payment goes
-            into the ledger and the balance plan becomes the collection plan. Enrollments Finance has checked and submitted wait for you in{" "}
+            into the ledger and the balance plan becomes the collection plan. Approving doesn&apos;t issue the invoice: the payment then waits in{" "}
+            {data.canInvoice ? (
+              <Link href="/finance/invoices?tab=to-invoice" className="font-semibold text-accent hover:underline">
+                Invoices › To invoice
+              </Link>
+            ) : (
+              "Invoices › To invoice"
+            )}
+            , where it&apos;s issued. Enrollments Finance has checked and submitted wait for you in{" "}
             <Link href="/finance/approvals/pending?type=Revenue" className="font-semibold text-accent hover:underline">
               Approvals › Revenue
             </Link>
@@ -62,7 +70,7 @@ export function EnrollmentsClient({ data }: { data: EnrollmentsPageData }) {
           <Callout icon="info">
             Each enrollment counts from the day the money landed, and the BDE&apos;s incentive counts it once it&apos;s verified (by the 7th of the
             next month). Check the payment against the bank, correct anything that&apos;s wrong (the BDE is told), then <b>Submit for approval</b>: the
-            Finance Manager approves it into the ledger and issues the invoice from Approvals › Revenue.
+            Finance Manager approves it into the ledger from Approvals › Revenue, then issues its invoice from Invoices › To invoice.
           </Callout>
         ))}
       {data.tab === "submitted" && (

@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useRef, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
+import Link from "next/link";
 import { inrFull } from "@/lib/format";
 import { HISTORICAL_LABEL, isHistoricalDate } from "@/lib/finance-historical";
 import { txErrorMessage } from "@/lib/finance-tx-errors";
@@ -27,7 +28,8 @@ function fmtDDMMYY(s: string): string {
 export type PendingRow = {
   id: string;
   /** "enrollment": a new enrollment's first payment, checked and submitted by
-   *  Finance. Approved in the enrollment panel (with its invoice), not by tick. */
+   *  Finance. Approved in the enrollment panel, not by tick; its invoice is
+   *  then issued from Invoices › To invoice. */
   kind: "create" | "update" | "delete" | "enrollment";
   enrollmentId?: string;
   submittedBy: string;
@@ -104,6 +106,8 @@ export function PendingList({
   const [serverError, setServerError] = useState<string | null>(null);
   const [signInNeeded, setSignInNeeded] = useState(false);
   const [toast, setToast] = useState<string | null>(null);
+  /** An enrollment just approved: its payment, to issue the invoice from To invoice. */
+  const [toastIssue, setToastIssue] = useState<string | null>(null);
   const [busy, startTransition] = useTransition();
   const justHydrated = useRef(true);
 
@@ -199,6 +203,7 @@ export function PendingList({
   async function process() {
     setServerError(null);
     setToast(null);
+    setToastIssue(null);
     const items = rows
       .map((r) => ({ row: r, s: state[r.id] }))
       .filter(({ s }) => s && s.decision !== null)
@@ -287,8 +292,13 @@ export function PendingList({
       </div>
 
       {toast && (
-        <div className="rounded-lg bg-green-50 text-green-800 border border-green-200 px-md py-sm text-body-md">
-          {toast}
+        <div className="rounded-lg bg-green-50 text-green-800 border border-green-200 px-md py-sm text-body-md flex flex-wrap items-center gap-x-md gap-y-xs">
+          <span>{toast}</span>
+          {toastIssue && (
+            <Link href={`/finance/invoices?issue=${encodeURIComponent(toastIssue)}`} className="font-semibold underline whitespace-nowrap" data-issue-link>
+              Issue the invoice
+            </Link>
+          )}
         </div>
       )}
       {serverError && (
@@ -388,7 +398,7 @@ export function PendingList({
                           className="inline-flex items-center gap-xs h-9 px-md rounded-lg bg-primary text-on-primary font-semibold hover:bg-primary-container transition whitespace-nowrap"
                         >
                           <span className="material-symbols-outlined text-[18px]">fact_check</span>
-                          Review, approve &amp; invoice
+                          Review &amp; approve
                         </button>
                       ) : (
                         <span className="text-on-surface-variant">Open it in Verify enrollments.</span>
@@ -470,10 +480,11 @@ export function PendingList({
             setOpenEnrollment(null);
             if (stale) router.refresh();
           }}
-          onDone={(msg) => {
+          onDone={(msg, issueId) => {
             setOpenEnrollment(null);
             setServerError(null);
             setToast(msg);
+            setToastIssue(issueId ?? null);
             router.refresh();
           }}
         />
