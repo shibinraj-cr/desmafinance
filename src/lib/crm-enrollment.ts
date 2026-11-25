@@ -2,7 +2,8 @@
  * An enrollment's life after the BDE submits the Enroll sheet
  * (src/lib/crm-enroll.ts creates it; the rules are in crm-enroll-confirm.ts).
  *
- *   pending ──Finance approves──▶ verified   (ledger row + collection plan; invoice)
+ *   pending ──Finance approves──▶ verified   (ledger row + collection plan; the
+ *      │                                       invoice is issued later, from Invoices › To invoice)
  *      │  (a Finance user who can't approve checks it and submits it first: it
  *      │   stays pending, `checkedAt` set, and waits in Approvals › Revenue)
  *      │  ▲
@@ -733,7 +734,8 @@ export async function approveEnrollment(a: EnrollmentAccess, id: string, patch: 
 /**
  * A Finance user who can't approve (the Finance Executive) has checked the
  * enrollment and submits it: it stays pending, and waits for the Finance
- * Manager in Approvals › Revenue, who approves it and issues the invoice. Any
+ * Manager in Approvals › Revenue, who approves it (and then issues its invoice
+ * from Invoices › To invoice). Any
  * last edits in `patch` are saved (and logged) first. Refused while it
  * couldn't be approved anyway, so the manager is never handed an incomplete one.
  */

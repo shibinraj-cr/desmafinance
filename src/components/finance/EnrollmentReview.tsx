@@ -4,10 +4,12 @@
  * Finance's review panel for one enrollment, shared by Verify enrollments and
  * Approvals › Revenue. Anyone in Finance corrects and saves; whoever can't
  * approve (the Finance Executive) submits it for approval; an approver (the
- * Finance Manager) approves it into the ledger and issues the invoice, or
- * returns a submitted one to the executive.
+ * Finance Manager) approves it into the ledger, or returns a submitted one to
+ * the executive. Approving never issues the invoice: the payment then waits
+ * in Invoices › To invoice, where the manager sees its number and issues it.
  */
 import { useEffect, useMemo, useState } from "react";
+import Link from "next/link";
 import type { EnrollmentDTO } from "@/lib/crm-enrollment";
 import {
   ENROLL_BANKS,
@@ -30,18 +32,19 @@ import {
 import { formatEnrollDate } from "@/lib/crm-enroll-date";
 import { PAYMENT_MODES } from "@/lib/catalog";
 import { GST_STATES } from "@/lib/invoices/gst-states";
-import { defaultDescription, isIndia } from "@/lib/invoices/core";
+import { isIndia } from "@/lib/invoices/core";
 import { Callout, Drawer, Field, Icon, api, btnCls, inputCls, primaryBtnCls } from "@/components/partner-commissions/ui";
 
 /** What the panel needs beyond the enrollment (src/lib/enrollment-review-context.ts). */
 export type EnrollmentReviewContext = {
   today: string;
   canApprove: boolean;
+  /** Can open Invoices (and so issue the invoice from To invoice). */
+  canInvoice: boolean;
   categories: Array<{ name: string; subItems: string[] }>;
-  /** Per bank: why approving can't issue the invoice too ("" when it can). */
+  /** Per bank: why its payments can't be invoiced in DesGro yet ("" when they can). */
   invoiceBlock: Record<string, string>;
   invoiceStartsOn: string | null;
-  bankEntity: Record<string, string>;
 };
 
 export const enrollInr = (n: number) => `₹${n.toLocaleString("en-IN", { maximumFractionDigits: 2 })}`;
@@ -64,7 +67,8 @@ export function EnrollmentReview({
   data: EnrollmentReviewContext;
   /** `stale`: an action failed, so the list behind may be out of date and should reload. */
   onClose: (stale: boolean) => void;
-  onDone: (msg: string) => void;
+  /** `issueId`: the approved payment's ledger entry, to issue its invoice from To invoice. */
+  onDone: (msg: string, issueId?: string | null) => void;
 }) {
   const editable = row.status === "pending" || row.status === "sent_back" || row.status === "not_received";
   /** Checked by the executive and waiting for the Finance Manager. */
@@ -90,23 +94,16 @@ export function EnrollmentReview({
   const [noteFor, setNoteFor] = useState<null | "back" | "none" | "return">(null);
   const [note, setNote] = useState("");
 
-  const entity = f.paymentMode ? data.bankEntity[f.paymentMode] ?? null : null;
   const banked = !!f.paymentMode && (ENROLL_BANKS as readonly string[]).includes(f.paymentMode);
   const beforeInApp = !!f.paidOn && !!data.invoiceStartsOn && f.paidOn < data.invoiceStartsOn;
-  const invoiceWhyNot = !banked
+  /** Never invoiced in DesGro: not a bank payment, or paid before in-app invoicing started. */
+  const notInvoiced = !banked
     ? "Not invoiced: only payments into Axis, HDFC or Wio get an invoice. It's listed for the CA."
     : beforeInApp
       ? "Paid before in-app invoicing started: the invoice is raised outside DesGro."
-      : data.invoiceBlock[f.paymentMode!] || null;
-  const [issue, setIssue] = useState(!invoiceWhyNot);
-  const [invoiceDate, setInvoiceDate] = useState(init.paidOn ?? data.today);
-  // The invoice can't be dated before the payment: follow a corrected payment date.
-  useEffect(() => {
-    if (f.paidOn && invoiceDate < f.paidOn) setInvoiceDate(f.paidOn);
-  }, [f.paidOn, invoiceDate]);
-  const [description, setDescription] = useState(defaultDescription(init.subItem));
-  const [currency, setCurrency] = useState(entity === "DLLC" ? "AED" : "");
-  const [foreign, setForeign] = useState("");
+      : null;
+  /** Invoiced from To invoice, but not yet: Invoice settings aren't finished for its bank. */
+  const invoiceBlocked = notInvoiced ? null : data.invoiceBlock[f.paymentMode!] || null;
 
   useEffect(() => {
     let live = true;
@@ -150,27 +147,10 @@ export function EnrollmentReview({
         await api(`/api/finance/enrollments/${row.id}/return`, { note, expectedUpdatedAt: row.updatedAt });
         onDone("Returned to Finance to check again.");
       } else if (kind === "approve") {
-        const wio = entity === "DLLC";
-        const res = await api<{ invoice: { number: string } | null; invoiceError: string | null }>(`/api/finance/enrollments/${row.id}/approve`, {
-          patch,
-          expectedUpdatedAt: row.updatedAt,
-          invoice:
-            issue && !invoiceWhyNot
-              ? {
-                  kind: wio ? "DOM" : f.expDom,
-                  invoiceDate,
-                  description,
-                  foreign: (wio || f.expDom === "EXP") && Number(foreign) > 0 ? { currency: (currency || "").toUpperCase(), amount: Number(foreign) } : null,
-                }
-              : null,
-        });
-        onDone(
-          res.invoice
-            ? `Approved and posted. Invoice ${res.invoice.number} issued.`
-            : res.invoiceError
-              ? `Approved and posted. No invoice: ${res.invoiceError} Issue it from Invoices › To invoice.`
-              : "Approved and posted to the ledger.",
-        );
+        const res = await api<{ transactionId: string }>(`/api/finance/enrollments/${row.id}/approve`, { patch, expectedUpdatedAt: row.updatedAt });
+        if (notInvoiced) onDone(`Approved and posted to the ledger. ${notInvoiced}`);
+        else if (invoiceBlocked) onDone(`Approved and posted. Its invoice can't be issued yet: ${invoiceBlocked}`);
+        else onDone("Approved and posted. Issue its invoice from Invoices › To invoice.", data.canInvoice ? res.transactionId : null);
       } else {
         await api(`/api/finance/enrollments/${row.id}/${kind === "back" ? "send-back" : "not-received"}`, { note });
         onDone(kind === "back" ? "Sent back to the BDE." : "Marked money not received. The sales head was asked to decide.");
@@ -202,7 +182,9 @@ export function EnrollmentReview({
           <Callout tone="ok" icon="fact_check">
             {data.canApprove ? "Checked" : "Submitted for approval"}
             {row.checkedByName ? ` by ${row.checkedByName}` : ""} on {date(row.checkedAt)}.{" "}
-            {data.canApprove ? "Approve it to post the payment and issue the invoice." : "It's waiting for the Finance Manager in Approvals › Revenue."}
+            {data.canApprove
+              ? "Approve it to post the payment; then issue its invoice from Invoices › To invoice."
+              : "It's waiting for the Finance Manager in Approvals › Revenue."}
           </Callout>
         )}
         {row.returnNote && !checked && row.status !== "verified" && (
@@ -325,45 +307,34 @@ export function EnrollmentReview({
 
         {editable && data.canApprove && (
           <Section title="Invoice">
-            {invoiceWhyNot ? (
-              <p className="text-body-md text-on-surface-variant">{invoiceWhyNot}</p>
-            ) : (
-              <>
-                <label className="flex items-center gap-2 text-body-md">
-                  <input type="checkbox" checked={issue} onChange={(e) => setIssue(e.target.checked)} />
-                  Issue the invoice when I approve
-                </label>
-                {issue && (
-                  <>
-                    <div className="grid grid-cols-2 gap-sm">
-                      <Field label="Invoice date">
-                        <input className={inputCls} type="date" min={f.paidOn ?? undefined} max={data.today} value={invoiceDate} onChange={(e) => setInvoiceDate(e.target.value)} />
-                      </Field>
-                      <Field label="Line">
-                        <input className={inputCls} value={description} onChange={(e) => setDescription(e.target.value)} />
-                      </Field>
-                    </div>
-                    {(entity === "DLLC" || f.expDom === "EXP") && (
-                      <div className="grid grid-cols-2 gap-sm">
-                        <Field label="Currency" hint={entity === "DLLC" ? "Wio invoices are in AED." : "Optional: leave empty for rupees."}>
-                          <input className={inputCls} value={currency} disabled={entity === "DLLC"} maxLength={3} onChange={(e) => setCurrency(e.target.value)} />
-                        </Field>
-                        <Field label="Amount in that currency">
-                          <input className={inputCls} type="number" value={foreign} onChange={(e) => setForeign(e.target.value)} />
-                        </Field>
-                      </div>
-                    )}
-                    {!f.billingAddress && <p className="text-caption text-error">Add the address above: the invoice needs it.</p>}
-                  </>
-                )}
-              </>
-            )}
+            <p className="text-body-md text-on-surface-variant" data-invoice-note>
+              {notInvoiced ??
+                `Approving doesn't issue the invoice. The payment then waits in Invoices › To invoice, where you see its invoice number and issue it.${
+                  invoiceBlocked ? ` It can't be issued yet: ${invoiceBlocked}` : ""
+                }`}
+            </p>
+            {!notInvoiced && !f.billingAddress && <p className="text-caption text-error">Add the address above: the invoice needs it.</p>}
           </Section>
         )}
 
         {row.status === "verified" && (
           <Callout tone="ok" icon="task_alt">
-            Verified{row.verifiedByName ? ` by ${row.verifiedByName}` : ""} on {date(row.verifiedAt)}. {row.invoice ? `Invoice ${row.invoice.number}.` : "No invoice yet."}
+            Verified{row.verifiedByName ? ` by ${row.verifiedByName}` : ""} on {date(row.verifiedAt)}.{" "}
+            {row.invoice ? (
+              `Invoice ${row.invoice.number}.`
+            ) : notInvoiced ? (
+              notInvoiced
+            ) : data.canInvoice && row.transactionId ? (
+              <>
+                No invoice yet:{" "}
+                <Link href={`/finance/invoices?issue=${encodeURIComponent(row.transactionId)}`} className="font-semibold text-accent hover:underline">
+                  issue it in To invoice
+                </Link>
+                .
+              </>
+            ) : (
+              "No invoice yet: it's waiting in Invoices › To invoice."
+            )}
           </Callout>
         )}
 
