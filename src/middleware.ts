@@ -35,6 +35,9 @@ export async function middleware(req: NextRequest) {
 export const config = {
   matcher: [
     // Run on every path except: auth/health endpoints, the login page,
+    // the Team Performance machine endpoints (api/performance/whatsapp/ingest
+    // and api/performance/holidays — they accept a TEAM_PERF_INGEST_TOKEN
+    // bearer or fall back to the session + Admin/HR Manager check themselves),
     // external integration webhooks (api/integrations, and the two Wabis
     // webhooks under api/crm/integrations/wabis — inbound replies + delivery
     // status — which authenticate with their own shared `wabis_inbound_secret`,
@@ -84,6 +87,6 @@ export const config = {
     // fold onto an existing one, and answers every outcome the same way),
     // Next.js internal asset routes, and any file with
     // an extension (/desfin.png, /favicon.ico, fonts).
-    "/((?!login|api/auth|api/health|api/whoami|api/integrations|api/crm/integrations/wabis/inbound|api/crm/integrations/wabis/delivery-status|api/crm/wa/webhook|api/crm/ig/webhook|api/crm/voxbay/webhook|psych/test|api/psych/test|privacy-policy|terms|careers|api/careers|offer|api/offer|partners|api/partners|api/hiring/calendar|api/wa-media|api/cron|share/|api/share/|sign/|api/sign/|verify/|api/verify/|r/|api/referral/|_next/static|_next/image|.*\\..*).*)",
+    "/((?!login|api/auth|api/health|api/whoami|api/performance/whatsapp/ingest|api/performance/holidays|api/integrations|api/crm/integrations/wabis/inbound|api/crm/integrations/wabis/delivery-status|api/crm/wa/webhook|api/crm/ig/webhook|api/crm/voxbay/webhook|psych/test|api/psych/test|privacy-policy|terms|careers|api/careers|offer|api/offer|partners|api/partners|api/hiring/calendar|api/wa-media|api/cron|share/|api/share/|sign/|api/sign/|verify/|api/verify/|r/|api/referral/|_next/static|_next/image|.*\\..*).*)",
   ],
 };

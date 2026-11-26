@@ -572,6 +572,22 @@ export const MODULES: AppModule[] = [
     ],
   },
   {
+    // Team Performance — staff scorecards across candidate support
+    // (after-hours WhatsApp) and sales (BDE). Admin + HR Manager only:
+    // every page and API re-checks canViewTeamPerformance().
+    id: "performance",
+    name: "Team Performance",
+    icon: "military_tech",
+    basePath: "/performance",
+    status: "active",
+    pages: [
+      { href: "/performance/overview", label: "Overview", icon: "dashboard", group: "DASHBOARD" },
+      { href: "/performance/candidate-support", label: "Candidate Support", icon: "support_agent", group: "CANDIDATE SUPPORT" },
+      { href: "/performance/unanswered", label: "Unanswered Queries", icon: "mark_chat_unread", group: "CANDIDATE SUPPORT" },
+      { href: "/performance/bde", label: "BDE Performance", icon: "person_search", group: "SALES" },
+    ],
+  },
+  {
     id: "me",
     name: "My Workspace",
     icon: "person",
