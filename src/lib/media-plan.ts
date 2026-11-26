@@ -65,6 +65,8 @@ export function serializeMediaItem(item: ItemWithTasks): MediaItemDto {
     id: item.id,
     title: item.title,
     format: item.format,
+    platform: item.platform,
+    category: item.category,
     status: item.status,
     publishDate: item.publishDate ? fromPrismaDate(item.publishDate) : null,
     publishTime: item.publishTime,

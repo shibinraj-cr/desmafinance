@@ -3,17 +3,21 @@
 import { useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import { useRouter } from "next/navigation";
 import {
-  MEDIA_FORMATS,
-  MEDIA_FORMAT_CODES,
+  MEDIA_CATEGORIES,
+  MEDIA_CATEGORY_CODES,
   MEDIA_ITEM_STATUSES,
+  MEDIA_PLATFORMS,
+  MEDIA_PLATFORM_CODES,
   MEDIA_STATUS_LABELS,
-  MEDIA_WEEKLY_TARGETS,
   MEDIA_THUMBNAIL_MAX_BYTES,
   MEDIA_THUMBNAIL_TYPES,
+  categoryLabel,
   isSafeHttpUrl,
   linkPlatform,
-  type MediaFormat,
+  platformMeta,
+  type MediaCategory,
   type MediaItemDto,
+  type MediaPlatform,
   type MediaItemStatus,
   type MediaTaskDto,
 } from "@/lib/media-plan-shared";
@@ -56,13 +60,34 @@ function shortDate(ds: string): string {
   return `${dt.getUTCDate()} ${MONTH_LABELS[dt.getUTCMonth()].slice(0, 3)}`;
 }
 
-function formatMeta(format: string): { label: string; pill: string; color: string } {
+/** Filter value for items nobody has filed under a category yet. */
+const UNCATEGORISED = "none";
+
+/**
+ * The same post on several platforms is one item per platform. In the
+ * all-platforms calendar those siblings collapse into one chip — same title,
+ * day, slot and category — so a day reads as posts, not as 4× duplicates.
+ */
+function postKey(it: MediaItemDto): string {
+  return [it.title.trim().toLowerCase(), it.publishDate ?? "", it.publishTime ?? "", it.category ?? ""].join("|");
+}
+
+function platformOrder(p: string): number {
+  const i = (MEDIA_PLATFORM_CODES as readonly string[]).indexOf(p);
+  return i < 0 ? 99 : i;
+}
+
+/** Small platform tag (YT / IG / FB / IN). */
+function PlatformPill({ platform, size = 8.5 }: { platform: string; size?: number }) {
+  const meta = platformMeta(platform);
   return (
-    MEDIA_FORMATS[format as MediaFormat] ?? {
-      label: format,
-      pill: format.toUpperCase(),
-      color: "#9a9078",
-    }
+    <span
+      className="shrink-0 rounded-[3px] px-[3px] font-extrabold tracking-wider leading-[1.35]"
+      style={{ backgroundColor: tint(meta.color, 0.2), color: meta.color, fontSize: size }}
+      title={meta.label}
+    >
+      {meta.pill}
+    </span>
   );
 }
 
@@ -144,7 +169,9 @@ function LinkOut({ href, size = 11 }: { href: string; size?: number }) {
 type Draft = {
   id: string | null;
   title: string;
-  format: MediaFormat;
+  /** The item's platform (edit), or every platform to create it on (new). */
+  platforms: MediaPlatform[];
+  category: MediaCategory | "";
   status: MediaItemStatus;
   publishDate: string;
   publishTime: string;
@@ -159,7 +186,8 @@ function draftFromItem(item: MediaItemDto): Draft {
   return {
     id: item.id,
     title: item.title,
-    format: (item.format as MediaFormat) ?? "reel",
+    platforms: [(item.platform as MediaPlatform) ?? "youtube"],
+    category: (item.category as MediaCategory | null) ?? "",
     status: (item.status as MediaItemStatus) ?? "idea",
     publishDate: item.publishDate ?? "",
     publishTime: item.publishTime ?? "",
@@ -198,7 +226,9 @@ export function MediaPlannerClient({
   const router = useRouter();
   const [items, setItems] = useState<MediaItemDto[]>(initialItems);
   const [view, setView] = useState<"calendar" | "board">("calendar");
-  const [formatFilter, setFormatFilter] = useState<string[]>([]);
+  // "" = every platform; otherwise one platform's own calendar.
+  const [platformFilter, setPlatformFilter] = useState<MediaPlatform | "">("");
+  const [categoryFilter, setCategoryFilter] = useState<string[]>([]);
   const [ownerFilter, setOwnerFilter] = useState<string>("");
   const [draft, setDraft] = useState<Draft | null>(null);
   const [newStep, setNewStep] = useState("");
@@ -245,11 +275,32 @@ export function MediaPlannerClient({
     );
   }
 
+  const matchesCategory = (it: MediaItemDto) =>
+    categoryFilter.length === 0 || categoryFilter.includes(it.category ?? UNCATEGORISED);
   const matchesFilters = (it: MediaItemDto) =>
-    (formatFilter.length === 0 || formatFilter.includes(it.format)) &&
+    (!platformFilter || it.platform === platformFilter) &&
+    matchesCategory(it) &&
     (!ownerFilter || it.ownerId === ownerFilter);
 
-  const visibleItems = useMemo(() => items.filter(matchesFilters), [items, formatFilter, ownerFilter]); // eslint-disable-line react-hooks/exhaustive-deps
+  const visibleItems = useMemo(() => items.filter(matchesFilters), [items, platformFilter, categoryFilter, ownerFilter]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Filter-chip counts for the month on screen: platforms count under the
+  // category filter, categories under the platform filter.
+  const monthPrefixForCounts = `${year}-${String(month).padStart(2, "0")}`;
+  const filterCounts = useMemo(() => {
+    const platforms = new Map<string, number>();
+    const categories = new Map<string, number>();
+    for (const it of items) {
+      if (!it.publishDate?.startsWith(monthPrefixForCounts)) continue;
+      if (ownerFilter && it.ownerId !== ownerFilter) continue;
+      if (matchesCategory(it)) platforms.set(it.platform, (platforms.get(it.platform) ?? 0) + 1);
+      if (!platformFilter || it.platform === platformFilter) {
+        const c = it.category ?? UNCATEGORISED;
+        categories.set(c, (categories.get(c) ?? 0) + 1);
+      }
+    }
+    return { platforms, categories };
+  }, [items, monthPrefixForCounts, ownerFilter, platformFilter, categoryFilter]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // ---- Calendar grid (leading/trailing days of adjacent months shown dim) ----
   const cells = useMemo(() => {
@@ -272,20 +323,33 @@ export function MediaPlannerClient({
     return out;
   }, [year, month]);
 
+  // Calendar entries per day: one per post (its platform items grouped) when
+  // showing every platform, one per item when a single platform is picked.
   const itemsByDate = useMemo(() => {
-    const m = new Map<string, MediaItemDto[]>();
+    const m = new Map<string, MediaItemDto[][]>();
+    const byKey = new Map<string, MediaItemDto[]>();
     for (const it of visibleItems) {
       if (!it.publishDate) continue;
-      const arr = m.get(it.publishDate) ?? [];
-      arr.push(it);
-      m.set(it.publishDate, arr);
+      const key = platformFilter ? it.id : postKey(it);
+      let group = byKey.get(key);
+      if (!group) {
+        group = [];
+        byKey.set(key, group);
+        const arr = m.get(it.publishDate) ?? [];
+        arr.push(group);
+        m.set(it.publishDate, arr);
+      }
+      group.push(it);
+    }
+    for (const group of Array.from(byKey.values())) {
+      group.sort((a, b) => platformOrder(a.platform) - platformOrder(b.platform));
     }
     // Within a day, in posting order; untimed items last.
     for (const arr of Array.from(m.values())) {
-      arr.sort((a, b) => (a.publishTime ?? "99:99").localeCompare(b.publishTime ?? "99:99"));
+      arr.sort((a, b) => (a[0].publishTime ?? "99:99").localeCompare(b[0].publishTime ?? "99:99"));
     }
     return m;
-  }, [visibleItems]);
+  }, [visibleItems, platformFilter]);
 
   // Open production steps on unshipped items — the execution list.
   const openSteps = useMemo(() => {
@@ -335,17 +399,22 @@ export function MediaPlannerClient({
     return { planned: planned.length, published: published.length, inProduction: inProduction.length, dueThisWeek, overdue };
   }, [items, monthPrefix, todayStr, weekStart, weekEnd]);
 
-  const cadence = useMemo(
-    () =>
-      MEDIA_FORMAT_CODES.map((code) => {
-        const count = items.filter(
-          (i) => i.format === code && i.publishDate && i.publishDate >= weekStart && i.publishDate <= weekEnd,
-        ).length;
-        const target = MEDIA_WEEKLY_TARGETS[code];
-        return { code, count, target, pct: Math.min(100, Math.round((count / Math.max(1, target)) * 100)) };
-      }),
-    [items, weekStart, weekEnd],
-  );
+  // Posts going out this week, per platform and per category.
+  const cadence = useMemo(() => {
+    const week = items.filter((i) => i.publishDate && i.publishDate >= weekStart && i.publishDate <= weekEnd);
+    const platforms = MEDIA_PLATFORM_CODES.map((code) => ({
+      code,
+      count: week.filter((i) => i.platform === code).length,
+    }));
+    const categories = [...MEDIA_CATEGORY_CODES, UNCATEGORISED]
+      .map((code) => ({
+        code,
+        count: week.filter((i) => (i.category ?? UNCATEGORISED) === code).length,
+      }))
+      .filter((c) => c.count > 0 || c.code !== UNCATEGORISED);
+    const max = Math.max(1, ...platforms.map((p) => p.count));
+    return { platforms, categories, max };
+  }, [items, weekStart, weekEnd]);
 
   // ---- Navigation ----
   function navigate(deltaMonths: number) {
@@ -361,7 +430,8 @@ export function MediaPlannerClient({
     setDraft({
       id: null,
       title: "",
-      format: "reel",
+      platforms: platformFilter ? [platformFilter] : [...MEDIA_PLATFORM_CODES],
+      category: "",
       status: "idea",
       publishDate: publishDate ?? todayStr,
       publishTime: "",
@@ -379,10 +449,22 @@ export function MediaPlannerClient({
   }
 
   const drawerItem = draft?.id ? items.find((i) => i.id === draft.id) ?? null : null;
+  // The same post's items on the other platforms.
+  const siblings = useMemo(() => {
+    if (!drawerItem) return [];
+    const key = postKey(drawerItem);
+    return items
+      .filter((i) => i.id !== drawerItem.id && postKey(i) === key)
+      .sort((a, b) => platformOrder(a.platform) - platformOrder(b.platform));
+  }, [drawerItem, items]);
 
   // ---- API calls ----
   async function saveDraft() {
     if (!draft || !draft.title.trim()) return;
+    if (draft.platforms.length === 0) {
+      alert("Pick at least one platform.");
+      return;
+    }
     if (draft.link.trim() && !isSafeHttpUrl(draft.link.trim())) {
       alert("The link must start with https:// (or http://).");
       return;
@@ -391,7 +473,7 @@ export function MediaPlannerClient({
     try {
       const payload = {
         title: draft.title.trim(),
-        format: draft.format,
+        category: draft.category || null,
         status: draft.status,
         publishDate: draft.publishDate || null,
         publishTime: draft.publishTime || null,
@@ -401,20 +483,29 @@ export function MediaPlannerClient({
         ownerId: draft.ownerId || null,
         ...(draft.id ? {} : { seedChecklist: draft.seedChecklist }),
       };
-      const res = await fetch(
-        draft.id ? `/api/marketing/media-plan/${draft.id}` : "/api/marketing/media-plan",
-        {
-          method: draft.id ? "PATCH" : "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(payload),
-        },
-      );
-      if (!res.ok) {
-        alert("Failed to save.");
+      // A new post is created once per chosen platform; an edit changes one item.
+      const targets = draft.id ? [draft.platforms[0]] : draft.platforms;
+      let failed = 0;
+      for (const platform of targets) {
+        const res = await fetch(
+          draft.id ? `/api/marketing/media-plan/${draft.id}` : "/api/marketing/media-plan",
+          {
+            method: draft.id ? "PATCH" : "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ ...payload, platform }),
+          },
+        );
+        if (!res.ok) {
+          failed += 1;
+          continue;
+        }
+        const { item } = (await res.json()) as { item: MediaItemDto };
+        replaceItem(item);
+      }
+      if (failed) {
+        alert(failed === targets.length ? "Failed to save." : `Saved, but ${failed} platform(s) failed.`);
         return;
       }
-      const { item } = (await res.json()) as { item: MediaItemDto };
-      replaceItem(item);
       setDraft(null);
     } finally {
       setBusy(false);
@@ -551,7 +642,7 @@ export function MediaPlannerClient({
         <div>
           <h1 className="text-[28px] font-bold tracking-tight">Media Planner</h1>
           <p className="mt-[4px] text-[13px]" style={{ color: "var(--lp-on-surface-variant)" }}>
-            Plan, produce and publish — YouTube shorts &amp; videos, Insta reels and posters.
+            Plan, produce and publish — YouTube, Instagram, Facebook and LinkedIn, by content category.
           </p>
         </div>
         <div className="flex flex-wrap items-center gap-[8px]">
@@ -671,39 +762,29 @@ export function MediaPlannerClient({
         ))}
       </div>
 
-      {/* Filters */}
+      {/* Filters: platform tabs, then category chips */}
       <div className="flex flex-wrap items-center gap-[8px]">
-        <button
-          onClick={() => setFormatFilter([])}
-          className="rounded-full px-[12px] py-[5px] text-[12px] font-semibold border"
-          style={
-            formatFilter.length === 0
-              ? { borderColor: "var(--lp-primary)", color: "var(--lp-primary)", backgroundColor: "rgba(250, 204, 21, 0.10)" }
-              : { borderColor: "var(--lp-outline-variant)", color: "var(--lp-on-surface-variant)" }
-          }
-        >
-          All formats
-        </button>
-        {MEDIA_FORMAT_CODES.map((code) => {
-          const meta = MEDIA_FORMATS[code];
-          const active = formatFilter.includes(code);
+        {(["", ...MEDIA_PLATFORM_CODES] as const).map((code) => {
+          const active = platformFilter === code;
+          const meta = code ? MEDIA_PLATFORMS[code] : null;
+          const color = meta?.color ?? "#facc15";
+          const count = code
+            ? filterCounts.platforms.get(code) ?? 0
+            : Array.from(filterCounts.platforms.values()).reduce((a, b) => a + b, 0);
           return (
             <button
-              key={code}
-              onClick={() =>
-                setFormatFilter((arr) =>
-                  arr.includes(code) ? arr.filter((c) => c !== code) : [...arr, code],
-                )
-              }
-              className="flex items-center gap-[6px] rounded-full px-[12px] py-[5px] text-[12px] font-semibold border"
+              key={code || "all"}
+              onClick={() => setPlatformFilter(code)}
+              className="flex items-center gap-[7px] rounded-[8px] px-[14px] py-[7px] text-[13px] font-bold border"
               style={
                 active
-                  ? { borderColor: meta.color, color: meta.color, backgroundColor: tint(meta.color, 0.12) }
+                  ? { borderColor: color, color, backgroundColor: tint(color, 0.13) }
                   : { borderColor: "var(--lp-outline-variant)", color: "var(--lp-on-surface-variant)" }
               }
             >
-              <span className="inline-block w-[7px] h-[7px] rounded-full" style={{ backgroundColor: meta.color }} />
-              {meta.label}s
+              {meta && <span className="inline-block w-[8px] h-[8px] rounded-full" style={{ backgroundColor: meta.color }} />}
+              {meta ? meta.label : "All platforms"}
+              <span className="text-[11px] font-mono font-semibold opacity-75">{count}</span>
             </button>
           );
         })}
@@ -721,6 +802,41 @@ export function MediaPlannerClient({
             </option>
           ))}
         </select>
+      </div>
+      <div className="flex flex-wrap items-center gap-[6px]">
+        <button
+          onClick={() => setCategoryFilter([])}
+          className="rounded-full px-[11px] py-[4px] text-[11.5px] font-semibold border"
+          style={
+            categoryFilter.length === 0
+              ? { borderColor: "var(--lp-primary)", color: "var(--lp-primary)", backgroundColor: "rgba(250, 204, 21, 0.10)" }
+              : { borderColor: "var(--lp-outline-variant)", color: "var(--lp-on-surface-variant)" }
+          }
+        >
+          All categories
+        </button>
+        {[...MEDIA_CATEGORY_CODES, UNCATEGORISED].map((code) => {
+          const count = filterCounts.categories.get(code) ?? 0;
+          if (code === UNCATEGORISED && count === 0 && !categoryFilter.includes(code)) return null;
+          const active = categoryFilter.includes(code);
+          return (
+            <button
+              key={code}
+              onClick={() =>
+                setCategoryFilter((arr) => (arr.includes(code) ? arr.filter((c) => c !== code) : [...arr, code]))
+              }
+              className="rounded-full px-[11px] py-[4px] text-[11.5px] font-semibold border"
+              style={
+                active
+                  ? { borderColor: "var(--lp-primary)", color: "var(--lp-primary)", backgroundColor: "rgba(250, 204, 21, 0.10)" }
+                  : { borderColor: "var(--lp-outline-variant)", color: "var(--lp-on-surface-variant)", opacity: count ? 1 : 0.55 }
+              }
+            >
+              {code === UNCATEGORISED ? "Uncategorised" : MEDIA_CATEGORIES[code as MediaCategory].label}
+              <span className="ml-[6px] font-mono opacity-75">{count}</span>
+            </button>
+          );
+        })}
       </div>
 
       {view === "calendar" ? (
@@ -789,9 +905,12 @@ export function MediaPlannerClient({
                       </span>
                     </div>
                     <div className="flex flex-col gap-[3px] overflow-hidden min-w-0">
-                      {shown.map((it) => {
-                        const meta = formatMeta(it.format);
-                        const done = it.status === "published";
+                      {shown.map((group) => {
+                        const it = group[0];
+                        const meta = platformMeta(it.platform);
+                        const done = group.every((g) => g.status === "published");
+                        const multi = group.length > 1;
+                        const accent = multi ? "#facc15" : meta.color;
                         return (
                           <div
                             key={it.id}
@@ -806,21 +925,31 @@ export function MediaPlannerClient({
                             }}
                             className="flex items-stretch gap-[5px] rounded-[6px] pl-[3px] pr-[5px] py-[3px] text-[10.5px] font-semibold text-left border cursor-pointer min-w-0"
                             style={{
-                              backgroundColor: tint(meta.color, 0.13),
-                              borderColor: tint(meta.color, 0.35),
+                              backgroundColor: tint(accent, multi ? 0.07 : 0.13),
+                              borderColor: tint(accent, 0.3),
                               color: "var(--lp-on-surface)",
                               opacity: done ? 0.6 : 1,
                             }}
-                            title={`${meta.label}${it.publishTime ? ` · ${it.publishTime}` : ""} — ${it.title}`}
+                            title={`${group.map((g) => platformMeta(g.platform).label).join(", ")} · ${categoryLabel(it.category)}${it.publishTime ? ` · ${it.publishTime}` : ""} — ${it.title}`}
                           >
                             <span
                               className="inline-block w-[3px] self-stretch rounded-full shrink-0"
-                              style={{ backgroundColor: meta.color }}
+                              style={{ backgroundColor: accent }}
                             />
                             <Thumb src={it.thumbnailUrl} className="w-[20px] h-[34px] rounded-[3px]" />
                             <span className="min-w-0 grow">
                               <span className="leading-[1.2] line-clamp-2 break-words">
                                 {done ? `✓ ${it.title}` : it.title}
+                              </span>
+                              <span className="flex flex-wrap items-center gap-[3px] mt-[2px]">
+                                {group.map((g) => (
+                                  <PlatformPill key={g.id} platform={g.platform} />
+                                ))}
+                                {it.category && (
+                                  <span className="text-[9px] font-normal truncate" style={{ color: "var(--lp-outline)" }}>
+                                    {categoryLabel(it.category, "short")}
+                                  </span>
+                                )}
                               </span>
                               {(it.publishTime || it.link) && (
                                 <span className="flex items-center gap-[4px] mt-[1px]">
@@ -906,7 +1035,7 @@ export function MediaPlannerClient({
                             {task.name} — {item.title}
                           </span>
                           <span className="block text-[10.5px]" style={{ color: "var(--lp-outline)" }}>
-                            {formatMeta(item.format).label}
+                            {platformMeta(item.platform).label} · {categoryLabel(item.category, "short")}
                             {task.assignedToId ? ` · ${usernameById.get(task.assignedToId) ?? "unknown"}` : ""}
                           </span>
                         </button>
@@ -933,31 +1062,46 @@ export function MediaPlannerClient({
             >
               <div className="flex items-center justify-between">
                 <h2 className="text-[10px] uppercase tracking-widest font-bold" style={{ color: "var(--lp-on-surface-variant)" }}>
-                  Weekly cadence
+                  This week
                 </h2>
                 <span className="text-[10px]" style={{ color: "var(--lp-outline)" }}>
                   {shortDate(weekStart)} – {shortDate(weekEnd)}
                 </span>
               </div>
-              {cadence.map((c) => {
-                const meta = MEDIA_FORMATS[c.code];
+              {cadence.platforms.map((c) => {
+                const meta = MEDIA_PLATFORMS[c.code];
                 return (
                   <div key={c.code}>
                     <div className="flex items-center justify-between mb-[4px]">
                       <span className="flex items-center gap-[7px] text-[11.5px] font-semibold" style={{ color: "var(--lp-on-surface-variant)" }}>
                         <span className="inline-block w-[7px] h-[7px] rounded-full" style={{ backgroundColor: meta.color }} />
-                        {meta.label}s
+                        {meta.label}
                       </span>
                       <span className="text-[11.5px] font-bold font-mono" style={{ color: "var(--lp-on-surface)" }}>
-                        {c.count} / {c.target}
+                        {c.count}
                       </span>
                     </div>
                     <div className="h-[5px] rounded-full overflow-hidden" style={{ backgroundColor: "rgba(255, 255, 255, 0.07)" }}>
-                      <div className="h-full rounded-full" style={{ backgroundColor: meta.color, width: `${c.pct}%` }} />
+                      <div
+                        className="h-full rounded-full"
+                        style={{ backgroundColor: meta.color, width: `${Math.round((c.count / cadence.max) * 100)}%` }}
+                      />
                     </div>
                   </div>
                 );
               })}
+              <div className="pt-[4px] space-y-[3px]">
+                {cadence.categories.map((c) => (
+                  <div key={c.code} className="flex items-center justify-between text-[11px]">
+                    <span style={{ color: "var(--lp-on-surface-variant)", opacity: c.count ? 1 : 0.5 }}>
+                      {c.code === UNCATEGORISED ? "Uncategorised" : MEDIA_CATEGORIES[c.code as MediaCategory].label}
+                    </span>
+                    <span className="font-mono font-bold" style={{ color: c.count ? "var(--lp-on-surface)" : "var(--lp-outline)" }}>
+                      {c.count}
+                    </span>
+                  </div>
+                ))}
+              </div>
               <p className="text-[10px] leading-relaxed" style={{ color: "var(--lp-outline)" }}>
                 Reminders go out 9:00 AM IST — in-app, to each step&apos;s assignee.
               </p>
@@ -985,7 +1129,7 @@ export function MediaPlannerClient({
                   </span>
                 </div>
                 {colItems.map((it) => {
-                  const meta = formatMeta(it.format);
+                  const meta = platformMeta(it.platform);
                   const openDue = it.tasks
                     .filter((t) => t.status === "open" && t.dueDate)
                     .map((t) => t.dueDate as string)
@@ -1004,11 +1148,16 @@ export function MediaPlannerClient({
                       }}
                     >
                       <div className="flex items-center justify-between gap-[6px]">
-                        <span
-                          className="text-[9px] font-extrabold tracking-wider rounded-[4px] px-[6px] py-[2px]"
-                          style={{ backgroundColor: tint(meta.color, 0.13), color: meta.color }}
-                        >
-                          {meta.pill}
+                        <span className="flex items-center gap-[5px] min-w-0">
+                          <span
+                            className="text-[9px] font-extrabold tracking-wider rounded-[4px] px-[6px] py-[2px]"
+                            style={{ backgroundColor: tint(meta.color, 0.13), color: meta.color }}
+                          >
+                            {meta.pill}
+                          </span>
+                          <span className="text-[9.5px] truncate" style={{ color: "var(--lp-outline)" }}>
+                            {categoryLabel(it.category, "short")}
+                          </span>
                         </span>
                         {overdue ? (
                           <span className="text-[9px] font-extrabold" style={{ color: "var(--lp-error)" }}>
@@ -1061,12 +1210,22 @@ export function MediaPlannerClient({
               <span
                 className="text-[9px] font-extrabold tracking-wider rounded-[4px] px-[7px] py-[3px]"
                 style={{
-                  backgroundColor: tint(formatMeta(draft.format).color, 0.15),
-                  color: formatMeta(draft.format).color,
+                  backgroundColor: tint(platformMeta(draft.platforms[0] ?? "").color, 0.15),
+                  color: platformMeta(draft.platforms[0] ?? "").color,
                 }}
               >
-                {formatMeta(draft.format).pill}
+                {draft.id
+                  ? platformMeta(draft.platforms[0]).label.toUpperCase()
+                  : `${draft.platforms.length} PLATFORM${draft.platforms.length === 1 ? "" : "S"}`}
               </span>
+              {draft.category && (
+                <span
+                  className="text-[9px] font-extrabold tracking-wider rounded-[4px] px-[7px] py-[3px]"
+                  style={{ backgroundColor: "rgba(250, 204, 21, 0.10)", color: "var(--lp-primary)" }}
+                >
+                  {categoryLabel(draft.category, "short").toUpperCase()}
+                </span>
+              )}
               <span
                 className="text-[9px] font-extrabold tracking-wider rounded-[4px] px-[7px] py-[3px]"
                 style={{ backgroundColor: "rgba(51, 228, 255, 0.10)", color: "var(--lp-cyan)" }}
@@ -1098,24 +1257,79 @@ export function MediaPlannerClient({
               />
             </div>
 
-            <div className="grid grid-cols-2 gap-[10px]">
-              <div>
-                <label className="block text-[10px] uppercase tracking-widest font-semibold mb-[4px]" style={{ color: "var(--lp-outline)" }}>
-                  Format
-                </label>
-                <select
-                  value={draft.format}
-                  onChange={(e) => setDraft({ ...draft, format: e.target.value as MediaFormat })}
-                  className={inputClass}
-                  style={inputStyle}
-                >
-                  {MEDIA_FORMAT_CODES.map((c) => (
-                    <option key={c} value={c}>
-                      {MEDIA_FORMATS[c].label}
-                    </option>
-                  ))}
-                </select>
+            <div>
+              <label className="block text-[10px] uppercase tracking-widest font-semibold mb-[4px]" style={{ color: "var(--lp-outline)" }}>
+                {draft.id ? "Platform" : "Platforms — one item per platform"}
+              </label>
+              <div className="flex flex-wrap gap-[6px]">
+                {MEDIA_PLATFORM_CODES.map((code) => {
+                  const meta = MEDIA_PLATFORMS[code];
+                  const on = draft.platforms.includes(code);
+                  return (
+                    <button
+                      key={code}
+                      type="button"
+                      onClick={() =>
+                        setDraft({
+                          ...draft,
+                          platforms: draft.id
+                            ? [code]
+                            : on
+                              ? draft.platforms.filter((p) => p !== code)
+                              : MEDIA_PLATFORM_CODES.filter((p) => p === code || draft.platforms.includes(p)),
+                        })
+                      }
+                      className="flex items-center gap-[6px] rounded-[8px] px-[11px] py-[6px] text-[12px] font-semibold border"
+                      style={
+                        on
+                          ? { borderColor: meta.color, color: meta.color, backgroundColor: tint(meta.color, 0.13) }
+                          : { borderColor: "var(--lp-outline-variant)", color: "var(--lp-on-surface-variant)" }
+                      }
+                    >
+                      <span className="inline-block w-[7px] h-[7px] rounded-full" style={{ backgroundColor: meta.color }} />
+                      {meta.label}
+                    </button>
+                  );
+                })}
               </div>
+              {drawerItem && siblings.length > 0 && (
+                <p className="mt-[6px] flex flex-wrap items-center gap-[6px] text-[11px]" style={{ color: "var(--lp-outline)" }}>
+                  Same post on:
+                  {siblings.map((sib) => (
+                    <button
+                      key={sib.id}
+                      type="button"
+                      onClick={() => openItem(sib)}
+                      className="underline-offset-2 hover:underline font-semibold"
+                      style={{ color: platformMeta(sib.platform).color }}
+                    >
+                      {platformMeta(sib.platform).label}
+                    </button>
+                  ))}
+                </p>
+              )}
+            </div>
+
+            <div>
+              <label className="block text-[10px] uppercase tracking-widest font-semibold mb-[4px]" style={{ color: "var(--lp-outline)" }}>
+                Category
+              </label>
+              <select
+                value={draft.category}
+                onChange={(e) => setDraft({ ...draft, category: e.target.value as MediaCategory | "" })}
+                className={inputClass}
+                style={inputStyle}
+              >
+                <option value="">Uncategorised</option>
+                {MEDIA_CATEGORY_CODES.map((c) => (
+                  <option key={c} value={c}>
+                    {MEDIA_CATEGORIES[c].label}
+                  </option>
+                ))}
+              </select>
+            </div>
+
+            <div className="grid grid-cols-2 gap-[10px]">
               <div>
                 <label className="block text-[10px] uppercase tracking-widest font-semibold mb-[4px]" style={{ color: "var(--lp-outline)" }}>
                   Stage
@@ -1295,7 +1509,7 @@ export function MediaPlannerClient({
                   checked={draft.seedChecklist}
                   onChange={(e) => setDraft({ ...draft, seedChecklist: e.target.checked })}
                 />
-                Seed the standard production checklist for this format
+                Seed the standard production checklist for this category
               </label>
             ) : (
               drawerItem && (
