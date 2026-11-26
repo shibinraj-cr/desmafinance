@@ -9,7 +9,7 @@ export function PerformanceNoAccess({ title }: { title: string }) {
       <div className="p-margin">
         <Section title="">
           <div className="py-lg text-center text-on-surface-variant">
-            Team Performance is available to Admin and HR Manager only.
+            You don&apos;t have access to this page. Ask an admin to tick it for your role in Role Management.
           </div>
         </Section>
       </div>

@@ -2,7 +2,7 @@ import { NextResponse } from "next/server";
 import { withApiHandler } from "@/lib/api";
 import { badRequest, forbidden, unauthorized } from "@/lib/http-error";
 import { getCurrentUserAndPermissions } from "@/lib/permissions";
-import { canViewTeamPerformance } from "@/lib/team-performance-rbac";
+import { canViewAnyTeamPerformancePage } from "@/lib/team-performance-rbac";
 import { isValidIngestToken } from "@/lib/team-performance-ingest";
 import { getHolidayMap } from "@/lib/team-performance";
 
@@ -14,7 +14,7 @@ export const GET = withApiHandler(async (req: Request) => {
   if (!isValidIngestToken(req)) {
     const { userId, perms } = await getCurrentUserAndPermissions();
     if (!userId || !perms) throw unauthorized();
-    if (!canViewTeamPerformance(perms)) throw forbidden();
+    if (!canViewAnyTeamPerformancePage(perms)) throw forbidden();
   }
   const sp = new URL(req.url).searchParams;
   const from = sp.get("from") ?? "";

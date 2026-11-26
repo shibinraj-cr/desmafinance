@@ -5,7 +5,7 @@ import { Section } from "@/components/Cards";
 import { DateFilter } from "@/components/DateFilter";
 import { EmptyNote, PerformanceNoAccess, numCls, tdCls, thCls } from "@/components/PerformanceUi";
 import { getCurrentUserAndPermissions } from "@/lib/permissions";
-import { canViewTeamPerformance } from "@/lib/team-performance-rbac";
+import { canViewTeamPerformancePage, TP_BDE } from "@/lib/team-performance-rbac";
 import { getBdeSummary, resolveRange, type BdeRow } from "@/lib/team-performance";
 
 export const dynamic = "force-dynamic";
@@ -73,7 +73,7 @@ export default async function BdePerformancePage({
 }) {
   const { perms } = await getCurrentUserAndPermissions();
   if (!perms) redirect("/login");
-  if (!canViewTeamPerformance(perms)) return <PerformanceNoAccess title="BDE Performance" />;
+  if (!canViewTeamPerformancePage(perms, TP_BDE)) return <PerformanceNoAccess title="BDE Performance" />;
 
   const range = resolveRange(searchParams);
   const rows = await getBdeSummary(range);

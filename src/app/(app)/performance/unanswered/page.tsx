@@ -4,7 +4,7 @@ import { Section } from "@/components/Cards";
 import { DateFilter } from "@/components/DateFilter";
 import { EmptyNote, PerformanceNoAccess, tdCls, thCls } from "@/components/PerformanceUi";
 import { getCurrentUserAndPermissions } from "@/lib/permissions";
-import { canViewTeamPerformance } from "@/lib/team-performance-rbac";
+import { canViewTeamPerformancePage, TP_UNANSWERED } from "@/lib/team-performance-rbac";
 import { getUnanswered, resolveRange } from "@/lib/team-performance";
 import { fromPrismaDate } from "@/lib/lead-pulse-dates";
 
@@ -17,7 +17,7 @@ export default async function UnansweredPage({
 }) {
   const { perms } = await getCurrentUserAndPermissions();
   if (!perms) redirect("/login");
-  if (!canViewTeamPerformance(perms)) return <PerformanceNoAccess title="Unanswered Queries" />;
+  if (!canViewTeamPerformancePage(perms, TP_UNANSWERED)) return <PerformanceNoAccess title="Unanswered Queries" />;
 
   const range = resolveRange(searchParams);
   const rows = await getUnanswered(range);
