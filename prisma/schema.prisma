@@ -7444,3 +7444,49 @@ model DirectorClaimSettlement {
 
   @@index([date])
 }
+
+// ── Team Performance module ────────────────────────────────────────────
+// After-hours WhatsApp candidate-support scores, one row per staff per
+// report day (the night that starts on `date`; Sundays/holidays cover the
+// whole day). Written by the daily scoring routine through
+// /api/performance/whatsapp/ingest or the CSV import script. Visible only
+// to Admin and HR Manager (see src/lib/team-performance-rbac.ts).
+model PerfWaStaffDaily {
+  id                  String   @id @default(cuid())
+  date                DateTime @db.Date
+  staff               String
+  queriesAnswered     Int      @default(0)
+  medianResponseMin   Float?
+  avgAccuracy         Float?
+  avgCompleteness     Float?
+  avgTone             Float?
+  avgNextStep         Float?
+  closuresDone        Int      @default(0)
+  closuresNeeded      Int      @default(0)
+  /// null = not a Sunday/holiday report day
+  sundayHolidayActive Boolean?
+  /// "auto" (script-scored) or "manual" (reviewed)
+  source              String   @default("auto")
+  notes               String?
+  createdAt           DateTime @default(now())
+  updatedAt           DateTime @updatedAt
+
+  @@unique([date, staff])
+  @@index([date])
+  @@index([staff])
+}
+
+/// Candidate query with no staff reply by 9 AM (team-level).
+model PerfWaUnanswered {
+  id        String   @id @default(cuid())
+  date      DateTime @db.Date
+  groupName String
+  queryAt   String
+  summary   String
+  status    String
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([groupName, queryAt])
+  @@index([date])
+}
