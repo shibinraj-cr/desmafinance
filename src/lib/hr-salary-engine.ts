@@ -1,7 +1,7 @@
 import { prisma } from "./prisma";
 import { recordAudit } from "./audit";
 import { cycleWindowForMonth, structureForMonth, computeLateTags, type LateTag } from "./hr-data";
-import { computeMonthlyLeaveLedger } from "./hr-leave-balance";
+import { computeMonthlyLeaveLedger, leaveYearForDate } from "./hr-leave-balance";
 import {
   computePf,
   pfSegmentsForWindow,
@@ -435,21 +435,22 @@ export function bucketAttendance(days: { status: string; halfPaid?: boolean | nu
 }
 
 /**
- * Paid leave the canonical leave engine (hr-leave-balance.ts) counts as "used"
- * for `year` among the given attendance rows, for dates that fall in that
- * calendar year (attendance dates are stored at midnight UTC): a full-day LV at
- * 1.0, and a half-day HR granted as PAID leave at 0.5.
+ * Explicit paid leave the canonical leave engine (hr-leave-balance.ts) charges
+ * to the balance of leave year `year` among the given attendance rows: a
+ * full-day LV at 1.0, and a half-day HR granted as PAID leave at 0.5.
  *
- * A half-day with no pay decision (null halfPaid) is NOT counted — it doesn't
- * consume the leave balance (it's pure 0.5-day loss-of-pay), so there is nothing
- * to add back for it.
+ * Leave years follow the salary cycle (`leaveYearForDate`): 26–31 Dec belong to
+ * the NEXT year, exactly as the leave engine buckets them, so a January cycle
+ * (26 Dec → 25 Jan) lies wholly in one leave year.
+ *
+ * A half-day with no pay decision (null halfPaid) is NOT counted here — it is
+ * loss-of-pay, and any allocation cover for it reaches payroll separately via
+ * the ledger's `covered` figure, so there is nothing to add back for it.
  *
  * computeSalaryRun adds this back onto the stored leave balance: that balance is
  * already net of the cycle's own LV (the leave engine subtracts decided leave
  * immediately), so covering this cycle's paid leave against it directly would
- * charge the same days twice — once as the balance deduction, again as LOP. The
- * `year` filter keeps the Dec→Jan cross-year cycle correct: December leave
- * belongs to the previous year's balance, not this one.
+ * charge the same days twice — once as the balance deduction, again as LOP.
  */
 export function leaveUsedInYear(
   days: { date: Date; status: string; halfPaid?: boolean | null }[],
@@ -457,7 +458,7 @@ export function leaveUsedInYear(
 ): number {
   let used = 0;
   for (const d of days) {
-    if (d.date.getUTCFullYear() !== year) continue;
+    if (leaveYearForDate(d.date) !== year) continue;
     if (d.status === "LV") used += 1;
     else if (d.status === "HD" && d.halfPaid === true) used += 0.5;
   }
@@ -697,24 +698,20 @@ export async function computeSalaryRun(monthKey: string, userId: string | null):
 
       // Cover this cycle's paid leave — full-day LV at 1.0 plus each half-day
       // granted as paid leave at 0.5 — against the balance as it stood BEFORE
-      // the cycle, computed PER CALENDAR YEAR. The canonical leave engine tracks
-      // balances by calendar year and deducts decided leave immediately, so we
-      // add this cycle's back to recover the pre-cycle balance. A cycle is
-      // 26th→25th, so a January run straddles two years (Dec belongs to the
-      // previous year's balance) — cover each year's leave against its own
-      // balance, else December leave would be charged twice (#Dec→Jan fix).
-      const coverYear = async (y: number) => {
-        const lv = leaveUsedInYear(attendance, y);
-        if (lv === 0) return 0;
+      // the cycle. The canonical leave engine deducts decided leave
+      // immediately, so we add this cycle's back to recover the pre-cycle
+      // balance. Balances are kept per LEAVE year (26 Dec → 25 Dec, see
+      // leaveYearForDate), so every day of this cycle — a January run's
+      // 26–31 Dec included — belongs to the run's own year, whose balance
+      // already opens with last year's carry-forward.
+      const cycleLeave = leaveUsedInYear(attendance, year);
+      if (cycleLeave > 0) {
         const bal = await prisma.hrLeaveBalance.findUnique({
-          where: { employeeId_year: { employeeId: e.id, year: y } },
+          where: { employeeId_year: { employeeId: e.id, year } },
         });
-        const before = (bal ? Number(bal.balance) : 0) + lv; // pre-cycle balance for year y
-        return Math.min(lv, Math.max(0, before));
-      };
-      const startYear = start.getUTCFullYear();
-      carried = await coverYear(year);
-      if (startYear !== year) carried += await coverYear(startYear);
+        const before = (bal ? Number(bal.balance) : 0) + cycleLeave; // pre-cycle balance
+        carried = Math.min(cycleLeave, Math.max(0, before));
+      }
 
       // Paid-leave coverage of this cycle's loss-of-pay. The monthly allocation
       // covers the earliest absence / unpaid half-day / late up to the balance

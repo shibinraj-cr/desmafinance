@@ -1,5 +1,6 @@
 import { prisma } from "./prisma";
 import { recomputeLeaveBalance } from "./hr-leave-balance";
+import { cycleMonthForDate } from "./hr-data";
 import { isOwnerDesignation, effectiveDesignation } from "./hr-salary-engine";
 
 /**
@@ -123,8 +124,11 @@ export async function manualAdjustment(args: {
 }): Promise<void> {
   const { employeeId, delta, reason, actorUserId } = args;
   if (delta === 0) throw new Error("delta cannot be zero");
-  const periodKey = new Date().toISOString().slice(0, 7);
-  const year = new Date().getUTCFullYear();
+  // Keyed by salary-cycle month, the basis the ledger reads (`YYYY-MM` of the
+  // cycle), so an adjustment made on 26–31 Dec lands in January of the next
+  // leave year rather than in a December that has already closed.
+  const periodKey = cycleMonthForDate(new Date());
+  const year = Number(periodKey.slice(0, 4));
   await prisma.$transaction(async (tx) => {
     await tx.hrLeaveAccrual.create({
       data: {

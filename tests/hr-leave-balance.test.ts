@@ -28,6 +28,10 @@ import {
   paidLeaveCoveredByDay,
   computeLeaveBalanceFor,
   computeMonthlyLeaveLedger,
+  recomputeLeaveBalance,
+  carryForwardAmount,
+  leaveYearForDate,
+  LEAVE_ROLLOVER_FROM_YEAR,
 } from "@/lib/hr-leave-balance";
 
 const D = (y: number, m: number, d: number) => new Date(Date.UTC(y, m - 1, d));
@@ -304,5 +308,203 @@ describe("computeMonthlyLeaveLedger", () => {
     expect(rows.find((r) => r.month === 2)!.allocated).toBe(2);
     expect(balanceAsOn).toBe(2); // captured at May; Aug's 5 comes later
     expect(rows.find((r) => r.month === 8)!.balance).toBe(7);
+  });
+});
+
+describe("leaveYearForDate (leave year = salary-cycle year)", () => {
+  it("keeps 25 Dec in its own year", () => {
+    expect(leaveYearForDate(D(2026, 12, 25))).toBe(2026);
+  });
+  it("moves 26–31 Dec into the next leave year (the January cycle)", () => {
+    expect(leaveYearForDate(D(2026, 12, 26))).toBe(2027);
+    expect(leaveYearForDate(D(2026, 12, 31))).toBe(2027);
+  });
+  it("keeps January in its own year", () => {
+    expect(leaveYearForDate(D(2027, 1, 5))).toBe(2027);
+  });
+});
+
+describe("carryForwardAmount", () => {
+  it("carries the whole positive balance when there is no cap (cap 0 = no cap)", () => {
+    expect(carryForwardAmount(12, { carryForward: true, carryForwardCap: 0 })).toBe(12);
+  });
+  it("limits the carry to the cap when one is set", () => {
+    expect(carryForwardAmount(12, { carryForward: true, carryForwardCap: 5 })).toBe(5);
+    expect(carryForwardAmount(3.5, { carryForward: true, carryForwardCap: 5 })).toBe(3.5);
+  });
+  it("lapses the balance when carry-forward is off", () => {
+    expect(carryForwardAmount(12, { carryForward: false, carryForwardCap: 12 })).toBe(0);
+  });
+  it("never carries an over-drawn (negative) balance as debt", () => {
+    expect(carryForwardAmount(-2, { carryForward: true, carryForwardCap: 0 })).toBe(0);
+  });
+  it("uses the column defaults (carry, no cap) when there is no eligibility row", () => {
+    expect(carryForwardAmount(7.5, null)).toBe(7.5);
+  });
+  it("accepts a Prisma Decimal-like cap", () => {
+    expect(carryForwardAmount(9, { carryForward: true, carryForwardCap: { toString: () => "4" } })).toBe(4);
+  });
+});
+
+/**
+ * A db stub that answers per leave year, the way the real queries filter:
+ * attendance by date window, ledger rows by `YYYY-` prefix, balance rows by
+ * (employee, year). Lets the rollover read last year's ledger for real.
+ */
+function multiYearDb(over: {
+  eligibility?: unknown;
+  stored?: Record<number, { opening: number }>;
+  accruals?: { periodKey: string; delta: number; source: string }[];
+  days?: ReturnType<typeof day>[];
+}) {
+  const days = over.days ?? [];
+  const accruals = over.accruals ?? [];
+  const stored = over.stored ?? {};
+  const upsert = vi.fn().mockResolvedValue({});
+  type Where = { where: Record<string, unknown> };
+  return {
+    upsert,
+    db: {
+      hrLeaveEligibility: { findUnique: vi.fn().mockResolvedValue(over.eligibility ?? null) },
+      hrLeaveBalance: {
+        findUnique: vi.fn(async ({ where }: Where) => {
+          const y = (where.employeeId_year as { year: number }).year;
+          return stored[y] ?? null;
+        }),
+        upsert,
+      },
+      hrLeaveAccrual: {
+        findMany: vi.fn(async ({ where }: Where) => {
+          const prefix = (where.periodKey as { startsWith: string }).startsWith;
+          return accruals.filter((a) => a.periodKey.startsWith(prefix));
+        }),
+      },
+      hrAttendanceDay: {
+        findMany: vi.fn(async ({ where }: Where) => {
+          const { gte, lte } = where.date as { gte: Date; lte: Date };
+          return days.filter((d) => d.date >= gte && d.date <= lte);
+        }),
+      },
+      employee: {
+        findUnique: vi.fn().mockResolvedValue({ halfHourConcession: false, joinDate: null, relievingDate: null }),
+      },
+    } as never,
+  };
+}
+
+describe("year-end carry-forward (rollover from LEAVE_ROLLOVER_FROM_YEAR)", () => {
+  const ELIG = (cap = 0, carryForward = true) => ({
+    enabled: true,
+    leavesPerPeriod: 1,
+    effectiveFrom: D(2026, 1, 1),
+    carryForward,
+    carryForwardCap: cap,
+  });
+  const JAN_2027 = D(2027, 1, 20); // inside the Jan-2027 cycle (26 Dec → 25 Jan)
+
+  it("starts with 2027 (2026 keeps its stored opening)", () => {
+    expect(LEAVE_ROLLOVER_FROM_YEAR).toBe(2027);
+  });
+
+  it("opens 2027 with 2026's closing, so a January half-day is covered by carry-forward", async () => {
+    // 2026: 1/month, no leave → closes at 12. Jan-2027 cycle: an absence on
+    // 29 Dec + a half-day on 5 Jan = 1.5 days of loss-of-pay.
+    const { db } = multiYearDb({
+      eligibility: ELIG(),
+      days: [day(D(2026, 12, 29), "A"), day(D(2027, 1, 5), "HD")],
+    });
+    const { rows, opening } = await computeMonthlyLeaveLedger("e1", 2027, { asOf: JAN_2027, fill: "full", db });
+    expect(opening).toBe(12);
+    const jan = rows[0];
+    expect(jan.covered).toBe(1.5); // both covered — nothing docked
+    expect(jan.unpaid).toBe(0);
+    expect(jan.balance).toBe(11.5); // 12 + 1 Jan allocation − 1.5
+  });
+
+  it("subtracts 2026's own leave before carrying (closing, not entitlement)", async () => {
+    const { db } = multiYearDb({
+      eligibility: ELIG(),
+      days: [day(D(2026, 3, 10), "A"), day(D(2026, 7, 2), "LV"), day(D(2026, 9, 9), "HD")],
+    });
+    const { opening } = await computeMonthlyLeaveLedger("e1", 2027, { asOf: JAN_2027, db });
+    expect(opening).toBe(9.5); // 12 − 1 − 1 − 0.5
+  });
+
+  it("adds a stored 2026 opening into the 2026 closing that rolls over", async () => {
+    const { db } = multiYearDb({ eligibility: ELIG(), stored: { 2026: { opening: 3 } } });
+    const { opening } = await computeMonthlyLeaveLedger("e1", 2027, { asOf: JAN_2027, db });
+    expect(opening).toBe(15);
+  });
+
+  it("ignores a stale stored 2027 opening — the rollover is derived", async () => {
+    const { db } = multiYearDb({ eligibility: ELIG(), stored: { 2027: { opening: 0 } } });
+    const { opening } = await computeMonthlyLeaveLedger("e1", 2027, { asOf: JAN_2027, db });
+    expect(opening).toBe(12);
+  });
+
+  it("limits the carry to the eligibility cap", async () => {
+    const { db } = multiYearDb({ eligibility: ELIG(5) });
+    const { opening } = await computeMonthlyLeaveLedger("e1", 2027, { asOf: JAN_2027, db });
+    expect(opening).toBe(5);
+  });
+
+  it("lapses the balance when carry-forward is off — the January half-day is then partly docked", async () => {
+    const { db } = multiYearDb({
+      eligibility: ELIG(0, false),
+      days: [day(D(2026, 12, 29), "A"), day(D(2027, 1, 5), "HD")],
+    });
+    const { rows, opening } = await computeMonthlyLeaveLedger("e1", 2027, { asOf: JAN_2027, fill: "full", db });
+    expect(opening).toBe(0);
+    expect(rows[0].covered).toBe(1); // only January's own allocation
+    expect(rows[0].unpaid).toBe(0.5);
+  });
+
+  it("does not carry an over-drawn 2026 into 2027", async () => {
+    // 14 LV against 12 accrued → 2026 closes at −2.
+    const lv = Array.from({ length: 14 }, (_, i) => day(D(2026, 1 + Math.floor(i / 2), 2 + (i % 2)), "LV"));
+    const { db } = multiYearDb({ eligibility: ELIG(), days: lv });
+    const { opening } = await computeMonthlyLeaveLedger("e1", 2027, { asOf: JAN_2027, db });
+    expect(opening).toBe(0);
+  });
+
+  it("projects the opening from a full-year 2026 when 2027 is viewed early", async () => {
+    // Viewed on 20 Nov 2026: Dec isn't credited yet in the live view, but the
+    // projected closing assumes the full year's allocation.
+    const { db } = multiYearDb({ eligibility: ELIG(), days: [day(D(2026, 3, 10), "A")] });
+    const { opening } = await computeMonthlyLeaveLedger("e1", 2027, { asOf: D(2026, 11, 20), fill: "full", db });
+    expect(opening).toBe(11);
+  });
+
+  it("chains: 2028 opens with 2027's closing, which opened with 2026's", async () => {
+    const { db } = multiYearDb({ eligibility: ELIG(), days: [day(D(2027, 6, 10), "A")] });
+    const { opening } = await computeMonthlyLeaveLedger("e1", 2028, { asOf: D(2028, 1, 10), db });
+    expect(opening).toBe(23); // 12 (2026) + 12 (2027) − 1
+  });
+
+  it("computeLeaveBalanceFor uses the same carried opening", async () => {
+    const { db } = multiYearDb({ eligibility: ELIG(), days: [day(D(2027, 1, 5), "HD")] });
+    const c = await computeLeaveBalanceFor(db, "e1", 2027, JAN_2027);
+    expect(c.opening).toBe(12);
+    expect(c.accrued).toBe(1);
+    expect(c.used).toBe(0.5);
+    expect(c.balance).toBe(12.5);
+  });
+
+  it("recomputing 2026 also refreshes an existing 2027 row with the new opening", async () => {
+    const { db, upsert } = multiYearDb({
+      eligibility: ELIG(),
+      stored: { 2026: { opening: 0 }, 2027: { opening: 0 } },
+      days: [day(D(2026, 12, 10), "A")],
+    });
+    await recomputeLeaveBalance("e1", 2026, { db, asOf: JAN_2027 });
+    const years = upsert.mock.calls.map((c) => c[0].where.employeeId_year.year);
+    expect(years).toEqual([2026, 2027]);
+    expect(upsert.mock.calls[1][0].update.opening).toBe(11); // 12 − the December absence
+  });
+
+  it("does not walk forward when no later row exists", async () => {
+    const { db, upsert } = multiYearDb({ eligibility: ELIG(), stored: { 2026: { opening: 0 } } });
+    await recomputeLeaveBalance("e1", 2026, { db, asOf: JAN_2027 });
+    expect(upsert).toHaveBeenCalledTimes(1);
   });
 });

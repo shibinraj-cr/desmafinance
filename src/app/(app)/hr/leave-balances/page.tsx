@@ -3,7 +3,7 @@ import { prisma } from "@/lib/prisma";
 import { getCurrentUserAndPermissions } from "@/lib/permissions";
 import { isHrUser } from "@/lib/hr-rbac";
 import { isOwnerDesignation, effectiveDesignation } from "@/lib/hr-salary-engine";
-import { recomputeAllLeaveBalances } from "@/lib/hr-leave-balance";
+import { recomputeAllLeaveBalances, leaveYearForDate } from "@/lib/hr-leave-balance";
 import { TopBar } from "@/components/TopBar";
 import { Section } from "@/components/Cards";
 
@@ -24,7 +24,7 @@ export default async function LeaveBalancesPage() {
       </>
     );
   }
-  const year = new Date().getUTCFullYear();
+  const year = leaveYearForDate(new Date());
   // Recompute before reading so the table always reflects current per-employee
   // eligibility and the latest reviewed/decided leave, without waiting on the
   // monthly accrual job.

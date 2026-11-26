@@ -5,7 +5,7 @@ import { getCurrentUserAndPermissions } from "@/lib/permissions";
 import { canApproveHr } from "@/lib/hr-rbac";
 import { applySandwichRule } from "@/lib/hr-sandwich";
 import { cycleWindowForMonth, cycleMonthForDate } from "@/lib/hr-data";
-import { recomputeLeaveBalance } from "@/lib/hr-leave-balance";
+import { recomputeLeaveBalance, leaveYearForDate } from "@/lib/hr-leave-balance";
 import { leaveStatusBlockedByPunch } from "@/lib/hr-attendance-status";
 import { leaveDecisionBlockedReason } from "@/lib/hr-approval-routing";
 
@@ -175,15 +175,15 @@ export async function POST(req: Request) {
 
   // Decisions (and any sandwich-rule flips) change the LV/HD days that drive
   // the leave balance, so recompute the canonical balance for every affected
-  // employee/year. Sandwich flips stay inside the cycle window, so the
-  // window's calendar year(s) cover them too.
+  // employee/LEAVE year (26 Dec → 25 Dec, so a late-December day belongs to
+  // the next year). Sandwich flips stay inside the cycle window, whose days
+  // all share one leave year.
   const affected = new Set<string>(); // `${employeeId}:${year}`
-  for (const d of days) affected.add(`${d.employeeId}:${d.date.getUTCFullYear()}`);
+  for (const d of days) affected.add(`${d.employeeId}:${leaveYearForDate(d.date)}`);
   if (sandwichSummary.length > 0) {
-    const { start, end } = cycleWindowForMonth(cycleMonthForDate(days[0].date));
+    const { end } = cycleWindowForMonth(cycleMonthForDate(days[0].date));
     for (const s of sandwichSummary) {
-      affected.add(`${s.employeeId}:${start.getUTCFullYear()}`);
-      affected.add(`${s.employeeId}:${end.getUTCFullYear()}`);
+      affected.add(`${s.employeeId}:${leaveYearForDate(end)}`);
     }
   }
   for (const key of affected) {

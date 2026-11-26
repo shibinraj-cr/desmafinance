@@ -5,7 +5,7 @@ import { TopBar } from "@/components/TopBar";
 import { Section } from "@/components/Cards";
 import { employeeForUser } from "@/lib/hr-me";
 import { isOwnerDesignation, effectiveDesignation } from "@/lib/hr-salary-engine";
-import { computeMonthlyLeaveLedger, recomputeLeaveBalance } from "@/lib/hr-leave-balance";
+import { computeMonthlyLeaveLedger, recomputeLeaveBalance, leaveYearForDate } from "@/lib/hr-leave-balance";
 import { halfSessionLabel } from "@/lib/hr-regularization";
 import { MyLeaveClient } from "./client";
 
@@ -43,11 +43,11 @@ export default async function MyLeavePage() {
   // a leave/attendance decision, so an employee with no recent activity saw a
   // months-old headline sitting directly above a live ledger that disagreed
   // with it. /hr/leave-balances already recomputes on load; this matches it.
-  const balanceYear = new Date().getUTCFullYear();
+  const balanceYear = leaveYearForDate(new Date());
   const bal = await recomputeLeaveBalance(emp.id, balanceYear);
   // Owners (MD / Director) have no leave — show history only, no apply form.
   const canApply = !isOwnerDesignation(effectiveDesignation(emp));
-  const ledgerYear = new Date().getUTCFullYear();
+  const ledgerYear = balanceYear;
   const ledger = canApply
     ? await computeMonthlyLeaveLedger(emp.id, ledgerYear)
     : { rows: [], opening: 0 };

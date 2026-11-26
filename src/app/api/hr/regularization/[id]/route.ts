@@ -3,7 +3,7 @@ import { z } from "zod";
 import { prisma } from "@/lib/prisma";
 import { getCurrentUserAndPermissions } from "@/lib/permissions";
 import { canApproveHr } from "@/lib/hr-rbac";
-import { recomputeLeaveBalance } from "@/lib/hr-leave-balance";
+import { recomputeLeaveBalance, leaveYearForDate } from "@/lib/hr-leave-balance";
 import { applySandwichRule } from "@/lib/hr-sandwich";
 import { cycleWindowForMonth, cycleMonthForDate } from "@/lib/hr-data";
 import { resolveShiftForDate } from "@/lib/hr-shift";
@@ -383,7 +383,7 @@ export async function PATCH(
         actorUserId: userId ?? null,
       });
     }
-    const years = [...new Set(targetDates.map((d) => d.getUTCFullYear()))];
+    const years = [...new Set(targetDates.map((d) => leaveYearForDate(d)))];
     for (const year of years) {
       await recomputeLeaveBalance(reg.employee.id, year);
     }
