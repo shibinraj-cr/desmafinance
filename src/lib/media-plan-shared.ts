@@ -6,19 +6,88 @@
  */
 export const MEDIA_PLANNER_HREF = "/marketing/media-planner";
 
+/**
+ * Every planner item is one post on one platform, filed under one content
+ * category — the two axes the team plans by. A piece that goes out on four
+ * platforms is four items (each with its own link, time and status).
+ */
+export const MEDIA_PLATFORM_CODES = ["youtube", "instagram", "facebook", "linkedin"] as const;
+export type MediaPlatform = (typeof MEDIA_PLATFORM_CODES)[number];
+
+/** Display metadata per platform. The chip color in the calendar is the platform's. */
+export const MEDIA_PLATFORMS: Record<
+  MediaPlatform,
+  { label: string; pill: string; color: string }
+> = {
+  youtube: { label: "YouTube", pill: "YT", color: "#ff6b5e" },
+  instagram: { label: "Instagram", pill: "IG", color: "#e86bd8" },
+  facebook: { label: "Facebook", pill: "FB", color: "#6f8bff" },
+  linkedin: { label: "LinkedIn", pill: "IN", color: "#33c3ff" },
+};
+
+export const MEDIA_CATEGORY_CODES = [
+  "longform",
+  "longform_cut",
+  "anchoring",
+  "animated_en",
+  "animated_ml",
+  "poster",
+  "coding_en",
+  "coding_ml",
+] as const;
+export type MediaCategory = (typeof MEDIA_CATEGORY_CODES)[number];
+
+/** Category labels, in the team's own words; `short` fits a calendar chip. */
+export const MEDIA_CATEGORIES: Record<MediaCategory, { label: string; short: string }> = {
+  longform: { label: "Lengthy Videos", short: "Lengthy" },
+  longform_cut: { label: "Reel Cut From Lengthy Videos", short: "Lengthy cut" },
+  anchoring: { label: "Anchoring Reels/Shorts", short: "Anchoring" },
+  animated_en: { label: "Animated Reels/Shorts English", short: "Animated EN" },
+  animated_ml: { label: "Animated Reels/Shorts Malayalam", short: "Animated ML" },
+  poster: { label: "Posters", short: "Poster" },
+  coding_en: { label: "Coding Videos English", short: "Coding EN" },
+  coding_ml: { label: "Coding Videos Malayalam", short: "Coding ML" },
+};
+
+/**
+ * The older single "format" axis (YT Short / YT Video / Insta Reel / Poster).
+ * Still stored — derived from platform + category — so older API clients and
+ * the per-format checklist fallback keep working.
+ */
 export const MEDIA_FORMAT_CODES = ["short", "video", "reel", "poster"] as const;
 export type MediaFormat = (typeof MEDIA_FORMAT_CODES)[number];
 
-/** Display metadata per format. Colors are the Lead Pulse data accents. */
-export const MEDIA_FORMATS: Record<
-  MediaFormat,
-  { label: string; pill: string; color: string }
-> = {
-  short: { label: "YT Short", pill: "YT SHORT", color: "#ffb693" },
-  video: { label: "YT Video", pill: "YT VIDEO", color: "#ffb4ab" },
-  reel: { label: "Insta Reel", pill: "REEL", color: "#8B7BFF" },
-  poster: { label: "Poster", pill: "POSTER", color: "#33e4ff" },
-};
+/** The format a platform + category pair stands for. */
+export function deriveMediaFormat(platform: MediaPlatform, category: MediaCategory | null): MediaFormat {
+  if (category === "poster") return "poster";
+  if (category === "longform") return "video";
+  return platform === "youtube" ? "short" : "reel";
+}
+
+/** Best-guess platform and category for a legacy format-only item or request. */
+export function platformFromFormat(format: MediaFormat): MediaPlatform {
+  return format === "short" || format === "video" ? "youtube" : "instagram";
+}
+export function categoryFromFormat(format: MediaFormat): MediaCategory | null {
+  if (format === "video") return "longform";
+  if (format === "poster") return "poster";
+  return null;
+}
+
+export function platformMeta(platform: string): { label: string; pill: string; color: string } {
+  return (
+    MEDIA_PLATFORMS[platform as MediaPlatform] ?? {
+      label: platform,
+      pill: platform.slice(0, 2).toUpperCase(),
+      color: "#9a9078",
+    }
+  );
+}
+
+export function categoryLabel(category: string | null | undefined, form: "label" | "short" = "label"): string {
+  if (!category) return "Uncategorised";
+  return MEDIA_CATEGORIES[category as MediaCategory]?.[form] ?? category;
+}
 
 export const MEDIA_ITEM_STATUSES = [
   "idea",
@@ -53,17 +122,21 @@ export const MEDIA_DEFAULT_CHECKLIST: Record<MediaFormat, string[]> = {
   poster: ["Design", "Approval", "Publish"],
 };
 
-/**
- * Weekly output targets the cadence tracker measures against. Deliberate
- * constants, not a settings table — the team revises them in a PR, the same
- * way the L2 scorecard weights are kept.
- */
-export const MEDIA_WEEKLY_TARGETS: Record<MediaFormat, number> = {
-  reel: 3,
-  short: 2,
-  video: 1,
-  poster: 2,
+/** Per-category checklist; uncategorised items fall back to the format's list. */
+export const MEDIA_CATEGORY_CHECKLIST: Record<MediaCategory, string[]> = {
+  longform: ["Script", "Shoot", "Edit", "Thumbnail", "Approval", "Publish"],
+  longform_cut: ["Pick clip", "Edit", "Captions", "Approval", "Publish"],
+  anchoring: ["Script", "Shoot", "Edit", "Approval", "Publish"],
+  animated_en: ["Script", "Voice-over", "Animate", "Approval", "Publish"],
+  animated_ml: ["Script", "Voice-over", "Animate", "Approval", "Publish"],
+  poster: ["Design", "Approval", "Publish"],
+  coding_en: ["Script", "Record", "Edit", "Approval", "Publish"],
+  coding_ml: ["Script", "Record", "Edit", "Approval", "Publish"],
 };
+
+export function mediaChecklist(category: MediaCategory | null, format: MediaFormat): string[] {
+  return category ? MEDIA_CATEGORY_CHECKLIST[category] : MEDIA_DEFAULT_CHECKLIST[format];
+}
 
 export type MediaTaskDto = {
   id: string;
@@ -78,7 +151,11 @@ export type MediaTaskDto = {
 export type MediaItemDto = {
   id: string;
   title: string;
+  /** Legacy axis, derived from platform + category. */
   format: string;
+  platform: string;
+  /** A MediaCategory code, or null for an item nobody has filed yet. */
+  category: string | null;
   status: string;
   publishDate: string | null;
   publishTime: string | null;

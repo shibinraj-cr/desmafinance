@@ -7,14 +7,18 @@ import { getCurrentUserAndPermissions } from "@/lib/permissions";
 import { recordAudit } from "@/lib/audit";
 import { toPrismaDate } from "@/lib/lead-pulse-dates";
 import {
+  MEDIA_CATEGORY_CODES,
   MEDIA_FORMAT_CODES,
   MEDIA_ITEM_STATUSES,
-  MEDIA_DEFAULT_CHECKLIST,
+  MEDIA_PLATFORM_CODES,
   canUseMediaPlanner,
+  categoryFromFormat,
+  deriveMediaFormat,
   isSafeHttpUrl,
+  mediaChecklist,
   mediaItemInclude,
+  platformFromFormat,
   serializeMediaItem,
-  type MediaFormat,
 } from "@/lib/media-plan";
 
 export const dynamic = "force-dynamic";
@@ -59,9 +63,14 @@ export const GET = withApiHandler(async (req: Request) => {
   return NextResponse.json({ items: items.map(serializeMediaItem) });
 });
 
-const CreateSchema = z.object({
+const CreateSchema = z
+  .object({
   title: z.string().trim().min(1).max(300),
-  format: z.enum(MEDIA_FORMAT_CODES),
+  // Platform + category are the planner's axes. `format` alone is still
+  // accepted from older clients and mapped onto them.
+  platform: z.enum(MEDIA_PLATFORM_CODES).optional(),
+  category: z.enum(MEDIA_CATEGORY_CODES).optional().nullable(),
+  format: z.enum(MEDIA_FORMAT_CODES).optional(),
   status: z.enum(MEDIA_ITEM_STATUSES).optional(),
   publishDate: z.string().regex(DATE_RX).optional().nullable(),
   publishTime: z.string().regex(TIME_RX).optional().nullable(),
@@ -79,7 +88,8 @@ const CreateSchema = z.object({
   // Seed the standard production checklist for the format (default on). The
   // Publish step inherits the publish date so the reminder cron can fire.
   seedChecklist: z.boolean().optional(),
-});
+  })
+  .refine((d) => d.platform || d.format, "platform is required");
 
 export const POST = withApiHandler(async (req: Request) => {
   const userId = await requirePlannerAccess();
@@ -93,13 +103,20 @@ export const POST = withApiHandler(async (req: Request) => {
     if (!owner?.isActive) throw badRequest("The selected owner is not an active user.", "bad_owner");
   }
 
+  const platform = data.platform ?? platformFromFormat(data.format!);
+  const category =
+    data.category !== undefined ? data.category : data.format ? categoryFromFormat(data.format) : null;
+  const format = deriveMediaFormat(platform, category);
+
   const seed = data.seedChecklist ?? true;
-  const steps = seed ? MEDIA_DEFAULT_CHECKLIST[data.format as MediaFormat] : [];
+  const steps = seed ? mediaChecklist(category, format) : [];
 
   const item = await prisma.mediaPlanItem.create({
     data: {
       title: data.title,
-      format: data.format,
+      format,
+      platform,
+      category,
       status: data.status ?? "idea",
       publishDate: data.publishDate ? toPrismaDate(data.publishDate) : null,
       publishTime: data.publishTime ?? null,
@@ -128,7 +145,12 @@ export const POST = withApiHandler(async (req: Request) => {
     entityId: item.id,
     action: "CREATE",
     userId,
-    changes: { title: item.title, format: item.format, publishDate: data.publishDate ?? null },
+    changes: {
+      title: item.title,
+      platform: item.platform,
+      category: item.category,
+      publishDate: data.publishDate ?? null,
+    },
   });
 
   return NextResponse.json({ item: serializeMediaItem(item) }, { status: 201 });

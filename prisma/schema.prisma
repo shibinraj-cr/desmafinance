@@ -1010,15 +1010,23 @@ model Holiday {
   @@index([date])
 }
 
-/// One planned piece of marketing content — a YouTube Short or video, an
-/// Instagram reel, or a poster. The unit the Media Planner calendar and
+/// One planned post of marketing content on one platform (YouTube,
+/// Instagram, Facebook or LinkedIn), filed under a content category. The unit the Media Planner calendar and
 /// production board render. Dates are IST calendar days stored as
 /// UTC-midnight `@db.Date` (the `toPrismaDate` convention).
 model MediaPlanItem {
   id          String    @id @default(cuid())
   title       String
-  // 'short' | 'video' | 'reel' | 'poster'
+  // Legacy 'short' | 'video' | 'reel' | 'poster' — derived from platform +
+  // category on every write (see deriveMediaFormat).
   format      String
+  // 'youtube' | 'instagram' | 'facebook' | 'linkedin' — one item per post per
+  // platform, so a piece cross-posted to four platforms is four items.
+  platform    String    @default("youtube")
+  // Content category (MEDIA_CATEGORY_CODES): 'longform' | 'longform_cut' |
+  // 'anchoring' | 'animated_en' | 'animated_ml' | 'poster' | 'coding_en' |
+  // 'coding_ml'. Null = not filed yet.
+  category    String?
   // Production stage: 'idea' | 'script' | 'shoot' | 'edit' | 'approval' |
   // 'scheduled' | 'published'. A string union like CrmTask.status, not an
   // enum, so a stage can be added without a migration.
@@ -1049,6 +1057,7 @@ model MediaPlanItem {
 
   // Calendar month fetch.
   @@index([publishDate])
+  @@index([platform, publishDate])
   // Production board (active items regardless of month).
   @@index([status, publishDate])
 }

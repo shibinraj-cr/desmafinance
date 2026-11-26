@@ -8,9 +8,16 @@ import { getCurrentUserAndPermissions } from "@/lib/permissions";
 import { recordAudit } from "@/lib/audit";
 import { toPrismaDate } from "@/lib/lead-pulse-dates";
 import {
+  MEDIA_CATEGORY_CODES,
   MEDIA_FORMAT_CODES,
   MEDIA_ITEM_STATUSES,
+  MEDIA_PLATFORM_CODES,
   canUseMediaPlanner,
+  categoryFromFormat,
+  deriveMediaFormat,
+  platformFromFormat,
+  type MediaCategory,
+  type MediaPlatform,
   isSafeHttpUrl,
   mediaItemInclude,
   serializeMediaItem,
@@ -30,6 +37,9 @@ async function requirePlannerAccess() {
 
 const PatchSchema = z.object({
   title: z.string().trim().min(1).max(300).optional(),
+  platform: z.enum(MEDIA_PLATFORM_CODES).optional(),
+  category: z.enum(MEDIA_CATEGORY_CODES).optional().nullable(),
+  // Legacy: a format-only change is mapped onto platform + category.
   format: z.enum(MEDIA_FORMAT_CODES).optional(),
   status: z.enum(MEDIA_ITEM_STATUSES).optional(),
   publishDate: z.string().regex(DATE_RX).optional().nullable(),
@@ -54,9 +64,25 @@ export const PATCH = withApiHandler(
 
     const existing = await prisma.mediaPlanItem.findUnique({
       where: { id: params.id },
-      select: { id: true, status: true },
+      select: { id: true, status: true, platform: true, category: true },
     });
     if (!existing) throw notFound();
+
+    // The stored format always follows platform + category.
+    let axes: { platform: MediaPlatform; category: MediaCategory | null; format: string } | null = null;
+    if (data.platform !== undefined || data.category !== undefined || data.format !== undefined) {
+      const platform =
+        data.platform ??
+        (data.format && data.category === undefined ? platformFromFormat(data.format) : null) ??
+        (existing.platform as MediaPlatform);
+      const category =
+        data.category !== undefined
+          ? data.category
+          : data.format && data.platform === undefined
+            ? categoryFromFormat(data.format) ?? (existing.category as MediaCategory | null)
+            : (existing.category as MediaCategory | null);
+      axes = { platform, category, format: deriveMediaFormat(platform, category) };
+    }
 
     if (data.ownerId) {
       const owner = await prisma.user.findUnique({
@@ -72,7 +98,7 @@ export const PATCH = withApiHandler(
       where: { id: params.id },
       data: {
         ...(data.title !== undefined ? { title: data.title } : {}),
-        ...(data.format !== undefined ? { format: data.format } : {}),
+        ...(axes ?? {}),
         ...(data.status !== undefined
           ? {
               status: data.status,
