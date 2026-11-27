@@ -376,6 +376,15 @@ export const MODULES: AppModule[] = [
         group: "WHATSAPP",
       },
       {
+        // Right after the Inbox: is every message answered, and how fast? Same
+        // audience as the inbox (see canSeePage) and the same visibility scope —
+        // oversight roles see the whole desk, a consultant sees their own chats.
+        href: "/crm/wa-replies",
+        label: "Reply Tracker",
+        icon: "mark_chat_read",
+        group: "WHATSAPP",
+      },
+      {
         // Lives beside the inbox rather than in Tools: both are the WhatsApp
         // workspace, and a marketer looking for broadcasts looks under WhatsApp.
         // Page enforces canBulkEmail — the same authority as a bulk email.

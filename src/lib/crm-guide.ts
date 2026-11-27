@@ -137,6 +137,12 @@ export type GuideChange = { date: string; section: string; title: string; detail
  */
 export const CRM_GUIDE_CHANGES: GuideChange[] = [
   {
+    date: "2026-11-27",
+    section: "inbox",
+    title: "Reply Tracker",
+    detail: "A new page under WhatsApp shows every chat still waiting for your reply, longest wait first, and how fast you answered. Click **Reply** to open the chat.",
+  },
+  {
     date: "2026-11-17",
     section: "deal-enroll",
     title: "Enroll now asks for the payment",
@@ -577,7 +583,7 @@ export function crmGuideSections(f: GuideFacts, canSee: (href: string) => boolea
       id: "inbox",
       title: "Answer WhatsApp in the Inbox",
       group: "Your day",
-      pages: ["/crm/inbox"],
+      pages: ["/crm/inbox", "/crm/wa-replies"],
       summary: `${where("/crm/inbox")} holds the WhatsApp chats on the company number for leads assigned to you. The badge counts chats waiting on a reply.`,
       blocks: [
         {
@@ -596,6 +602,16 @@ export function crmGuideSections(f: GuideFacts, canSee: (href: string) => boolea
             "Every reply you send is logged on the lead's timeline as a WhatsApp contact by you, so it counts for your response time and stops the uncontacted alarm.",
             "**Close conversation** clears a finished chat from your list. It doesn't change the lead's stage, and the chat reopens by itself if the candidate writes again.",
             "When a number the CRM has never seen messages the company WhatsApp, a new lead is created by itself, named with the phone number and with source **WA API**. Add the candidate's name once you know it.",
+          ],
+        },
+        {
+          kind: "steps",
+          title: "Check nothing is left unanswered",
+          items: [
+            `${where("/crm/wa-replies")} lists every chat still waiting for your reply, longest wait first. Red means it has waited past the target.`,
+            "Click **Reply** to open the chat in the Inbox and answer it. It leaves the list as soon as you send.",
+            "**Template only** means 24 hours have passed since the candidate's last message: reply with a template.",
+            "**Answered late** shows the messages you answered after the target, so you can see where you slipped.",
           ],
         },
         {
@@ -1456,6 +1472,13 @@ export function crmGuideQuiz(f: GuideFacts): GuideQuizQuestion[] {
       ["Only an approved template"],
       ["Any free-text message", "Nothing — the chat is closed for good", "Only a photo"],
       "WhatsApp allows free text for 24 hours after the candidate's last message. After that, start again with a template.",
+    ),
+    q(
+      "wa-reply-counts",
+      "A candidate messages on WhatsApp. What takes the chat off the Reply Tracker's waiting list?",
+      ["You send them a WhatsApp reply"],
+      ["You open the chat and read it", "An automated reminder goes out to them", "You close the conversation without replying"],
+      "Only a reply a person sends counts as an answer. Reading a chat or an automated message doesn't. Closing a chat hides it, but the tracker still counts it as closed without a reply.",
     ),
     q(
       "pipeline-how",
