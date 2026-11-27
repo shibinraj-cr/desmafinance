@@ -168,7 +168,9 @@ export function LeaveEligibilityClient({
                   </td>
                   <td className="px-sm py-xs text-on-surface-variant">
                     {e.eligibility?.carryForward
-                      ? `Yes (max ${e.eligibility.carryForwardCap.toFixed(0)})`
+                      ? e.eligibility.carryForwardCap > 0
+                        ? `Yes (max ${e.eligibility.carryForwardCap.toFixed(0)})`
+                        : "Yes (no cap)"
                       : "No"}
                   </td>
                   <td className="px-sm py-xs text-right">
@@ -431,7 +433,7 @@ function EligibilityModal({
           </label>
           <label className="block space-y-xs">
             <span className="text-caption uppercase tracking-wider text-on-surface-variant">
-              Carry-forward cap
+              Carry-forward cap (0 = no cap)
             </span>
             <input
               type="number"

@@ -125,9 +125,13 @@ describe("leaveUsedInYear", () => {
     expect(leaveUsedInYear(days, 2026)).toBe(1.5);
   });
 
-  it("still ignores days outside the year", () => {
-    const days = [day("2025-12-30", "HD", { halfPaid: true }), day("2026-01-02", "LV")];
-    expect(leaveUsedInYear(days, 2026)).toBe(1);
+  it("still ignores days outside the leave year (26 Dec opens the next one)", () => {
+    const days = [
+      day("2025-12-20", "HD", { halfPaid: true }), // leave year 2025 — ignored
+      day("2025-12-30", "HD", { halfPaid: true }), // Jan-2026 cycle → leave year 2026
+      day("2026-01-02", "LV"),
+    ];
+    expect(leaveUsedInYear(days, 2026)).toBe(1.5);
   });
 });
 

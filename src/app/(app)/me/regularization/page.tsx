@@ -1,7 +1,7 @@
 import { redirect } from "next/navigation";
 import { prisma } from "@/lib/prisma";
 import { getCurrentUserAndPermissions } from "@/lib/permissions";
-import { recomputeLeaveBalance } from "@/lib/hr-leave-balance";
+import { recomputeLeaveBalance, leaveYearForDate } from "@/lib/hr-leave-balance";
 import { employeeForUser } from "@/lib/hr-me";
 import { TopBar } from "@/components/TopBar";
 import { Section } from "@/components/Cards";
@@ -133,7 +133,7 @@ export default async function MyRegularizationPage({
 
   // Show the employee what they actually have before they apply. Recomputed
   // rather than read from the stored row, which only refreshes on a decision.
-  const leaveBalance = await recomputeLeaveBalance(emp.id, new Date().getUTCFullYear())
+  const leaveBalance = await recomputeLeaveBalance(emp.id, leaveYearForDate(new Date()))
     .then((b) => b.balance)
     .catch(() => null);
 

@@ -97,12 +97,15 @@ export function paidLeaveCoveredByDay(
  * per-employee eligibility and the leave HR actually reviewed and decided.
  *
  * This module is the single source of truth. `recomputeLeaveBalance` derives:
+ *   - opening = from LEAVE_ROLLOVER_FROM_YEAR on, last leave year's closing
+ *               balance under the carry-forward policy (see `openingForYear`);
+ *               earlier years keep the stored opening,
  *   - accrued = per-employee entitlement-to-date for the year — HR's per-month
  *               allocation (HrLeaveAccrual source 'allocation') where set, else
  *               the eligibility auto-accrual (`leavesPerPeriod`) for that month,
  *               summed over elapsed months + manual ledger adjustments
  *               (HrLeaveAccrual source 'manual' / 'expiry'),
- *   - used    = reviewed & decided paid leave in the calendar year: full-day
+ *   - used    = reviewed & decided paid leave in the leave year: full-day
  *               LV at 1.0, a half-day granted as PAID leave at 0.5, plus the
  *               portion of loss-of-pay the monthly allocation covered,
  *   - balance = opening + accrued − used,
@@ -114,6 +117,80 @@ export function paidLeaveCoveredByDay(
 // PrismaClient or an interactive-transaction client — `prisma` is assignable
 // to TransactionClient (it's a superset), so callers can pass either.
 type Db = Prisma.TransactionClient;
+
+/**
+ * The leave year a date belongs to. Leave years follow the salary cycle, not
+ * the calendar: the January cycle opens on 26 Dec, so 26–31 Dec already belong
+ * to the NEXT leave year. Same basis as the ledger's cycle-year window — use
+ * this wherever a balance row (keyed by year) is picked for a date, or "today".
+ */
+export function leaveYearForDate(d: Date): number {
+  return Number(cycleMonthForDate(d).slice(0, 4));
+}
+
+/**
+ * First leave year whose opening balance is rolled over from the previous
+ * year's closing balance. Earlier years keep the stored
+ * `HrLeaveBalance.opening` (seeded before this engine existed), so the
+ * rollover never rewrites a year that has already been paid out.
+ */
+export const LEAVE_ROLLOVER_FROM_YEAR = 2027;
+
+/** The carry-forward settings on an employee's `HrLeaveEligibility`. */
+export type CarryForwardPolicy = {
+  carryForward: boolean;
+  carryForwardCap: number | { toString(): string };
+};
+
+/**
+ * How much of a closing balance opens the next leave year.
+ *
+ * - Carry-forward off → 0 (the balance lapses at year end).
+ * - Cap > 0 → at most the cap. A cap of 0 means "no cap": it is the column's
+ *   default, and reading it as "carry nothing" would silently wipe the balance
+ *   of everyone HR left on the default.
+ * - A negative closing (leave over-drawn) is NOT carried as debt: payroll
+ *   already docks over-drawn leave, so carrying it would charge it twice.
+ * - No eligibility row → the column defaults (carry forward, no cap).
+ */
+export function carryForwardAmount(closing: number, policy: CarryForwardPolicy | null): number {
+  const carry = policy ? policy.carryForward : true;
+  if (!carry) return 0;
+  const positive = Math.max(0, closing);
+  const cap = policy ? Number(policy.carryForwardCap) : 0;
+  return round2(cap > 0 ? Math.min(positive, cap) : positive);
+}
+
+/**
+ * The opening balance of `year`. Before `LEAVE_ROLLOVER_FROM_YEAR` it is the
+ * stored opening; from then on it is the previous year's closing balance (the
+ * ledger's running balance after its December cycle), passed through the
+ * employee's carry-forward policy. Derived on every read rather than stored,
+ * so a late change to last year (a December decision, an allocation edit)
+ * flows into this year's opening without a separate rollover job.
+ *
+ * The previous year is evaluated as fully elapsed: a year still in progress
+ * (viewing next year early) projects its closing from the full-year
+ * allocation with no further leave.
+ */
+async function openingForYear(
+  db: Db,
+  employeeId: string,
+  year: number,
+  storedOpening: number,
+  policy: CarryForwardPolicy | null,
+  asOf: Date,
+): Promise<number> {
+  if (year < LEAVE_ROLLOVER_FROM_YEAR) return storedOpening;
+  const prevYearEnd = new Date(Date.UTC(year - 1, 11, 25));
+  const prev = await computeMonthlyLeaveLedger(employeeId, year - 1, {
+    asOf: asOf > prevYearEnd ? asOf : prevYearEnd,
+    fill: "full",
+    db,
+  });
+  const closing = prev.rows.length > 0 ? prev.rows[prev.rows.length - 1].balance : prev.opening;
+  return carryForwardAmount(closing, policy);
+}
 
 export interface ComputedBalance {
   opening: number;
@@ -228,7 +305,7 @@ export function explicitPaidLeave(days: { status: string; halfPaid?: boolean | n
 export async function computeMonthlyLeaveLedger(
   employeeId: string,
   year: number,
-  opts: { asOf?: Date; fill?: "toCurrent" | "full" } = {},
+  opts: { asOf?: Date; fill?: "toCurrent" | "full"; db?: Db } = {},
 ): Promise<{
   rows: LeaveLedgerRow[];
   opening: number;
@@ -237,6 +314,7 @@ export async function computeMonthlyLeaveLedger(
 }> {
   const asOf = opts.asOf ?? new Date();
   const fill = opts.fill ?? "toCurrent";
+  const db = opts.db ?? prisma;
   // Cycle-year window: Jan's cycle opens on 26 Dec of the previous year, Dec's
   // closes on 25 Dec of `year`. Every day in this window maps to a cycle month
   // keyed `${year}-01`..`${year}-12`.
@@ -244,9 +322,9 @@ export async function computeMonthlyLeaveLedger(
   const windowEnd = new Date(Date.UTC(year, 11, 25));
 
   const [eligibility, existing, ledger, days, employee] = await Promise.all([
-    prisma.hrLeaveEligibility.findUnique({ where: { employeeId } }),
-    prisma.hrLeaveBalance.findUnique({ where: { employeeId_year: { employeeId, year } } }),
-    prisma.hrLeaveAccrual.findMany({
+    db.hrLeaveEligibility.findUnique({ where: { employeeId } }),
+    db.hrLeaveBalance.findUnique({ where: { employeeId_year: { employeeId, year } } }),
+    db.hrLeaveAccrual.findMany({
       where: {
         employeeId,
         source: { in: ["manual", "expiry", "allocation"] },
@@ -256,14 +334,21 @@ export async function computeMonthlyLeaveLedger(
     }),
     // ALL attendance in the window (not just LV/HD/A): AL half-days are docked on
     // PRESENT rows, so late minutes on P days are needed to compute the true LOP.
-    prisma.hrAttendanceDay.findMany({
+    db.hrAttendanceDay.findMany({
       where: { employeeId, date: { gte: windowStart, lte: windowEnd } },
       select: { id: true, date: true, status: true, lateMinutes: true, halfPaid: true },
     }),
-    prisma.employee.findUnique({ where: { id: employeeId }, select: { halfHourConcession: true, joinDate: true, relievingDate: true } }),
+    db.employee.findUnique({ where: { id: employeeId }, select: { halfHourConcession: true, joinDate: true, relievingDate: true } }),
   ]);
 
-  const opening = existing ? Number(existing.opening) : 0;
+  const opening = await openingForYear(
+    db,
+    employeeId,
+    year,
+    existing ? Number(existing.opening) : 0,
+    eligibility,
+    asOf,
+  );
   const perMonthRate =
     eligibility && eligibility.enabled ? Number(eligibility.leavesPerPeriod) : 0;
   const accrualMonths = new Set(
@@ -342,7 +427,7 @@ export async function computeMonthlyLeaveLedger(
 }
 
 /**
- * Calendar years to offer in the Leave-tab year filter: every year the
+ * Leave years to offer in the Leave-tab year filter: every year the
  * employee holds a balance row for, plus last/this/next year (so a fresh
  * employee still has a sensible range and HR can pre-allocate ahead), sorted
  * newest first.
@@ -355,7 +440,7 @@ export async function leaveLedgerYears(
     where: { employeeId },
     select: { year: true },
   });
-  const cur = asOf.getUTCFullYear();
+  const cur = leaveYearForDate(asOf);
   const years = new Set<number>([cur - 1, cur, cur + 1]);
   for (const b of bals) years.add(b.year);
   return [...years].sort((a, b) => b - a);
@@ -448,7 +533,14 @@ export async function computeLeaveBalanceFor(
   // allocation covers the earliest absence / half-day / late-day up to the
   // balance available. A HD/AL is NOT charged in full: only the covered portion
   // (via the allocation) consumes the balance; the rest stays plain loss-of-pay.
-  const opening = existing ? Number(existing.opening) : 0;
+  const opening = await openingForYear(
+    db,
+    employeeId,
+    year,
+    existing ? Number(existing.opening) : 0,
+    eligibility,
+    asOf,
+  );
   let entitlement = 0;
   let used = 0;
   let balance = round2(opening + manualSum); // manual adjustments available up front
@@ -482,7 +574,31 @@ export async function recomputeLeaveBalance(
   opts: { db?: Db; asOf?: Date } = {},
 ): Promise<ComputedBalance> {
   const db = opts.db ?? prisma;
-  const c = await computeLeaveBalanceFor(db, employeeId, year, opts.asOf ?? new Date());
+  const asOf = opts.asOf ?? new Date();
+  const c = await persistLeaveBalance(db, employeeId, year, asOf);
+  // Year Y's closing opens year Y+1, so a change to Y moves every later year
+  // already on file (e.g. a December decision after January's row exists).
+  // Refresh them too so the stored rows — which payroll reads for paid-leave
+  // cover — never lag the ledger. Rows exist at most a year or two ahead (HR
+  // pre-allocating next year), so the walk is short; the bound is a backstop.
+  for (let y = Math.max(year + 1, LEAVE_ROLLOVER_FROM_YEAR); y <= year + 3; y++) {
+    const later = await db.hrLeaveBalance.findUnique({
+      where: { employeeId_year: { employeeId, year: y } },
+      select: { id: true },
+    });
+    if (!later) break;
+    await persistLeaveBalance(db, employeeId, y, asOf);
+  }
+  return c;
+}
+
+async function persistLeaveBalance(
+  db: Db,
+  employeeId: string,
+  year: number,
+  asOf: Date,
+): Promise<ComputedBalance> {
+  const c = await computeLeaveBalanceFor(db, employeeId, year, asOf);
 
   const existing = await db.hrLeaveBalance.findUnique({
     where: { employeeId_year: { employeeId, year } },
@@ -516,12 +632,16 @@ export async function recomputeAllLeaveBalances(
   year: number,
   asOf: Date = new Date(),
 ): Promise<number> {
-  const yearStart = new Date(Date.UTC(year, 0, 1));
-  const yearEnd = new Date(Date.UTC(year, 11, 31));
+  // Cycle-year window (26 Dec prev → 25 Dec), the same basis as the balance.
+  const yearStart = new Date(Date.UTC(year - 1, 11, 26));
+  const yearEnd = new Date(Date.UTC(year, 11, 25));
+  // From the rollover year on, last year's balance holders open this year with
+  // their carry-forward even before anything else happens to them.
+  const balanceYears = year >= LEAVE_ROLLOVER_FROM_YEAR ? [year, year - 1] : [year];
 
   const [elig, bals, leaveEmp] = await Promise.all([
     prisma.hrLeaveEligibility.findMany({ select: { employeeId: true } }),
-    prisma.hrLeaveBalance.findMany({ where: { year }, select: { employeeId: true } }),
+    prisma.hrLeaveBalance.findMany({ where: { year: { in: balanceYears } }, select: { employeeId: true } }),
     prisma.hrAttendanceDay.findMany({
       where: { date: { gte: yearStart, lte: yearEnd }, status: { in: ["LV", "HD"] } },
       select: { employeeId: true },

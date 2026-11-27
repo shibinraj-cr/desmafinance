@@ -3,7 +3,7 @@ import { z } from "zod";
 import { prisma } from "@/lib/prisma";
 import { getCurrentUserAndPermissions } from "@/lib/permissions";
 import { canApproveHr } from "@/lib/hr-rbac";
-import { recomputeLeaveBalance } from "@/lib/hr-leave-balance";
+import { recomputeLeaveBalance, leaveYearForDate } from "@/lib/hr-leave-balance";
 
 const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
 
@@ -64,7 +64,7 @@ export async function PUT(req: Request, { params }: { params: { employeeId: stri
   // monthly accrual job.
   const balance = await recomputeLeaveBalance(
     params.employeeId,
-    new Date().getUTCFullYear(),
+    leaveYearForDate(new Date()),
   );
 
   await prisma.hrAuditLog.create({

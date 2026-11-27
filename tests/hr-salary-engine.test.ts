@@ -274,15 +274,17 @@ describe("leaveUsedInYear", () => {
     expect(leaveUsedInYear(days, 2026)).toBe(2); // LV only
   });
 
-  it("excludes leave that falls in a different calendar year (Dec→Jan cycle)", () => {
-    // A January cycle spans 26 Dec (prev year) → 25 Jan. December leave belongs
-    // to the previous year's balance, so it must not be added back to this year.
+  it("buckets by LEAVE year: 26–31 Dec belong to the next year (Dec→Jan cycle)", () => {
+    // A January cycle spans 26 Dec (prev year) → 25 Jan, and the leave engine
+    // charges all of it to the new leave year — so must the add-back.
     const days = [
-      { date: new Date(Date.UTC(2025, 11, 29)), status: "LV" }, // Dec 2025 — excluded
+      { date: new Date(Date.UTC(2025, 11, 20)), status: "LV" }, // 20 Dec 2025 — leave year 2025, excluded
+      { date: new Date(Date.UTC(2025, 11, 29)), status: "LV" }, // 29 Dec 2025 — leave year 2026, counted
       { date: new Date(Date.UTC(2026, 0, 5)), status: "LV" }, // Jan 2026 — counted
-      { date: new Date(Date.UTC(2026, 0, 10)), status: "HD" }, // Jan 2026 — HD not counted
+      { date: new Date(Date.UTC(2026, 0, 10)), status: "HD" }, // Jan 2026 — unpaid HD not counted
     ];
-    expect(leaveUsedInYear(days, 2026)).toBe(1); // Jan LV only
+    expect(leaveUsedInYear(days, 2026)).toBe(2); // 29 Dec + 5 Jan
+    expect(leaveUsedInYear(days, 2025)).toBe(1); // 20 Dec only
   });
 });
 

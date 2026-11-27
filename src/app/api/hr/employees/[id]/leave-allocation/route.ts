@@ -7,6 +7,7 @@ import {
   computeMonthlyLeaveLedger,
   recomputeLeaveBalance,
   leaveLedgerYears,
+  leaveYearForDate,
 } from "@/lib/hr-leave-balance";
 
 /**
@@ -29,7 +30,7 @@ async function ledgerPayload(employeeId: string, year: number) {
 
 function parseYear(raw: string | null): number {
   const y = Number(raw);
-  return Number.isInteger(y) && y >= 2000 && y <= 2100 ? y : new Date().getUTCFullYear();
+  return Number.isInteger(y) && y >= 2000 && y <= 2100 ? y : leaveYearForDate(new Date());
 }
 
 export async function GET(req: Request, { params }: { params: { id: string } }) {

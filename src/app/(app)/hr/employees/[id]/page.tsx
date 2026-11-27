@@ -3,7 +3,7 @@ import Link from "next/link";
 import { prisma } from "@/lib/prisma";
 import { getCurrentUserAndPermissions } from "@/lib/permissions";
 import { isHrUser, canApproveHr } from "@/lib/hr-rbac";
-import { computeMonthlyLeaveLedger, leaveLedgerYears } from "@/lib/hr-leave-balance";
+import { computeMonthlyLeaveLedger, leaveLedgerYears, leaveYearForDate } from "@/lib/hr-leave-balance";
 import { TopBar } from "@/components/TopBar";
 import { Section } from "@/components/Cards";
 import { EmployeeEditor } from "./client";
@@ -59,7 +59,7 @@ export default async function EmployeeDetailPage({ params }: { params: { id: str
   ]);
   if (!employee) notFound();
 
-  const currentYear = new Date().getUTCFullYear();
+  const currentYear = leaveYearForDate(new Date());
   const today = new Date();
   const todayDate = new Date(Date.UTC(today.getUTCFullYear(), today.getUTCMonth(), today.getUTCDate()));
   const [leaveLedger, leaveYears, activePf] = await Promise.all([
