@@ -196,6 +196,7 @@ export function canSeePage(p: Permissions, href: string): boolean {
     href.startsWith("/crm/deliveries/") ||
     href === "/crm/inbox" ||
     href.startsWith("/crm/inbox/") ||
+    href === "/crm/wa-replies" ||
     // The Broadcast Report, by itself: a consultant sees replies on their own
     // leads. The prefix rule below would otherwise tie it to a /crm/broadcasts
     // grant, which is the bulk-send tool and stays narrow.
