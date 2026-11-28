@@ -53,6 +53,7 @@ import {
   type VolumeAssignment,
   type VolumeTier,
 } from "./logic";
+import { partnerPartyId, syncCommissionPlan } from "./plan-sync";
 
 /**
  * Server half of Partner Commissions: who may do what, and every database write.
@@ -672,6 +673,8 @@ export async function updateInvoice(a: PcAccess, id: string, patch: InvoicePatch
         }
         await tx.commissionInvoiceLine.update({ where: { id: l.id }, data: lineData });
       }
+      // A sent invoice's collection plan follows its total, number and term.
+      if (inv.status === "sent") await syncCommissionPlan(tx, id);
     });
   } catch (e) {
     if (isUniqueViolation(e)) throw conflict(`Invoice number ${patch.number?.trim()} is already used by another invoice. Pick another number.`, "number_taken");
@@ -689,6 +692,7 @@ export async function removeInvoiceLine(a: PcAccess, id: string, lineId: string)
   await prisma.$transaction(async (tx) => {
     await tx.commissionInvoiceLine.delete({ where: { id: lineId } });
     if (line.enrollmentId) await tx.commissionEnrollment.updateMany({ where: { id: line.enrollmentId, invoiceId: id }, data: { invoiceId: null } });
+    if (inv.status === "sent") await syncCommissionPlan(tx, id);
   });
   await recordAudit({ entityType: "CommissionInvoice", entityId: id, action: "UPDATE", userId: a.userId, changes: { removedLine: line.description } });
 }
@@ -718,6 +722,7 @@ export async function addInvoiceLine(a: PcAccess, id: string, enrollmentId: stri
         ...lineTerms(e, vol),
       },
     });
+    if (inv.status === "sent") await syncCommissionPlan(tx, id);
   });
   await recordAudit({ entityType: "CommissionInvoice", entityId: id, action: "UPDATE", userId: a.userId, changes: { addedEnrollment: enrollmentId } });
 }
@@ -727,7 +732,12 @@ export async function markInvoiceSent(a: PcAccess, id: string) {
   const inv = await loadInvoice(id);
   if (inv.status !== "draft") throw conflict("Only a draft can be marked as sent.");
   if (inv.lines.length === 0) throw conflict("This invoice has no lines.");
-  await prisma.commissionInvoice.update({ where: { id }, data: { status: "sent", sentAt: new Date() } });
+  // Sent = money expected: its collection plan is made in the same step.
+  await prisma.$transaction(async (tx) => {
+    const moved = await tx.commissionInvoice.updateMany({ where: { id, status: "draft" }, data: { status: "sent", sentAt: new Date() } });
+    if (moved.count !== 1) throw conflict("Someone just changed this invoice. Reload and try again.");
+    await syncCommissionPlan(tx, id);
+  });
   await recordAudit({ entityType: "CommissionInvoice", entityId: id, action: "UPDATE", userId: a.userId, changes: { status: "sent" } });
 }
 
@@ -749,6 +759,7 @@ export async function cancelInvoice(a: PcAccess, id: string) {
   await prisma.$transaction(async (tx) => {
     await tx.commissionEnrollment.updateMany({ where: { invoiceId: id }, data: { invoiceId: null } });
     await tx.commissionInvoice.update({ where: { id }, data: { status: "cancelled", cancelledAt: new Date() } });
+    await syncCommissionPlan(tx, id);
   });
   await recordAudit({ entityType: "CommissionInvoice", entityId: id, action: "UPDATE", userId: a.userId, changes: { status: "cancelled" } });
 }
@@ -841,18 +852,6 @@ export async function updateReceipt(a: PcAccess, id: string, r: Partial<ReceiptI
   await recordAudit({ entityType: "CommissionReceipt", entityId: id, action: "UPDATE", userId: a.userId, changes: { ...r } });
 }
 
-/** The partner's Party for the Revenue rows: the linked one, else one named like it (created when missing). */
-async function partnerPartyId(tx: Prisma.TransactionClient, partner: { id: string; name: string; partyId: string | null }): Promise<string> {
-  if (partner.partyId) return partner.partyId;
-  const existing = await tx.party.findFirst({
-    where: { name: { equals: partner.name, mode: "insensitive" }, group: "Vendor" },
-    select: { id: true },
-  });
-  const partyId = existing?.id ?? (await tx.party.create({ data: { name: partner.name, group: "Vendor", txTypes: "Both" } })).id;
-  await tx.commissionPartner.update({ where: { id: partner.id }, data: { partyId } });
-  return partyId;
-}
-
 /**
  * Approve a recorded payment: posts the INR value to Revenue › Commissions,
  * split by program, dated the day it reached Wio — unless the receipt is marked
@@ -919,6 +918,8 @@ export async function approveReceipt(a: PcAccess, id: string, edits: Partial<Rec
     const total = invoiceTotal(lines);
     const status = anyAwaiting ? "awaiting" : statusAfterApproval({ total, approvedAud, settleInFull: settledInFull });
     await tx.commissionInvoice.update({ where: { id: inv.id }, data: { status } });
+    // The plan shows this payment as received, at its real INR value.
+    await syncCommissionPlan(tx, inv.id);
     return { txIds, status };
   });
   for (const [i, txId] of result.txIds.entries()) {

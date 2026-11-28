@@ -11,6 +11,7 @@ import { todayIst, fromPrismaDate } from "@/lib/lead-pulse-dates";
 import { loadSettings } from "@/lib/invoices/server";
 import { notInvoiceableReason } from "@/lib/invoices/core";
 import { parseUndo } from "@/lib/collection-payment-server";
+import { PC_FINANCE_PAGE } from "@/lib/partner-commissions/constants";
 
 export const dynamic = "force-dynamic";
 
@@ -48,6 +49,7 @@ export default async function CollectionPlanDetailPage({
         },
       },
       createdBy: { select: { id: true, username: true } },
+      commissionInvoice: { select: { id: true, number: true } },
     },
   });
   if (!plan) notFound();
@@ -60,6 +62,7 @@ export default async function CollectionPlanDetailPage({
     .filter((x) => x.undo && x.i.status === "received")
     .sort((a, b) => b.undo!.at.localeCompare(a.undo!.at))[0];
   const undoableId =
+    !plan.commissionInvoice &&
     canApprove(perms) &&
     latestRecorded &&
     latestRecorded.i.transaction &&
@@ -108,6 +111,12 @@ export default async function CollectionPlanDetailPage({
             status: plan.status as "active" | "closed" | "cancelled",
             createdByUsername: plan.createdBy?.username ?? null,
             createdAt: plan.createdAt.toISOString(),
+            commissionInvoice: plan.commissionInvoice
+              ? {
+                  number: plan.commissionInvoice.number,
+                  href: `${PC_FINANCE_PAGE}?tab=invoices&invoice=${encodeURIComponent(plan.commissionInvoice.id)}`,
+                }
+              : null,
             installments: plan.installments.map((i) => ({
               id: i.id,
               seq: i.seq,

@@ -10,6 +10,7 @@ import { PlanChangeRefused, applyPaymentToPlan } from "@/lib/collection-payment-
 import { lockLedgerRow } from "@/lib/invoices/ledger-lock";
 import { NOT_INVOICEABLE_MESSAGE, notInvoiceableReason } from "@/lib/invoices/core";
 import { loadSettings } from "@/lib/invoices/server";
+import { commissionPlanRefusal } from "@/lib/partner-commissions/plan-sync";
 
 export const dynamic = "force-dynamic";
 
@@ -29,6 +30,9 @@ export async function POST(req: NextRequest, { params }: { params: { id: string;
   const { perms, userId } = await getCurrentUserAndPermissions();
   if (!perms || !userId) return NextResponse.json({ error: "unauthorized" }, { status: 401 });
   if (!canSeePage(perms, PAGE) || !canApprove(perms)) return NextResponse.json({ error: "forbidden" }, { status: 403 });
+  // A plan that follows a Partner Commissions invoice is changed only by it.
+  const refusal = await commissionPlanRefusal(params.id);
+  if (refusal) return NextResponse.json(refusal, { status: 409 });
 
   const parsed = z.object({ transactionId: z.string().min(1) }).safeParse(await req.json().catch(() => null));
   if (!parsed.success) return NextResponse.json({ error: "validation_failed" }, { status: 400 });

@@ -6,6 +6,7 @@ import { canSeePage } from "@/lib/rbac";
 import { PAYMENT_MODES } from "@/lib/catalog";
 import { verifyCategorySubItem } from "@/lib/master-data";
 import { recordAudit } from "@/lib/audit";
+import { commissionPlanRefusal } from "@/lib/partner-commissions/plan-sync";
 
 export const dynamic = "force-dynamic";
 
@@ -36,6 +37,9 @@ export async function PATCH(
   if (!canSeePage(perms, PAGE)) {
     return NextResponse.json({ error: "forbidden" }, { status: 403 });
   }
+  // A plan that follows a Partner Commissions invoice is changed only by it.
+  const refusal = await commissionPlanRefusal(params.id);
+  if (refusal) return NextResponse.json(refusal, { status: 409 });
   const body = await req.json().catch(() => null);
   const parsed = PatchSchema.safeParse(body);
   if (!parsed.success) {
@@ -104,6 +108,9 @@ export async function DELETE(
   if (!canSeePage(perms, PAGE)) {
     return NextResponse.json({ error: "forbidden" }, { status: 403 });
   }
+  // A plan that follows a Partner Commissions invoice is changed only by it.
+  const refusal = await commissionPlanRefusal(params.id);
+  if (refusal) return NextResponse.json(refusal, { status: 409 });
   const existing = await prisma.collectionPlanInstallment.findUnique({
     where: { id: params.installmentId },
   });

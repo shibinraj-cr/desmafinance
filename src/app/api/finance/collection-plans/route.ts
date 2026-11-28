@@ -50,6 +50,9 @@ export async function GET(req: NextRequest) {
     where: {
       ...(partyId ? { partyId } : {}),
       ...(status ? { status } : {}),
+      // The Daily Tracker's "which instalment?" picker reads this. A plan
+      // that follows a Partner Commissions invoice is paid on the invoice.
+      commissionInvoiceId: null,
     },
     orderBy: [{ createdAt: "desc" }],
     include: {

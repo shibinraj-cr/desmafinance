@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { logger } from "@/lib/logger";
 import { runMonthly } from "@/lib/partner-commissions/server";
+import { syncOpenCommissionPlans } from "@/lib/partner-commissions/plan-sync";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 60;
@@ -21,6 +22,9 @@ async function handle(req: Request): Promise<NextResponse> {
   const authed = req.headers.get("authorization") === `Bearer ${secret}` || url.searchParams.get("key") === secret;
   if (!authed) return NextResponse.json({ error: "unauthorized" }, { status: 401 });
   try {
+    // Any invoice still owed money without its collection plan gets one.
+    const plans = await syncOpenCommissionPlans();
+    if (plans) logger.info("pc_plan_backfill", { plans });
     const result = await runMonthly();
     logger.info("pc_monthly_run", { ran: result.ran, reason: result.reason, invoices: result.invoices.length });
     return NextResponse.json(result);

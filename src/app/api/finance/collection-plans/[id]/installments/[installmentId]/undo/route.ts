@@ -4,6 +4,7 @@ import { getCurrentUserAndPermissions } from "@/lib/permissions";
 import { canApprove, canSeePage } from "@/lib/rbac";
 import { recordAudit } from "@/lib/audit";
 import { UndoRefused, undoPayment } from "@/lib/collection-payment-server";
+import { commissionPlanRefusal } from "@/lib/partner-commissions/plan-sync";
 
 export const dynamic = "force-dynamic";
 
@@ -20,6 +21,9 @@ export async function POST(_req: NextRequest, { params }: { params: { id: string
   const { perms, userId } = await getCurrentUserAndPermissions();
   if (!perms || !userId) return NextResponse.json({ error: "unauthorized" }, { status: 401 });
   if (!canSeePage(perms, PAGE) || !canApprove(perms)) return NextResponse.json({ error: "forbidden" }, { status: 403 });
+  // A plan that follows a Partner Commissions invoice is changed only by it.
+  const refusal = await commissionPlanRefusal(params.id);
+  if (refusal) return NextResponse.json(refusal, { status: 409 });
 
   const own = await prisma.collectionPlanInstallment.findUnique({ where: { id: params.installmentId }, select: { planId: true } });
   if (!own || own.planId !== params.id) return NextResponse.json({ error: "not_found" }, { status: 404 });

@@ -5,6 +5,7 @@ import { getCurrentUserAndPermissions } from "@/lib/permissions";
 import { canSeePage } from "@/lib/rbac";
 import { TopBar } from "@/components/TopBar";
 import { inr } from "@/lib/format";
+import { syncOpenCommissionPlans } from "@/lib/partner-commissions/plan-sync";
 
 export const dynamic = "force-dynamic";
 
@@ -53,6 +54,10 @@ export default async function CollectionPlanListPage({
   const rangeActive = !!(fromDate || toDate);
   const inRange = (d: Date) =>
     (!fromDate || d >= fromDate) && (!toDate || d <= toDate);
+
+  // Sent Partner Commissions invoices get their plan when marked sent; this
+  // catches any sent before that existed. One indexed query when none are.
+  await syncOpenCommissionPlans();
 
   const plans = await prisma.collectionPlan.findMany({
     orderBy: [{ createdAt: "desc" }],

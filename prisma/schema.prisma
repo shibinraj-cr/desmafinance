@@ -1639,6 +1639,12 @@ model CollectionPlan {
   installments CollectionPlanInstallment[]
   /// Set when the plan was made from a verified CRM enrollment.
   crmEnrollment CrmEnrollment? @relation("CrmEnrollmentPlan")
+  /// Set when the plan follows a Partner Commissions invoice: made when the
+  /// invoice is marked sent and kept in step with it (payments approved,
+  /// cancelled). Read-only on the Collection Plan pages; the payment is
+  /// recorded on the invoice (src/lib/partner-commissions/plan-sync.ts).
+  commissionInvoiceId String?            @unique
+  commissionInvoice   CommissionInvoice? @relation(fields: [commissionInvoiceId], references: [id], onDelete: SetNull)
 
   @@index([partyId])
   @@index([serviceId])
@@ -7109,6 +7115,8 @@ model CommissionInvoice {
   lines       CommissionInvoiceLine[]
   receipts    CommissionReceipt[]
   enrollments CommissionEnrollment[]
+  /// The collection plan that expects this invoice's money (once sent).
+  collectionPlan CollectionPlan?
 
   @@index([partnerId])
   @@index([status])
