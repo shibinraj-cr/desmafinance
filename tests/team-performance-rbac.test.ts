@@ -3,6 +3,7 @@ import {
   canViewAnyTeamPerformancePage,
   canViewTeamPerformancePage,
   hasFullTeamPerformanceAccess,
+  TEAM_PERFORMANCE_PAGES,
   TP_BDE,
   TP_OVERVIEW,
   TP_SUPPORT,
@@ -32,7 +33,7 @@ describe("Team Performance access", () => {
       { ...base, roleName: " hr manager " },
     ]) {
       expect(hasFullTeamPerformanceAccess(p)).toBe(true);
-      for (const h of [TP_OVERVIEW, TP_SUPPORT, TP_UNANSWERED, TP_BDE]) {
+      for (const h of TEAM_PERFORMANCE_PAGES) {
         expect(canViewTeamPerformancePage(p, h)).toBe(true);
       }
     }
