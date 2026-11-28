@@ -67,6 +67,7 @@ export const GET = withApiHandler(async (req: Request) => {
       lastInboundAt: true,
       sessionExpiresAt: true,
       awaitingReply: true,
+      autoReplied: true,
       lead: {
         select: { id: true, candidateName: true, status: { select: { label: true, color: true } } },
       },
@@ -105,8 +106,9 @@ export const GET = withApiHandler(async (req: Request) => {
     ...(ownerScope ?? {}),
     ...(campaignScope ?? {}),
   };
-  const [needsReply, unread, unassigned] = await Promise.all([
+  const [needsReply, autoReplied, unread, unassigned] = await Promise.all([
     prisma.waConversation.count({ where: { ...open, awaitingReply: true } }),
+    prisma.waConversation.count({ where: { ...open, autoReplied: true } }),
     prisma.waConversation.count({ where: { ...open, unreadCount: { gt: 0 } } }),
     prisma.waConversation.count({ where: { ...open, assignedToId: null } }),
   ]);
@@ -129,7 +131,7 @@ export const GET = withApiHandler(async (req: Request) => {
   return NextResponse.json({
     conversations: page.map(serializeInboxRow),
     nextCursor: hasMore ? page[page.length - 1]?.id ?? null : null,
-    counts: { needsReply, unread, unassigned },
+    counts: { needsReply, autoReplied, unread, unassigned },
     campaigns,
     filter,
   });

@@ -29,6 +29,7 @@ type InboxRow = {
   lastInboundAt: string | null;
   sessionOpen: boolean;
   awaitingReply: boolean;
+  autoReplied: boolean;
   preview: string | null;
   previewDirection: string | null;
   lead: { id: string; candidateName: string; statusLabel: string | null; statusColor: string | null } | null;
@@ -148,6 +149,9 @@ type BdeOpt = { userId: string; displayName: string };
 
 const FILTERS = [
   { key: "needs_reply", label: "Needs reply", countKey: "needsReply" as const },
+  // Nobody answered, but an automated message went after theirs — their turn
+  // now, but still worth a person's look (see wa/reply-state).
+  { key: "auto_replied", label: "Bot replied", countKey: "autoReplied" as const },
   { key: "mine", label: "Mine", countKey: null },
   { key: "unread", label: "Unread", countKey: "unread" as const },
   { key: "unassigned", label: "Unassigned", countKey: "unassigned" as const },
@@ -226,7 +230,7 @@ export function InboxClient({
   const [campaign, setCampaign] = useState<string>("");
   const [campaigns, setCampaigns] = useState<string[]>([]);
   const [rows, setRows] = useState<InboxRow[]>([]);
-  const [counts, setCounts] = useState({ needsReply: 0, unread: 0, unassigned: 0 });
+  const [counts, setCounts] = useState({ needsReply: 0, autoReplied: 0, unread: 0, unassigned: 0 });
   const [listLoading, setListLoading] = useState(true);
   const [selectedId, setSelectedId] = useState<string | null>(initialConversationId);
 
@@ -321,7 +325,7 @@ function ConversationList({
   campaigns,
 }: {
   rows: InboxRow[];
-  counts: { needsReply: number; unread: number; unassigned: number };
+  counts: { needsReply: number; autoReplied: number; unread: number; unassigned: number };
   loading: boolean;
   filter: string;
   onFilter: (f: string) => void;
@@ -447,6 +451,14 @@ function ConversationList({
               {r.awaitingReply && (
                 <span className="px-[6px] h-[17px] inline-flex items-center rounded-full text-[10px] font-bold bg-amber-500/15 text-amber-600">
                   awaiting reply
+                </span>
+              )}
+              {r.autoReplied && (
+                <span
+                  title="Nobody has answered them yet, but an automated message went after their last one"
+                  className="px-[6px] h-[17px] inline-flex items-center rounded-full text-[10px] font-bold bg-surface-container text-on-surface-variant"
+                >
+                  bot replied
                 </span>
               )}
               {r.lead?.statusLabel && (

@@ -8,9 +8,10 @@
  *   2. THE PERIOD — every exchange a candidate started inside the chosen days,
  *      and whether/when a person answered it.
  *
- * Only inbound messages and HUMAN replies are loaded. Automated outbound sends
- * (broadcasts, re-marketing, reminders) are most of the table by volume and
- * play no part in the pairing, so they are filtered out in the database.
+ * Only threads with an inbound message in the period are read, so the bulk of
+ * one-way automated traffic never loads. Within those threads every message is
+ * read: automated sends do not answer anything, but they mark an unanswered
+ * exchange as "bot replied" (see ./reply-state).
  */
 import type { Prisma } from "@prisma/client";
 import { prisma } from "../prisma";
@@ -20,6 +21,7 @@ import {
   exchangeState,
   pairExchanges,
   waitingSince,
+  type BotRow,
   type ExchangeRow,
   type ReplyTrackerData,
   type ThreadInfo,
@@ -56,11 +58,6 @@ function chunks<T>(xs: T[], size = CHUNK): T[][] {
   return out;
 }
 
-/** Inbound, or sent by a person — the only messages the pairing reads. */
-const PAIRING_MESSAGES: Prisma.WaMessageWhereInput = {
-  OR: [{ direction: "in" }, { direction: "out", sentById: { not: null } }],
-};
-
 const PAIRING_SELECT = { conversationId: true, direction: true, occurredAt: true, sentById: true } as const;
 
 async function pairingMessages(conversationIds: string[], since: Date): Promise<{ byThread: Map<string, TrackerMessage[]>; truncated: boolean }> {
@@ -73,7 +70,7 @@ async function pairingMessages(conversationIds: string[], since: Date): Promise<
       break;
     }
     const rows = await prisma.waMessage.findMany({
-      where: { AND: [{ conversationId: { in: ids } }, { occurredAt: { gte: since } }, PAIRING_MESSAGES] },
+      where: { conversationId: { in: ids }, occurredAt: { gte: since } },
       orderBy: [{ conversationId: "asc" }, { occurredAt: "asc" }],
       take: MAX_MESSAGES - loaded,
       select: PAIRING_SELECT,
@@ -87,6 +84,76 @@ async function pairingMessages(conversationIds: string[], since: Date): Promise<
     }
   }
   return { byThread, truncated };
+}
+
+type OpenThread = WaitingRow & { autoAt: number | null; autoTemplate: string | null; lastMessageAt: number | null };
+
+/**
+ * Open threads carrying one of the two reply-state flags (see ./reply-state),
+ * with when the unanswered exchange began and, for bot-replied ones, the
+ * automated message that followed it.
+ */
+async function loadOpenThreads(
+  flag: "awaitingReply" | "autoReplied",
+  visibility: Prisma.WaConversationWhereInput,
+  nowMs: number,
+): Promise<{ rows: OpenThread[]; truncated: boolean }> {
+  const convs = await prisma.waConversation.findMany({
+    where: { AND: [{ [flag]: true }, { status: { not: "closed" } }, ...nonEmpty(visibility)] },
+    orderBy: [{ lastInboundAt: { sort: "asc", nulls: "last" } }, { id: "asc" }],
+    take: MAX_WAITING,
+    select: {
+      id: true,
+      phoneE164: true,
+      assignedToId: true,
+      lastInboundAt: true,
+      lastMessageAt: true,
+      sourceCampaign: true,
+      lead: { select: { id: true, candidateName: true, status: { select: { label: true } } } },
+      messages: {
+        orderBy: { occurredAt: "desc" },
+        // Enough to reach their last message past a couple of bot sends.
+        take: 5,
+        select: { body: true, type: true, unsupportedType: true, direction: true, mediaId: true, templateName: true, sentById: true },
+      },
+    },
+  });
+  let truncated = convs.length >= MAX_WAITING;
+
+  const msgs = await pairingMessages(
+    convs.map((c) => c.id),
+    new Date(nowMs - WAIT_LOOKBACK_MS),
+  );
+  if (msgs.truncated) truncated = true;
+
+  const rows: OpenThread[] = [];
+  for (const c of convs) {
+    const lastInboundAt = c.lastInboundAt?.getTime() ?? null;
+    if (lastInboundAt === null) continue;
+    const w = waitingSince(msgs.byThread.get(c.id) ?? []);
+    const newestIn = c.messages.find((m) => m.direction === "in");
+    const newestAuto = c.messages.find((m) => m.direction === "out" && !m.sentById);
+    rows.push({
+      conversationId: c.id,
+      phoneE164: c.phoneE164,
+      leadId: c.lead?.id ?? null,
+      candidateName: c.lead?.candidateName ?? null,
+      stage: c.lead?.status?.label ?? null,
+      ownerId: c.assignedToId,
+      // The flag says waiting; the messages say since when. If the pairing
+      // disagrees (a reply sent outside the CRM, history before the window),
+      // the flag wins and the wait is dated from the latest message.
+      since: w?.since ?? lastInboundAt,
+      lastInboundAt,
+      inboundCount: w?.inboundCount ?? 1,
+      preview: newestIn ? clip(waMessageText({ ...newestIn, hasMedia: !!newestIn.mediaId })) : null,
+      sourceCampaign: c.sourceCampaign,
+      autoAt: w?.autoAt ?? null,
+      autoTemplate: newestAuto ? (newestAuto.templateName?.split(":")[0] ?? newestAuto.type) : null,
+      lastMessageAt: c.lastMessageAt?.getTime() ?? null,
+    });
+  }
+  return { rows, truncated };
 }
 
 function nonEmpty(where: Prisma.WaConversationWhereInput): Prisma.WaConversationWhereInput[] {
@@ -104,57 +171,20 @@ export async function loadReplyTracker(input: {
   const { range, visibility } = input;
   let truncated = false;
 
-  // ---- 1. Waiting now ------------------------------------------------------
-  const waitingConvs = await prisma.waConversation.findMany({
-    where: { AND: [{ awaitingReply: true }, { status: { not: "closed" } }, ...nonEmpty(visibility)] },
-    orderBy: [{ lastInboundAt: { sort: "asc", nulls: "last" } }, { id: "asc" }],
-    take: MAX_WAITING,
-    select: {
-      id: true,
-      phoneE164: true,
-      assignedToId: true,
-      lastInboundAt: true,
-      sourceCampaign: true,
-      lead: { select: { id: true, candidateName: true, status: { select: { label: true } } } },
-      messages: {
-        where: { direction: "in" },
-        orderBy: { occurredAt: "desc" },
-        take: 1,
-        select: { body: true, type: true, unsupportedType: true, direction: true, mediaId: true },
-      },
-    },
-  });
-  if (waitingConvs.length >= MAX_WAITING) truncated = true;
-
-  const waitMsgs = await pairingMessages(
-    waitingConvs.map((c) => c.id),
-    new Date(nowMs - WAIT_LOOKBACK_MS),
-  );
-  if (waitMsgs.truncated) truncated = true;
-
-  const waiting: WaitingRow[] = [];
-  for (const c of waitingConvs) {
-    const lastInboundAt = c.lastInboundAt?.getTime() ?? null;
-    if (lastInboundAt === null) continue;
-    const w = waitingSince(waitMsgs.byThread.get(c.id) ?? []);
-    const newest = c.messages[0];
-    waiting.push({
-      conversationId: c.id,
-      phoneE164: c.phoneE164,
-      leadId: c.lead?.id ?? null,
-      candidateName: c.lead?.candidateName ?? null,
-      stage: c.lead?.status?.label ?? null,
-      ownerId: c.assignedToId,
-      // The flag says waiting; the messages say since when. If the pairing
-      // disagrees (a reply sent outside the CRM, history before the window),
-      // the flag wins and the wait is dated from the latest message.
-      since: w?.since ?? lastInboundAt,
-      lastInboundAt,
-      inboundCount: w?.inboundCount ?? 1,
-      preview: newest ? clip(waMessageText({ ...newest, hasMedia: !!newest.mediaId })) : null,
-      sourceCampaign: c.sourceCampaign,
-    });
-  }
+  // ---- 1. Waiting now, and bot-replied -----------------------------------
+  const [waitingRaw, botRaw] = await Promise.all([
+    loadOpenThreads("awaitingReply", visibility, nowMs),
+    loadOpenThreads("autoReplied", visibility, nowMs),
+  ]);
+  if (waitingRaw.truncated || botRaw.truncated) truncated = true;
+  const waiting: WaitingRow[] = waitingRaw.rows;
+  const botReplied: BotRow[] = botRaw.rows.map((r) => ({
+    ...r,
+    // The flag says a bot spoke after them; the messages say when. Fall back to
+    // the thread's clock if the message window does not reach that far.
+    autoAt: r.autoAt ?? r.lastMessageAt ?? r.lastInboundAt,
+    autoTemplate: r.autoTemplate,
+  }));
 
   // ---- 2. The period -------------------------------------------------------
   const from = new Date(range.from);
@@ -222,7 +252,7 @@ export async function loadReplyTracker(input: {
 
   // ---- Names ---------------------------------------------------------------
   const userIds = new Set<string>();
-  for (const w of waiting) if (w.ownerId) userIds.add(w.ownerId);
+  for (const w of [...waiting, ...botReplied]) if (w.ownerId) userIds.add(w.ownerId);
   for (const e of exchanges) {
     if (e.ownerId) userIds.add(e.ownerId);
     if (e.answeredById) userIds.add(e.answeredById);
@@ -240,6 +270,7 @@ export async function loadReplyTracker(input: {
     generatedAt: nowMs,
     range,
     waiting,
+    botReplied,
     exchanges,
     threads,
     people,

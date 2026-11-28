@@ -53,7 +53,8 @@ export default async function ReplyTrackerPage({
 
   const slaParam = Number(oneParam(sp.sla));
   const slaMinutes = (SLA_OPTIONS as readonly number[]).includes(slaParam) ? slaParam : DEFAULT_SLA_MINUTES;
-  const tab = oneParam(sp.tab) === "late" ? "late" : "waiting";
+  const tabParam = oneParam(sp.tab);
+  const tab = tabParam === "late" || tabParam === "bot" ? tabParam : "waiting";
 
   return (
     <>

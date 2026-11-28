@@ -17,7 +17,7 @@ import { waMessageText } from "./message-label";
 import { isSessionOpen } from "./mirror";
 
 /** Which slice of the inbox to show. */
-export const WA_INBOX_FILTERS = ["mine", "unassigned", "unread", "needs_reply", "all", "closed"] as const;
+export const WA_INBOX_FILTERS = ["mine", "unassigned", "unread", "needs_reply", "auto_replied", "all", "closed"] as const;
 export type WaInboxFilter = (typeof WA_INBOX_FILTERS)[number];
 
 /**
@@ -131,6 +131,10 @@ export function buildInboxWhere(filter: WaInboxFilter, scope: InboxScope, search
     case "needs_reply":
       and.push({ awaitingReply: true });
       break;
+    // Nobody answered, but a bot message went after theirs (see wa/reply-state).
+    case "auto_replied":
+      and.push({ autoReplied: true });
+      break;
     case "all":
     case "closed":
       break;
@@ -178,6 +182,8 @@ export type InboxRow = {
   lastInboundAt: string | null;
   sessionOpen: boolean;
   awaitingReply: boolean;
+  /** Nobody answered, but a bot message went after theirs. */
+  autoReplied: boolean;
   /** Preview of the newest message, for the list. */
   preview: string | null;
   previewDirection: string | null;
@@ -196,6 +202,7 @@ type ConversationWithPreview = {
   lastInboundAt: Date | null;
   sessionExpiresAt: Date | null;
   awaitingReply: boolean;
+  autoReplied: boolean;
   lead: {
     id: string;
     candidateName: string;
@@ -217,6 +224,7 @@ export function serializeInboxRow(c: ConversationWithPreview): InboxRow {
     lastInboundAt: c.lastInboundAt?.toISOString() ?? null,
     sessionOpen: isSessionOpen(c.sessionExpiresAt),
     awaitingReply: c.awaitingReply,
+    autoReplied: c.autoReplied,
     // A media message with no caption still needs a line in the list.
     preview: newest ? waMessageText(newest) : null,
     previewDirection: newest?.direction ?? null,

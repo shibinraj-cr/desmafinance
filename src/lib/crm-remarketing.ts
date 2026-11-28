@@ -63,6 +63,7 @@ import {
 } from "./crm-remarketing-templates";
 import { cloudProvider } from "./wa/cloud-provider";
 import { findOrCreateConversationForLead } from "./wa/mirror";
+import { markAutomatedSend } from "./wa/reply-state";
 import { RANK, type WaDeliveryUpdate } from "./wa/delivery-status";
 import { isPermanentUndeliverable } from "./wa/undeliverable";
 import { checkAutomatedSend, logAutomatedSend } from "./wa/send-policy";
@@ -931,6 +932,7 @@ async function recordTouchOnThread(input: {
     where: { id: conversation.conversationId },
     data: { lastMessageAt: input.now },
   });
+  await markAutomatedSend(conversation.conversationId);
 }
 
 // ── Daily scheduler (driven by /api/cron/crm-webhooks) ──────────────────────

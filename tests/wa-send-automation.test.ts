@@ -5,12 +5,17 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 // writes back to the conversation and the lead's timeline.
 const findUnique = vi.fn();
 const update = vi.fn();
+const updateMany = vi.fn();
 const create = vi.fn();
 const recordLeadActivity = vi.fn();
 
 vi.mock("@/lib/prisma", () => ({
   prisma: {
-    waConversation: { findUnique: (a: unknown) => findUnique(a), update: (a: unknown) => update(a) },
+    waConversation: {
+      findUnique: (a: unknown) => findUnique(a),
+      update: (a: unknown) => update(a),
+      updateMany: (a: unknown) => updateMany(a),
+    },
     waMessage: { create: (a: unknown) => create(a) },
   },
 }));
@@ -29,6 +34,7 @@ import { sendWaMessage } from "@/lib/wa/send";
 beforeEach(() => {
   findUnique.mockReset().mockResolvedValue({ id: "c1", phoneE164: "+919800000000", leadId: "l1", sessionExpiresAt: null });
   update.mockReset().mockResolvedValue({});
+  updateMany.mockReset().mockResolvedValue({ count: 1 });
   create.mockReset().mockResolvedValue({ id: "m1" });
   recordLeadActivity.mockReset().mockResolvedValue(undefined);
 });
@@ -38,15 +44,22 @@ describe("sendWaMessage — who answered", () => {
     const out = await sendWaMessage({ conversationId: "c1", sentById: "u1", body: "Hello" });
     expect(out.ok).toBe(true);
     expect(update.mock.calls[0][0].data.awaitingReply).toBe(false);
+    expect(update.mock.calls[0][0].data.autoReplied).toBe(false);
+    expect(updateMany).not.toHaveBeenCalled();
     expect(recordLeadActivity).toHaveBeenCalledTimes(1);
     expect(recordLeadActivity.mock.calls[0][0].actorId).toBe("u1");
   });
 
-  it("an automated send (no author) leaves the candidate in Needs reply", async () => {
+  it("an automated send (no author) moves a waiting thread to Bot replied, never clears it outright", async () => {
     const out = await sendWaMessage({ conversationId: "c1", sentById: null, template: "task_reminder:en" });
     expect(out.ok).toBe(true);
     expect(update.mock.calls[0][0].data).not.toHaveProperty("awaitingReply");
     expect(update.mock.calls[0][0].data.lastMessageAt).toBeInstanceOf(Date);
+    // Conditional: only a thread that is actually waiting moves.
+    expect(updateMany).toHaveBeenCalledWith({
+      where: { id: "c1", awaitingReply: true },
+      data: { awaitingReply: false, autoReplied: true },
+    });
   });
 
   it("recordActivity: false skips the generic timeline row (the caller writes its own)", async () => {
