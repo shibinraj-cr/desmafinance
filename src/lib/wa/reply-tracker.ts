@@ -15,6 +15,11 @@
  * unanswered messages would triple-count a single wait. An exchange starts at
  * the first inbound message after the last human reply and ends at the next
  * human reply.
+ *
+ * An exchange nobody answered but that an AUTOMATED message followed is "bot
+ * replied" (see ./reply-state): not an answer, but the candidate now has
+ * something from us to respond to, so it sits on its own list rather than in
+ * "waiting".
  */
 
 export const MINUTE_MS = 60_000;
@@ -53,6 +58,8 @@ export type Exchange = {
   /** The first human reply after it, or null while nobody has answered. */
   answeredAt: number | null;
   answeredById: string | null;
+  /** First automated message after their latest one, while nobody has answered. */
+  autoAt: number | null;
 };
 
 /** Is this an outbound message a person sent (i.e. an answer)? */
@@ -64,8 +71,8 @@ function isHumanReply(m: TrackerMessage): boolean {
  * Split one thread's messages (any order) into exchanges, oldest first.
  *
  * Inbound messages in a row join one exchange; a human reply closes it.
- * Automated outbound messages are skipped entirely — they neither answer an
- * open exchange nor start anything.
+ * Automated outbound messages never answer or start anything; they only mark
+ * an open exchange as bot-replied (`autoAt`) until the candidate writes again.
  */
 export function pairExchanges(messages: TrackerMessage[]): Exchange[] {
   const sorted = [...messages].sort((a, b) => a.occurredAt - b.occurredAt);
@@ -76,14 +83,19 @@ export function pairExchanges(messages: TrackerMessage[]): Exchange[] {
       if (open) {
         open.lastInboundAt = m.occurredAt;
         open.inboundCount += 1;
+        // They wrote again after the bot: their turn is over, ours again.
+        open.autoAt = null;
       } else {
-        open = { askedAt: m.occurredAt, lastInboundAt: m.occurredAt, inboundCount: 1, answeredAt: null, answeredById: null };
+        open = { askedAt: m.occurredAt, lastInboundAt: m.occurredAt, inboundCount: 1, answeredAt: null, answeredById: null, autoAt: null };
       }
     } else if (isHumanReply(m) && open) {
       open.answeredAt = m.occurredAt;
       open.answeredById = m.sentById;
+      open.autoAt = null;
       out.push(open);
       open = null;
+    } else if (m.direction === "out" && open && open.autoAt === null) {
+      open.autoAt = m.occurredAt;
     }
   }
   if (open) out.push(open);
@@ -95,11 +107,11 @@ export function pairExchanges(messages: TrackerMessage[]): Exchange[] {
  * last human reply. Null when the newest exchange has been answered (or there
  * is nothing inbound at all).
  */
-export function waitingSince(messages: TrackerMessage[]): { since: number; inboundCount: number } | null {
+export function waitingSince(messages: TrackerMessage[]): { since: number; inboundCount: number; autoAt: number | null } | null {
   const ex = pairExchanges(messages);
   const last = ex[ex.length - 1];
   if (!last || last.answeredAt !== null) return null;
-  return { since: last.askedAt, inboundCount: last.inboundCount };
+  return { since: last.askedAt, inboundCount: last.inboundCount, autoAt: last.autoAt };
 }
 
 // ---------------------------------------------------------------------------
@@ -123,7 +135,15 @@ export type WaitingRow = {
   sourceCampaign: string | null;
 };
 
-export type ExchangeState = "answered" | "waiting" | "closed";
+/** A thread nobody answered, where only an automated message followed theirs. */
+export type BotRow = WaitingRow & {
+  /** When the bot message went out. */
+  autoAt: number;
+  /** Which automated message it was (template name), when known. */
+  autoTemplate: string | null;
+};
+
+export type ExchangeState = "answered" | "waiting" | "auto" | "closed";
 
 /** One exchange that STARTED inside the chosen period. */
 export type ExchangeRow = {
@@ -133,7 +153,10 @@ export type ExchangeRow = {
   answeredAt: number | null;
   answeredById: string | null;
   inboundCount: number;
-  /** "closed": nobody replied, and someone closed the thread instead. */
+  /**
+   * "closed": nobody replied, and someone closed the thread instead.
+   * "auto": nobody replied, but an automated message followed theirs.
+   */
   state: ExchangeState;
 };
 
@@ -143,6 +166,8 @@ export type ReplyTrackerData = {
   generatedAt: number;
   range: { key: TrackerRangeKey; from: number; to: number };
   waiting: WaitingRow[];
+  /** "Bot replied" — see BotRow. */
+  botReplied: BotRow[];
   exchanges: ExchangeRow[];
   /** Names/phones for the threads `exchanges` mention, keyed by conversation id. */
   threads: Record<string, ThreadInfo>;
@@ -154,7 +179,8 @@ export type ReplyTrackerData = {
 
 export function exchangeState(ex: Exchange, conversationStatus: string): ExchangeState {
   if (ex.answeredAt !== null) return "answered";
-  return conversationStatus === "closed" ? "closed" : "waiting";
+  if (conversationStatus === "closed") return "closed";
+  return ex.autoAt !== null ? "auto" : "waiting";
 }
 
 // ---------------------------------------------------------------------------
@@ -186,7 +212,7 @@ export function windowOpen(row: Pick<WaitingRow, "lastInboundAt">, now: number):
 }
 
 /** Longest wait first — the worklist's order. */
-export function sortWaiting(rows: WaitingRow[]): WaitingRow[] {
+export function sortWaiting<T extends WaitingRow>(rows: T[]): T[] {
   return [...rows].sort((a, b) => a.since - b.since || a.conversationId.localeCompare(b.conversationId));
 }
 
@@ -207,6 +233,8 @@ export type TrackerSummary = {
   pending: number;
   /** Closed without a reply. */
   closed: number;
+  /** Nobody answered, but a bot message followed theirs. Not judged against the SLA. */
+  auto: number;
   /** onTime / (answered + overdue) — the share of judged exchanges that met the SLA. */
   slaBase: number;
   medianMs: number | null;
@@ -226,6 +254,7 @@ export function summarise(rows: ExchangeRow[], slaMs: number, now: number): Trac
   let overdue = 0;
   let pending = 0;
   let closed = 0;
+  let auto = 0;
   const times: number[] = [];
   for (const r of rows) {
     if (r.state === "answered" && r.answeredAt !== null) {
@@ -235,6 +264,8 @@ export function summarise(rows: ExchangeRow[], slaMs: number, now: number): Trac
       if (t <= slaMs) onTime += 1;
     } else if (r.state === "closed") {
       closed += 1;
+    } else if (r.state === "auto") {
+      auto += 1;
     } else if (now - r.askedAt > slaMs) {
       overdue += 1;
     } else {
@@ -249,6 +280,7 @@ export function summarise(rows: ExchangeRow[], slaMs: number, now: number): Trac
     overdue,
     pending,
     closed,
+    auto,
     slaBase: answered + overdue,
     medianMs: quantile(times, 0.5),
     p90Ms: quantile(times, 0.9),
@@ -261,13 +293,22 @@ export type OwnerRow = {
   /** Age of the longest current wait, ms. */
   oldestMs: number | null;
   windowClosed: number;
+  /** Threads on the "Bot replied" list now. */
+  botReplied: number;
   summary: TrackerSummary;
 };
 
 /** One row per owner who has anything waiting now or anything in the period. Worst first. */
-export function summariseByOwner(waiting: WaitingRow[], exchanges: ExchangeRow[], slaMs: number, now: number): OwnerRow[] {
+export function summariseByOwner(
+  waiting: WaitingRow[],
+  exchanges: ExchangeRow[],
+  slaMs: number,
+  now: number,
+  botReplied: WaitingRow[] = [],
+): OwnerRow[] {
   const keys = new Set<string>();
   for (const w of waiting) keys.add(ownerKeyOf(w.ownerId));
+  for (const b of botReplied) keys.add(ownerKeyOf(b.ownerId));
   for (const e of exchanges) keys.add(ownerKeyOf(e.ownerId));
   const rows: OwnerRow[] = [];
   for (const key of keys) {
@@ -278,6 +319,7 @@ export function summariseByOwner(waiting: WaitingRow[], exchanges: ExchangeRow[]
       waitingNow: mine.length,
       oldestMs: oldest === null ? null : now - oldest,
       windowClosed: mine.filter((w) => !windowOpen(w, now)).length,
+      botReplied: botReplied.filter((b) => ownerKeyOf(b.ownerId) === key).length,
       summary: summarise(
         exchanges.filter((e) => ownerKeyOf(e.ownerId) === key),
         slaMs,

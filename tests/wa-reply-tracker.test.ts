@@ -31,14 +31,20 @@ const bot = (at: number): TrackerMessage => ({ direction: "out", occurredAt: at,
 describe("pairExchanges", () => {
   it("joins messages in a row into one exchange answered by the next human reply", () => {
     const ex = pairExchanges([inMsg(m(0)), inMsg(m(2)), inMsg(m(5)), human(m(20))]);
-    expect(ex).toEqual([{ askedAt: m(0), lastInboundAt: m(5), inboundCount: 3, answeredAt: m(20), answeredById: "u1" }]);
+    expect(ex).toEqual([{ askedAt: m(0), lastInboundAt: m(5), inboundCount: 3, answeredAt: m(20), answeredById: "u1", autoAt: null }]);
   });
 
-  it("ignores automated sends — they neither answer nor start anything", () => {
+  it("automated sends neither answer nor start anything", () => {
     const ex = pairExchanges([bot(m(-10)), inMsg(m(0)), bot(m(1)), human(m(30), "u2")]);
     expect(ex).toHaveLength(1);
     expect(ex[0].answeredAt).toBe(m(30));
     expect(ex[0].answeredById).toBe("u2");
+    expect(ex[0].autoAt).toBeNull();
+  });
+
+  it("marks an unanswered exchange bot-replied, until the candidate writes again", () => {
+    expect(pairExchanges([inMsg(m(0)), bot(m(8)), bot(m(60))])[0].autoAt).toBe(m(8));
+    expect(pairExchanges([inMsg(m(0)), bot(m(8)), inMsg(m(20))])[0]).toMatchObject({ autoAt: null, inboundCount: 2 });
   });
 
   it("leaves the last exchange open when nobody has replied", () => {
@@ -59,7 +65,7 @@ describe("pairExchanges", () => {
 
 describe("waitingSince", () => {
   it("dates the wait from the first unanswered message", () => {
-    expect(waitingSince([inMsg(m(0)), human(m(5)), inMsg(m(10)), inMsg(m(15))])).toEqual({ since: m(10), inboundCount: 2 });
+    expect(waitingSince([inMsg(m(0)), human(m(5)), inMsg(m(10)), inMsg(m(15))])).toEqual({ since: m(10), inboundCount: 2, autoAt: null });
   });
   it("is null when the latest exchange was answered", () => {
     expect(waitingSince([inMsg(m(0)), human(m(5)), bot(m(6))])).toBeNull();
@@ -67,11 +73,15 @@ describe("waitingSince", () => {
 });
 
 describe("exchangeState", () => {
-  const open = { askedAt: 0, lastInboundAt: 0, inboundCount: 1, answeredAt: null, answeredById: null };
+  const open = { askedAt: 0, lastInboundAt: 0, inboundCount: 1, answeredAt: null, answeredById: null, autoAt: null };
   it("closed without a reply is its own state, not waiting", () => {
     expect(exchangeState(open, "closed")).toBe("closed");
     expect(exchangeState(open, "open")).toBe("waiting");
     expect(exchangeState({ ...open, answeredAt: 5 }, "closed")).toBe("answered");
+  });
+  it("bot-replied is its own state too", () => {
+    expect(exchangeState({ ...open, autoAt: 3 }, "open")).toBe("auto");
+    expect(exchangeState({ ...open, autoAt: 3 }, "closed")).toBe("closed");
   });
 });
 
@@ -95,10 +105,11 @@ describe("summarise", () => {
     row({ askedAt: m(100) }), // waiting 200m → overdue
     row({ askedAt: m(280) }), // waiting 20m → pending
     row({ state: "closed" }),
+    row({ state: "auto" }),
   ];
-  it("splits on time, late, overdue, pending and closed", () => {
+  it("splits on time, late, overdue, pending, closed and bot-replied", () => {
     const s = summarise(rows, sla, now);
-    expect(s).toMatchObject({ received: 5, answered: 2, onTime: 1, late: 1, overdue: 1, pending: 1, closed: 1, slaBase: 3 });
+    expect(s).toMatchObject({ received: 6, answered: 2, onTime: 1, late: 1, overdue: 1, pending: 1, closed: 1, auto: 1, slaBase: 3 });
     expect(s.medianMs).toBe(10 * MINUTE_MS);
   });
   it("lists late answers slowest first", () => {
@@ -163,6 +174,12 @@ describe("waiting now", () => {
     expect(owners.map((o) => o.key)).toEqual([NO_OWNER, "u1", "u2"]);
     expect(owners[0]).toMatchObject({ waitingNow: 2, oldestMs: 100 * MINUTE_MS });
     expect(owners[2].summary.onTime).toBe(1);
+  });
+
+  it("counts bot-replied threads per owner without making them 'waiting'", () => {
+    const owners = summariseByOwner([], [], 60 * MINUTE_MS, m(0), [wait({ ownerId: "u3" })]);
+    expect(owners).toHaveLength(1);
+    expect(owners[0]).toMatchObject({ key: "u3", waitingNow: 0, botReplied: 1 });
   });
 });
 

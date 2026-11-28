@@ -23,6 +23,7 @@ import { recordLeadActivity } from "../crm-activity";
 import { logger } from "../logger";
 import { getWaProvider } from "./registry";
 import { isSessionOpen } from "./mirror";
+import { HUMAN_REPLY_STATE, markAutomatedSend } from "./reply-state";
 
 /** Longest single WhatsApp text message; Meta rejects anything above this. */
 export const WA_MAX_TEXT_LENGTH = 4096;
@@ -242,7 +243,7 @@ export async function sendWaVoiceNote(input: {
 
     await prisma.waConversation.update({
       where: { id: conversation.id },
-      data: { lastMessageAt: now, status: "open", awaitingReply: false },
+      data: { lastMessageAt: now, status: "open", ...HUMAN_REPLY_STATE },
     });
 
     if (conversation.leadId) {
@@ -303,10 +304,13 @@ async function recordSentMessage(
   // an automated reminder or notice is not an answer to what the candidate
   // wrote, and clearing the flag would drop her out of "Needs reply" while she
   // is still waiting for a human.
+  // An automated send moves a waiting thread to "Bot replied" instead
+  // (see ./reply-state).
   await prisma.waConversation.update({
     where: { id: conversation.id },
-    data: { lastMessageAt: now, status: "open", ...(input.sentById ? { awaitingReply: false } : {}) },
+    data: { lastMessageAt: now, status: "open", ...(input.sentById ? HUMAN_REPLY_STATE : {}) },
   });
+  if (!input.sentById) await markAutomatedSend(conversation.id);
 
   // Unlike inbound (deliberately silent, or a chatty thread would bury the
   // timeline), an outbound message is something a consultant DID — the same

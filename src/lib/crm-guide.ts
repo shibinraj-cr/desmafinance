@@ -137,6 +137,12 @@ export type GuideChange = { date: string; section: string; title: string; detail
  */
 export const CRM_GUIDE_CHANGES: GuideChange[] = [
   {
+    date: "2026-11-28",
+    section: "inbox",
+    title: "Bot replied",
+    detail: "When nobody has answered a candidate but an automated message (the assignment intro, a task reminder, a re-marketing message) went after theirs, the chat moves from **Needs reply** to **Bot replied**, in the Inbox and on the Reply Tracker. Open it and answer if they asked something.",
+  },
+  {
     date: "2026-11-27",
     section: "inbox",
     title: "Reply Tracker",
@@ -589,7 +595,7 @@ export function crmGuideSections(f: GuideFacts, canSee: (href: string) => boolea
         {
           kind: "steps",
           items: [
-            "The Inbox opens on **Needs reply**: chats where the candidate wrote last. **Mine**, **Unread** and **All** are the other views.",
+            "The Inbox opens on **Needs reply**: chats where the candidate wrote last. **Bot replied** holds chats nobody answered where an automated message went after theirs. **Mine**, **Unread** and **All** are the other views.",
             "Open a chat. The pill at the top is the reply window: green **…h …m left** means you can type freely; grey **Template only** means 24 hours have passed since the candidate's last message.",
             "Inside the window, type your reply and press Enter (Shift+Enter for a new line) — or switch to **Template**.",
             "Outside the window, pick an approved template under **Choose a template…**, fill each {{1}} box, check **This is what will be sent** and click **Send this message**.",
@@ -611,6 +617,7 @@ export function crmGuideSections(f: GuideFacts, canSee: (href: string) => boolea
             `${where("/crm/wa-replies")} lists every chat still waiting for your reply, longest wait first. Red means it has waited past the target.`,
             "Click **Reply** to open the chat in the Inbox and answer it. It leaves the list as soon as you send.",
             "**Template only** means 24 hours have passed since the candidate's last message: reply with a template.",
+            "**Bot replied** lists chats where only an automated message (assignment intro, task reminder, re-marketing) went after the candidate's last message. Nobody has answered them yet: check what they asked.",
             "**Answered late** shows the messages you answered after the target, so you can see where you slipped.",
           ],
         },
@@ -1475,10 +1482,10 @@ export function crmGuideQuiz(f: GuideFacts): GuideQuizQuestion[] {
     ),
     q(
       "wa-reply-counts",
-      "A candidate messages on WhatsApp. What takes the chat off the Reply Tracker's waiting list?",
+      "A candidate messages on WhatsApp. What counts as answering them on the Reply Tracker?",
       ["You send them a WhatsApp reply"],
       ["You open the chat and read it", "An automated reminder goes out to them", "You close the conversation without replying"],
-      "Only a reply a person sends counts as an answer. Reading a chat or an automated message doesn't. Closing a chat hides it, but the tracker still counts it as closed without a reply.",
+      "Only a reply a person sends counts as an answer. An automated message moves the chat to **Bot replied**, still unanswered. Closing a chat hides it, but the tracker counts it as closed without a reply.",
     ),
     q(
       "pipeline-how",

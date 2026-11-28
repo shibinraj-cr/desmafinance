@@ -44,6 +44,7 @@ import {
   type WaInboundMessage,
 } from "./inbound";
 import { pickThreadLead } from "./thread-lead";
+import { INBOUND_REPLY_STATE } from "./reply-state";
 import { renderTemplatePreview } from "./cloud-provider";
 import type { WaProviderKey } from "./provider";
 
@@ -539,7 +540,7 @@ export async function ingestInboundMessage(
         // outbound reply must not resurrect the needs-reply flag — and the
         // timestamp patch already encodes "was this the newest": it is empty
         // when the message did not move the thread's clock forward.
-        ...(timestamps.lastInboundAt ? { awaitingReply: true } : {}),
+        ...(timestamps.lastInboundAt ? INBOUND_REPLY_STATE : {}),
       },
     });
 

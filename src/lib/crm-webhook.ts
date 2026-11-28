@@ -43,6 +43,7 @@ import {
 } from "./app-settings";
 import { cloudProvider, isCloudConfigured, renderTemplatePreview } from "./wa/cloud-provider";
 import { findOrCreateConversationForLead } from "./wa/mirror";
+import { markAutomatedSend } from "./wa/reply-state";
 import { isPhoneOptedOut, logAutomatedSend } from "./wa/send-policy";
 
 export const LEAD_ASSIGNED_EVENT = "lead_assigned";
@@ -750,6 +751,9 @@ async function mirrorLeadAssignedCloudMessage(opts: {
     where: { id: found.conversationId },
     data: { lastMessageAt: now, status: "open" },
   });
+  // The intro is not an answer to anything the candidate wrote — a waiting
+  // thread moves to "Bot replied" (see wa/reply-state).
+  await markAutomatedSend(found.conversationId);
   return null;
 }
 

@@ -34,7 +34,7 @@ const PAGE = 50;
 /** The page is a live monitor: re-read the server this often while the tab is visible. */
 const AUTO_REFRESH_MS = 60_000;
 
-type Tab = "waiting" | "late";
+type Tab = "waiting" | "bot" | "late";
 
 const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
 
@@ -170,9 +170,11 @@ export function ReplyTrackerClient({
     const inOwners = (id: string | null) => !ownerKeys.length || ownerKeys.includes(ownerKeyOf(id));
     const waiting = sortWaiting(data.waiting.filter((w) => inOwners(w.ownerId)));
     const exchanges = data.exchanges.filter((e) => inOwners(e.ownerId));
+    const bot = sortWaiting(data.botReplied.filter((b) => inOwners(b.ownerId)));
     const oldest = waiting[0] ?? null;
     return {
       waiting,
+      bot,
       exchanges,
       oldestMs: oldest ? now - oldest.since : null,
       windowClosed: waiting.filter((w) => !windowOpen(w, now)).length,
@@ -180,7 +182,7 @@ export function ReplyTrackerClient({
       buckets: bucketCounts(waiting, now),
       summary: summarise(exchanges, slaMs, now),
       late: lateAnswers(exchanges, slaMs),
-      byOwner: summariseByOwner(data.waiting, data.exchanges, slaMs, now).filter((o) => !ownerKeys.length || ownerKeys.includes(o.key)),
+      byOwner: summariseByOwner(data.waiting, data.exchanges, slaMs, now, data.botReplied).filter((o) => !ownerKeys.length || ownerKeys.includes(o.key)),
     };
   }, [data, ownerKeys, slaMs, now]);
 
@@ -261,7 +263,11 @@ export function ReplyTrackerClient({
 
       {/* Headline */}
       <div className="grid grid-cols-2 md:grid-cols-3 xl:grid-cols-6 gap-md">
-        <Tile label="Waiting for a reply now" value={n(view.waiting.length)} tone={view.waiting.length ? "red" : "green"} note={view.waiting.length ? `${n(view.overSla)} past the ${slaLabel(slaMinutes)} target` : "Every chat answered"} />
+        <Tile label="Waiting for a reply now" value={n(view.waiting.length)} tone={view.waiting.length ? "red" : "green"} note={
+            (view.waiting.length ? `${n(view.overSla)} past the ${slaLabel(slaMinutes)} target` : "Every chat answered") +
+            (view.bot.length ? ` · ${n(view.bot.length)} more got only a bot reply` : "")
+          }
+        />
         <Tile label="Longest wait" value={formatDuration(view.oldestMs)} tone={view.oldestMs === null ? undefined : waitTone(view.oldestMs, slaMs)} />
         <Tile label="24h passed · template only" value={n(view.windowClosed)} tone={view.windowClosed ? "red" : undefined} note="Free text can't be sent; use a template" />
         <Tile label={`Received · ${rangeLabel}`} value={n(s.received)} note={`${n(s.answered)} answered`} />
@@ -291,6 +297,7 @@ export function ReplyTrackerClient({
                     <th className="px-sm py-base font-semibold text-right">Waiting now</th>
                     <th className="px-sm py-base font-semibold text-right">Longest wait</th>
                     <th className="px-sm py-base font-semibold text-right">24h passed</th>
+                    <th className="px-sm py-base font-semibold text-right" title="Nobody answered, but an automated message went after theirs">Bot replied</th>
                     <th className="px-sm py-base font-semibold text-right">Received</th>
                     <th className="px-sm py-base font-semibold text-right">Answered</th>
                     <th className="px-sm py-base font-semibold text-right">Within {slaLabel(slaMinutes)}</th>
@@ -311,6 +318,7 @@ export function ReplyTrackerClient({
                         <td className={"px-sm py-base text-right tabular-nums font-semibold " + (o.waitingNow ? "text-red-700" : "text-on-surface-variant")}>{n(o.waitingNow)}</td>
                         <td className="px-sm py-base text-right tabular-nums">{formatDuration(o.oldestMs)}</td>
                         <td className={"px-sm py-base text-right tabular-nums " + (o.windowClosed ? "text-red-700" : "")}>{n(o.windowClosed)}</td>
+                        <td className="px-sm py-base text-right tabular-nums text-on-surface-variant">{n(o.botReplied)}</td>
                         <td className="px-sm py-base text-right tabular-nums">{n(o.summary.received)}</td>
                         <td className="px-sm py-base text-right tabular-nums">{n(o.summary.answered)}</td>
                         <td className={"px-sm py-base text-right tabular-nums font-semibold " + (tone ? TONE_TEXT[tone] : "")}>{percent(o.summary.onTime, o.summary.slaBase)}</td>
@@ -327,13 +335,20 @@ export function ReplyTrackerClient({
 
       {/* Worklist */}
       <Panel
-        title={tab === "waiting" ? "Chats to answer" : "Answered late"}
-        sub={tab === "waiting" ? "Longest wait first. Reply opens the chat in the Inbox." : `Answered after the ${slaLabel(slaMinutes)} target, slowest first.`}
+        title={tab === "waiting" ? "Chats to answer" : tab === "bot" ? "Bot replied" : "Answered late"}
+        sub={
+          tab === "waiting"
+            ? "The candidate wrote last. Longest wait first. Reply opens the chat in the Inbox."
+            : tab === "bot"
+              ? "Nobody has answered them, but an automated message (assignment intro, task reminder, re-marketing) went after their last one. Worth a person's look."
+              : `Answered after the ${slaLabel(slaMinutes)} target, slowest first.`
+        }
       >
         <div className="flex flex-wrap items-center gap-base mb-sm">
           {(
             [
               ["waiting", "Waiting now", view.waiting.length],
+              ["bot", "Bot replied", view.bot.length],
               ["late", `Answered late · ${rangeLabel}`, view.late.length],
             ] as const
           ).map(([t, label, count]) => {
@@ -423,6 +438,69 @@ export function ReplyTrackerClient({
               </table>
             </div>
           )
+        ) : tab === "bot" ? (
+          view.bot.length === 0 ? (
+            <Empty text="No chat where only a bot replied." />
+          ) : (
+            <div className="overflow-x-auto">
+              <table className="w-full text-body-md">
+                <thead>
+                  <tr className="text-left text-label-sm text-on-surface-variant">
+                    <th className="px-sm py-base font-semibold">Candidate</th>
+                    {seesEveryone && <th className="px-sm py-base font-semibold">Owner</th>}
+                    <th className="px-sm py-base font-semibold">Their last message</th>
+                    <th className="px-sm py-base font-semibold">Then the bot sent</th>
+                    <th className="px-sm py-base font-semibold">Reply window</th>
+                    <th className="px-sm py-base font-semibold" />
+                  </tr>
+                </thead>
+                <tbody>
+                  {view.bot.slice(0, limit).map((b) => {
+                    const left = SESSION_WINDOW_MS - (now - b.lastInboundAt);
+                    return (
+                      <tr key={b.conversationId} className="border-t border-outline-variant align-top">
+                        <td className="px-sm py-base">
+                          {b.leadId ? (
+                            <Link href={`/crm/leads/${b.leadId}`} className="font-medium text-on-surface hover:underline">
+                              {b.candidateName || b.phoneE164}
+                            </Link>
+                          ) : (
+                            <span className="font-medium">{b.phoneE164}</span>
+                          )}
+                          <div className="text-caption text-on-surface-variant">
+                            {b.phoneE164}
+                            {b.stage && ` · ${b.stage}`}
+                          </div>
+                        </td>
+                        {seesEveryone && <td className={"px-sm py-base " + (b.ownerId ? "" : "text-red-700 font-semibold")}>{person(b.ownerId)}</td>}
+                        <td className="px-sm py-base max-w-[320px]">
+                          <span className="line-clamp-2 text-on-surface">{b.preview ?? <span className="text-on-surface-variant">Media</span>}</span>
+                          <div className="text-caption text-on-surface-variant">{fmtWhen(b.lastInboundAt)}</div>
+                        </td>
+                        <td className="px-sm py-base whitespace-nowrap">
+                          <span className="font-mono text-label-sm">{b.autoTemplate ?? "Automated message"}</span>
+                          <div className="text-caption text-on-surface-variant">
+                            {fmtWhen(b.autoAt)} · {formatDuration(now - b.autoAt)} ago
+                          </div>
+                        </td>
+                        <td className="px-sm py-base whitespace-nowrap">
+                          {left > 0 ? <Pill tone={left < 2 * HOUR_MS ? "amber" : "green"}>{formatDuration(left)} left</Pill> : <Pill tone="gray">Template only</Pill>}
+                        </td>
+                        <td className="px-sm py-base text-right">
+                          <Link
+                            href={`/crm/inbox?conversation=${b.conversationId}`}
+                            className="inline-flex items-center gap-xs h-8 px-md rounded-lg border border-outline-variant text-label-sm font-semibold hover:bg-surface-container-low"
+                          >
+                            Open chat
+                          </Link>
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          )
         ) : view.late.length === 0 ? (
           <Empty text={`Every answered message in this period was answered within ${slaLabel(slaMinutes)}.`} />
         ) : (
@@ -472,7 +550,7 @@ export function ReplyTrackerClient({
             </table>
           </div>
         )}
-        {(tab === "waiting" ? waitingRows.length : view.late.length) > limit && (
+        {(tab === "waiting" ? waitingRows.length : tab === "bot" ? view.bot.length : view.late.length) > limit && (
           <div className="flex justify-center mt-sm">
             <button type="button" onClick={() => setLimit((l) => l + PAGE)} className="h-9 px-md rounded-lg border border-outline-variant text-label-sm font-semibold hover:bg-surface-container-low">
               Show more
@@ -522,6 +600,7 @@ function Outcome({ s }: { s: TrackerSummary }) {
     { n: s.late, cls: "bg-amber-400", label: "Answered late" },
     { n: s.overdue, cls: "bg-red-500", label: "Waiting · past target" },
     { n: s.pending, cls: "bg-blue-300", label: "Waiting · within target" },
+    { n: s.auto, cls: "bg-outline-variant", label: "Only a bot replied" },
     { n: s.closed, cls: "bg-outline", label: "Closed without reply" },
   ];
   return (

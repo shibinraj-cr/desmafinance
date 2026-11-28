@@ -4038,6 +4038,13 @@ model WaConversation {
   /// `lastMessageAt` in a `where`, and post-filtering a fetched page would break
   /// pagination. Set on inbound ingest, cleared on outbound send.
   awaitingReply    Boolean   @default(false)
+  /// Nobody has answered the candidate, but an AUTOMATED message (assignment
+  /// intro, task reminder, re-marketing touch) went out after their last one.
+  /// Mutually exclusive with `awaitingReply`: an automated send moves a waiting
+  /// thread here, so "Needs reply" means the candidate wrote last, while these
+  /// stay visible on their own list ("Bot replied") instead of vanishing. Set by
+  /// markAutomatedSend; cleared by any inbound message or human send.
+  autoReplied      Boolean   @default(false)
 
   /// The most recent broadcast campaign this number was sent, stamped when they
   /// REPLY (see mirrorBroadcastContext). Lets the inbox filter to "broadcast
@@ -4058,6 +4065,8 @@ model WaConversation {
   @@index([sessionExpiresAt])
   /// The inbox's default landing query: unanswered threads, newest first.
   @@index([awaitingReply, lastMessageAt])
+  /// The "Bot replied" list.
+  @@index([autoReplied, lastMessageAt])
   /// The broadcast-replies filter.
   @@index([sourceCampaign])
 }

@@ -71,6 +71,7 @@ describe("buildInboxWhere", () => {
   });
   it("reads the maintained flag for needs-reply, not a column comparison", () => {
     expect(buildInboxWhere("needs_reply", scope)).toEqual({ AND: [OPEN, { awaitingReply: true }] });
+    expect(buildInboxWhere("auto_replied", scope)).toEqual({ AND: [OPEN, { autoReplied: true }] });
   });
   it("filters unread on the counter", () => {
     expect(buildInboxWhere("unread", scope)).toEqual({ AND: [OPEN, { unreadCount: { gt: 0 } }] });
