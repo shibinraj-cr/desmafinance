@@ -5,7 +5,7 @@ import { DateFilter } from "@/components/DateFilter";
 import { ScoreMeter } from "@/components/PerformanceCharts";
 import { EmptyNote, PerformanceNoAccess, numCls, tdCls, thCls } from "@/components/PerformanceUi";
 import { getCurrentUserAndPermissions } from "@/lib/permissions";
-import { canViewTeamPerformance } from "@/lib/team-performance-rbac";
+import { canViewTeamPerformancePage, TP_SUPPORT } from "@/lib/team-performance-rbac";
 import { getDailyRows, getStaffSummary, resolveRange } from "@/lib/team-performance";
 import { fromPrismaDate } from "@/lib/lead-pulse-dates";
 
@@ -20,7 +20,7 @@ export default async function CandidateSupportPage({
 }) {
   const { perms } = await getCurrentUserAndPermissions();
   if (!perms) redirect("/login");
-  if (!canViewTeamPerformance(perms)) return <PerformanceNoAccess title="Candidate Support" />;
+  if (!canViewTeamPerformancePage(perms, TP_SUPPORT)) return <PerformanceNoAccess title="Candidate Support" />;
 
   const range = resolveRange(searchParams);
   const [summary, daily] = await Promise.all([getStaffSummary(range), getDailyRows(range)]);

@@ -6,7 +6,7 @@ import { DateFilter } from "@/components/DateFilter";
 import { DailyQueriesChart, ShareBars } from "@/components/PerformanceCharts";
 import { EmptyNote, PerformanceNoAccess, PerformerCard, numCls, tdCls, thCls } from "@/components/PerformanceUi";
 import { getCurrentUserAndPermissions } from "@/lib/permissions";
-import { canViewTeamPerformance } from "@/lib/team-performance-rbac";
+import { canViewTeamPerformancePage, TP_OVERVIEW } from "@/lib/team-performance-rbac";
 import {
   getBdeSummary,
   getDailySeries,
@@ -24,7 +24,7 @@ export default async function PerformanceOverviewPage({
 }) {
   const { perms } = await getCurrentUserAndPermissions();
   if (!perms) redirect("/login");
-  if (!canViewTeamPerformance(perms)) return <PerformanceNoAccess title="Team Performance" />;
+  if (!canViewTeamPerformancePage(perms, TP_OVERVIEW)) return <PerformanceNoAccess title="Team Performance" />;
 
   const range = resolveRange(searchParams);
   const [support, days, unanswered, bdes] = await Promise.all([

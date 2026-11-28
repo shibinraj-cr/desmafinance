@@ -2,7 +2,7 @@ import { NextResponse } from "next/server";
 import { withApiHandler } from "@/lib/api";
 import { forbidden, unauthorized } from "@/lib/http-error";
 import { getCurrentUserAndPermissions } from "@/lib/permissions";
-import { canViewTeamPerformance } from "@/lib/team-performance-rbac";
+import { hasFullTeamPerformanceAccess } from "@/lib/team-performance-rbac";
 import { ingestSchema, ingestScores, isValidIngestToken } from "@/lib/team-performance-ingest";
 
 export const dynamic = "force-dynamic";
@@ -14,7 +14,7 @@ export const POST = withApiHandler(async (req: Request) => {
   if (!isValidIngestToken(req)) {
     const { userId, perms } = await getCurrentUserAndPermissions();
     if (!userId || !perms) throw unauthorized();
-    if (!canViewTeamPerformance(perms)) throw forbidden();
+    if (!hasFullTeamPerformanceAccess(perms)) throw forbidden();
   }
   const payload = ingestSchema.parse(await req.json());
   const result = await ingestScores(payload);
